@@ -201,16 +201,28 @@ class DatasetCard(BaseModel):
 ```python
 class ImportSpec(BaseModel):
     importer: str
-    src: Path
+    src: Path                       # 來源目錄；各匯入器以 options 指定目錄內的檔案
     name: str
     options: dict[str, str] = {}
-    source: SourceInfo 的 license / url / downloaded_at / notes 由 CLI 旗標傳入
+    license: str                    # 以下四欄由 CLI 旗標傳入，匯入器寫進 SourceInfo
+    url: str
+    downloaded_at: str
+    notes: str = ""
+
+class ImportResult(BaseModel):
+    dataset: Dataset
+    rows_read: int
+    samples_written: int
+    rows_skipped: int
+    skipped_reasons_path: Path | None
 
 class Importer(Protocol):
     name: str
     version: str
-    def run(self, spec: ImportSpec) -> ImportResult   # Dataset + 統計（讀入列數、產出數、跳過數與原因）
+    def run(self, spec: ImportSpec) -> ImportResult
 ```
+
+匯入器自行填 `SourceInfo` 的 `importer`、`importer_version`、`raw_path`（= `src`）、`raw_hash`（掃描 `src` 產生 `raw_manifest.txt` 後計算）。
 
 登記於 `importers/__init__.py` 的字典。CLI：
 
@@ -225,7 +237,7 @@ vcp data import --importer <名> --src <路徑> --name <資料集名> \
 |---|---|---|---|
 | `coco` | instances JSON + 影像目錄 | det 或 seg（由 `--opt task=`） | 類別 id 原樣保留；bbox 已是 xywh 絕對像素 |
 | `yolo` | `labels/*.txt` + 影像 + 類別表 | det | 正規化 cxcywh → 絕對 xywh；尺寸以 Pillow 讀 header |
-| `csv_boxes` | 通用 CSV，欄位對照可用 `--opt` 覆寫 | det | 預設對照 `image_filename,label_id,x,y,w,h`（海廢格式）；sample_id = 檔名；無框的影像從影像目錄補為負樣本 |
+| `csv_boxes` | `--src` 目錄內的 CSV 與影像目錄，以 `--opt csv=<相對路徑>` 與 `--opt images=<相對目錄>` 指定；欄位對照可用 `--opt col_<標準名>=<CSV 欄名>` 覆寫 | det | 預設對照 `image_filename,label_id,x,y,w,h`（海廢格式）；sample_id = 檔名；影像目錄中沒有任何框的影像補為負樣本（`boxes=[]`） |
 | `imagefolder` | `root/<class>/*.jpg`，或 CSV `path,label`（label 可為多欄 0/1） | cls 或 multilabel | |
 | `dicom_study` | `train.csv` + `train_series.csv` + `train_series/<study>/<series>/<sop>.dcm` | multilabel | sample = study；views = 全部切片，只讀 DICOM header（`stop_before_pixels`）取 InstanceNumber 與尺寸；`view.meta` 帶 `plane` / `fluid_sensitive` / `fat_suppression`；12 標籤齊全者 `gold`，否則 `none`；`Report` 進 `meta.report`；test 目錄同樣可匯入（無標籤） |
 
@@ -373,4 +385,4 @@ vcp data audit --name <名> [--against <test 資料集名>] [--max-bad-boxes 0] 
 6. `vcp data export` 對 train 子集輸出 COCO 與 YOLO，附 manifest；COCO 輸出結構驗證通過。
 7. `vcp data lineage` 對 `train`、`train,valA`、`train,valA,valB` 三種輸入回傳正確乾淨基底。
 8. 對 holdout 取子集拋 `SealedSubsetError`；`--unseal --reason` 後回傳子集並留下 unseal 記錄。
-9. ruff 通過，包含 banned-api 規則對 `datetime.now` 的攔截（以一個故意違規的測試檔驗證規則生效後移除）。
+9. ruff 通過；另有一個單元測試把含 `datetime.now()` 的程式碼寫到暫存檔後對它執行 ruff，斷言 banned-api 規則確實報錯。

@@ -16,7 +16,7 @@ Status = Literal["OK", "WARN", "FAIL", "ABORT"]
 STATUS_ORDER: dict[str, int] = {"OK": 0, "WARN": 1, "FAIL": 2, "ABORT": 3}
 EXIT_CODES: dict[str, int] = {"OK": 0, "WARN": 0, "FAIL": 1, "ABORT": 2}
 FieldValue = str | int | float | bool
-_BARE = re.compile(r'^[^\s"=]+$')
+_BARE = re.compile(r'[^\s"=]+')
 
 
 def format_value(v: FieldValue) -> str:
@@ -25,7 +25,7 @@ def format_value(v: FieldValue) -> str:
     if isinstance(v, float):
         return repr(v)
     s = str(v)
-    return s if _BARE.match(s) else json.dumps(s, ensure_ascii=False)
+    return s if _BARE.fullmatch(s) else json.dumps(s, ensure_ascii=False)
 
 
 class Verdict(BaseModel):

@@ -52,6 +52,7 @@ select = ["E", "F", "I", "UP", "B", "TID"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/vcp/core/time.py" = ["TID251"]
+"src/vcp/core/config.py" = ["UP047"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -19,6 +19,8 @@ def test_full_precision_floats_and_bool_before_int():
     assert format_value(False) == "false"
     assert format_value(3) == "3"
     assert format_value("a=b") == '"a=b"'
+    assert format_value("abc\n") == '"abc\\n"'
+    assert format_value("70\n") == '"70\\n"'
 
 
 def test_worst_and_exit_codes():

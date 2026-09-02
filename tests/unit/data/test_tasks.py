@@ -80,16 +80,33 @@ def test_det_validation_bounds_and_presence_key():
     t = get_task("det")
     c = card("det")
     ok = sample(
-        Labels(boxes=[Box(x=0, y=0, w=8, h=8, category_id=0), Box(x=1, y=1, w=2, h=2, category_id=2)]),
+        Labels(boxes=[
+            Box(x=0, y=0, w=8, h=8, category_id=0),
+            Box(x=1, y=1, w=2, h=2, category_id=2),
+        ]),
         width=8, height=8,
     )
     t.validate(ok, c)
     assert t.stratify_key(ok, c) == (1, 0, 1)
     t.validate(sample(Labels(boxes=[]), width=8, height=8), c)
     assert t.stratify_key(sample(Labels(boxes=[]), width=8, height=8), c) == (0, 0, 0)
-    t.validate(sample(Labels(boxes=[Box(x=0, y=0, w=8.9, h=8, category_id=0)]), width=8, height=8), c)
+    t.validate(
+        sample(
+            Labels(boxes=[Box(x=0, y=0, w=8.9, h=8, category_id=0)]),
+            width=8,
+            height=8,
+        ),
+        c,
+    )
     with pytest.raises(ValidationFailed, match="exceeds view bounds"):
-        t.validate(sample(Labels(boxes=[Box(x=0, y=0, w=10, h=8, category_id=0)]), width=8, height=8), c)
+        t.validate(
+            sample(
+                Labels(boxes=[Box(x=0, y=0, w=10, h=8, category_id=0)]),
+                width=8,
+                height=8,
+            ),
+            c,
+        )
     with pytest.raises(ValidationFailed, match="view index"):
         t.validate(sample(Labels(boxes=[Box(x=0, y=0, w=1, h=1, category_id=0, view=3)])), c)
     with pytest.raises(ValidationFailed, match="unknown category id"):

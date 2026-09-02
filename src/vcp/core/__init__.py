@@ -1,0 +1,1 @@
+"""vcp.core module."""

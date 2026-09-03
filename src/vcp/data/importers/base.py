@@ -47,6 +47,7 @@ class ImportResult(BaseModel):
     rows_skipped: int
     skipped_reasons_path: Path | None
     plans_invalidated: int = 0
+    old_card_unreadable: bool = False
     unlabeled: int = 0
     exif_rotated: int = 0
     extra_fields: dict[str, int] = Field(default_factory=dict)
@@ -75,17 +76,18 @@ def get_importer(name: str) -> Importer:
         raise RegistryError(f"unknown importer {name!r}; known: {sorted(IMPORTERS)}") from None
 
 
-def count_invalidated_plans(paths: DatasetPaths, new_digest: str) -> int:
-    """Existing split plans that a re-import with a different samples_hash would orphan."""
+def count_invalidated_plans(paths: DatasetPaths, new_digest: str) -> tuple[int, bool]:
+    """(plans a re-import would orphan, old card readable). An unreadable old card cannot prove
+    the plans still match, so every plan file counts."""
     if not paths.card_yaml.is_file() or not paths.splits_dir.is_dir():
-        return 0
+        return 0, True
     try:
         old = load_yaml_model(paths.card_yaml, DatasetCard)
     except ValidationFailed:
-        old = None  # unreadable old card: cannot prove the plans still match, so count them
-    if old is not None and old.samples_hash == new_digest:
-        return 0
-    return len(list(paths.splits_dir.glob("*.json")))
+        return len(list(paths.splits_dir.glob("*.json"))), False
+    if old.samples_hash == new_digest:
+        return 0, True
+    return len(list(paths.splits_dir.glob("*.json"))), True
 
 
 def finalize_import(
@@ -136,7 +138,9 @@ def finalize_import(
         exif_policy=exif_policy,
     )
     dataset = Dataset.from_parts(card, samples)
-    plans_invalidated = count_invalidated_plans(paths, samples_digest(dataset.samples))
+    plans_invalidated, old_card_readable = count_invalidated_plans(
+        paths, samples_digest(dataset.samples)
+    )
     raw_hash = write_manifest(dir_manifest(spec.src, mode=spec.raw_manifest), paths.raw_manifest)
     dataset.card = dataset.card.model_copy(
         update={"source": source.model_copy(update={"raw_hash": raw_hash})}
@@ -156,6 +160,7 @@ def finalize_import(
         rows_skipped=len(skipped),
         skipped_reasons_path=skipped_path,
         plans_invalidated=plans_invalidated,
+        old_card_unreadable=not old_card_readable,
         unlabeled=unlabeled,
         exif_rotated=exif_rotated,
         extra_fields=dict(extra_fields or {}),

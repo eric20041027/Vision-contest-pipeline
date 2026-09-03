@@ -181,6 +181,8 @@ def import_cmd(
             fields["skipped_reasons"] = str(res.skipped_reasons_path)
         if res.plans_invalidated:
             fields["plans_invalidated"] = res.plans_invalidated
+            if res.old_card_unreadable:
+                fields["old_card"] = "unreadable"
         if res.unlabeled:
             fields["unlabeled"] = res.unlabeled
         if res.exif_rotated:

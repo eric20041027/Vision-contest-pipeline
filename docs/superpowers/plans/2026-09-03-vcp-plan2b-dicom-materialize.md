@@ -1745,7 +1745,7 @@ def test_dicom_import_skips_non_dicom_and_validates_options(roots):
     (src / "1.2.1" / "notes.dcm").write_bytes(b"hello")
     res = get_importer("dicom").run(_spec(roots, src))
     assert [(r["file"], r["reason"]) for r in _skipped(res)] == [("1.2.1/notes.dcm", "not_dicom")]
-    assert res.rows_read == 7
+    assert res.rows_read == 10  # 9 slices + the junk file
     with pytest.raises(ValidationFailed, match="no files match"):
         get_importer("dicom").run(_spec(roots, src, glob="**/*.ima"))
     with pytest.raises(ValidationFailed, match="target_cols"):

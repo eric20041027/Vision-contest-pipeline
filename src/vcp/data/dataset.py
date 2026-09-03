@@ -138,7 +138,10 @@ class Dataset:
         paths: DatasetPaths | None = None,
     ) -> list[Sample]:
         """Samples of one subset. A sealed subset opens only with an explicit, recorded unseal."""
-        from vcp.data.split import assert_plan_invariants  # local: split imports Dataset lazily
+        from vcp.data.split import (  # local: split imports Dataset lazily
+            assert_plan_invariants,
+            resolve_group_fn,
+        )
 
         if plan.dataset != self.card.name:
             raise PlanMismatchError(
@@ -149,7 +152,11 @@ class Dataset:
                 f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
                 f"dataset now has {self.card.samples_hash[:12]}"
             )
-        assert_plan_invariants(plan, self)
+        try:
+            group_of = resolve_group_fn(str(plan.params.get("group_key", "auto")))
+        except ValidationFailed:
+            group_of = None
+        assert_plan_invariants(plan, self, group_of=group_of)
         spec = plan.subset(name)
         if spec.role == "sealed":
             if not unseal:

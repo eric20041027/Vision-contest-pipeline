@@ -108,6 +108,9 @@ def run_command(
     if json_mode:
         doc = {"cmd": cmd, "status": status, "fields": fields, "result": payload}
         typer.echo(json.dumps(doc, ensure_ascii=False, default=str))
+        for line in human:
+            if line.startswith("VERDICT "):
+                typer.echo(line, err=True)
         typer.echo(verdict.line(), err=True)
     else:
         for line in human:

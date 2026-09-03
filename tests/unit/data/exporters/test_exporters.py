@@ -221,6 +221,28 @@ def test_export_yolo_rejects_flatten_collisions(roots, tmp_path):
         )
 
 
+def test_export_empty_subset_warns(roots, tmp_path):
+    paths = DatasetPaths.resolve("few", data_root=roots.data, configs_root=roots.configs)
+    samples = det_samples(5, seed=0)
+    write_images(roots.data / "raw" / "few", samples)
+    ds = Dataset.from_parts(make_card("det", name="few", image_root="raw/few"), samples)
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    save_plan(plan, paths)
+    res = export_subset(
+        ExportSpec(
+            name="few",
+            plan_id="p",
+            subset="valA",
+            format="coco",
+            out=tmp_path / "e",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    assert res.files == 1 and res.warnings == ["subset is empty"]
+
+
 def test_export_yolo_rejects_label_name_collisions(roots, tmp_path):
     paths = DatasetPaths.resolve("lbl", data_root=roots.data, configs_root=roots.configs)
     samples = [

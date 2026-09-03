@@ -464,3 +464,24 @@ def test_import_warns_on_exif_rotated_views(roots, tmp_path):
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert "status=WARN" in v and "exif_rotated=1" in v
+
+
+def test_materialize_cli(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0
+    r = runner.invoke(
+        app, ["data", "materialize", "--name", "tiny", "--mode", "png", "--resize", "4"]
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "materialized=60" in v and "mode=png" in v and "resize=4" in v
+    r = runner.invoke(
+        app, ["data", "materialize", "--name", "tiny", "--mode", "png", "--resize", "4"]
+    )
+    assert "skipped=60" in _last_verdict(r.output)
+    (tmp_path / "src" / "s0003.jpg").unlink()
+    r = runner.invoke(app, ["data", "materialize", "--name", "tiny", "--mode", "npy"])
+    assert r.exit_code == 1 and "failed=1" in _last_verdict(r.output)
+    r = runner.invoke(
+        app, ["data", "materialize", "--name", "tiny", "--mode", "npy", "--resize", "3"]
+    )
+    assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)

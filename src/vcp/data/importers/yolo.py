@@ -18,6 +18,10 @@ def load_names(path: Path) -> list[Category]:
         raise ValidationFailed(f"names file not found: {path}")
     if path.suffix.lower() in (".yaml", ".yml"):
         doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(doc, dict):
+            raise ValidationFailed(
+                f"{path.name}: expected a YAML mapping at top level", location=str(path)
+            )
         names = doc.get("names")
         if isinstance(names, dict):
             return [Category(id=int(k), name=str(v)) for k, v in sorted(names.items())]

@@ -65,6 +65,12 @@ def test_names_from_yaml_and_errors(roots, tmp_path):
     assert [c.name for c in res.dataset.card.categories] == ["cat", "dog"]
     (src / "list.yaml").write_text("names: [x, y, z]\n", encoding="utf-8")
     assert [c.name for c in load_names(src / "list.yaml")] == ["x", "y", "z"]
+    (src / "bad.yaml").write_text("- cat\n- dog\n", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="YAML mapping"):
+        load_names(src / "bad.yaml")
+    (src / "nonames.yaml").write_text("path: x\n", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="no usable 'names'"):
+        load_names(src / "nonames.yaml")
     with pytest.raises(ValidationFailed, match="names file not found"):
         load_names(src / "nope.txt")
     (src / "labels" / "a.txt").write_text("5 0.5 0.5 0.2 0.4\n", encoding="utf-8")

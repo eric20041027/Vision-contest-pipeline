@@ -45,7 +45,7 @@ def test_jsonl_import_writes_dataset(roots, tmp_path):
     assert (res.rows_read, res.samples_written, res.rows_skipped) == (4, 4, 0)
     assert res.skipped_reasons_path is None
     ds = Dataset.load("ds", data_root=roots.data, configs_root=roots.configs)
-    assert ds.samples == samples
+    assert ds.samples == tuple(samples)
     assert ds.card.task == "det"
     assert [c.name for c in ds.card.categories] == ["cat", "dog", "bird"]
     assert ds.card.source.importer == "jsonl" and ds.card.source.license == "CC0"

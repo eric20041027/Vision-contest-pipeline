@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -47,7 +48,7 @@ def read_samples_jsonl(path: Path) -> Iterator[Sample]:
 class Dataset:
     def __init__(self, card: DatasetCard, samples: Iterable[Sample]) -> None:
         self.card = card
-        self.samples: list[Sample] = sorted(samples, key=lambda s: s.sample_id)
+        self.samples: tuple[Sample, ...] = tuple(sorted(samples, key=lambda s: s.sample_id))
         self._by_id: dict[str, Sample] = {}
         for s in self.samples:
             if s.sample_id in self._by_id:
@@ -55,8 +56,8 @@ class Dataset:
             self._by_id[s.sample_id] = s
 
     @property
-    def by_id(self) -> dict[str, Sample]:
-        return self._by_id
+    def by_id(self) -> Mapping[str, Sample]:
+        return MappingProxyType(self._by_id)
 
     def validate(self) -> None:
         task = get_task(self.card.task)

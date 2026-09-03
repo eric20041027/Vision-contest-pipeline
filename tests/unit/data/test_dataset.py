@@ -63,6 +63,13 @@ def test_from_parts_fills_count_runs_task_validation_and_rejects_unknown_task():
         Dataset.from_parts(make_card("pose"), det_samples(1))
 
 
+def test_samples_and_by_id_are_immutable_views():
+    ds = Dataset.from_parts(make_card("det"), det_samples(2))
+    assert isinstance(ds.samples, tuple)
+    with pytest.raises(TypeError):
+        ds.by_id["x"] = ds.samples[0]  # type: ignore[index]
+
+
 def test_validate_checks_sample_count():
     ds = Dataset.from_parts(make_card("det"), det_samples(3))
     ds.card = ds.card.model_copy(update={"sample_count": 99})

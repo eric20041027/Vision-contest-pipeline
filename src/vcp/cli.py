@@ -46,8 +46,13 @@ def _root() -> None:
 
 
 @app.command("version")
-def version_cmd() -> None:
-    typer.echo(__version__)
+def version_cmd(json_mode: JsonOpt = False, data_root: DataRootOpt = None) -> None:
+    """Print the vcp version."""
+
+    def fn() -> CmdResult:
+        return "OK", {"version": __version__}, {"version": __version__}, [__version__]
+
+    run_command("version", json_mode, data_root, fn)
 
 
 def parse_opts(opts: list[str] | None) -> dict[str, str]:

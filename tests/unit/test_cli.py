@@ -36,6 +36,11 @@ def test_help_and_version():
     assert runner.invoke(app, ["--help"]).exit_code == 0
     r = runner.invoke(app, ["version"])
     assert r.exit_code == 0 and "0.1.0" in r.output
+    assert _last_verdict(r.output) == "VERDICT cmd=version status=OK version=0.1.0"
+    r = runner.invoke(app, ["version", "--json"])
+    assert r.exit_code == 0
+    doc = json.loads(next(line for line in r.output.splitlines() if line.startswith("{")))
+    assert doc["cmd"] == "version" and doc["result"]["version"] == "0.1.0"
 
 
 def test_import_validate_split_lineage_flow(roots, tmp_path):

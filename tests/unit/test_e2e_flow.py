@@ -63,7 +63,9 @@ def test_full_flow(roots, tmp_path):
     r = runner.invoke(app, ["data", "audit", "--name", "flow"])
     assert r.exit_code == 0, r.output
     groups = json.loads(
-        (roots.data / "datasets" / "flow" / "cache" / "audit" / "groups.json").read_text()
+        (roots.data / "datasets" / "flow" / "cache" / "audit" / "groups.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert set(groups) == {"img00.jpg", "img00_copy.jpg"}
 
@@ -84,7 +86,9 @@ def test_full_flow(roots, tmp_path):
         ],
     )
     assert r.exit_code == 0, r.output
-    plan = json.loads((roots.configs / "datasets" / "flow" / "splits" / "p1.json").read_text())
+    plan = json.loads(
+        (roots.configs / "datasets" / "flow" / "splits" / "p1.json").read_text(encoding="utf-8")
+    )
     assert plan["assignment"]["img00.jpg"] == plan["assignment"]["img00_copy.jpg"]
     assert plan["params"]["group_from_audit"] is True
 

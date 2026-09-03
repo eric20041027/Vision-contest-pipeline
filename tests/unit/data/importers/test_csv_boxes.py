@@ -99,7 +99,7 @@ def test_bad_rows_abort_with_location_or_skip_with_reasons(roots, tmp_path):
         get_importer("csv_boxes").run(_spec(roots, src))
     res = get_importer("csv_boxes").run(_spec(roots, src, on_bad_row="skip"))
     assert (res.rows_read, res.rows_skipped, res.samples_written) == (5, 4, 3)
-    txt = res.skipped_reasons_path.read_text().splitlines()
+    txt = res.skipped_reasons_path.read_text(encoding="utf-8").splitlines()
     reasons = [json.loads(line)["reason"] for line in txt]
     assert any("unknown image" in r for r in reasons)
     assert any("unparsable" in r for r in reasons)

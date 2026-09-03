@@ -252,10 +252,12 @@ class DicomImporter:
         extra_tags = split_list(opts.get("tags"))
         group_from = opts.get("group_from", DEFAULT_GROUP_TAG)
         role_from = opts.get("role_from")
-        # Validate the CSV-join options before paying for the (threaded, but O(n)) header scan:
-        # a typo in --opt target_cols= should fail fast, not after reading every header on disk.
+        # Validate the CSV-join options (and, when there is no labels_csv, --opt task=) before
+        # paying for the (threaded, but O(n)) header scan: a typo should fail fast, not after
+        # reading every header on disk.
         seq_meta = load_seq_csv(spec.src, opts)
         table = load_labels(spec.src, opts, sample_level)
+        no_labels_task = None if table else choice_option(opts, "task", TASKS, "multilabel")
         files = find_files(spec.src, pattern)
         if not files:
             raise ValidationFailed(f"no files match {pattern!r} under {spec.src}")
@@ -322,7 +324,7 @@ class DicomImporter:
             task = table.task
             categories = [Category(id=i, name=c) for i, c in enumerate(table.target_cols)]
         else:
-            task, categories = choice_option(opts, "task", TASKS, "multilabel"), []
+            task, categories = no_labels_task, []
         return finalize_import(
             spec=spec,
             importer=self,

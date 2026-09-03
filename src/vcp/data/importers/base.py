@@ -147,12 +147,15 @@ def finalize_import(
     )
     dataset.save(paths)
     skipped_path: Path | None = None
+    skip_file = paths.cache_dir / "import_skipped.jsonl"
     if skipped:
         paths.cache_dir.mkdir(parents=True, exist_ok=True)
-        skipped_path = paths.cache_dir / "import_skipped.jsonl"
+        skipped_path = skip_file
         with skipped_path.open("w", encoding="utf-8", newline="\n") as f:
             for row in skipped:
                 f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    else:
+        skip_file.unlink(missing_ok=True)
     return ImportResult(
         dataset=dataset,
         rows_read=rows_read,

@@ -9,6 +9,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.data.audit.base import AuditContext, CheckResult, write_jsonl
 from vcp.data.audit.dhash import compute_hashes, cross_pairs, gray64, near_pairs, pearson
 from vcp.data.dataset import Dataset
+from vcp.data.importers.common import IMAGE_EXTS
 
 
 class _UnionFind:
@@ -49,7 +50,9 @@ class DedupCheck:
     name = "dedup"
 
     def applies(self, dataset: Dataset) -> bool:
-        return True
+        return all(
+            Path(v.path).suffix.lower() in IMAGE_EXTS for s in dataset.samples for v in s.views
+        )
 
     def run(self, ctx: AuditContext) -> CheckResult:
         opts = ctx.opts

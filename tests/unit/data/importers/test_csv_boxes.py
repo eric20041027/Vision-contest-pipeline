@@ -107,6 +107,22 @@ def test_bad_rows_abort_with_location_or_skip_with_reasons(roots, tmp_path):
     assert any("non-positive size" in r for r in reasons)
 
 
+def test_clean_reimport_removes_stale_skipped_reasons_file(roots, tmp_path):
+    """F3: a re-import that has nothing to skip must clear a stale cache/import_skipped.jsonl
+    left behind by an earlier, dirtier import of the same dataset name."""
+    bad = "image_filename,label_id,x,y,w,h,confidence\na.jpg,3,1,1,5,4,1.0\nzzz.jpg,3,1,1,5,4,1.0\n"
+    src = _src(tmp_path, bad)
+    res = get_importer("csv_boxes").run(_spec(roots, src, on_bad_row="skip"))
+    assert res.skipped_reasons_path is not None
+    skipped_path = res.skipped_reasons_path
+    assert skipped_path.is_file()
+
+    (src / "labels.csv").write_text(GOOD, encoding="utf-8")
+    res2 = get_importer("csv_boxes").run(_spec(roots, src, on_bad_row="skip"))
+    assert res2.skipped_reasons_path is None
+    assert not skipped_path.is_file()
+
+
 def test_option_validation_and_missing_inputs(roots, tmp_path):
     src = _src(tmp_path, GOOD)
     with pytest.raises(ValidationFailed, match="box_format"):

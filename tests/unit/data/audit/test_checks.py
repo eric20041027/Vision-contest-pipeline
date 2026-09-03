@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from helpers import make_card, write_exif_image
+from helpers import make_card, write_dicom_study, write_exif_image
 from vcp.core.paths import DatasetPaths
 from vcp.data.audit import AUDITS, get_check
 from vcp.data.audit.base import AuditContext, AuditOptions, run_audit
@@ -15,6 +15,8 @@ from vcp.data.audit.coords import (
     suspicious_problems,
 )
 from vcp.data.dataset import Dataset
+from vcp.data.importers import get_importer
+from vcp.data.importers.base import ImportSpec
 from vcp.data.schema import Box, Labels, Mask, Sample, View
 
 
@@ -217,6 +219,34 @@ def test_dedup_groups_and_overlap(roots):
     ).is_file()
     alone = get_check("dedup").run(AuditContext(dataset=ds, paths=paths, opts=AuditOptions()))
     assert alone.status == "OK" and alone.fields["overlap_pairs"] == 0
+
+
+def test_dedup_check_does_not_apply_to_a_dicom_dataset(roots):
+    """F1: dHash needs Pillow-readable image views; a dicom dataset's views are ``.dcm`` files
+    (or series directories), so ``dedup`` must not run for it (spec-level ruling)."""
+    src = roots.data / "raw" / "dcm"
+    write_dicom_study(src, study_uid="1.2.1", series=1, slices=2)
+    res = get_importer("dicom").run(
+        ImportSpec(
+            importer="dicom",
+            src=src,
+            name="dcm",
+            options={},
+            license="CC0",
+            url="u",
+            downloaded_at="2026-09-03",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    ds = res.dataset
+    paths = DatasetPaths.resolve("dcm", data_root=roots.data, configs_root=roots.configs)
+    assert get_check("dedup").applies(ds) is False
+    status, results = run_audit(AuditContext(dataset=ds, paths=paths, opts=AuditOptions()))
+    assert "dedup" not in results
+    assert status == "OK"
+    img_ds, _ = _dataset(roots, "img-ok", [("a.png", _gradient(6), Labels(boxes=[]), {})])
+    assert get_check("dedup").applies(img_ds) is True
 
 
 def test_provenance_and_run_audit(roots):

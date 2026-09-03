@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from vcp.data.schema import Box, Category, DatasetCard, Labels, Sample, SourceInfo, View
@@ -157,3 +158,65 @@ def write_exif_image(path: Path, *, size: tuple[int, int] = (8, 4), orientation:
     exif = Image.Exif()
     exif[0x0112] = orientation
     Image.new("RGB", size, (10, 20, 30)).save(path, format="JPEG", exif=exif.tobytes())
+
+
+def write_dicom_study(
+    root: Path,
+    *,
+    study_uid: str = "1.2.826.0.1.3680043.8.498.1",
+    patient_id: str = "P1",
+    series: int = 2,
+    slices: int = 3,
+    size: tuple[int, int] = (16, 16),
+    missing_instance_number: bool = False,
+    compress: str | None = None,
+    descriptions: tuple[str, ...] = ("sag_t2", "cor_pd", "ax_t1"),
+) -> list[Path]:
+    """Synthetic MR study at ``<root>/<study>/<series>/<sop>.dcm``; returns the files written.
+
+    InstanceNumber runs *backwards* relative to file name and slice position on purpose, so a
+    consumer that sorts correctly yields pixel values [.., +20, +10, +0]. Pixel value of slice k in
+    series s is ``100 * (s + 1) + 10 * k`` everywhere.
+    """
+    from pydicom.dataset import Dataset, FileMetaDataset
+    from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, RLELossless
+
+    written: list[Path] = []
+    for si in range(series):
+        series_uid = f"{study_uid}.{si + 1}"
+        for k in range(slices):
+            sop = f"{series_uid}.{k + 1}"
+            ds = Dataset()
+            ds.file_meta = FileMetaDataset()
+            ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+            ds.file_meta.MediaStorageSOPClassUID = MRImageStorage
+            ds.file_meta.MediaStorageSOPInstanceUID = sop
+            ds.SOPClassUID = MRImageStorage
+            ds.SOPInstanceUID = sop
+            ds.StudyInstanceUID = study_uid
+            ds.SeriesInstanceUID = series_uid
+            ds.PatientID = patient_id
+            ds.Modality = "MR"
+            ds.SeriesDescription = descriptions[si % len(descriptions)]
+            ds.SeriesNumber = si + 1
+            if not missing_instance_number:
+                ds.InstanceNumber = slices - k
+            ds.ImagePositionPatient = [0.0, 0.0, float(k) * 3.0]
+            ds.ImageOrientationPatient = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            ds.PixelSpacing = [0.5, 0.5]
+            ds.SliceThickness = 3.0
+            ds.Rows, ds.Columns = size[1], size[0]
+            ds.SamplesPerPixel = 1
+            ds.PhotometricInterpretation = "MONOCHROME2"
+            ds.BitsAllocated, ds.BitsStored, ds.HighBit, ds.PixelRepresentation = 16, 12, 11, 0
+            ds.RescaleIntercept, ds.RescaleSlope = 0, 1
+            ds.WindowCenter, ds.WindowWidth = 1000, 2000
+            arr = np.full((size[1], size[0]), 100 * (si + 1) + 10 * k, dtype="<u2")
+            ds.PixelData = arr.tobytes()
+            if compress == "rle":
+                ds.compress(RLELossless)
+            path = root / study_uid / series_uid / f"{sop}.dcm"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            ds.save_as(path, enforce_file_format=True)
+            written.append(path)
+    return written

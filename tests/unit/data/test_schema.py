@@ -3,6 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from helpers import make_card
 from vcp.data.schema import (
     Box,
     Category,
@@ -153,3 +154,19 @@ def test_card_category_uniqueness_and_empty_categories_allowed():
 def test_extra_labels_stored_unvalidated():
     lab = Labels(cls=0, extra={"keypoints": [[1, 2, 3]]})
     assert lab.extra["keypoints"] == [[1, 2, 3]]
+
+
+def test_card_exif_policy_and_manifest_mode_defaults_are_backward_compatible():
+    card = make_card("det")
+    assert card.exif_policy == "stored"
+    assert card.source.raw_manifest_mode == "full"
+    dumped = card.model_dump(mode="json")
+    dumped.pop("exif_policy")
+    dumped["source"].pop("raw_manifest_mode")
+    assert DatasetCard.model_validate(dumped).exif_policy == "stored"  # v3 cards still load
+    with pytest.raises(ValidationError):
+        DatasetCard.model_validate({**card.model_dump(mode="json"), "exif_policy": "rotated"})
+    with pytest.raises(ValidationError):
+        DatasetCard.model_validate(
+            {**dumped, "source": {**dumped["source"], "raw_manifest_mode": "md5"}}
+        )

@@ -1,4 +1,7 @@
+import pytest
+
 from vcp.core import hashing as h
+from vcp.core.hashing import dir_manifest, manifest_hash
 
 
 def test_canonical_json_is_order_independent():
@@ -33,3 +36,17 @@ def test_dir_manifest_sorted_posix_and_hash_stable(tmp_path):
 def test_dir_manifest_empty_dir(tmp_path):
     assert h.dir_manifest(tmp_path) == []
     assert h.manifest_hash([]) == h.sha256_text("\n")
+
+
+def test_dir_manifest_sizes_mode_skips_hashing(tmp_path):
+    (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.bin").write_bytes(b"\x00" * 3)
+    full = dir_manifest(tmp_path)
+    sizes = dir_manifest(tmp_path, mode="sizes")
+    assert [ln.split("\t")[:2] for ln in full] == [ln.split("\t")[:2] for ln in sizes]
+    assert all(ln.endswith("\t-") for ln in sizes)
+    assert not any(ln.endswith("\t-") for ln in full)
+    assert manifest_hash(full) != manifest_hash(sizes)
+    with pytest.raises(ValueError, match="manifest mode"):
+        dir_manifest(tmp_path, mode="md5")

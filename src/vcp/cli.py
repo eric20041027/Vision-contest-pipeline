@@ -13,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from vcp import __version__
 from vcp.core.errors import ValidationFailed, VcpError
+from vcp.core.hashing import MANIFEST_MODES
 from vcp.core.log import FieldValue, Status, Verdict, exit_code, setup_logging
 from vcp.core.paths import DatasetPaths, logs_dir, resolve_data_root
 from vcp.data.audit import AuditContext, AuditOptions, run_audit
@@ -128,6 +129,13 @@ def import_cmd(
     url: Annotated[str, typer.Option("--url", help="where the raw data came from")],
     downloaded_at: Annotated[str, typer.Option("--downloaded-at", help="UTC date of download")],
     notes: Annotated[str, typer.Option("--notes")] = "",
+    raw_manifest: Annotated[
+        str,
+        typer.Option(
+            "--raw-manifest",
+            help="full: md5 of every raw file (default) | sizes: names and sizes only (huge trees)",
+        ),
+    ] = "full",
     opt: Annotated[
         list[str] | None, typer.Option("--opt", help="importer option key=value (repeatable)")
     ] = None,
@@ -138,6 +146,10 @@ def import_cmd(
     """Raw data -> canonical dataset (dataset.yaml + samples.jsonl)."""
 
     def fn() -> CmdResult:
+        if raw_manifest not in MANIFEST_MODES:
+            raise ValidationFailed(
+                f"--raw-manifest must be one of {MANIFEST_MODES}, got {raw_manifest!r}"
+            )
         spec = ImportSpec(
             importer=importer,
             src=src,
@@ -147,11 +159,14 @@ def import_cmd(
             url=url,
             downloaded_at=downloaded_at,
             notes=notes,
+            raw_manifest=raw_manifest,
             data_root=data_root,
             configs_root=configs_root,
         )
         res = get_importer(importer).run(spec)
-        status: Status = "WARN" if res.rows_skipped or res.plans_invalidated else "OK"
+        status: Status = (
+            "WARN" if res.rows_skipped or res.plans_invalidated or res.exif_rotated else "OK"
+        )
         fields: dict[str, FieldValue] = {
             "name": name,
             "task": res.dataset.card.task,
@@ -165,6 +180,8 @@ def import_cmd(
             fields["plans_invalidated"] = res.plans_invalidated
         if res.unlabeled:
             fields["unlabeled"] = res.unlabeled
+        if res.exif_rotated:
+            fields["exif_rotated"] = res.exif_rotated
         human = [
             f"imported {res.samples_written} samples into dataset {name!r} "
             f"(task={res.dataset.card.task})"

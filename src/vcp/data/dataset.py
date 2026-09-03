@@ -152,10 +152,7 @@ class Dataset:
                 f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
                 f"dataset now has {self.card.samples_hash[:12]}"
             )
-        try:
-            group_of = resolve_group_fn(str(plan.params.get("group_key", "auto")))
-        except ValidationFailed:
-            group_of = None
+        group_of = resolve_group_fn(str(plan.params.get("group_key", "auto")))
         assert_plan_invariants(plan, self, group_of=group_of)
         spec = plan.subset(name)
         if spec.role == "sealed":

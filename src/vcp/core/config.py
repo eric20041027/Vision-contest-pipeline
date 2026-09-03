@@ -11,8 +11,11 @@ from vcp.core.errors import ValidationFailed
 
 
 def load_yaml_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ValidationFailed(f"invalid YAML: {e}", location=str(path)) from e
     if not isinstance(data, dict):
         raise ValidationFailed("expected a YAML mapping at top level", location=str(path))
     try:

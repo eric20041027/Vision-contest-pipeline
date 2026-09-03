@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from PIL import Image
 
 from helpers import CATS, det_samples, make_card, write_images
 from vcp.core.errors import RegistryError, SealedSubsetError, ValidationFailed, VcpError
@@ -276,3 +277,46 @@ def test_export_yolo_rejects_label_name_collisions(roots, tmp_path):
                 configs_root=roots.configs,
             )
         )
+
+
+def _det_dataset(roots, name, view_paths):
+    paths = DatasetPaths.resolve(name, data_root=roots.data, configs_root=roots.configs)
+    raw = roots.data / "raw" / name
+    raw.mkdir(parents=True, exist_ok=True)
+    for p in view_paths:
+        Image.new("RGB", (8, 8)).save(raw / p, format="PNG")
+    samples = [
+        Sample(
+            sample_id=p,
+            views=[View(path=p, width=8, height=8)],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        )
+        for p in view_paths
+    ]
+    ds = Dataset.from_parts(make_card("det", name=name, image_root=f"raw/{name}"), samples)
+    ds.save(paths)
+    save_plan(build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:1.0"), seed=0), paths)
+
+
+def _yolo_spec(roots, name, out):
+    return ExportSpec(
+        name=name,
+        plan_id="p",
+        subset="train",
+        format="yolo",
+        out=out,
+        options={"copy": "true"},
+        data_root=roots.data,
+        configs_root=roots.configs,
+    )
+
+
+def test_export_yolo_image_and_label_namespaces_are_separate(roots, tmp_path):
+    _det_dataset(roots, "solo", ["x.txt"])
+    export_subset(_yolo_spec(roots, "solo", tmp_path / "solo"))
+    assert (tmp_path / "solo" / "images" / "x.txt").is_file()
+    assert (tmp_path / "solo" / "labels" / "x.txt").is_file()
+    _det_dataset(roots, "pair", ["x.jpg", "x.txt"])
+    with pytest.raises(ValidationFailed, match="label name collision"):
+        export_subset(_yolo_spec(roots, "pair", tmp_path / "pair"))

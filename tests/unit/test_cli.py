@@ -3,7 +3,7 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from helpers import CATS, det_samples
+from helpers import CATS, det_samples, write_images
 from vcp.cli import app, parse_opts, render_table
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
@@ -18,10 +18,13 @@ def _last_verdict(output: str) -> str:
     return lines[-1]
 
 
-def _import_tiny(roots, tmp_path, name="tiny", n=60):
+def _import_tiny(roots, tmp_path, name="tiny", n=60, with_images=False):
     src = tmp_path / "src"
     src.mkdir(exist_ok=True)
-    write_samples_jsonl(src / "samples.jsonl", det_samples(n, seed=0))
+    samples = det_samples(n, seed=0)
+    write_samples_jsonl(src / "samples.jsonl", samples)
+    if with_images:
+        write_images(src, samples)
     (src / "cats.json").write_text(json.dumps([c.model_dump() for c in CATS]), encoding="utf-8")
     return runner.invoke(
         app,
@@ -363,3 +366,17 @@ def test_export_cli_flow(roots, tmp_path):
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
+
+
+def test_audit_cli(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0
+    r = runner.invoke(app, ["data", "audit", "--name", "tiny"])
+    assert r.exit_code == 0, r.output
+    assert "VERDICT cmd=audit.coords status=OK" in r.output
+    assert "VERDICT cmd=audit.dedup status=OK" in r.output
+    assert "VERDICT cmd=audit.provenance status=OK" in r.output
+    v = _last_verdict(r.output)
+    assert v.startswith("VERDICT cmd=audit status=OK") and "dedup=OK" in v
+    assert (roots.data / "datasets" / "tiny" / "cache" / "audit" / "summary.json").is_file()
+    r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--against", "missing"])
+    assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)

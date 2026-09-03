@@ -154,7 +154,11 @@ def test_export_yolo_copy_and_symlink_fallback(roots, tmp_path, det_ds, monkeypa
     assert data["train"] == "images" and data["names"] == {0: "cat", 1: "dog", 2: "bird"}
     assert Path(data["path"]) == out.resolve()
     sample = ds.by_id[ids[0]]
-    lines = (out / "labels" / Path(names[0]).with_suffix(".txt").name).read_text().splitlines()
+    lines = (
+        (out / "labels" / Path(names[0]).with_suffix(".txt").name)
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     assert len(lines) == len(sample.labels.boxes)
     if lines:
         idx, cx, cy, w, h = lines[0].split()

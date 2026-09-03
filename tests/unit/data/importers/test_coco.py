@@ -98,7 +98,9 @@ def test_import_det(roots, tmp_path):
         (1, "bottle", {"supercategory": "plastic"}),
         (2, "net", {}),
     ]
-    reason = json.loads(res.skipped_reasons_path.read_text().splitlines()[0])["reason"]
+    reason = json.loads(res.skipped_reasons_path.read_text(encoding="utf-8").splitlines()[0])[
+        "reason"
+    ]
     assert "unknown image_id" in reason
 
 

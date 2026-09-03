@@ -219,3 +219,34 @@ def test_export_yolo_rejects_flatten_collisions(roots, tmp_path):
                 configs_root=roots.configs,
             )
         )
+
+
+def test_export_yolo_rejects_label_name_collisions(roots, tmp_path):
+    paths = DatasetPaths.resolve("lbl", data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        Sample(
+            sample_id=p,
+            views=[View(path=p, width=8, height=8)],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        )
+        for p in ("x.jpg", "x.png", "y.jpg")
+    ]
+    write_images(roots.data / "raw" / "lbl", samples)
+    ds = Dataset.from_parts(make_card("det", name="lbl", image_root="raw/lbl"), samples)
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:1.0"), seed=0)
+    save_plan(plan, paths)
+    with pytest.raises(ValidationFailed, match="label name collision"):
+        export_subset(
+            ExportSpec(
+                name="lbl",
+                plan_id="p",
+                subset="train",
+                format="yolo",
+                out=tmp_path / "y",
+                options={"copy": "true"},
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )

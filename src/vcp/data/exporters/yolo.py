@@ -61,13 +61,17 @@ class YoloExporter:
             src = image_root / view.path
             if not src.is_file():
                 raise ValidationFailed(f"image missing: {src}")
+            suffix = Path(view.path).suffix
             flat = view.path.replace("/", "__")
-            if flat in used:
-                raise ValidationFailed(
-                    f"flattened image name collision: {view.path!r} and "
-                    f"{used[flat]!r} both map to {flat!r}"
-                )
-            used[flat] = view.path
+            stem = flat[: -len(suffix)] if suffix and flat.endswith(suffix) else flat
+            label_name = stem + ".txt"
+            for kind, key in (("image", flat), ("label", label_name)):
+                if key in used:
+                    raise ValidationFailed(
+                        f"flattened {kind} name collision: {view.path!r} and {used[key]!r} "
+                        f"both map to {key!r}"
+                    )
+                used[key] = view.path
             dst = images_out / flat
             fell_back = _place_image(src, dst, copy=copy) or fell_back
             files.append(dst)
@@ -79,7 +83,7 @@ class YoloExporter:
                 cx, cy = (b.x + b.w / 2) / view.width, (b.y + b.h / 2) / view.height
                 w, h = b.w / view.width, b.h / view.height
                 lines.append(f"{index[b.category_id]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
-            label = labels_out / Path(flat).with_suffix(".txt").name
+            label = labels_out / label_name
             with label.open("w", encoding="utf-8", newline="\n") as f:
                 f.write("\n".join(lines) + ("\n" if lines else ""))
             files.append(label)

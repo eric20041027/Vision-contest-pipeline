@@ -113,3 +113,9 @@ def test_imagefolder_without_images_fails(roots, tmp_path):
     (src / "cat" / "notes.txt").write_text("x", encoding="utf-8")
     with pytest.raises(ValidationFailed, match="no images found"):
         get_importer("imagefolder").run(_spec(roots, "imagefolder", src))
+
+
+def test_image_csv_empty_fails(roots, tmp_path):
+    src = _csv_src(tmp_path, "path,label\n")
+    with pytest.raises(ValidationFailed, match="no data rows"):
+        get_importer("image_csv").run(_spec(roots, "image_csv", src))

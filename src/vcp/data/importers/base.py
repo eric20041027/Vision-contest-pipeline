@@ -46,6 +46,7 @@ class ImportResult(BaseModel):
     rows_skipped: int
     skipped_reasons_path: Path | None
     plans_invalidated: int = 0
+    unlabeled: int = 0
 
 
 class Importer(Protocol):
@@ -73,10 +74,13 @@ def get_importer(name: str) -> Importer:
 
 def count_invalidated_plans(paths: DatasetPaths, new_digest: str) -> int:
     """Existing split plans that a re-import with a different samples_hash would orphan."""
-    if not paths.card_yaml.is_file():
+    if not paths.card_yaml.is_file() or not paths.splits_dir.is_dir():
         return 0
-    old = load_yaml_model(paths.card_yaml, DatasetCard)
-    if old.samples_hash == new_digest or not paths.splits_dir.is_dir():
+    try:
+        old = load_yaml_model(paths.card_yaml, DatasetCard)
+    except ValidationFailed:
+        old = None  # unreadable old card: cannot prove the plans still match, so count them
+    if old is not None and old.samples_hash == new_digest:
         return 0
     return len(list(paths.splits_dir.glob("*.json")))
 
@@ -91,6 +95,7 @@ def finalize_import(
     samples: list[Sample],
     rows_read: int,
     skipped: list[dict[str, Any]],
+    unlabeled: int = 0,
 ) -> ImportResult:
     """Common tail of every importer: validate, then provenance, save, skip report.
 
@@ -141,4 +146,5 @@ def finalize_import(
         rows_skipped=len(skipped),
         skipped_reasons_path=skipped_path,
         plans_invalidated=plans_invalidated,
+        unlabeled=unlabeled,
     )

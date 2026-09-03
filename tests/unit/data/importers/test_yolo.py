@@ -56,6 +56,7 @@ def test_import_yolo(roots, tmp_path):
     assert ds.by_id["sub/b.jpg"].labels.boxes == []
     assert [(c.id, c.name) for c in ds.card.categories] == [(0, "cat"), (1, "dog")]
     assert res.rows_read == 3 and res.rows_skipped == 0
+    assert res.unlabeled == 1
 
 
 def test_names_from_yaml_and_errors(roots, tmp_path):
@@ -79,3 +80,9 @@ def test_names_from_yaml_and_errors(roots, tmp_path):
     (src / "labels" / "a.txt").write_text("0 0.5 0.5 0.2\n", encoding="utf-8")
     with pytest.raises(ValidationFailed, match=r"a\.txt:1"):
         get_importer("yolo").run(_spec(roots, src))
+
+
+def test_missing_labels_dir_fails(roots, tmp_path):
+    src = _src(tmp_path)
+    with pytest.raises(ValidationFailed, match="labels directory not found"):
+        get_importer("yolo").run(_spec(roots, src, labels="lbls"))

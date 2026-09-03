@@ -71,14 +71,21 @@ class YoloImporter:
         opts = spec.options
         images_dir = spec.src / opts.get("images", "images")
         labels_dir = spec.src / opts.get("labels", "labels")
+        if not labels_dir.is_dir():
+            raise ValidationFailed(f"labels directory not found: {labels_dir}")
         categories = load_names(spec.src / opts.get("names", "classes.txt"))
         known = {c.id for c in categories}
         samples: list[Sample] = []
+        unlabeled = 0
         for p in iter_images(images_dir):
             rel = rel_posix(p, images_dir)
             view = make_view(images_dir, rel)
             label_file = labels_dir / Path(rel).with_suffix(".txt")
-            boxes = _parse_label_file(label_file, view, known) if label_file.is_file() else []
+            if label_file.is_file():
+                boxes = _parse_label_file(label_file, view, known)
+            else:
+                unlabeled += 1
+                boxes = []
             samples.append(
                 Sample(sample_id=rel, views=[view], labels=Labels(boxes=boxes), label_source="gold")
             )
@@ -91,4 +98,5 @@ class YoloImporter:
             samples=samples,
             rows_read=len(samples),
             skipped=[],
+            unlabeled=unlabeled,
         )

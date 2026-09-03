@@ -164,7 +164,8 @@ def test_relative_src_keeps_default_image_root(roots, tmp_path, monkeypatch):
     assert res.dataset.card.source.raw_path == src.resolve().as_posix()
 
 
-def test_reimport_over_corrupt_card_still_counts_plans(roots, tmp_path):
+@pytest.mark.parametrize("corrupt", ["name: [broken\n", "name: [broken]\n"])
+def test_reimport_over_corrupt_card_still_counts_plans(roots, tmp_path, corrupt):
     src = _src(tmp_path, det_samples(6))
     (src / "categories.json").write_text(
         json.dumps([c.model_dump() for c in CATS]), encoding="utf-8"
@@ -176,6 +177,6 @@ def test_reimport_over_corrupt_card_still_counts_plans(roots, tmp_path):
         build_plan(first.dataset, plan_id="p1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0),
         paths,
     )
-    paths.card_yaml.write_text("name: [broken]\n", encoding="utf-8")
+    paths.card_yaml.write_text(corrupt, encoding="utf-8")
     again = get_importer("jsonl").run(spec)
     assert again.plans_invalidated == 1

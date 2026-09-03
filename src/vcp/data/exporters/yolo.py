@@ -53,7 +53,8 @@ class YoloExporter:
         files: list[Path] = []
         fell_back = False
         dropped_views = 0
-        used: dict[str, str] = {}
+        used_images: dict[str, str] = {}
+        used_labels: dict[str, str] = {}
         for s in samples:
             vi, view = select_view(s, view_opt)
             if view.width is None or view.height is None:
@@ -65,7 +66,10 @@ class YoloExporter:
             flat = view.path.replace("/", "__")
             stem = flat[: -len(suffix)] if suffix and flat.endswith(suffix) else flat
             label_name = stem + ".txt"
-            for kind, key in (("image", flat), ("label", label_name)):
+            for kind, key, used in (
+                ("image", flat, used_images),
+                ("label", label_name, used_labels),
+            ):
                 if key in used:
                     raise ValidationFailed(
                         f"flattened {kind} name collision: {view.path!r} and {used[key]!r} "

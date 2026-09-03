@@ -3,7 +3,7 @@ import json
 import pytest
 
 from helpers import det_samples, make_card
-from vcp.core.errors import PlanMismatchError, SealedSubsetError
+from vcp.core.errors import PlanMismatchError, SealedSubsetError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.lineage import clean_eval_subsets
@@ -87,3 +87,15 @@ def test_subset_honours_plan_group_key(roots):
     )
     val = ds.subset("val", plan)
     assert len(val) == 4 and len({s.meta["site"] for s in val}) == 1
+
+
+def test_subset_rejects_unresolvable_group_key(roots):
+    paths = DatasetPaths.resolve("bad", data_root=roots.data, configs_root=roots.configs)
+    ds = Dataset.from_parts(make_card("det", name="bad"), det_samples(8, seed=0))
+    ds.save(paths)
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0
+    )
+    edited = plan.model_copy(update={"params": {**plan.params, "group_key": "site"}})
+    with pytest.raises(ValidationFailed, match="group_key"):
+        ds.subset("train", edited)

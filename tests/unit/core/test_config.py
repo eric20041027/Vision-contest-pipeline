@@ -31,3 +31,11 @@ def test_yaml_non_mapping_rejected(tmp_path):
     p.write_text("- 1\n- 2\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
         load_yaml_model(p, M)
+
+
+def test_yaml_malformed_reports_path(tmp_path):
+    p = tmp_path / "m.yaml"
+    p.write_text("name: [broken\n", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="invalid YAML") as ei:
+        load_yaml_model(p, M)
+    assert str(p) in str(ei.value)

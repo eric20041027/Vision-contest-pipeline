@@ -244,6 +244,30 @@ def normalize_keys(raw: dict[str, StratKey | None]) -> dict[str, NormKey]:
     return {k: str(v) for k, v in raw.items()}
 
 
+def _balance_to_size(y: np.ndarray, taken_idx: list[int], n: int) -> list[int]:
+    """Trim or pad an iterstrat selection to exactly ``n`` rows.
+
+    Greedy: keep per-label positive counts close to their proportional targets.
+    Deterministic — ties resolve to the first maximum in row order.
+    """
+    total = y.shape[0]
+    desired = n * y.sum(axis=0) / total
+    taken = sorted(set(taken_idx))
+    rest = sorted(set(range(total)) - set(taken))
+    counts = y[taken].sum(axis=0) if taken else np.zeros(y.shape[1])
+    while len(taken) > n:
+        scores = y[taken] @ (counts - desired)
+        i = int(np.argmax(scores))
+        counts = counts - y[taken[i]]
+        rest.append(taken.pop(i))
+    while len(taken) < n and rest:
+        scores = y[rest] @ (desired - counts)
+        i = int(np.argmax(scores))
+        counts = counts + y[rest[i]]
+        taken.append(rest.pop(i))
+    return sorted(taken)
+
+
 def stratified_take(pool: list[str], keys: dict[str, NormKey], n: int, *, seed: int) -> list[str]:
     """Deterministically pick ``n`` ids from ``pool`` preserving the key distribution."""
     if n <= 0 or not pool:
@@ -257,7 +281,8 @@ def stratified_take(pool: list[str], keys: dict[str, NormKey], n: int, *, seed: 
         y = np.array([keys[i] for i in ordered], dtype=int)
         splitter = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=n, random_state=seed)
         _, test_idx = next(splitter.split(np.zeros((len(ordered), 1)), y))
-        return sorted(ordered[i] for i in test_idx)
+        balanced = _balance_to_size(y, [int(i) for i in test_idx], n)
+        return sorted(ordered[i] for i in balanced)
     rng = np.random.default_rng(seed)
     strata: dict[str, list[str]] = {}
     for sid in ordered:
@@ -358,7 +383,13 @@ def generate_fixed(
     n_eligible = len(pool)
     assignment: dict[str, str] = {}
     for step, sub in enumerate(order):
-        taken = stratified_take(pool, keys, round(sub.ratio * n_eligible), seed=seed + step)
+        n_take = round(sub.ratio * n_eligible)
+        taken = stratified_take(pool, keys, n_take, seed=seed + step)
+        if len(taken) != n_take:
+            raise InvariantError(
+                f"stratified_take returned {len(taken)} units for subset {sub.name!r}, "
+                f"expected {n_take}"
+            )
         for uid in taken:
             for m in units[uid]:
                 assignment[m.sample_id] = sub.name

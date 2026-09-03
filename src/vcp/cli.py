@@ -21,6 +21,7 @@ from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.importers import ImportSpec, get_importer
 from vcp.data.lineage import clean_eval_subsets
+from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.split import (
     DEFAULT_SUBSETS,
     build_plan,
@@ -449,3 +450,68 @@ def audit_cmd(
         return status, fields, payload, human
 
     run_command("audit", json_mode, data_root, fn)
+
+
+@data_app.command("materialize")
+def materialize_cmd(
+    name: NameOpt,
+    mode: Annotated[str, typer.Option("--mode", help="npy | png")],
+    resize: Annotated[
+        int | None, typer.Option("--resize", help="png only: long side in px")
+    ] = None,
+    stack_seq: Annotated[
+        bool, typer.Option("--stack-seq", help="stack views of a seq into S×H×W")
+    ] = False,
+    window: Annotated[
+        str,
+        typer.Option("--window", help="png 8-bit mapping: dicom | minmax | percentile"),
+    ] = "dicom",
+    workers: Annotated[int, typer.Option("--workers", help="decode processes")] = 1,
+    force: Annotated[bool, typer.Option("--force", help="redo outputs that already exist")] = False,
+    decoder: Annotated[
+        str | None, typer.Option("--decoder", help="force a registered decoder")
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Decode every view once into cache/materialize/<mode>/ with a portable manifest."""
+
+    def fn() -> CmdResult:
+        res = materialize(
+            MaterializeSpec(
+                name=name,
+                mode=mode,
+                resize=resize,
+                stack_seq=stack_seq,
+                window=window,
+                workers=workers,
+                force=force,
+                decoder=decoder,
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        )
+        status: Status = "FAIL" if res.failed else ("WARN" if res.warnings else "OK")
+        fields: dict[str, FieldValue] = {"name": name, "mode": mode}
+        if resize is not None:
+            fields["resize"] = resize
+        fields.update(
+            {
+                "materialized": res.materialized,
+                "skipped": res.skipped,
+                "failed": res.failed,
+                "out": str(res.out_dir),
+            }
+        )
+        human = [
+            f"materialized {res.materialized}, skipped {res.skipped}, "
+            f"failed {res.failed} -> {res.out_dir}",
+            *res.warnings,
+        ]
+        if res.failed:
+            human.append(f"see {res.out_dir / 'failed.jsonl'}")
+        payload = {"manifest": str(res.manifest_path), "warnings": res.warnings}
+        return status, fields, payload, human
+
+    run_command("materialize", json_mode, data_root, fn)

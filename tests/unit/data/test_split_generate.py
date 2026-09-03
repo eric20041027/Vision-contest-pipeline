@@ -10,7 +10,7 @@ from helpers import (
     multilabel_samples,
     regression_samples,
 )
-from vcp.core.errors import RegistryError, ValidationFailed
+from vcp.core.errors import InvariantError, RegistryError, ValidationFailed
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Labels
 from vcp.data.split import (
@@ -243,3 +243,10 @@ def test_tiny_pool_reports_empty_subsets():
     plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     assert plan.params["empty_subsets"] == ["valA", "valB", "holdout"]
     assert _counts(plan) == {"train": 5}
+
+
+def test_oversubscribed_ratios_explain_themselves():
+    ds = Dataset.from_parts(make_card("det"), det_samples(15, seed=0))
+    spec_text = "train:train:0.1," + ",".join(f"v{i}:eval:0.1" for i in range(9))
+    with pytest.raises(InvariantError, match="exceed the eligible pool"):
+        build_plan(ds, plan_id="p", subsets=parse_subsets(spec_text), seed=0)

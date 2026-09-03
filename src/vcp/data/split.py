@@ -38,6 +38,7 @@ DEFAULT_SUBSETS = "train:train:0.7,valA:eval:0.1,valB:eval:0.1,holdout:sealed:0.
 RATIO_TOL = 1e-6
 GroupFn = Callable[[Sample], str | None]
 QUANTILE_BINS = 10
+SEED_STRIDE = 1000  # per-subset seeds: seed * SEED_STRIDE + step never collide across seeds
 KeyFn = Callable[[Sample], StratKey | None]
 NormKey = str | tuple[int, ...]
 
@@ -231,7 +232,12 @@ def resolve_stratify_fn(stratify_key: str, dataset: Dataset) -> KeyFn:
 
 
 def normalize_keys(raw: dict[str, StratKey | None]) -> dict[str, NormKey]:
-    """Vectors stay vectors (None -> zeros); floats become quantile bins; everything else -> str."""
+    """Normalise raw stratify keys for ``stratified_take``.
+
+    Vectors stay vectors (None -> zeros); a zero-width vector carries no information and falls
+    through to string keys (one stratum, i.e. a plain random split); floats become quantile bins
+    ``q0..q9`` (None -> "None"); everything else becomes ``str(key)``.
+    """
     values = list(raw.values())
     tuples = [v for v in values if isinstance(v, tuple)]
     if tuples:
@@ -391,7 +397,13 @@ def generate_fixed(
     assignment: dict[str, str] = {}
     for step, sub in enumerate(order):
         n_take = round(sub.ratio * n_eligible)
-        taken = stratified_take(pool, keys, n_take, seed=seed + step)
+        if n_take > len(pool):
+            raise InvariantError(
+                f"subset {sub.name!r} needs {n_take} units but only {len(pool)} remain: the "
+                f"rounded subset sizes exceed the eligible pool of {n_eligible}; lower the ratios "
+                f"or add data"
+            )
+        taken = stratified_take(pool, keys, n_take, seed=seed * SEED_STRIDE + step)
         if len(taken) != n_take:
             raise InvariantError(
                 f"stratified_take returned {len(taken)} units for subset {sub.name!r}, "

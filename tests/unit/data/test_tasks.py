@@ -78,6 +78,8 @@ def test_regression_validation_and_float_key():
         t.validate(sample(Labels(targets={"height": 1.0})), c)
     with pytest.raises(ValidationFailed, match="must be finite"):
         t.validate(sample(Labels(targets={"age": float("nan")})), c)
+    with pytest.raises(ValidationFailed, match="at least one"):
+        t.validate(sample(Labels(targets={})), c)
     assert t.stratify_key(sample(Labels(targets={})), c) is None
 
 

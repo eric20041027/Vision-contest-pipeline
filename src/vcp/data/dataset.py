@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.errors import IntegrityError, PlanMismatchError, SealedSubsetError, ValidationFailed
-from vcp.core.hashing import sha256_file
+from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.schema import DatasetCard, Sample, sample_json_line
@@ -20,6 +20,12 @@ from vcp.data.tasks import get_task
 
 if TYPE_CHECKING:
     from vcp.data.split import SplitPlan
+
+
+def samples_digest(samples: Iterable[Sample]) -> str:
+    """sha256 of exactly the bytes ``write_samples_jsonl`` would write (sorted, LF, UTF-8)."""
+    ordered = sorted(samples, key=lambda s: s.sample_id)
+    return sha256_text("".join(sample_json_line(s) + "\n" for s in ordered))
 
 
 def write_samples_jsonl(path: Path, samples: Iterable[Sample]) -> str:
@@ -85,6 +91,11 @@ class Dataset:
         configs_root: Path | None = None,
         verify_hash: bool = True,
     ) -> Dataset:
+        """Load a saved dataset, verifying the card and the samples file.
+
+        ``verify_hash=False`` exists for tests only: production code must keep the hash chain
+        (card.samples_hash -> samples.jsonl -> plan.dataset_hash) intact.
+        """
         paths = DatasetPaths.resolve(name, data_root=data_root, configs_root=configs_root)
         if not paths.card_yaml.is_file():
             raise ValidationFailed(f"dataset card not found: {paths.card_yaml}")
@@ -127,6 +138,8 @@ class Dataset:
         paths: DatasetPaths | None = None,
     ) -> list[Sample]:
         """Samples of one subset. A sealed subset opens only with an explicit, recorded unseal."""
+        from vcp.data.split import assert_plan_invariants  # local: split imports Dataset lazily
+
         if plan.dataset != self.card.name:
             raise PlanMismatchError(
                 f"plan {plan.plan_id!r} belongs to dataset {plan.dataset!r}, not {self.card.name!r}"
@@ -136,6 +149,7 @@ class Dataset:
                 f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
                 f"dataset now has {self.card.samples_hash[:12]}"
             )
+        assert_plan_invariants(plan, self)
         spec = plan.subset(name)
         if spec.role == "sealed":
             if not unseal:

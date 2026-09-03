@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import make_card
 from vcp.core import paths
 from vcp.core.errors import ValidationFailed
 
@@ -65,3 +66,32 @@ def test_dataset_paths_layout(tmp_path):
 def test_dataset_paths_validates_name(tmp_path):
     with pytest.raises(ValidationFailed):
         paths.DatasetPaths.resolve("../evil", data_root=tmp_path, configs_root=tmp_path)
+
+
+def test_configs_root_errors_when_not_found(monkeypatch, tmp_path):
+    monkeypatch.delenv(paths.ENV_CONFIGS_ROOT, raising=False)
+    lonely = tmp_path / "lonely"
+    lonely.mkdir()
+    monkeypatch.chdir(lonely)
+    with pytest.raises(ValidationFailed, match="VCP_CONFIGS_ROOT"):
+        paths.resolve_configs_root()
+
+
+def test_store_and_resolve_paths(tmp_path):
+    root = tmp_path / "data"
+    inside = root / "raw" / "ds"
+    inside.mkdir(parents=True)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    assert paths.store_path(inside, root) == "raw/ds"
+    assert paths.store_path(outside, root) == outside.resolve().as_posix()
+    assert paths.resolve_stored_path("raw/ds", root) == root / "raw" / "ds"
+    assert paths.resolve_stored_path(outside.resolve().as_posix(), root) == outside.resolve()
+
+
+def test_dataset_paths_resolve_image_root(tmp_path):
+    p = paths.DatasetPaths.resolve("ds1", data_root=tmp_path / "d", configs_root=tmp_path / "c")
+    card = make_card("det", name="ds1", image_root="raw/ds1")
+    assert p.resolve_image_root(card) == (tmp_path / "d").resolve() / "raw" / "ds1"
+    absolute = (tmp_path / "abs").resolve().as_posix()
+    assert p.resolve_image_root(make_card("det", name="ds1", image_root=absolute)) == Path(absolute)

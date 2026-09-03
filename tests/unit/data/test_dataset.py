@@ -3,11 +3,12 @@ import json
 import pytest
 
 from helpers import det_samples, make_card
-from vcp.core.errors import IntegrityError, RegistryError, ValidationFailed
+from vcp.core.errors import IntegrityError, InvariantError, RegistryError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
-from vcp.data.dataset import Dataset, read_samples_jsonl, write_samples_jsonl
+from vcp.data.dataset import Dataset, read_samples_jsonl, samples_digest, write_samples_jsonl
 from vcp.data.schema import Box, Labels
+from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets
 
 
 def test_write_is_sorted_and_hash_stable(tmp_path):
@@ -109,3 +110,21 @@ def test_load_detects_tampered_samples_and_missing_files(roots):
         Dataset.load("ds", data_root=roots.data, configs_root=roots.configs)
     with pytest.raises(ValidationFailed, match="sample_count"):
         Dataset.load("ds", data_root=roots.data, configs_root=roots.configs, verify_hash=False)
+
+
+def test_samples_digest_matches_written_file(tmp_path):
+    samples = det_samples(4, seed=3)
+    assert samples_digest(samples) == write_samples_jsonl(tmp_path / "s.jsonl", samples)
+
+
+def test_subset_rejects_tampered_plan(roots):
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    ds = Dataset.from_parts(make_card("det"), det_samples(30, seed=0))
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    victim = next(iter(plan.ids_in("valA")))
+    tampered = plan.model_copy(
+        update={"assignment": {k: v for k, v in plan.assignment.items() if k != victim}}
+    )
+    with pytest.raises(InvariantError, match="does not cover"):
+        ds.subset("valA", tampered)

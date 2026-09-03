@@ -46,7 +46,11 @@ class JsonlImporter:
             raise ValidationFailed("jsonl importer needs --opt task=<name>")
         get_task(task)
         categories = load_categories(spec.options.get("categories"), spec.src)
-        image_root = spec.options.get("image_root", str(spec.src))
+        root_opt = spec.options.get("image_root")
+        root = spec.src if not root_opt else Path(root_opt)
+        if not root.is_absolute():
+            root = spec.src / root
+        image_root = str(root)
         samples_file = spec.src / spec.options.get("samples", "samples.jsonl")
         if not samples_file.is_file():
             raise ValidationFailed(f"samples file not found: {samples_file}")

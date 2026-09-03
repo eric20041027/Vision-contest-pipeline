@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -148,3 +149,16 @@ def test_invalid_samples_do_not_write_manifest(roots, tmp_path):
     with pytest.raises(ValidationFailed, match="unknown category id"):
         get_importer("jsonl").run(_spec(roots, src, task="det", categories="[]"))
     assert not (roots.data / "datasets" / "ds" / "raw_manifest.txt").exists()
+
+
+def test_relative_src_keeps_default_image_root(roots, tmp_path, monkeypatch):
+    src = _src(tmp_path, det_samples(2))
+    (src / "categories.json").write_text(
+        json.dumps([c.model_dump() for c in CATS]), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    res = get_importer("jsonl").run(
+        _spec(roots, Path("src"), task="det", categories="categories.json")
+    )
+    assert res.dataset.card.image_root == src.resolve().as_posix()
+    assert res.dataset.card.source.raw_path == src.resolve().as_posix()

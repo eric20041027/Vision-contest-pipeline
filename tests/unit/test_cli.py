@@ -7,6 +7,7 @@ from helpers import CATS, det_samples
 from vcp.cli import app, parse_opts, render_table
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
+from vcp.data.importers import IMPORTERS, register_importer
 
 runner = CliRunner()
 
@@ -165,6 +166,52 @@ def test_tampered_dataset_fails_validate(roots, tmp_path):
     )
     r = runner.invoke(app, ["data", "validate", "--name", "tiny"])
     assert r.exit_code == 1 and "IntegrityError" in _last_verdict(r.output)
+
+
+def test_logger_falls_back_to_plain_logger_on_oserror(roots, monkeypatch):
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("vcp.cli.setup_logging", _boom)
+    r = runner.invoke(app, ["version"])
+    assert r.exit_code == 0
+    assert _last_verdict(r.output) == "VERDICT cmd=version status=OK version=0.1.0"
+
+
+def test_run_command_wraps_non_vcp_error_as_abort(roots, tmp_path):
+    class _BoomImporter:
+        name = "boom"
+        version = "0.0.0"
+
+        def run(self, spec):
+            raise RuntimeError("kaboom")
+
+    register_importer(_BoomImporter())
+    try:
+        r = runner.invoke(
+            app,
+            [
+                "data",
+                "import",
+                "--importer",
+                "boom",
+                "--src",
+                str(tmp_path),
+                "--name",
+                "x",
+                "--license",
+                "a",
+                "--url",
+                "b",
+                "--downloaded-at",
+                "c",
+            ],
+        )
+    finally:
+        IMPORTERS.pop("boom", None)
+    assert r.exit_code == 2
+    v = _last_verdict(r.output)
+    assert "status=ABORT" in v and "RuntimeError" in v and "kaboom" in v
 
 
 def test_parse_opts_and_render_table():

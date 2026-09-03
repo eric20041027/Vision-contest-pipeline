@@ -262,3 +262,13 @@ def test_parse_opts_and_render_table():
     text = render_table({"train": {"cat": 3}, "val": {"cat": 1, "dog": 2}}, {"train": 3, "val": 3})
     assert text.splitlines()[0].split() == ["label", "train", "val"]
     assert "(total)" in text and "dog" in text
+
+
+def test_reimport_after_split_warns_about_invalidated_plans(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path).exit_code == 0
+    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "p", "--seed", "0"])
+    assert r.exit_code == 0
+    r = _import_tiny(roots, tmp_path, n=61)
+    assert r.exit_code == 0
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "plans_invalidated=1" in v

@@ -8,11 +8,12 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.core.config import load_yaml_model
 from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.core.hashing import dir_manifest, write_manifest
-from vcp.core.paths import DatasetPaths
+from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp
-from vcp.data.dataset import Dataset
+from vcp.data.dataset import Dataset, samples_digest
 from vcp.data.schema import Category, DatasetCard, Sample, SourceInfo
 
 
@@ -44,6 +45,7 @@ class ImportResult(BaseModel):
     samples_written: int
     rows_skipped: int
     skipped_reasons_path: Path | None
+    plans_invalidated: int = 0
 
 
 class Importer(Protocol):
@@ -69,6 +71,16 @@ def get_importer(name: str) -> Importer:
         raise RegistryError(f"unknown importer {name!r}; known: {sorted(IMPORTERS)}") from None
 
 
+def count_invalidated_plans(paths: DatasetPaths, new_digest: str) -> int:
+    """Existing split plans that a re-import with a different samples_hash would orphan."""
+    if not paths.card_yaml.is_file():
+        return 0
+    old = load_yaml_model(paths.card_yaml, DatasetCard)
+    if old.samples_hash == new_digest or not paths.splits_dir.is_dir():
+        return 0
+    return len(list(paths.splits_dir.glob("*.json")))
+
+
 def finalize_import(
     *,
     spec: ImportSpec,
@@ -80,16 +92,19 @@ def finalize_import(
     rows_read: int,
     skipped: list[dict[str, Any]],
 ) -> ImportResult:
-    """Common tail of every importer: provenance, card, validation, save, skip report."""
+    """Common tail of every importer: validate, then provenance, save, skip report.
+
+    Validation runs before the raw manifest so a bad dataset never pays for hashing every raw
+    file. Paths inside the data root are stored relative to it (portable cards).
+    """
     paths = spec.paths()
     if not spec.src.is_dir():
         raise ValidationFailed(f"source directory not found: {spec.src}")
-    raw_hash = write_manifest(dir_manifest(spec.src), paths.raw_manifest)
     source = SourceInfo(
         importer=importer.name,
         importer_version=importer.version,
-        raw_path=str(spec.src),
-        raw_hash=raw_hash,
+        raw_path=store_path(spec.src, paths.data_root),
+        raw_hash="",
         license=spec.license,
         url=spec.url,
         downloaded_at=spec.downloaded_at,
@@ -99,13 +114,18 @@ def finalize_import(
         name=spec.name,
         task=task,
         categories=categories,
-        image_root=image_root,
+        image_root=store_path(Path(image_root), paths.data_root),
         source=source,
         created_at=stamp(),
         sample_count=len(samples),
         samples_hash="",
     )
     dataset = Dataset.from_parts(card, samples)
+    plans_invalidated = count_invalidated_plans(paths, samples_digest(dataset.samples))
+    raw_hash = write_manifest(dir_manifest(spec.src), paths.raw_manifest)
+    dataset.card = dataset.card.model_copy(
+        update={"source": source.model_copy(update={"raw_hash": raw_hash})}
+    )
     dataset.save(paths)
     skipped_path: Path | None = None
     if skipped:
@@ -120,4 +140,5 @@ def finalize_import(
         samples_written=len(dataset.samples),
         rows_skipped=len(skipped),
         skipped_reasons_path=skipped_path,
+        plans_invalidated=plans_invalidated,
     )

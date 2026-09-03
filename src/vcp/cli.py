@@ -146,7 +146,7 @@ def import_cmd(
             configs_root=configs_root,
         )
         res = get_importer(importer).run(spec)
-        status: Status = "WARN" if res.rows_skipped else "OK"
+        status: Status = "WARN" if res.rows_skipped or res.plans_invalidated else "OK"
         fields: dict[str, FieldValue] = {
             "name": name,
             "task": res.dataset.card.task,
@@ -156,6 +156,8 @@ def import_cmd(
         }
         if res.skipped_reasons_path is not None:
             fields["skipped_reasons"] = str(res.skipped_reasons_path)
+        if res.plans_invalidated:
+            fields["plans_invalidated"] = res.plans_invalidated
         human = [
             f"imported {res.samples_written} samples into dataset {name!r} "
             f"(task={res.dataset.card.task})"

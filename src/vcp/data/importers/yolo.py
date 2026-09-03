@@ -8,7 +8,13 @@ import yaml
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
-from vcp.data.importers.common import iter_images, make_view, rel_posix
+from vcp.data.importers.common import (
+    count_exif_rotated,
+    exif_policy_option,
+    iter_images,
+    make_view,
+    rel_posix,
+)
 from vcp.data.schema import Box, Category, Labels, Sample, View
 
 
@@ -75,11 +81,12 @@ class YoloImporter:
             raise ValidationFailed(f"labels directory not found: {labels_dir}")
         categories = load_names(spec.src / opts.get("names", "classes.txt"))
         known = {c.id for c in categories}
+        exif_policy = exif_policy_option(opts)
         samples: list[Sample] = []
         unlabeled = 0
         for p in iter_images(images_dir):
             rel = rel_posix(p, images_dir)
-            view = make_view(images_dir, rel)
+            view = make_view(images_dir, rel, exif_policy=exif_policy)
             label_file = labels_dir / Path(rel).with_suffix(".txt")
             if label_file.is_file():
                 boxes = _parse_label_file(label_file, view, known)
@@ -99,4 +106,6 @@ class YoloImporter:
             rows_read=len(samples),
             skipped=[],
             unlabeled=unlabeled,
+            exif_policy=exif_policy,
+            exif_rotated=count_exif_rotated(samples),
         )

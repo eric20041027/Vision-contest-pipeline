@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Protocol
 
@@ -10,10 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vcp.core.errors import RegistryError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
+from vcp.core.log import FieldValue
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
-from vcp.data.importers.common import rel_posix
+from vcp.data.importers.common import count_exif_rotated, rel_posix
 from vcp.data.schema import Sample, View
 from vcp.data.split import load_plan
 
@@ -38,11 +41,23 @@ class ExportSpec(BaseModel):
         )
 
 
+@dataclass(frozen=True)
+class ExportOutput:
+    """What an exporter hands back: written files, human warnings, extra VERDICT fields and
+    extra manifest entries (e.g. YOLO's class-index map)."""
+
+    files: list[Path]
+    warnings: list[str] = dc_field(default_factory=list)
+    fields: dict[str, FieldValue] = dc_field(default_factory=dict)
+    manifest: dict[str, object] = dc_field(default_factory=dict)
+
+
 class ExportResult(BaseModel):
     out: Path
     manifest_path: Path
     files: int
     warnings: list[str]
+    fields: dict[str, FieldValue] = Field(default_factory=dict)
 
 
 class Exporter(Protocol):
@@ -56,7 +71,7 @@ class Exporter(Protocol):
         out: Path,
         image_root: Path,
         options: dict[str, str],
-    ) -> tuple[list[Path], list[str]]: ...
+    ) -> ExportOutput: ...
 
 
 EXPORTERS: dict[str, Exporter] = {}
@@ -112,11 +127,18 @@ def export_subset(spec: ExportSpec) -> ExportResult:
     if out.exists() and any(out.iterdir()):
         raise ValidationFailed(f"output directory not empty: {out}")
     out.mkdir(parents=True, exist_ok=True)
-    files, warnings = exporter.run(
-        dataset, samples, out, paths.resolve_image_root(dataset.card), spec.options
-    )
+    image_root = paths.resolve_image_root(dataset.card)
+    output = exporter.run(dataset, samples, out, image_root, spec.options)
+    files, warnings, fields = list(output.files), list(output.warnings), dict(output.fields)
     if not samples:
-        warnings = [*warnings, "subset is empty"]
+        warnings.append("subset is empty")
+    rotated = count_exif_rotated(samples)
+    if rotated:
+        fields["exif_rotated"] = rotated
+        warnings.append(
+            f"{rotated} views carry an EXIF orientation != 1 (policy {dataset.card.exif_policy}); "
+            "verify the label space before training"
+        )
     manifest = {
         "dataset": dataset.card.name,
         "samples_hash": dataset.card.samples_hash,
@@ -126,10 +148,15 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         "exporter_version": exporter.version,
         "exported_at": stamp(),
         "sample_count": len(samples),
+        "exif_policy": dataset.card.exif_policy,
+        "exif_rotated": rotated,
+        **output.manifest,
         "files": {rel_posix(f, out): sha256_file(f) for f in sorted(files)},
     }
     manifest_path = out / "manifest.json"
     with manifest_path.open("w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=1)
         f.write("\n")
-    return ExportResult(out=out, manifest_path=manifest_path, files=len(files), warnings=warnings)
+    return ExportResult(
+        out=out, manifest_path=manifest_path, files=len(files), warnings=warnings, fields=fields
+    )

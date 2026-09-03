@@ -12,7 +12,7 @@ from pathlib import Path
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import read_samples_jsonl
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
-from vcp.data.importers.common import load_categories
+from vcp.data.importers.common import count_exif_rotated, exif_policy_option, load_categories
 from vcp.data.tasks import get_task
 
 
@@ -47,4 +47,6 @@ class JsonlImporter:
             samples=samples,
             rows_read=len(samples),
             skipped=[],
+            exif_policy=exif_policy_option(spec.options),
+            exif_rotated=count_exif_rotated(samples),
         )

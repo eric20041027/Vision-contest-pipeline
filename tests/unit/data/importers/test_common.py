@@ -3,9 +3,13 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from helpers import write_exif_image
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.common import (
     IMAGE_EXTS,
+    choice_option,
+    exif_policy_option,
+    image_header,
     image_size,
     iter_images,
     load_categories,
@@ -70,3 +74,25 @@ def test_load_categories_inline_file_and_errors(tmp_path):
         load_categories("missing.json", tmp_path)
     with pytest.raises(ValidationFailed, match="bad categories"):
         load_categories('[{"id": "x"}]', tmp_path)
+
+
+def test_make_view_records_exif_orientation_and_honours_policy(tmp_path):
+    write_exif_image(tmp_path / "o.jpg", size=(8, 4), orientation=6)
+    Image.new("RGB", (8, 4)).save(tmp_path / "plain.png")
+    assert image_header(tmp_path / "o.jpg") == (8, 4, 6)
+    assert image_header(tmp_path / "plain.png") == (8, 4, None)
+    stored = make_view(tmp_path, "o.jpg")
+    assert (stored.width, stored.height, stored.meta) == (8, 4, {"exif_orientation": 6})
+    oriented = make_view(tmp_path, "o.jpg", exif_policy="oriented")
+    assert (oriented.width, oriented.height, oriented.meta["exif_orientation"]) == (4, 8, 6)
+    assert make_view(tmp_path, "plain.png", exif_policy="oriented").meta == {}
+
+
+def test_option_helpers():
+    assert exif_policy_option({}) == "stored"
+    assert exif_policy_option({"exif": "oriented"}) == "oriented"
+    with pytest.raises(ValidationFailed, match="exif="):
+        exif_policy_option({"exif": "rotated"})
+    assert choice_option({"m": "b"}, "m", ("a", "b"), "a") == "b"
+    with pytest.raises(ValidationFailed, match="--opt m="):
+        choice_option({"m": "z"}, "m", ("a", "b"), "a")

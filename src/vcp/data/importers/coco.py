@@ -8,7 +8,12 @@ from typing import Any
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
-from vcp.data.importers.common import image_size
+from vcp.data.importers.common import (
+    SWAPPED_ORIENTATIONS,
+    count_exif_rotated,
+    exif_policy_option,
+    image_header,
+)
 from vcp.data.schema import Box, Category, Labels, Mask, Sample, View
 
 TASKS = ("det", "seg")
@@ -57,7 +62,8 @@ class CocoImporter:
             )
             for c in doc["categories"]
         ]
-        views = _load_views(doc["images"], images_dir)
+        exif_policy = exif_policy_option(opts)
+        views = _load_views(doc["images"], images_dir, exif_policy)
         boxes: dict[int, list[Box]] = {iid: [] for iid in views}
         masks: dict[int, list[Mask]] = {iid: [] for iid in views}
         skipped: list[dict[str, Any]] = []
@@ -111,10 +117,14 @@ class CocoImporter:
             samples=samples,
             rows_read=len(doc["annotations"]),
             skipped=skipped,
+            exif_policy=exif_policy,
+            exif_rotated=count_exif_rotated(samples),
         )
 
 
-def _load_views(images: list[dict[str, Any]], images_dir: Path) -> dict[int, tuple[str, View]]:
+def _load_views(
+    images: list[dict[str, Any]], images_dir: Path, exif_policy: str
+) -> dict[int, tuple[str, View]]:
     views: dict[int, tuple[str, View]] = {}
     seen: set[str] = set()
     seen_ids: set[int] = set()
@@ -132,11 +142,16 @@ def _load_views(images: list[dict[str, Any]], images_dir: Path) -> dict[int, tup
         if not path.is_file():
             missing.append(rel)
             continue
-        if "width" in im and "height" in im:
+        width, height, orientation = image_header(path)
+        from_json = "width" in im and "height" in im
+        if from_json:
             width, height = int(im["width"]), int(im["height"])
-        else:
-            width, height = image_size(path)
-        views[image_id] = (rel, View(path=rel, width=width, height=height))
+        meta: dict[str, Any] = {}
+        if orientation is not None:
+            meta["exif_orientation"] = orientation
+            if exif_policy == "oriented" and not from_json and orientation in SWAPPED_ORIENTATIONS:
+                width, height = height, width
+        views[image_id] = (rel, View(path=rel, width=width, height=height, meta=meta))
     if missing:
         raise ValidationFailed(f"{len(missing)} images missing under {images_dir}: {missing[:5]}")
     return views

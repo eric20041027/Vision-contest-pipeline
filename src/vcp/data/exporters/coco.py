@@ -8,7 +8,7 @@ from typing import Any
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import Dataset
-from vcp.data.exporters.base import select_view
+from vcp.data.exporters.base import ExportOutput, select_view
 from vcp.data.schema import Mask, Sample
 
 
@@ -50,7 +50,7 @@ class CocoExporter:
         out: Path,
         image_root: Path,
         options: dict[str, str],
-    ) -> tuple[list[Path], list[str]]:
+    ) -> ExportOutput:
         task = dataset.card.task
         if task not in ("det", "seg"):
             raise ValidationFailed(f"coco export supports det/seg datasets, not {task!r}")
@@ -116,4 +116,4 @@ class CocoExporter:
             warnings.append(f"{dropped_views} annotations on non-exported views dropped")
         if png_masks:
             warnings.append(f"{png_masks} PNG-path masks cannot be expressed in COCO; skipped")
-        return [target], warnings
+        return ExportOutput([target], warnings)

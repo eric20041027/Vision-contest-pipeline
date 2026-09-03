@@ -115,6 +115,8 @@ def export_subset(spec: ExportSpec) -> ExportResult:
     files, warnings = exporter.run(
         dataset, samples, out, paths.resolve_image_root(dataset.card), spec.options
     )
+    if not samples:
+        warnings = [*warnings, "subset is empty"]
     manifest = {
         "dataset": dataset.card.name,
         "samples_hash": dataset.card.samples_hash,

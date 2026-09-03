@@ -380,3 +380,10 @@ def test_audit_cli(roots, tmp_path):
     assert (roots.data / "datasets" / "tiny" / "cache" / "audit" / "summary.json").is_file()
     r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--against", "missing"])
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
+
+    r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--json"])
+    assert r.exit_code == 0
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["result"]["checks"]["dedup"]["status"] == "OK"
+    assert "VERDICT cmd=audit.coords" in r.stderr and "VERDICT cmd=audit status=OK" in r.stderr
+    assert "VERDICT" not in r.stdout

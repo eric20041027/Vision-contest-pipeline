@@ -68,3 +68,22 @@ def test_sealed_requires_recorded_unseal(ds_and_plan):
     assert rec["dataset_hash"] == ds.card.samples_hash and rec["ts"].endswith("Z")
     ds.subset("holdout", plan, unseal=True, reason="again", paths=paths)
     assert len(paths.unseal_jsonl("fixed-v1").read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_subset_honours_plan_group_key(roots):
+    paths = DatasetPaths.resolve("grp", data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        s.model_copy(update={"group": f"pair{i // 2}", "meta": {"site": f"S{i % 2}"}})
+        for i, s in enumerate(det_samples(8, seed=0))
+    ]
+    ds = Dataset.from_parts(make_card("det", name="grp"), samples)
+    ds.save(paths)
+    plan = build_plan(
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
+        group_key="meta.site",
+    )
+    val = ds.subset("val", plan)
+    assert len(val) == 4 and len({s.meta["site"] for s in val}) == 1

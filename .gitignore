@@ -10,3 +10,4 @@ dist/
 projects/*/data/
 projects/*/runs/
 .superpowers/
+.claude/worktrees/

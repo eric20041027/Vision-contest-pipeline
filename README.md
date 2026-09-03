@@ -34,7 +34,7 @@ uv run pytest --cov=vcp
 | `image_csv` | CSV 路徑欄 + 標籤 / 目標欄 | CSV 資料列 |
 | `dicom` | DICOM 目錄樹（header 分組） | 掃到的檔案 |
 
-所有影像匯入器接受 `--opt exif=stored|oriented`（預設 `stored`），Orientation ≠ 1 的 view 會記進 `view.meta.exif_orientation` 並讓 VERDICT 帶 `exif_rotated=<n>` WARN；`materialize --mode png` 是唯一會把方向烙進像素的步驟。
+所有影像匯入器接受 `--opt exif=stored|oriented`（預設 `stored`），Orientation ≠ 1 的 view 會記進 `view.meta.exif_orientation` 並讓 VERDICT 帶 `exif_rotated=<n>` WARN；`materialize`（npy 與 png 皆然）是唯一會把方向烙進像素的步驟；`dicom` 匯入器不讀 EXIF。
 
 ## DICOM 形態的用法（以 RSNA Knee 為例）
 

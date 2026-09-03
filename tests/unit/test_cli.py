@@ -2,6 +2,7 @@ import json
 
 import pytest
 import yaml
+from PIL import Image
 from typer.testing import CliRunner
 
 from helpers import CATS, det_samples, write_exif_image, write_images
@@ -278,6 +279,18 @@ def test_reimport_after_split_warns_about_invalidated_plans(roots, tmp_path):
     assert "status=WARN" in v and "plans_invalidated=1" in v
 
 
+def test_reimport_over_unreadable_card_reports_old_card(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path).exit_code == 0
+    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "p1", "--seed", "1"])
+    assert r.exit_code == 0, r.output
+    card = roots.configs / "datasets" / "tiny" / "dataset.yaml"
+    card.write_text("name: [broken\n", encoding="utf-8")
+    r = _import_tiny(roots, tmp_path)
+    v = _last_verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v
+    assert "plans_invalidated=1" in v and "old_card=unreadable" in v
+
+
 def _split_tiny(roots, tmp_path, name="tiny"):
     assert _import_tiny(roots, tmp_path, name=name).exit_code == 0
     r = runner.invoke(
@@ -464,6 +477,66 @@ def test_import_warns_on_exif_rotated_views(roots, tmp_path):
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert "status=WARN" in v and "exif_rotated=1" in v
+
+
+def test_import_yolo_reports_unlabeled(roots, tmp_path):
+    src = tmp_path / "yolo"
+    for rel in ("images/a.jpg", "images/b.jpg"):
+        p = src / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8)).save(p)
+    (src / "labels").mkdir()
+    (src / "labels" / "a.txt").write_text("0 0.5 0.5 0.5 0.5\n", encoding="utf-8")
+    (src / "classes.txt").write_text("thing\n", encoding="utf-8")
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "import",
+            "--importer",
+            "yolo",
+            "--src",
+            str(src),
+            "--name",
+            "y",
+            "--license",
+            "CC0",
+            "--url",
+            "u",
+            "--downloaded-at",
+            "2026-09-03",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "unlabeled=1" in v and "samples=2" in v
+
+
+def test_export_empty_subset_is_warn(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path, n=5, with_images=True).exit_code == 0
+    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "p1", "--seed", "1"])
+    assert r.exit_code == 0 and "empty_subsets=" in _last_verdict(r.output)
+    empty = _last_verdict(r.output).split("empty_subsets=")[1].split()[0].split(",")[0]
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "p1",
+            "--subset",
+            empty,
+            "--format",
+            "coco",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "subset is empty" in v
 
 
 def test_materialize_cli(roots, tmp_path):

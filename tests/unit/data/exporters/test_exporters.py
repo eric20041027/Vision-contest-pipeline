@@ -1,3 +1,4 @@
+import errno
 import json
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import get_exporter
 from vcp.data.exporters.base import ExportSpec, export_subset, select_view
+from vcp.data.exporters.yolo import _place_image
 from vcp.data.schema import Labels, Mask, Sample, View
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 
@@ -168,13 +170,44 @@ def test_export_yolo_copy_and_symlink_fallback(roots, tmp_path, det_ds, monkeypa
     assert res.files == 2 * len(ids) + 1 and res.warnings == []
 
     def refuse(self, target, target_is_directory=False):
-        raise OSError("symlink not permitted")
+        raise OSError(errno.EPERM, "symlink not permitted")
 
     monkeypatch.setattr(Path, "symlink_to", refuse)
     out2 = tmp_path / "yolo_out2"
     res2 = export_subset(_spec(roots, "yolo", out2))
     assert any("copied" in w for w in res2.warnings)
     assert (out2 / "images" / names[0]).is_file() and not (out2 / "images" / names[0]).is_symlink()
+
+
+def test_yolo_manifest_categories_and_images_field(det_ds, roots, tmp_path):
+    res = export_subset(_spec(roots, "yolo", tmp_path / "y", options={"copy": "true"}))
+    manifest = json.loads(res.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["format"] == "yolo"
+    assert manifest["categories"] == [
+        {"index": i, "id": c.id, "name": c.name} for i, c in enumerate(CATS)
+    ]
+    assert res.fields["images"] == "copied"
+    res2 = export_subset(_spec(roots, "yolo", tmp_path / "y2"))
+    assert res2.fields["images"] in ("copied", "symlinked")
+
+
+def test_place_image_only_falls_back_on_permission_errors(tmp_path, monkeypatch):
+    src = tmp_path / "a.jpg"
+    Image.new("RGB", (4, 4)).save(src)
+
+    def denied(self, target, target_is_directory=False):
+        raise OSError(errno.EPERM, "A required privilege is not held by the client")
+
+    monkeypatch.setattr(Path, "symlink_to", denied)
+    assert _place_image(src, tmp_path / "b.jpg", copy=False) is True
+    assert (tmp_path / "b.jpg").is_file()
+
+    def missing(self, target, target_is_directory=False):
+        raise OSError(errno.ENOENT, "no such file")
+
+    monkeypatch.setattr(Path, "symlink_to", missing)
+    with pytest.raises(OSError, match="no such file"):
+        _place_image(src, tmp_path / "c.jpg", copy=False)
 
 
 def test_export_guards(roots, tmp_path, det_ds):

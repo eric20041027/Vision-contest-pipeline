@@ -180,6 +180,7 @@ def test_reimport_over_corrupt_card_still_counts_plans(roots, tmp_path, corrupt)
     paths.card_yaml.write_text(corrupt, encoding="utf-8")
     again = get_importer("jsonl").run(spec)
     assert again.plans_invalidated == 1
+    assert again.old_card_unreadable is True
 
 
 def test_raw_manifest_sizes_mode_is_recorded(roots, tmp_path):
@@ -194,6 +195,7 @@ def test_raw_manifest_sizes_mode_is_recorded(roots, tmp_path):
     assert res.dataset.card.source.raw_manifest_mode == "sizes"
     assert res.dataset.card.exif_policy == "stored"
     assert res.exif_rotated == 0
+    assert res.old_card_unreadable is False
     paths = DatasetPaths.resolve("ds", data_root=roots.data, configs_root=roots.configs)
     lines = paths.raw_manifest.read_text(encoding="utf-8").splitlines()
     assert lines and all(ln.endswith("\t-") for ln in lines)

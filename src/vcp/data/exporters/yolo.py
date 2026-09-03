@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import shutil
 from pathlib import Path
 
@@ -13,19 +14,25 @@ from vcp.data.exporters.base import ExportOutput, select_view
 from vcp.data.schema import Sample
 
 _TRUE = {"1", "true", "yes"}
+_SYMLINK_DENIED_ERRNO = {errno.EPERM, errno.EACCES}
+_WINERROR_PRIVILEGE_NOT_HELD = 1314
 
 
 def _place_image(src: Path, dst: Path, *, copy: bool) -> bool:
-    """Put ``src`` at ``dst`` by symlink (or copy). Returns True when a copy
-    was forced by OSError.
-    """
+    """Put ``src`` at ``dst`` by symlink, or copy. Returns True when the symlink was refused for
+    lack of privilege and a copy was made instead; any other OSError propagates."""
     if copy:
         shutil.copy2(src, dst)
         return False
     try:
         dst.symlink_to(src)
         return False
-    except OSError:
+    except OSError as e:
+        denied = e.errno in _SYMLINK_DENIED_ERRNO or (
+            getattr(e, "winerror", None) == _WINERROR_PRIVILEGE_NOT_HELD
+        )
+        if not denied:
+            raise
         shutil.copy2(src, dst)
         return True
 
@@ -110,4 +117,14 @@ class YoloExporter:
             warnings.append("symlink not permitted; images were copied")
         if dropped_views:
             warnings.append(f"{dropped_views} boxes on non-exported views dropped")
-        return ExportOutput(files, warnings)
+        return ExportOutput(
+            files,
+            warnings,
+            fields={"images": "copied" if (copy or fell_back) else "symlinked"},
+            manifest={
+                "categories": [
+                    {"index": i, "id": c.id, "name": c.name}
+                    for i, c in enumerate(dataset.card.categories)
+                ]
+            },
+        )

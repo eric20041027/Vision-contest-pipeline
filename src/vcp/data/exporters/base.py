@@ -140,6 +140,7 @@ def export_subset(spec: ExportSpec) -> ExportResult:
             "verify the label space before training"
         )
     manifest = {
+        **output.manifest,
         "dataset": dataset.card.name,
         "samples_hash": dataset.card.samples_hash,
         "plan_id": plan.plan_id,
@@ -150,7 +151,6 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         "sample_count": len(samples),
         "exif_policy": dataset.card.exif_policy,
         "exif_rotated": rotated,
-        **output.manifest,
         "files": {rel_posix(f, out): sha256_file(f) for f in sorted(files)},
     }
     manifest_path = out / "manifest.json"

@@ -1,10 +1,10 @@
 # vcp 骨架與資料層設計（子專案 0 + 1）
 
 - 日期：2026-09-02
-- 版本：v3。v1 依對話逐段核可；v2 依使用者要求提高通用性，移除核心 schema 與 CLI 中所有綁定特定比賽的假設，並把每一個變異軸改為登記表；v3（2026-09-03）依 Plan 1 執行後的整支審查，新增 §14 補充決定並修正 §5.2 的 regression 規則。
-- 狀態：v2 已核可並由 Plan 1（骨架 + 資料核心）實作合併；v3 補充已於對話核可，供 Plan 2a / 2b 使用
+- 版本：v4。v1 依對話逐段核可；v2 依使用者要求提高通用性，移除核心 schema 與 CLI 中所有綁定特定比賽的假設，並把每一個變異軸改為登記表；v3（2026-09-03）依 Plan 1 執行後的整支審查，新增 §14 補充決定並修正 §5.2 的 regression 規則；v4（2026-09-03）依 Plan 2a 後記與 RSNA Knee 真實資料形態，新增 §15 供 Plan 2b 使用。
+- 狀態：v2 由 Plan 1 實作合併；v3 由 Plan 2a 實作合併；v4 §15 已於對話逐節核可，供 Plan 2b 使用
 - 素材：`docs/postmortems/2026-08-aidea-marine-debris-detection.md`（下稱「報告」）§6、§8、§9；Plan 1 後記 `docs/superpowers/plans/2026-09-02-vcp-skeleton-data-core-followups.md`
-- 後續：Plan 2a（海廢形態：其餘影像匯入器、匯出器、稽核、整合測試）→ Plan 2b（RSNA 形態：dicom 匯入器、materialize）
+- 後續：Plan 2a（海廢形態，已合併）→ Plan 2b（RSNA 形態：dicom 匯入器、materialize、EXIF 與 coords 稽核的落地、Plan 2a 遺留 hygiene）
 
 ## 1. 目的
 
@@ -474,3 +474,71 @@ vcp data audit --name <名> [--against <test 資料集名>] [--max-bad-boxes 0] 
 - **Plan 2a（海廢形態）**：`csv_boxes`、`coco`、`yolo`、`imagefolder`、`image_csv` 匯入器；`coco` / `yolo` 匯出器；稽核三項；`tests/integration/` 與海廢真實資料測試；14.4 的 hygiene 任務。
 - **Plan 2b（RSNA 形態）**：`dicom` 匯入器；materialize（`npy` / `png`、`--resize`、`--stack-seq`）與解碼器登記表；合成 DICOM 測試。
 - 仍不在範圍：K-fold、`generate_fixed` 拆函式、tiff / nifti / 影片解碼器。
+
+## 15. v4 補充決定（Plan 2a 後記與 RSNA 真實資料形態，2026-09-03 逐節核可）
+
+以下條目落實 Plan 2a 後記 §5 的待辦，並依 RSNA Knee 的真實資料形態（4,407 個 study、24,371 個 series、82 萬張切片、570 GB、transfer syntax 混雜、僅 58 個 study 有完整人工標籤）把 §6.1 的 `dicom` 列與 §6.3 講清楚。與前文衝突時以本節為準。
+
+### 15.1 EXIF 方向政策
+
+1. **政策記在 card**：`DatasetCard.exif_policy: Literal["stored", "oriented"] = "stored"`。`stored` 以檔內像素為正；`oriented` 以 EXIF 轉正後為正。`schema_version` 不變，舊 card 讀入時取預設。
+2. **匯入**：影像匯入器（`csv_boxes`、`coco`、`yolo`、`imagefolder`、`image_csv`）接受 `--opt exif=stored|oriented`，寫進 card。`common.make_view` 讀 Orientation 標籤（0x0112）：值不在 {None, 1} 時記 `view.meta["exif_orientation"] = <int>`；政策為 `oriented` 且值在 {5, 6, 7, 8} 時 `width` / `height` 對調。`jsonl` 直通匯入器只依選項寫政策，不掃描影像。
+3. **可見性**：`ImportResult.exif_rotated: int`（`finalize_import` 加同名關鍵字參數）；大於 0 時 VERDICT 帶 `exif_rotated=<n>` 且狀態 WARN，不論政策，提醒抽幾張人工核對框所在的空間。
+4. **一致性**：尺寸、座標驗證、匯出、materialize 全部依 card 政策。解碼器 `image` 只在 `oriented` 政策下套 `ImageOps.exif_transpose`。匯出器不改像素；`manifest.json` 加 `exif_policy` 與 `exif_rotated`，後者大於 0 時匯出 VERDICT 帶同名欄位並 WARN。要把方向烙進像素只有一條路：materialize `png`。
+
+### 15.2 coords 稽核的職責
+
+5. **載入驗證維持嚴格**：資料集內的框永遠幾何合法（失敗封閉在邊界），`on_bad_row` 語意不變。
+6. **稽核改查三件事**，全部寫入 `cache/audit/coords_bad.jsonl`，每列帶 `kind`：
+   - 有尺寸 view 上的可疑框（WARN）：`tiny`（`w` 或 `h` < `min_box_px`）、`aspect`（`max(w/h, h/w)` > `max_aspect`）、`cover`（`w*h` ≥ `max_cover × W×H`）、`duplicate`（同 view 上 `category_id, x, y, w, h` 完全相同）。
+   - 無尺寸 view（`width` / `height` 為 None）：以 `common.image_size` 讀 header 補尺寸後查越界，`kind=out_of_bounds`，狀態 FAIL。
+   - 匯入時被擋的列：讀 `cache/import_skipped.jsonl`（存在時），每列併入為 `kind=import_skipped` 並保留原因。
+7. **門檻**：`AuditOptions` 新增 `min_box_px: float = 2.0`、`max_aspect: float = 20.0`、`max_cover: float = 0.98`；CLI 對應 `--min-box-px`、`--max-aspect`、`--max-cover`。`--max-bad-boxes` 的計數 = `out_of_bounds` + `import_skipped`；超過即 FAIL。`summary.json` 與 `VERDICT cmd=audit.coords` 帶 `suspicious=<n> out_of_bounds=<n> import_skipped=<n>`。
+8. **整合測試**：海廢資料集的 coords 斷言改為「`import_skipped` 計數等於 `cache/import_skipped.jsonl` 列數」，不再用 `max_bad_boxes=10**9`。
+
+### 15.3 `dicom` 匯入器
+
+9. **依賴**：需要 `dicom` extra；未安裝 pydicom 時 `VcpError`（ABORT）並提示 `uv sync --extra dicom`。
+10. **探索**：`--opt glob=**/*.dcm`（預設，副檔名不分大小寫）；`--opt glob=**/*` 收所有檔案，非 DICOM 者進 skipped（`not_dicom`）。只讀 header（`stop_before_pixels=True`），`--opt workers=4` 個執行緒平行讀。`rows_read` = 掃到的檔案數。
+11. **必要 tag 與跳過原因**：`StudyInstanceUID`、`SeriesInstanceUID`、`SOPInstanceUID`、`Rows`、`Columns` 缺一即 skipped（`missing_tag:<keyword>`）；`NumberOfFrames` > 1 → skipped（`multiframe`，多幀不在本 spec 範圍）。以 header 的 UID 分組，不信任資料夾名。
+12. **層級選項**：
+    - `--opt sample_level=study|series`（預設 `study`）：sample_id 為該層級的 UID。
+    - `--opt view_level=slice|series`（預設 `slice`）。`slice`：每張切片一個 view，`path` 為檔案相對路徑，`seq_id` = SeriesInstanceUID，`seq_index` = 排序後的名次（0 起，非原始 InstanceNumber），`meta` 只記 `instance_number` 與（有則記）`slice_location`。`series`：每個 series 一個 view，`path` 為 series 目錄相對路徑，尺寸取名次 0 的切片；切片尺寸不一致時尺寸留 None、`meta["inconsistent_size"]=true`，並計入 VERDICT `inconsistent_series=<n>`（WARN）。
+    - 排序：InstanceNumber；缺則 ImagePositionPatient 沿 ImageOrientationPatient 法向量的投影；再缺則檔名。view 順序為（SeriesNumber, SeriesInstanceUID, seq_index）。
+13. **series 層級摘要**放 `sample.meta["series"][<SeriesInstanceUID>]`，切片不重複攜帶：`description`、`number`、`n_slices`、`modality`、`rows`、`columns`、`pixel_spacing`、`slice_thickness`、`transfer_syntax`（取名次 0 的切片）；`--opt tags=Kw1,Kw2` 追加任意 header keyword；`--opt seq_csv=`、`--opt seq_id_col=`（預設 `SeriesInstanceUID`）、`--opt seq_cols=a,b` 把序列屬性表的欄併入同一處。`--opt role_from=<DICOM keyword 或 seq_csv 欄名>` 填 `view.role`；預設不填。
+14. **標籤**：`--opt labels_csv=`（相對 `src` 或絕對）、`--opt id_col=`（預設依 sample_level 為 `StudyInstanceUID` / `SeriesInstanceUID`）、`--opt target_cols=`、`--opt task=multilabel|regression`（缺省時依 §14.1-6 的 image_csv 規則推定）、`--opt meta_cols=`（其餘欄原字串進 `sample.meta[<col>]`）。categories 為 `target_cols` 欄名、id 依序。目標欄全有值 → `gold`；全空 → `none`（`labels=None`）；部分有值 → skipped（`partial_targets`）。樹裡有檔案但 CSV 沒有的 sample → `none`；CSV 有 id 但沒有檔案 → skipped（`no_files`）。`unlabeled` = `label_source=none` 的 sample 數。
+15. **分組**：`--opt group_from=PatientID`（預設）→ `sample.group` 取名次 0 切片的該 tag 值，缺則不分組；`--opt group_from=none` 關閉。同一病患的多次檢查因此不會跨子集。
+16. **其餘**：`image_root` = `src`，依 §14.1-1 規則儲存（Kaggle 的 `/kaggle/input/...` 為絕對路徑）；sample 依 sample_id 排序，輸出決定性。RSNA 的用法：`sample_level=study`、`labels_csv=train.csv`、`target_cols=<12 欄>`、`meta_cols=Report`、`seq_csv=train_series.csv`、`seq_cols=Fluid_Sensitive,Fat_Suppression,Anatomical_Plane`、`role_from=Anatomical_Plane`。
+
+### 15.4 materialize 與解碼器登記表
+
+17. **模組**：`data/materialize/`（`base.py` 介面與登記表、`run.py` 執行、`manifest.py`）與 `data/materialize/decoders/`（`image.py`、`dicom.py`）。`Decoder` 協定：`name`、`version`、`decode(path, *, exif_policy) -> ndarray`（HW 或 HWC）、`decode_series(paths) -> ndarray`（依呼叫端給定順序堆成 S×H×W，不重讀 header）。登記表 `DECODERS` 依名稱；`decoder_for(path)`：副檔名 `.dcm` → `dicom`，其餘 → `image`；`--decoder <名>` 可強制。
+18. **`dicom` 解碼**：`pixel_array` 套 RescaleSlope / RescaleIntercept；slope 與 intercept 為整數時保留 int16 / uint16（依 PixelRepresentation），否則 float32。壓縮 transfer syntax 由 pylibjpeg 家族處理。`MONOCHROME1` 在 `png` 模式反相，`npy` 模式保留原值並在 manifest 記 `photometric`。
+19. **命令**：`vcp data materialize --name <名> --mode npy|png [--resize <長邊>] [--stack-seq] [--window dicom|minmax|percentile] [--workers N] [--force] [--decoder <名>]`。`--window` 只影響 `png`：`dicom` 用 WindowCenter / WindowWidth，缺 tag 退回 `minmax`；`percentile` 取 0.5 / 99.5 百分位。`image` 解碼器在 `png` 模式重存為 8-bit 並以 LANCZOS 依長邊等比縮放。materialize 涵蓋全部 sample，不分子集，不觸發開封（像素不是標籤）。`--workers` 用 process pool，解碼是 CPU 工作。
+20. **輸出佈局**：`cache/materialize/<mode>[-r<長邊>]/<dir>/<view_index>.npy|png`；`--stack-seq` 時 `<dir>/<seq_id>.npy`，同 seq 尺寸不一致則 WARN 並退回逐 view。`<dir>` 為 sample_id 經路徑安全化：`/` → `__`；仍含檔名不可用字元時改用 sample_id 的 sha256 前 16 碼。manifest 為權威對照。
+21. **manifest**：`cache/materialize/<mode>[-r<長邊>]/manifest.jsonl`，每列 `sample_id`、`view`（int，堆疊時 null）、`seq_id`、`src`（view.path）、`out`（相對該 mode 目錄）、`shape`、`dtype`、`resize`、`window`、`exif_policy`、`decoder`、`decoder_version`、`sha256`、`materialized_at`。路徑一律相對，快取目錄可在 Kaggle 與本機之間搬移。重跑時已有同 `src` / `resize` / `window` / `decoder_version` 的列且輸出檔存在即 skip；`--force` 重做並覆寫該列。
+22. **失敗與判決**：解碼失敗記 `failed.jsonl`（`sample_id`、`view`、`src`、`error`），不中斷其他工作；VERDICT `cmd=materialize` 帶 `mode= resize= materialized=<n> skipped=<n> failed=<n>`，`failed` > 0 → FAIL。
+23. **Kaggle 用法**（寫進 README）：notebook 內 `pip install git+<repo>`，`VCP_DATA_ROOT=/kaggle/working/vcp-data`，`vcp data import --importer dicom --src /kaggle/input/<comp>/train_series ... --raw-manifest sizes`，`vcp data materialize --mode png --resize 256`，把 `cache/materialize/` 打包成 Kaggle Dataset 下載；本機以同一份 `dataset.yaml` + `samples.jsonl` + manifest 使用。
+
+### 15.5 大資料集的 raw manifest
+
+24. `vcp data import --raw-manifest full|sizes`（預設 `full`）→ `ImportSpec.raw_manifest`。`sizes` 模式的 `raw_manifest.txt` 每列 `relpath<TAB>size<TAB>-`，不算 md5；`SourceInfo.raw_manifest_mode: Literal["full", "sizes"] = "full"` 讓 card 誠實記錄來源證據強度。`raw_hash` 仍為 manifest 檔內容的 sha256。
+
+### 15.6 依賴、夾具與驗收
+
+25. **dev 群組**加入 `pydicom>=3.0`、`pylibjpeg>=2.0`、`pylibjpeg-libjpeg>=2.0`、`pylibjpeg-openjpeg>=2.0`，完整測試套件不需另裝 extra；runtime 仍以 `dicom` extra 宣告。
+26. **合成夾具**：`tests/helpers.py` 提供 `write_dicom_study(dir, *, series, slices, size=(16, 16), missing_instance_number=False, compress=None|"rle")`，用 pydicom 產生多 series 的 study（含 PatientID、SeriesDescription、InstanceNumber、ImagePositionPatient、Rescale、Window），RLE Lossless 由 pydicom 內建編碼，驗證壓縮路徑不需外部編碼器。
+27. **真資料整合測試**：`tests/integration/test_rsna_knee.py`，讀 `VCP_REALDATA_ROOT/rsna-knee/`（佈局同 Kaggle：`train.csv`、`train_series.csv`、`train_series/<study>/<series>/*.dcm`），資料缺席即 skip。斷言：200 個 study 子集匯入得 200 sample、`gold` 58、`unlabeled` 142、每 sample 的 series 數等於 `train_series.csv` 該 study 的列數、view 依 seq_index 遞增；對 3 個 sample 跑 `png --resize 256` 與 `--stack-seq npy`，manifest 列數與 sha256 可重現。
+28. **驗收條件補充**（接 §13）：12. RSNA 子集依第 27 條通過；13. materialize 在合成夾具重跑第二次 `skipped` 等於第一次的 `materialized`；14. 海廢資料集 `audit.coords` 的 `import_skipped` 等於 `import_skipped.jsonl` 列數；15. 帶 Orientation=6 的 JPEG 夾具在 `stored` / `oriented` 兩政策下尺寸分別為原始與對調，兩者 VERDICT 都帶 `exif_rotated=1` 且 WARN。
+
+### 15.7 Plan 2a 遺留的小項（Plan 2b 的 hygiene 任務）
+
+29. YOLO 匯出的 `manifest.json` 加 `categories: [{index, id, name}]`。
+30. `ExportResult.fields: dict[str, FieldValue]` 讓匯出器回傳額外 VERDICT 欄位；YOLO 填 `images=copied|symlinked`。
+31. `_place_image` 只在符號連結權限不足（`OSError` 之 EPERM / EACCES / WinError 1314）時退回複製，其他 I/O 錯誤傳播。
+32. CLI 層測試：`import` 的 `unlabeled=` 欄位、空子集匯出 `status=WARN`、`plans_invalidated` 的 WARN 行；`count_invalidated_plans` 因舊 card 不可讀而計數時 VERDICT 帶 `old_card=unreadable`。
+33. README 記各匯入器 `rows_read` 的語意（csv 列 / coco annotations / yolo 影像 / imagefolder 影像 / dicom 檔案）。
+
+### 15.8 不在 Plan 2b 範圍
+
+多幀 DICOM；NIfTI、TIFF、影片解碼器；由報告文字推導標籤的工具（屬 `projects/rsna-knee/`）；Kaggle Dataset 上傳自動化；訓練層對 materialize 快取的讀取介面（子專案 3 的 spec 決定，資料層只保證 manifest 穩定）；dedup 對多 view 共享檔案的判定單位（留待有真實案例）。

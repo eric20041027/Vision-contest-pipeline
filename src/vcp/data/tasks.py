@@ -83,6 +83,8 @@ def _validate_regression(sample: Sample, card: DatasetCard) -> None:
     targets = sample.labels.targets
     if targets is None:
         _fail(sample, "task regression requires labels.targets")
+    if not targets:
+        _fail(sample, "task regression requires at least one target value")
     unknown = sorted(set(targets) - set(_cat_names(card)))
     if unknown:
         _fail(sample, f"unknown target names {unknown}; declared: {_cat_names(card)}")

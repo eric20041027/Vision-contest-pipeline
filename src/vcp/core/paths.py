@@ -7,8 +7,12 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vcp.core.errors import ValidationFailed
+
+if TYPE_CHECKING:
+    from vcp.data.schema import DatasetCard
 
 ENV_DATA_ROOT = "VCP_DATA_ROOT"
 ENV_CONFIGS_ROOT = "VCP_CONFIGS_ROOT"
@@ -40,8 +44,10 @@ def resolve_configs_root(override: Path | None = None) -> Path:
     for candidate in (here, *here.parents):
         if (candidate / "pyproject.toml").is_file() and (candidate / "configs").is_dir():
             return candidate / "configs"
-    repo_root = Path(__file__).resolve().parents[3]  # src/vcp/core/paths.py -> repo
-    return repo_root / "configs"
+    raise ValidationFailed(
+        f"cannot locate configs root: no ancestor of {here} contains pyproject.toml and configs/; "
+        f"set {ENV_CONFIGS_ROOT} or pass --configs-root"
+    )
 
 
 def validate_name(name: str) -> None:
@@ -54,6 +60,26 @@ def validate_name(name: str) -> None:
 
 def logs_dir(data_root: Path) -> Path:
     return data_root / "logs"
+
+
+def store_path(path: Path, data_root: Path) -> str:
+    """How a filesystem path is written into a git-tracked card.
+
+    Inside ``data_root`` -> posix path relative to it (portable across machines that follow the
+    data-root convention); elsewhere -> absolute posix path.
+    """
+    resolved = Path(path).expanduser().resolve()
+    root = Path(data_root).expanduser().resolve()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def resolve_stored_path(stored: str, data_root: Path) -> Path:
+    """Inverse of ``store_path``: relative values are re-anchored at ``data_root``."""
+    p = Path(stored)
+    return p if p.is_absolute() else Path(data_root) / p
 
 
 @dataclass(frozen=True)
@@ -108,3 +134,7 @@ class DatasetPaths:
     def unseal_jsonl(self, plan_id: str) -> Path:
         validate_name(plan_id)
         return self.splits_dir / f"{plan_id}.unseal.jsonl"
+
+    def resolve_image_root(self, card: DatasetCard) -> Path:
+        """Absolute image root for this dataset on this machine (see ``store_path``)."""
+        return resolve_stored_path(card.image_root, self.data_root)

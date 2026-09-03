@@ -4,11 +4,16 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from helpers import make_card
+from helpers import make_card, write_exif_image
 from vcp.core.paths import DatasetPaths
 from vcp.data.audit import AUDITS, get_check
 from vcp.data.audit.base import AuditContext, AuditOptions, run_audit
-from vcp.data.audit.coords import box_problems, polygon_problems
+from vcp.data.audit.coords import (
+    box_problems,
+    polygon_problems,
+    read_import_skipped,
+    suspicious_problems,
+)
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Labels, Mask, Sample, View
 
@@ -26,7 +31,7 @@ def _gradient(seed: int) -> np.ndarray:
     return np.stack([img, img, img], axis=-1)
 
 
-def _dataset(roots, name, specs, *, task="det", card_kwargs=None):
+def _dataset(roots, name, specs, *, task="det", card_kwargs=None, exif_policy=None):
     """specs: list of (sample_id, image array | None, labels, view kwargs)."""
     paths = DatasetPaths.resolve(name, data_root=roots.data, configs_root=roots.configs)
     root = roots.data / "raw" / name
@@ -43,6 +48,8 @@ def _dataset(roots, name, specs, *, task="det", card_kwargs=None):
             )
         )
     card = make_card(task, name=name, image_root=f"raw/{name}", **(card_kwargs or {}))
+    if exif_policy is not None:
+        card = card.model_copy(update={"exif_policy": exif_policy})
     ds = Dataset.from_parts(card, samples)
     ds.save(paths)
     return ds, paths
@@ -58,7 +65,21 @@ def test_box_and_polygon_problems():
     assert any("degenerate" in p for p in polygon_problems([[0, 0, 5, 0]], 10, 10))
 
 
-def test_coords_check_reads_sizes_and_fails_over_limit(roots):
+def test_suspicious_problems_thresholds():
+    opts = AuditOptions()
+    ok = Box(x=1, y=1, w=5, h=5, category_id=0)
+    assert suspicious_problems(ok, 32, 32, opts) == []
+    assert suspicious_problems(Box(x=1, y=1, w=1, h=5, category_id=0), 32, 32, opts) == ["tiny"]
+    assert suspicious_problems(Box(x=0, y=0, w=30, h=1, category_id=0), 64, 64, opts) == [
+        "tiny",
+        "aspect",
+    ]
+    assert suspicious_problems(Box(x=0, y=0, w=32, h=32, category_id=0), 32, 32, opts) == ["cover"]
+    loose = AuditOptions(min_box_px=0, max_aspect=100, max_cover=1.01)
+    assert suspicious_problems(Box(x=0, y=0, w=32, h=1, category_id=0), 32, 32, loose) == []
+
+
+def test_coords_check_classifies_kinds(roots):
     img = _gradient(1)
     specs = [
         (
@@ -68,12 +89,24 @@ def test_coords_check_reads_sizes_and_fails_over_limit(roots):
             {"width": 32, "height": 32},
         ),
         (
-            "zero.png",
+            "tiny.png",
             img,
             Labels(boxes=[Box(x=1, y=1, w=0, h=5, category_id=0)]),
             {"width": 32, "height": 32},
         ),
+        (
+            "dup.png",
+            img,
+            Labels(
+                boxes=[
+                    Box(x=1, y=1, w=5, h=5, category_id=0),
+                    Box(x=1, y=1, w=5, h=5, category_id=0),
+                ]
+            ),
+            {"width": 32, "height": 32},
+        ),
         ("unsized.png", img, Labels(boxes=[Box(x=0, y=0, w=100, h=100, category_id=1)]), {}),
+        ("gone.png", None, Labels(boxes=[Box(x=0, y=0, w=4, h=4, category_id=1)]), {}),
         (
             "poly.png",
             img,
@@ -82,19 +115,74 @@ def test_coords_check_reads_sizes_and_fails_over_limit(roots):
         ),
     ]
     ds, paths = _dataset(roots, "cc", specs)
+    (paths.cache_dir).mkdir(parents=True, exist_ok=True)
+    (paths.cache_dir / "import_skipped.jsonl").write_text(
+        '{"line": 7, "reason": "box exceeds image bounds 32x32", "row": {}}\n'
+        '{"line": 9, "reason": "unknown image \'zz.png\'", "row": {}}\n',
+        encoding="utf-8",
+        newline="\n",
+    )
     ctx = AuditContext(dataset=ds, paths=paths, opts=AuditOptions())
     res = get_check("coords").run(ctx)
-    assert res.status == "FAIL" and res.fields["bad"] == 3
+    assert res.status == "FAIL"
+    assert (res.fields["suspicious"], res.fields["out_of_bounds"]) == (2, 2)
+    assert (res.fields["import_skipped"], res.fields["unsized"]) == (2, 1)
     rows = [
         json.loads(line)
         for line in (ctx.out_dir / "coords_bad.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert {r["sample_id"] for r in rows} == {"zero.png", "unsized.png", "poly.png"}
+    kinds = {(r.get("sample_id"), r["kind"]) for r in rows}
+    assert kinds == {
+        ("tiny.png", "suspicious"),
+        ("dup.png", "suspicious"),
+        ("unsized.png", "out_of_bounds"),
+        ("gone.png", "unsized"),
+        ("poly.png", "out_of_bounds"),
+        (None, "import_skipped"),
+    }
+    assert [r["reason"] for r in rows if r["kind"] == "import_skipped"][0].startswith("box exceeds")
+    # raising the budget to cover 2 out-of-bounds + 2 refused rows leaves only WARN-level findings
     res2 = get_check("coords").run(
-        AuditContext(dataset=ds, paths=paths, opts=AuditOptions(max_bad_boxes=3))
+        AuditContext(dataset=ds, paths=paths, opts=AuditOptions(max_bad_boxes=4))
     )
-    assert res2.status == "OK"
+    assert res2.status == "WARN"
     assert not get_check("coords").applies(Dataset.from_parts(make_card("cls"), []))
+
+
+def test_coords_check_clean_dataset_is_ok(roots):
+    specs = [
+        (
+            "a.png",
+            _gradient(2),
+            Labels(boxes=[Box(x=2, y=2, w=6, h=6, category_id=0)]),
+            {"width": 32, "height": 32},
+        )
+    ]
+    ds, paths = _dataset(roots, "clean", specs)
+    res = get_check("coords").run(AuditContext(dataset=ds, paths=paths, opts=AuditOptions()))
+    assert res.status == "OK" and res.fields["import_skipped"] == 0
+    assert read_import_skipped(paths.cache_dir / "import_skipped.jsonl") == []
+
+
+def test_coords_check_unsized_view_honors_exif_policy(roots):
+    """Controller ruling: sizing an unsized view from the header must honour exif_policy,
+    the same way ``common.make_view`` does at import time (spec 15.1 + 15.2)."""
+    box = Box(x=0, y=0, w=4, h=8, category_id=0)
+    specs = [("a.jpg", None, Labels(boxes=[box]), {})]
+
+    ds_oriented, paths_oriented = _dataset(roots, "exif-or", specs, exif_policy="oriented")
+    write_exif_image(paths_oriented.raw_dir / "a.jpg", size=(8, 4), orientation=6)
+    res_oriented = get_check("coords").run(
+        AuditContext(dataset=ds_oriented, paths=paths_oriented, opts=AuditOptions())
+    )
+    assert res_oriented.fields["out_of_bounds"] == 0
+
+    ds_stored, paths_stored = _dataset(roots, "exif-st", specs)
+    write_exif_image(paths_stored.raw_dir / "a.jpg", size=(8, 4), orientation=6)
+    res_stored = get_check("coords").run(
+        AuditContext(dataset=ds_stored, paths=paths_stored, opts=AuditOptions())
+    )
+    assert res_stored.fields["out_of_bounds"] == 1
 
 
 def test_dedup_groups_and_overlap(roots):

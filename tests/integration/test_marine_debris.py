@@ -28,14 +28,19 @@ def test_marine_train_shape(marine):
     assert all(s.label_source == "gold" for s in marine.samples)
 
 
-def test_marine_coords_audit_runs(marine, real_roots):
+def test_marine_coords_audit_reports_refused_rows(marine, real_roots):
     paths = DatasetPaths.resolve(
         "marine-debris", data_root=real_roots.data, configs_root=real_roots.configs
     )
-    ctx = AuditContext(dataset=marine, paths=paths, opts=AuditOptions(max_bad_boxes=10**9))
+    skipped_file = paths.cache_dir / "import_skipped.jsonl"
+    expected = (
+        len(skipped_file.read_text(encoding="utf-8").splitlines()) if skipped_file.is_file() else 0
+    )
+    ctx = AuditContext(dataset=marine, paths=paths, opts=AuditOptions(max_bad_boxes=expected))
     res = get_check("coords").run(ctx)
-    assert res.status == "OK"
-    assert isinstance(res.fields["bad"], int)
+    assert res.fields["import_skipped"] == expected
+    assert res.fields["out_of_bounds"] == 0  # sized det dataset: validation already blocked them
+    assert res.status in ("OK", "WARN")
 
 
 def test_val282_matches_postmortem(val282):

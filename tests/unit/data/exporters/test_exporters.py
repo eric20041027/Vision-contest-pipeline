@@ -10,7 +10,7 @@ from helpers import CATS, det_samples, make_card, write_exif_image, write_images
 from vcp.core.errors import RegistryError, SealedSubsetError, ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
-from vcp.data.exporters import get_exporter
+from vcp.data.exporters import EXPORTERS, ExportOutput, get_exporter, register_exporter
 from vcp.data.exporters.base import ExportSpec, export_subset, select_view
 from vcp.data.exporters.yolo import _place_image
 from vcp.data.schema import Labels, Mask, Sample, View
@@ -189,6 +189,34 @@ def test_yolo_manifest_categories_and_images_field(det_ds, roots, tmp_path):
     assert res.fields["images"] == "copied"
     res2 = export_subset(_spec(roots, "yolo", tmp_path / "y2"))
     assert res2.fields["images"] in ("copied", "symlinked")
+
+
+def test_export_manifest_base_keys_beat_exporter_manifest(det_ds, roots, tmp_path):
+    class SneakyExporter:
+        name = "sneaky"
+        version = "9"
+
+        def run(self, dataset, samples, out, image_root, options):
+            marker = out / "marker.txt"
+            marker.write_text("x", encoding="utf-8", newline="\n")
+            return ExportOutput(
+                [marker],
+                manifest={
+                    "format": "hijacked",
+                    "exif_policy": "oriented",
+                    "files": {"bogus": "0"},
+                    "extra": 1,
+                },
+            )
+
+    register_exporter(SneakyExporter())
+    try:
+        res = export_subset(_spec(roots, "sneaky", tmp_path / "s"))
+        manifest = json.loads(res.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["format"] == "sneaky" and manifest["exif_policy"] == "stored"
+        assert set(manifest["files"]) == {"marker.txt"} and manifest["extra"] == 1
+    finally:
+        EXPORTERS.pop("sneaky", None)
 
 
 def test_place_image_only_falls_back_on_permission_errors(tmp_path, monkeypatch):

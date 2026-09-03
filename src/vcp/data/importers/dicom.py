@@ -33,6 +33,17 @@ def split_list(value: str | None) -> list[str]:
     return [v.strip() for v in (value or "").split(",") if v.strip()]
 
 
+def workers_option(opts: dict[str, str]) -> int:
+    value = opts.get("workers", "4")
+    try:
+        workers = int(value)
+    except ValueError:
+        workers = 0
+    if workers < 1:
+        raise ValidationFailed(f"--opt workers= must be a positive integer, got {value!r}")
+    return workers
+
+
 def find_files(src: Path, pattern: str) -> list[Path]:
     """Files matching ``pattern`` under ``src``; a ``.dcm`` pattern matches any suffix case."""
     if pattern.lower().endswith(".dcm"):
@@ -65,6 +76,10 @@ def load_labels(src: Path, opts: dict[str, str], sample_level: str) -> LabelTabl
     if not target_cols:
         raise ValidationFailed("labels_csv needs --opt target_cols=a,b,... (the label columns)")
     meta_cols = split_list(opts.get("meta_cols"))
+    if "series" in meta_cols:
+        raise ValidationFailed(
+            "meta_cols cannot include 'series' (reserved for the per-series summary)"
+        )
     _, rows = read_csv(path, required=[id_col, *target_cols, *meta_cols])
     table: dict[str, dict[str, str]] = {}
     for lineno, row in enumerate(rows, start=2):
@@ -106,7 +121,13 @@ def load_seq_csv(src: Path, opts: dict[str, str]) -> dict[str, dict[str, str]]:
     cols = split_list(opts.get("seq_cols"))
     header, rows = read_csv(path, required=[id_col, *cols])
     use = cols or [c for c in header if c != id_col]
-    return {row[id_col].strip(): {c: row[c] for c in use} for row in rows}
+    table: dict[str, dict[str, str]] = {}
+    for lineno, row in enumerate(rows, start=2):
+        key = row[id_col].strip()
+        if key in table:
+            raise ValidationFailed(f"duplicate id {key!r}", location=f"{path.name}:{lineno}")
+        table[key] = {c: row[c] for c in use}
+    return table
 
 
 def group_units(
@@ -227,10 +248,14 @@ class DicomImporter:
         view_level = choice_option(opts, "view_level", VIEW_LEVELS, "slice")
         exif_policy = exif_policy_option(opts)
         pattern = opts.get("glob", "**/*.dcm")
-        workers = int(opts.get("workers", "4"))
+        workers = workers_option(opts)
         extra_tags = split_list(opts.get("tags"))
         group_from = opts.get("group_from", DEFAULT_GROUP_TAG)
         role_from = opts.get("role_from")
+        # Validate the CSV-join options before paying for the (threaded, but O(n)) header scan:
+        # a typo in --opt target_cols= should fail fast, not after reading every header on disk.
+        seq_meta = load_seq_csv(spec.src, opts)
+        table = load_labels(spec.src, opts, sample_level)
         files = find_files(spec.src, pattern)
         if not files:
             raise ValidationFailed(f"no files match {pattern!r} under {spec.src}")
@@ -247,8 +272,6 @@ class DicomImporter:
                 skipped.append({"file": rel_posix(path, spec.src), "reason": h})
                 continue
             series[h.series_uid].append(h)
-        seq_meta = load_seq_csv(spec.src, opts)
-        table = load_labels(spec.src, opts, sample_level)
         units = group_units(series, sample_level)
         samples: list[Sample] = []
         unlabeled = inconsistent = 0

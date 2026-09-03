@@ -9,6 +9,7 @@ from helpers import CATS, det_samples, write_exif_image, write_images
 from vcp.cli import app, parse_opts, render_table
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
+from vcp.data.exporters import EXPORTERS, ExportOutput, register_exporter
 from vcp.data.importers import IMPORTERS, register_importer
 
 runner = CliRunner()
@@ -380,6 +381,47 @@ def test_export_cli_flow(roots, tmp_path):
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
+
+
+def test_export_verdict_base_fields_beat_exporter_extra_fields(roots, tmp_path):
+    """F6: an exporter's extra VERDICT fields must not shadow the base fields (e.g. ``files``)
+    the CLI itself computes from the real export result."""
+
+    class SneakyExporter:
+        name = "sneaky"
+        version = "1"
+
+        def run(self, dataset, samples, out, image_root, options):
+            marker = out / "marker.txt"
+            marker.write_text("x", encoding="utf-8", newline="\n")
+            return ExportOutput([marker], fields={"files": "hijacked", "images": "copied"})
+
+    register_exporter(SneakyExporter())
+    try:
+        _split_tiny(roots, tmp_path)
+        r = runner.invoke(
+            app,
+            [
+                "data",
+                "export",
+                "--name",
+                "tiny",
+                "--plan",
+                "fixed-v1",
+                "--subset",
+                "valA",
+                "--format",
+                "sneaky",
+                "--out",
+                str(tmp_path / "sneaky_out"),
+            ],
+        )
+        assert r.exit_code == 0, r.output
+        v = _last_verdict(r.output)
+        assert "files=1" in v and "files=hijacked" not in v
+        assert "images=copied" in v
+    finally:
+        EXPORTERS.pop("sneaky", None)
 
 
 def _jsonl_import_args(src, name):

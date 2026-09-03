@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from helpers import det_samples, make_card, write_dicom_study, write_images
+from helpers import det_samples, make_card, write_dicom_study, write_exif_image, write_images
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
@@ -75,6 +75,12 @@ def test_npy_mode_and_option_validation(roots):
         materialize(_spec(roots, mode="png", window="gamma"))
 
 
+def test_bad_decoder_option_is_a_validation_failure(roots):
+    """F7: an unknown --decoder is the caller's mistake (FAIL), not a registry ABORT."""
+    with pytest.raises(ValidationFailed, match="decoder"):
+        materialize(_spec(roots, mode="npy", decoder="nifti"))
+
+
 def test_failures_are_recorded_not_raised(roots):
     _image_ds(roots)
     (roots.data / "raw" / "tiny" / "s0001.jpg").write_bytes(b"broken")
@@ -107,6 +113,35 @@ def test_dicom_stack_seq_png_window_and_series_views(roots):
     assert vols.materialized == 2 and np.load(vols.out_dir / "1.2.1" / "0.npy").shape == (3, 16, 16)
     bad = materialize(_spec(roots, name="dcm2", mode="png"))
     assert bad.failed == 2 and bad.materialized == 0
+
+
+def test_series_view_materialize_ignores_non_decoder_files(roots):
+    """F4: a series-level view lists a directory of slices; a stray non-.dcm file dropped in
+    that directory (a README, a sidecar) must not be handed to decode_series."""
+    src = roots.data / "raw" / "dcm3"
+    write_dicom_study(src, study_uid="1.2.9", series=1, slices=2)
+    (src / "1.2.9" / "1.2.9.1" / "README.txt").write_text("not a slice", encoding="utf-8")
+    get_importer("dicom").run(
+        ImportSpec(
+            importer="dicom",
+            src=src,
+            name="dcm3",
+            options={"view_level": "series"},
+            license="CC0",
+            url="u",
+            downloaded_at="2026-09-03",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    res = materialize(_spec(roots, name="dcm3", mode="npy"))
+    assert res.failed == 0
+    vol = np.load(res.out_dir / "1.2.9" / "0.npy")
+    assert vol.shape == (2, 16, 16)
+    # A directory containing *only* non-decoder files never actually occurs here: the dicom
+    # importer only ever builds a series-level view from a directory of .dcm files it just
+    # grouped by SeriesInstanceUID, so the "nothing qualifies" ValidationFailed branch is
+    # defence in depth rather than something this importer can trigger end to end.
 
 
 def test_stack_seq_shape_mismatch_falls_back_per_view(roots):
@@ -154,6 +189,41 @@ def test_decoder_override_invalidates_cache(roots):
     assert res.failed == 6
     rows = read_manifest(res.manifest_path)
     assert all(r.decoder != "dicom" for r in rows.values())
+
+
+def test_exif_policy_change_invalidates_materialize_cache(roots, tmp_path):
+    """F2: re-importing the same dataset under a different --opt exif= must make materialize
+    redo the affected views, not skip them with the old (wrongly-oriented) cached array."""
+    src = tmp_path / "exif_src"
+    write_exif_image(src / "images" / "a.jpg", size=(8, 4), orientation=6)
+    (src / "labels.csv").write_text("path,label\na.jpg,0\n", encoding="utf-8")
+
+    def _import(exif: str):
+        return get_importer("image_csv").run(
+            ImportSpec(
+                importer="image_csv",
+                src=src,
+                name="exif",
+                options={"task": "cls", "exif": exif},
+                license="CC0",
+                url="u",
+                downloaded_at="2026-09-03",
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )
+
+    _import("stored")
+    res = materialize(_spec(roots, name="exif", mode="npy"))
+    assert (res.materialized, res.skipped) == (1, 0)
+    arr = np.load(res.out_dir / "a.jpg" / "0.npy")
+    assert arr.shape == (4, 8, 3)
+
+    _import("oriented")
+    res2 = materialize(_spec(roots, name="exif", mode="npy"))
+    assert (res2.materialized, res2.skipped) == (1, 0)
+    arr2 = np.load(res2.out_dir / "a.jpg" / "0.npy")
+    assert arr2.shape == (8, 4, 3)
 
 
 def test_stack_seq_after_plain_run_writes_the_volume(roots):

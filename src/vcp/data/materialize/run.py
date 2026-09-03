@@ -16,6 +16,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
+from vcp.data.importers.common import IMAGE_EXTS
 from vcp.data.materialize.base import (
     MODES,
     MaterializeResult,
@@ -23,9 +24,15 @@ from vcp.data.materialize.base import (
     mode_dir_name,
     safe_dir_name,
 )
-from vcp.data.materialize.decoders import Decoded, decoder_for, get_decoder
+from vcp.data.materialize.decoders import DECODERS, Decoded, decoder_for, get_decoder
 from vcp.data.materialize.manifest import ManifestRow, read_manifest, row_key, write_manifest
 from vcp.data.materialize.window import WINDOW_MODES, resize_long_side, to_uint8
+
+# Series-directory materialize jobs (view_level=series) must list only the decoder's own file
+# family: a stray non-slice file (a README, a sidecar) in the series directory must not be
+# handed to decode_series. None (any future decoder not listed here) keeps the old behaviour of
+# taking every file, so adding a decoder stays a registry-only change.
+_SERIES_SUFFIXES: dict[str, frozenset[str]] = {"dicom": frozenset({".dcm"}), "image": IMAGE_EXTS}
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,8 @@ def _validate(spec: MaterializeSpec) -> None:
         raise ValidationFailed(f"--resize must be >= 1, got {spec.resize}")
     if spec.workers < 1:
         raise ValidationFailed(f"--workers must be >= 1, got {spec.workers}")
+    if spec.decoder and spec.decoder not in DECODERS:
+        raise ValidationFailed(f"--decoder must be one of {sorted(DECODERS)}, got {spec.decoder!r}")
 
 
 def _decoder_name(rel_path: str, image_root: Path, override: str | None) -> str:
@@ -184,7 +193,15 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
         dec = get_decoder(job.decoder)
         paths = [cfg.image_root / s for s in job.srcs]
         if len(paths) == 1 and paths[0].is_dir():  # series-level view: a dir of slices
-            files = sorted(p for p in paths[0].iterdir() if p.is_file())
+            all_files = sorted(p for p in paths[0].iterdir() if p.is_file())
+            wanted_suffixes = _SERIES_SUFFIXES.get(job.decoder)
+            files = (
+                all_files
+                if wanted_suffixes is None
+                else [p for p in all_files if p.suffix.lower() in wanted_suffixes]
+            )
+            if not files:
+                raise ValidationFailed(f"no {job.decoder} files in {paths[0]}")
             decoded = dec.decode_series(files)
             out = cfg.out_root / job.out_dir / f"{job.view}.{ext}"
             shape, dtype = _write(decoded, out, cfg)
@@ -225,23 +242,24 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
         return JobOutcome([], [failure])
 
 
-def _is_current(
-    job: Job, existing: dict[str, ManifestRow], spec: MaterializeSpec, out_root: Path
-) -> bool:
-    """Skip only when this exact job's own manifest row exists, matches this spec (decoder
-    identity + version, resize, window) and its output file is still there at the recorded
-    size. A stack job has no row under its own key once it has fallen back to per-view files,
-    so it is always re-attempted (and will warn and fall back again if still mismatched)."""
+def _is_current(job: Job, existing: dict[str, ManifestRow], cfg: Settings) -> bool:
+    """Skip only when this exact job's own manifest row exists, matches this run's settings
+    (decoder identity + version, resize, window, exif_policy) and its output file is still there
+    at the recorded size. A stack job has no row under its own key once it has fallen back to
+    per-view files, so it is always re-attempted (and will warn and fall back again if still
+    mismatched)."""
     r = existing.get(row_key(job.sample_id, job.view, job.seq_id))
     if r is None:
         return False
     version = get_decoder(job.decoder).version
-    window = spec.window if spec.mode == "png" else None
+    window = cfg.window if cfg.mode == "png" else None
     if r.decoder != job.decoder or r.decoder_version != version:
         return False
-    if r.resize != spec.resize or r.window != window:
+    if r.resize != cfg.resize or r.window != window:
         return False
-    f = out_root / r.out
+    if r.exif_policy != cfg.exif_policy:
+        return False
+    f = cfg.out_root / r.out
     return f.is_file() and f.stat().st_size == r.bytes
 
 
@@ -273,7 +291,7 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         dataset.card.exif_policy,
     )
     jobs = plan_jobs(dataset, spec, cfg.image_root)
-    todo = [j for j in jobs if not _is_current(j, existing, spec, out_root)]
+    todo = [j for j in jobs if not _is_current(j, existing, cfg)]
     skipped = len(jobs) - len(todo)
     if spec.workers <= 1 or len(todo) < 2:
         outcomes = [run_job(j, cfg) for j in todo]

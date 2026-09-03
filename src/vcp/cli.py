@@ -187,7 +187,8 @@ def import_cmd(
             fields["unlabeled"] = res.unlabeled
         if res.exif_rotated:
             fields["exif_rotated"] = res.exif_rotated
-        fields.update(res.extra_fields)
+        for k, v in res.extra_fields.items():
+            fields.setdefault(k, v)
         human = [
             f"imported {res.samples_written} samples into dataset {name!r} "
             f"(task={res.dataset.card.task})"
@@ -376,7 +377,8 @@ def export_cmd(
             "files": res.files,
             "out": str(res.out),
         }
-        fields.update(res.fields)
+        for k, v in res.fields.items():
+            fields.setdefault(k, v)
         if res.warnings:
             fields["warnings"] = "; ".join(res.warnings)
         human = [f"exported {res.files} files to {res.out}", *res.warnings]

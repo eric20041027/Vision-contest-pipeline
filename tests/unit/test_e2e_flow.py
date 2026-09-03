@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 from typer.testing import CliRunner
 
+from helpers import write_dicom_study
 from vcp.cli import app
 
 runner = CliRunner()
@@ -139,3 +140,55 @@ def test_full_flow(roots, tmp_path):
     assert r.exit_code == 0, r.output
     doc = json.loads((out_coco / "instances.json").read_text(encoding="utf-8"))
     assert len(doc["images"]) == n_val and len(doc["annotations"]) == n_val
+
+
+def test_dicom_flow(roots, tmp_path):
+    src = roots.data / "raw" / "knee"
+    write_dicom_study(src, study_uid="1.2.1", patient_id="PA", series=2, slices=2)
+    write_dicom_study(src, study_uid="1.2.2", patient_id="PB", series=1, slices=3, compress="rle")
+    (src / "train.csv").write_text(
+        "StudyInstanceUID,Report,ACL\n1.2.1,torn,1\n1.2.2,ok,\n", encoding="utf-8"
+    )
+    common = ["--license", "CC0", "--url", "u", "--downloaded-at", "2026-09-03"]
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "import",
+            "--importer",
+            "dicom",
+            "--src",
+            str(src),
+            "--name",
+            "knee",
+            *common,
+            "--opt",
+            "labels_csv=train.csv",
+            "--opt",
+            "target_cols=ACL",
+            "--opt",
+            "meta_cols=Report",
+            "--opt",
+            "role_from=SeriesDescription",
+            "--raw-manifest",
+            "sizes",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    verdict = _verdicts(r.output)[-1]
+    assert "samples=2" in verdict and "unlabeled=1" in verdict and "rows_read=7" in verdict
+    r = runner.invoke(
+        app, ["data", "materialize", "--name", "knee", "--mode", "npy", "--stack-seq"]
+    )
+    assert r.exit_code == 0, r.output
+    assert "materialized=3" in _verdicts(r.output)[-1]
+    vol = np.load(
+        roots.data / "datasets" / "knee" / "cache" / "materialize" / "npy" / "1.2.2" / "1.2.2.1.npy"
+    )
+    assert vol.shape == (3, 16, 16)
+    r = runner.invoke(
+        app, ["data", "materialize", "--name", "knee", "--mode", "png", "--resize", "8"]
+    )
+    assert r.exit_code == 0 and "materialized=7" in _verdicts(r.output)[-1]
+    r = runner.invoke(app, ["data", "validate", "--name", "knee"])
+    assert r.exit_code == 0

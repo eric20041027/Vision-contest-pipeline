@@ -12,10 +12,12 @@
 - 資料根目錄：`VCP_DATA_ROOT`（預設 Windows `C:/vcp-data`、Linux `~/vcp-data`）。`raw/<name>/` 永不修改；`datasets/<name>/` 放 `samples.jsonl`、`raw_manifest.txt`、`cache/`。
 - 設定根目錄：`VCP_CONFIGS_ROOT`（預設 repo 的 `configs/`）。`configs/datasets/<name>/dataset.yaml` 與 `splits/*.json` 進 git；plan 檔一旦寫入不可修改，要改就換 plan-id。
 - 整合測試讀 `VCP_REALDATA_ROOT` / `VCP_REALDATA_CONFIGS`，資料缺席即 skip；`raw/<name>/` 永不修改。
+- `datasets/<name>/cache/materialize/<mode>/` 是可搬移的解碼快取，`manifest.jsonl` 為權威對照。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`
 - `uv run vcp data export --name X --plan P --subset S --format coco|yolo --out DIR` / `uv run vcp data audit --name X [--against TEST]`
+- `uv run vcp data materialize --name X --mode npy|png [--resize L] [--stack-seq]`
 
 ## 文件
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`

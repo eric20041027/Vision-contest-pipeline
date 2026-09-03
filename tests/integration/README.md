@@ -22,3 +22,12 @@ uv run vcp data import --importer coco --src C:/vcp-data/raw/marine-val282 --nam
 
 期望值來自賽後報告 §1.3 / §5.1：train 15,163 張、34 類；val282 282 張、1,093 框、33 類出現。
 `on_bad_row=skip` 會把方向錯誤的標註列寫進 `cache/import_skipped.jsonl`，稽核 `coords` 再看一次。
+
+## 準備 RSNA Knee 子集（一次）
+
+1. `uvx --from kaggle python projects/rsna-knee/list_files.py`（列出 82 萬筆檔案清單，可中斷續跑）。
+2. `uvx --from kaggle python projects/rsna-knee/download_subset.py --extra 142 --workers 6`（58 個 gold study + 142 個隨機 study，約 26 GB，保留 `train_series/<study>/<series>/*.dcm` 佈局；CSV 已在 `raw/rsna-knee/`）。
+3. 以 README 的 `vcp data import --importer dicom ...` 匯入為 `rsna-knee`。
+4. `uv run pytest tests/integration -m realdata`。
+
+期望值由 CSV 推算（子集內的 study 數、十二欄皆有值的 gold 數、每 study 的 series 數），不寫死。

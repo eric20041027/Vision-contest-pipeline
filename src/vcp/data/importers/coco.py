@@ -62,23 +62,32 @@ class CocoImporter:
         masks: dict[int, list[Mask]] = {iid: [] for iid in views}
         skipped: list[dict[str, Any]] = []
         for i, ann in enumerate(doc["annotations"]):
-            iid = int(ann["image_id"])
-            if iid not in views:
-                skipped.append(
-                    {"annotation": ann.get("id", i), "reason": f"unknown image_id {iid}"}
+            ann_id = ann.get("id", i)
+            try:
+                iid = int(ann["image_id"])
+                cid = int(ann["category_id"])
+                bbox = [float(v) for v in ann["bbox"]] if task == "det" else None
+            except (KeyError, TypeError, ValueError) as e:
+                raise ValidationFailed(
+                    f"annotation {ann_id!r}: bad field ({type(e).__name__}: {e})",
+                    location=str(json_path),
+                ) from e
+            if bbox is not None and len(bbox) != 4:
+                raise ValidationFailed(
+                    f"annotation {ann_id!r}: bbox must have 4 numbers, got {len(bbox)}",
+                    location=str(json_path),
                 )
+            if iid not in views:
+                skipped.append({"annotation": ann_id, "reason": f"unknown image_id {iid}"})
                 continue
-            cid = int(ann["category_id"])
             meta: dict[str, Any] = {"iscrowd": 1} if ann.get("iscrowd") else {}
             if task == "det":
-                x, y, w, h = (float(v) for v in ann["bbox"])
+                x, y, w, h = bbox
                 boxes[iid].append(Box(x=x, y=y, w=w, h=h, category_id=cid, meta=meta))
                 continue
             mask = mask_from_segmentation(ann.get("segmentation"), cid, meta)
             if mask is None:
-                skipped.append(
-                    {"annotation": ann.get("id", i), "reason": "annotation without segmentation"}
-                )
+                skipped.append({"annotation": ann_id, "reason": "annotation without segmentation"})
                 continue
             masks[iid].append(mask)
         samples = [
@@ -106,12 +115,17 @@ class CocoImporter:
 def _load_views(images: list[dict[str, Any]], images_dir: Path) -> dict[int, tuple[str, View]]:
     views: dict[int, tuple[str, View]] = {}
     seen: set[str] = set()
+    seen_ids: set[int] = set()
     missing: list[str] = []
     for im in images:
         rel = Path(str(im["file_name"])).as_posix()
         if rel in seen:
             raise ValidationFailed(f"duplicate file_name {rel!r} in COCO images")
         seen.add(rel)
+        image_id = int(im["id"])
+        if image_id in seen_ids:
+            raise ValidationFailed(f"duplicate image id {image_id} in COCO images")
+        seen_ids.add(image_id)
         path = images_dir / rel
         if not path.is_file():
             missing.append(rel)
@@ -120,7 +134,7 @@ def _load_views(images: list[dict[str, Any]], images_dir: Path) -> dict[int, tup
             width, height = int(im["width"]), int(im["height"])
         else:
             width, height = image_size(path)
-        views[int(im["id"])] = (rel, View(path=rel, width=width, height=height))
+        views[image_id] = (rel, View(path=rel, width=width, height=height))
     if missing:
         raise ValidationFailed(f"{len(missing)} images missing under {images_dir}: {missing[:5]}")
     return views

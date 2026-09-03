@@ -132,3 +132,20 @@ def test_mask_from_segmentation_variants():
     assert u.rle == "1,2" and u.meta == {"size": [4, 4], "rle_encoding": "uncompressed"}
     assert mask_from_segmentation(None, 1, {}) is None
     assert mask_from_segmentation([], 1, {}) is None
+
+
+def test_duplicate_image_id_and_bad_numbers_fail_with_location(roots, tmp_path):
+    doc = _doc()
+    doc["images"].append({"id": 10, "file_name": "c.jpg"})
+    src = _src(tmp_path / "d1", doc)
+    _img(src / "images" / "c.jpg")
+    with pytest.raises(ValidationFailed, match="duplicate image id 10"):
+        get_importer("coco").run(_spec(roots, src))
+    doc = _doc()
+    doc["annotations"][0]["bbox"] = [1, 2, 3]
+    with pytest.raises(ValidationFailed, match="bbox must have 4"):
+        get_importer("coco").run(_spec(roots, _src(tmp_path / "d2", doc)))
+    doc = _doc()
+    doc["annotations"][1]["image_id"] = "abc"
+    with pytest.raises(ValidationFailed, match=r"annotation 2.*bad field"):
+        get_importer("coco").run(_spec(roots, _src(tmp_path / "d3", doc)))

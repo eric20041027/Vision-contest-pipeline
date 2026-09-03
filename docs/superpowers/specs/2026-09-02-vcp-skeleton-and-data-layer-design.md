@@ -1,10 +1,10 @@
 # vcp 骨架與資料層設計（子專案 0 + 1）
 
 - 日期：2026-09-02
-- 版本：v2。v1 依對話逐段核可；v2 依使用者要求提高通用性，移除核心 schema 與 CLI 中所有綁定特定比賽的假設，並把每一個變異軸改為登記表。
-- 狀態：待使用者審閱
-- 素材：`docs/postmortems/2026-08-aidea-marine-debris-detection.md`（下稱「報告」）§6、§8、§9
-- 後續：核可後交由 writing-plans 產生實作計畫
+- 版本：v3。v1 依對話逐段核可；v2 依使用者要求提高通用性，移除核心 schema 與 CLI 中所有綁定特定比賽的假設，並把每一個變異軸改為登記表；v3（2026-09-03）依 Plan 1 執行後的整支審查，新增 §14 補充決定並修正 §5.2 的 regression 規則。
+- 狀態：v2 已核可並由 Plan 1（骨架 + 資料核心）實作合併；v3 補充已於對話核可，供 Plan 2a / 2b 使用
+- 素材：`docs/postmortems/2026-08-aidea-marine-debris-detection.md`（下稱「報告」）§6、§8、§9；Plan 1 後記 `docs/superpowers/plans/2026-09-02-vcp-skeleton-data-core-followups.md`
+- 後續：Plan 2a（海廢形態：其餘影像匯入器、匯出器、稽核、整合測試）→ Plan 2b（RSNA 形態：dicom 匯入器、materialize）
 
 ## 1. 目的
 
@@ -211,7 +211,7 @@ v1 登記項：
 |---|---|---|---|
 | `cls` | `labels.cls` | 值在 categories 的 id 內 | 類別 id |
 | `multilabel` | `labels.targets` | 鍵集合 = categories 的 name 集合；值 ∈ {0, 1} | 標籤向量（iterative stratification） |
-| `regression` | `labels.targets` | 鍵集合 ⊆ categories 的 name 集合；值為有限浮點數 | 首個 target 的分位數桶 |
+| `regression` | `labels.targets` | 非空，且鍵集合 ⊆ categories 的 name 集合；值為有限浮點數（v3：空 `targets` 不再合法，否則樣本通過驗證卻無法分層） | 首個 target 的分位數桶 |
 | `det` | `labels.boxes`（可為空 list = 負樣本） | `view` 在範圍內；`category_id` 在 categories 內；view 有尺寸則 box 不得超出（容忍 1 px） | 影像含哪些類別的 multi-hot |
 | `seg` | `labels.masks` | `rle` / `polygon` / `path` 恰一；`view` 與 `category_id` 同 det | 同 det |
 
@@ -435,3 +435,42 @@ vcp data audit --name <名> [--against <test 資料集名>] [--max-bad-boxes 0] 
 9. 對 holdout 取子集拋 `SealedSubsetError`；`--unseal --reason` 後回傳子集並留下 unseal 記錄。
 10. `image_csv` 匯入一個回歸 CSV 得 `task=regression` 資料集並通過驗證；`jsonl` 直通匯入手寫檔通過驗證並產出 card。
 11. ruff 通過；另有一個單元測試把含 `datetime.now()` 的程式碼寫到暫存檔後對它執行 ruff，斷言 banned-api 規則確實報錯。
+
+## 14. v3 補充決定（Plan 1 整支審查後，2026-09-03 核可）
+
+以下條目補足 v2 未講清楚或審查發現的缺口；與前文衝突時以本節為準。Plan 1 已落地的實作與本節不一致者（14.14–14.17）由 Plan 2a 的 hygiene 任務修正。
+
+### 14.1 路徑可攜性與匯入行為
+
+1. **`image_root` / `raw_path` 儲存規則**：路徑若位於 `data_root` 之下，存相對於 `data_root` 的 posix 相對路徑；否則存絕對路徑。card 不加欄位。新增 `DatasetPaths.resolve_image_root(card) -> Path`（相對路徑接回 `data_root`，絕對路徑原樣），匯出器與 materialize 一律經由它取影像根目錄。效果：資料照慣例放 `<data_root>/raw/<name>/` 時，進 git 的 `dataset.yaml` 跨機器可用。
+2. **`import` 覆寫既有資料集**：card 已存在、新 `samples_hash` 與舊值不同、且 `splits/` 下已有 plan 檔 → 命令狀態 `WARN`，VERDICT 帶 `plans_invalidated=<n>`。plan 檔不刪（hash 鏈會在 `subset()` 擋下失效的 plan），只提早警告。`ImportResult` 加 `plans_invalidated: int`。
+3. **`finalize_import` 先驗證再算 manifest**：以空 `raw_hash` 組 card 跑 `Dataset.from_parts` 驗證，通過後才掃 `dir_manifest`（大資料集 md5 成本高，不在壞資料上白算），最後以 `model_copy` 補入 `raw_hash` 再 `save`。
+4. **sample_id 慣例**：所有以影像為單位的匯入器（`csv_boxes`、`coco`、`yolo`、`imagefolder`、`image_csv`）一律 `sample_id = view.path`（相對 `image_root`、含副檔名的 posix 路徑）；重複 → `ValidationFailed`。
+5. **影像尺寸**：上述匯入器一律用 Pillow 讀 header（`Image.open` 不解碼像素）填 `width` / `height`；影像缺檔 → `ValidationFailed` 列出檔名（不跳過）。
+6. **`image_csv` 的類別對照**：`task=cls` 時以標籤欄不重複值排序，`id` = 序號、`name` = `str(值)`；`task=multilabel` / `regression` 時 `target_cols` 的欄名即 category 名（id 依序）。`gold_col`（可選，0/1）決定 `gold` / `derived`，缺省全 gold。
+
+### 14.2 匯出器細節
+
+7. **YOLO**：輸出 `images/`、`labels/`、`data.yaml`（`path: <匯出目錄絕對路徑>`、`train: images`、`names: {id: name}`），一個匯出目錄對應一個子集。影像預設嘗試符號連結，失敗（Windows 無權限等）時**自動退回複製並 WARN**（VERDICT 帶 `images=copied`）；`--opt copy=true` 強制複製。標籤列為 `class_index cx cy w h` 正規化到 0–1，class_index 依 `card.categories` 宣告序。
+8. **COCO**：`instances.json` 的 `images[].file_name` = view 路徑（相對 `image_root`）、`id` = 匯出時的連續整數（另附 `sample_id` 欄位保留對應）；`annotations[]` 為 `bbox` xywh、`area = w*h`、`iscrowd = 0`、`segmentation` 原樣（polygon 或 RLE）；`categories` 原樣。
+9. **多 view 樣本**：`--opt view=<索引或 role>` 指定用哪個 view；未指定且任一樣本有多個 view → ABORT。
+10. **`manifest.json`**：`dataset`、`samples_hash`、`plan_id`、`subset`、`exported_at`、`format`、`files: {相對匯出目錄的路徑: sha256}`。匯出 sealed 子集需 `--unseal --reason`（走 §7.4 留痕）。
+
+### 14.3 稽核細節
+
+11. **dHash**：Pillow 轉灰階縮到 9×8，相鄰像素比較得 64-bit 整數；不新增 imagehash 依賴。快取 `cache/dhash.jsonl`（每列 `path`、`size`、`hash`；`path` 相同且 `size` 相同即命中，`--recompute` 強制重算）。配對搜尋以 numpy 分塊 XOR + popcount（15k 圖數秒內）；Hamming ≤ `--hamming`（預設 4）的配對再以 64×64 灰階 Pearson 相關 ≥ `--corr`（預設 0.95）確認。
+12. **輸出**：`cache/audit/coords_bad.jsonl`、`cache/audit/groups.json`（`sample_id → group_id`，僅多成員群；即 `split --group-from-audit` 的輸入）、`cache/audit/overlap.jsonl`、`cache/audit/summary.json`。三項檢查各一行 `VERDICT cmd=audit.<項目>`，最後一行 `VERDICT cmd=audit status=<最差者>`。
+13. **多 view 樣本**依 view 計算；sample 級命中 = 至少 `--view-hits`（預設 1）個 view 命中。稽核項目為登記表，每項 `check(dataset, opts) -> Verdict`。
+
+### 14.4 Plan 1 遺留的修正（Plan 2a 的 hygiene 任務）
+
+14. `resolve_configs_root` 找不到 `pyproject.toml` + `configs/` 時明確 `ValidationFailed`（提示設 `VCP_CONFIGS_ROOT`），不再退回套件相對路徑。
+15. `Dataset.subset()` 在核對 hash 之後、回傳之前跑一次 `assert_plan_invariants(plan, self)`，擋下手動編輯過的 plan 檔。
+16. §5.2 的 regression 規則改為「非空」（已修正於前文）；`_validate_regression` 同步。
+17. 切分每步的 seed 改為 `seed * 1000 + step`；`Dataset.load(verify_hash=False)` 加「僅供測試」警語；`normalize_keys` docstring 補充零寬向量退回字串分層；比例超額訂閱時的 `InvariantError` 訊息改為說明「四捨五入後的子集大小總和超過可用池」。
+
+### 14.5 Plan 2 的切分
+
+- **Plan 2a（海廢形態）**：`csv_boxes`、`coco`、`yolo`、`imagefolder`、`image_csv` 匯入器；`coco` / `yolo` 匯出器；稽核三項；`tests/integration/` 與海廢真實資料測試；14.4 的 hygiene 任務。
+- **Plan 2b（RSNA 形態）**：`dicom` 匯入器；materialize（`npy` / `png`、`--resize`、`--stack-seq`）與解碼器登記表；合成 DICOM 測試。
+- 仍不在範圍：K-fold、`generate_fixed` 拆函式、tiff / nifti / 影片解碼器。

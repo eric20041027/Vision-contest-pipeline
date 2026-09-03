@@ -50,7 +50,7 @@ def test_make_view(tmp_path):
 
 def test_read_csv_header_bom_and_required(tmp_path):
     p = tmp_path / "t.csv"
-    p.write_text("﻿image,label\na.jpg,1\nb.jpg,2\n", encoding="utf-8")
+    p.write_text("\ufeffimage,label\na.jpg,1\nb.jpg,2\n", encoding="utf-8")
     header, rows = read_csv(p, required=["image", "label"])
     assert header == ["image", "label"]
     assert rows == [{"image": "a.jpg", "label": "1"}, {"image": "b.jpg", "label": "2"}]

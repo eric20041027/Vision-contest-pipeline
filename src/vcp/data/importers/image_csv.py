@@ -25,7 +25,7 @@ def infer_task(rows: list[dict[str, str]], cols: list[str]) -> str:
 
 
 def _cls_categories(values: list[str]) -> list[Category]:
-    distinct = sorted(set(values), key=lambda v: (0, int(v)) if _INT.match(v) else (1, v))
+    distinct = sorted(set(values), key=lambda v: (0, int(v), v) if _INT.match(v) else (1, v))
     return [Category(id=i, name=v) for i, v in enumerate(distinct)]
 
 

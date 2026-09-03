@@ -32,6 +32,8 @@ class ImageFolderImporter:
                         label_source="gold",
                     )
                 )
+        if not samples:
+            raise ValidationFailed(f"no images found under {root}")
         return finalize_import(
             spec=spec,
             importer=self,

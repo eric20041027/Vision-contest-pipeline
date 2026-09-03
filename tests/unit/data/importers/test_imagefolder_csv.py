@@ -98,3 +98,18 @@ def test_infer_task():
     assert infer_task([{"a": "1", "b": "0"}, {"a": "0", "b": "1"}], ["a", "b"]) == "multilabel"
     assert infer_task([{"a": "0.5"}], ["a"]) == "regression"
     assert infer_task([{"a": "1"}, {"a": "0"}], ["a"]) == "cls"
+
+
+def test_cls_categories_are_deterministic_for_equal_ints():
+    from vcp.data.importers.image_csv import _cls_categories
+
+    cats = _cls_categories(["1", "01", "b", "a", "1"])
+    assert [(c.id, c.name) for c in cats] == [(0, "01"), (1, "1"), (2, "a"), (3, "b")]
+
+
+def test_imagefolder_without_images_fails(roots, tmp_path):
+    src = tmp_path / "src"
+    (src / "cat").mkdir(parents=True)
+    (src / "cat" / "notes.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="no images found"):
+        get_importer("imagefolder").run(_spec(roots, "imagefolder", src))

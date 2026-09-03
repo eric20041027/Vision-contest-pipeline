@@ -9,14 +9,17 @@ from vcp.data.importers.base import (
     get_importer,
     register_importer,
 )
+from vcp.data.importers.coco import CocoImporter
 from vcp.data.importers.csv_boxes import CsvBoxesImporter
 from vcp.data.importers.jsonl import JsonlImporter
 
 register_importer(JsonlImporter())
 register_importer(CsvBoxesImporter())
+register_importer(CocoImporter())
 
 __all__ = [
     "IMPORTERS",
+    "CocoImporter",
     "CsvBoxesImporter",
     "Importer",
     "ImportResult",

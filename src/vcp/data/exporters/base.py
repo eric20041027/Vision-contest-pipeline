@@ -8,7 +8,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from vcp.core.errors import RegistryError, ValidationFailed
+from vcp.core.errors import RegistryError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -80,7 +80,7 @@ def select_view(sample: Sample, view_opt: str | None) -> tuple[int, View]:
     views = sample.views
     if view_opt is None:
         if len(views) != 1:
-            raise ValidationFailed(
+            raise VcpError(
                 f"sample {sample.sample_id!r} has {len(views)} views; pass --opt view=<index|role>"
             )
         return 0, views[0]

@@ -21,6 +21,24 @@ def segmentation_from_mask(mask: Mask) -> Any:
     return {"counts": mask.rle, "size": size}
 
 
+def polygon_area(polygon: list[list[float]]) -> float:
+    """Sum of shoelace areas of the rings (absolute value)."""
+    total = 0.0
+    for ring in polygon:
+        xs, ys = ring[0::2], ring[1::2]
+        n = len(xs)
+        total += abs(sum(xs[i] * ys[(i + 1) % n] - xs[(i + 1) % n] * ys[i] for i in range(n))) / 2
+    return total
+
+
+def mask_area(mask: Mask) -> float:
+    if "area" in mask.meta:
+        return float(mask.meta["area"])
+    if mask.polygon is not None:
+        return polygon_area(mask.polygon)
+    return 0.0
+
+
 class CocoExporter:
     name = "coco"
     version = "1"
@@ -75,7 +93,7 @@ class CocoExporter:
                     ann["area"] = it.w * it.h
                 else:
                     ann["segmentation"] = segmentation_from_mask(it)
-                    ann["area"] = it.meta.get("area", 0)
+                    ann["area"] = mask_area(it)
                 annotations.append(ann)
         categories = [
             {

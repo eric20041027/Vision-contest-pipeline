@@ -7,33 +7,13 @@ validation, hashing and card generation still done by the framework.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-from pydantic import ValidationError
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import read_samples_jsonl
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
-from vcp.data.schema import Category
+from vcp.data.importers.common import load_categories
 from vcp.data.tasks import get_task
-
-
-def load_categories(value: str | None, base: Path) -> list[Category]:
-    """``value`` is inline JSON (starts with ``[``) or a path to a JSON file (relative to base)."""
-    if not value:
-        return []
-    text = value.strip()
-    if not text.startswith("["):
-        path = Path(text) if Path(text).is_absolute() else base / text
-        if not path.is_file():
-            raise ValidationFailed(f"categories file not found: {path}")
-        text = path.read_text(encoding="utf-8")
-    try:
-        raw = json.loads(text)
-        return [Category.model_validate(item) for item in raw]
-    except (json.JSONDecodeError, ValidationError, TypeError) as e:
-        raise ValidationFailed(f"bad categories: {e}") from e
 
 
 class JsonlImporter:

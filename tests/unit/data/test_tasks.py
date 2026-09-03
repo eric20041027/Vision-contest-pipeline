@@ -12,8 +12,13 @@ def card(task, names=("a", "b", "c")):
         categories=[Category(id=i, name=n) for i, n in enumerate(names)],
         image_root="/img",
         source=SourceInfo(
-            importer="t", importer_version="1", raw_path="/r", raw_hash="h",
-            license="", url="", downloaded_at="",
+            importer="t",
+            importer_version="1",
+            raw_path="/r",
+            raw_hash="h",
+            license="",
+            url="",
+            downloaded_at="",
         ),
         created_at="",
         sample_count=0,
@@ -80,11 +85,14 @@ def test_det_validation_bounds_and_presence_key():
     t = get_task("det")
     c = card("det")
     ok = sample(
-        Labels(boxes=[
-            Box(x=0, y=0, w=8, h=8, category_id=0),
-            Box(x=1, y=1, w=2, h=2, category_id=2),
-        ]),
-        width=8, height=8,
+        Labels(
+            boxes=[
+                Box(x=0, y=0, w=8, h=8, category_id=0),
+                Box(x=1, y=1, w=2, h=2, category_id=2),
+            ]
+        ),
+        width=8,
+        height=8,
     )
     t.validate(ok, c)
     assert t.stratify_key(ok, c) == (1, 0, 1)

@@ -23,8 +23,13 @@ def view(**kw):
 
 def source():
     return SourceInfo(
-        importer="jsonl", importer_version="1", raw_path="/raw", raw_hash="h",
-        license="CC-BY", url="https://x", downloaded_at="2026-09-02T00:00:00.000Z",
+        importer="jsonl",
+        importer_version="1",
+        raw_path="/raw",
+        raw_hash="h",
+        license="CC-BY",
+        url="https://x",
+        downloaded_at="2026-09-02T00:00:00.000Z",
     )
 
 
@@ -103,22 +108,45 @@ def test_views_non_empty_and_ids_non_empty():
 
 def test_card_category_uniqueness_and_empty_categories_allowed():
     DatasetCard(
-        name="d", task="det", categories=[Category(id=1, name="a"), Category(id=2, name="b")],
-        image_root="/img", source=source(), created_at="t", sample_count=0, samples_hash="",
+        name="d",
+        task="det",
+        categories=[Category(id=1, name="a"), Category(id=2, name="b")],
+        image_root="/img",
+        source=source(),
+        created_at="t",
+        sample_count=0,
+        samples_hash="",
     )
     DatasetCard(
-        name="d", task="regression", image_root="/img", source=source(), created_at="t",
-        sample_count=0, samples_hash="",
+        name="d",
+        task="regression",
+        image_root="/img",
+        source=source(),
+        created_at="t",
+        sample_count=0,
+        samples_hash="",
     )
     with pytest.raises(ValidationError, match="unique"):
         DatasetCard(
-            name="d", task="det", categories=[Category(id=1, name="a"), Category(id=1, name="b")],
-            image_root="/img", source=source(), created_at="t", sample_count=0, samples_hash="",
+            name="d",
+            task="det",
+            categories=[Category(id=1, name="a"), Category(id=1, name="b")],
+            image_root="/img",
+            source=source(),
+            created_at="t",
+            sample_count=0,
+            samples_hash="",
         )
     with pytest.raises(ValidationError, match="unique"):
         DatasetCard(
-            name="d", task="det", categories=[Category(id=1, name="a"), Category(id=2, name="a")],
-            image_root="/img", source=source(), created_at="t", sample_count=0, samples_hash="",
+            name="d",
+            task="det",
+            categories=[Category(id=1, name="a"), Category(id=2, name="a")],
+            image_root="/img",
+            source=source(),
+            created_at="t",
+            sample_count=0,
+            samples_hash="",
         )
 
 

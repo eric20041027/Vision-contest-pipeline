@@ -14,9 +14,15 @@ from vcp.data.schema import Box, Labels
 
 def _spec(roots, src, **opts):
     return ImportSpec(
-        importer="jsonl", src=src, name="ds", options=opts, license="CC0",
-        url="https://example.org", downloaded_at="2026-09-02T00:00:00.000Z",
-        data_root=roots.data, configs_root=roots.configs,
+        importer="jsonl",
+        src=src,
+        name="ds",
+        options=opts,
+        license="CC0",
+        url="https://example.org",
+        downloaded_at="2026-09-02T00:00:00.000Z",
+        data_root=roots.data,
+        configs_root=roots.configs,
     )
 
 
@@ -86,7 +92,7 @@ def test_jsonl_missing_files_reported(roots, tmp_path):
     with pytest.raises(ValidationFailed, match="categories file not found"):
         load_categories("nope.json", src)
     with pytest.raises(ValidationFailed, match="bad categories"):
-        load_categories("[{\"id\": \"x\"}]", src)
+        load_categories('[{"id": "x"}]', src)
     assert load_categories(None, src) == []
 
 

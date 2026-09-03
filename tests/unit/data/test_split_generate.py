@@ -113,7 +113,10 @@ def test_audit_group_conflict_counted_but_explicit_group_wins():
     samples[0] = samples[0].model_copy(update={"group": "explicit"})
     ds = Dataset.from_parts(make_card("det"), samples)
     plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0,
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
         audit_groups={"s0000": "dup", "s0001": "dup"},
     )
     assert plan.params["audit_group_conflicts"] == 1
@@ -122,7 +125,10 @@ def test_audit_group_conflict_counted_but_explicit_group_wins():
 def test_no_eval_gold_only_allows_unlabeled_in_eval():
     ds = Dataset.from_parts(make_card("det"), det_samples(100, seed=0, gold_frac=0.0))
     plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0,
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
         eval_gold_only=False,
     )
     assert _counts(plan) == {"train": 50, "val": 50}
@@ -160,9 +166,7 @@ def test_regression_bins_by_quantile():
     medians = {}
     for sub in ("train", "val"):
         vals = [
-            ds.by_id[sid].labels.targets["age"]
-            for sid, s in plan.assignment.items()
-            if s == sub
+            ds.by_id[sid].labels.targets["age"] for sid, s in plan.assignment.items() if s == sub
         ]
         medians[sub] = float(np.median(vals))
     assert abs(medians["train"] - medians["val"]) < 15
@@ -177,8 +181,12 @@ def test_meta_stratify_and_group_keys():
     ]
     ds = Dataset.from_parts(make_card("det"), samples)
     plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0,
-        stratify_key="meta.site", group_key="meta.patient",
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
+        stratify_key="meta.site",
+        group_key="meta.patient",
     )
     assert_plan_invariants(plan, ds, group_of=lambda s: s.meta["patient"])
     for i in range(0, 80, 2):
@@ -201,9 +209,7 @@ def test_strategy_registry_and_plan_id_validation():
 def test_stratified_take_vector_returns_exactly_n(seed, n):
     rng = np.random.default_rng(seed)
     pool = [f"s{i:03d}" for i in range(100)]
-    keys = {
-        sid: tuple(int(x) for x in rng.random(3) < [0.5, 0.2, 0.1]) for sid in pool
-    }
+    keys = {sid: tuple(int(x) for x in rng.random(3) < [0.5, 0.2, 0.1]) for sid in pool}
     taken = stratified_take(pool, keys, n, seed=seed)
     assert len(taken) == n and len(set(taken)) == n and taken == sorted(taken)
     assert set(taken) <= set(pool)
@@ -212,7 +218,5 @@ def test_stratified_take_vector_returns_exactly_n(seed, n):
 
 def test_vector_tasks_honour_ratios_exactly_on_small_pools():
     ds = Dataset.from_parts(make_card("det"), det_samples(62, seed=0))
-    plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0
-    )
+    plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     assert _counts(plan) == {"train": 44, "valA": 6, "valB": 6, "holdout": 6}

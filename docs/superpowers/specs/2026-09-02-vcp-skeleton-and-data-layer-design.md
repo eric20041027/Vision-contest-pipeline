@@ -130,67 +130,83 @@ Vision-contest-pipeline/
 
 ```python
 class View(BaseModel):
-    path: str                       # 相對 DatasetCard.image_root
+    path: str  # 相對 DatasetCard.image_root
     width: int | None = None
     height: int | None = None
-    role: str | None = None         # 此 view 在 sample 內的語意：rgb / nir / t1 / front ...；單 view 為 None
-    seq_id: str | None = None       # 所屬序列：DICOM series、影片、時間序列；無序列為 None
-    seq_index: int | None = None    # 序列內順序，0 起
+    role: str | None = (
+        None  # 此 view 在 sample 內的語意：rgb / nir / t1 / front ...；單 view 為 None
+    )
+    seq_id: str | None = None  # 所屬序列：DICOM series、影片、時間序列；無序列為 None
+    seq_index: int | None = None  # 序列內順序，0 起
     meta: dict[str, Any] = {}
 
-class Box(BaseModel):               # 絕對像素、左上原點、xywh
-    x: float; y: float; w: float; h: float
+
+class Box(BaseModel):  # 絕對像素、左上原點、xywh
+    x: float
+    y: float
+    w: float
+    h: float
     category_id: int
-    view: int = 0                   # views 索引
-    meta: dict[str, Any] = {}       # 實例屬性：truncated / occluded / track_id；旋轉框的旋轉參數存 meta.rotated，x,y,w,h 存軸對齊外接矩形
+    view: int = 0  # views 索引
+    meta: dict[
+        str, Any
+    ] = {}  # 實例屬性：truncated / occluded / track_id；旋轉框的旋轉參數存 meta.rotated，x,y,w,h 存軸對齊外接矩形
+
 
 class Mask(BaseModel):
     category_id: int
     view: int = 0
-    rle: str | None = None          # COCO 壓縮 RLE
-    polygon: list[list[float]] | None = None   # COCO 多邊形 [[x1, y1, x2, y2, ...], ...]
-    path: str | None = None         # PNG 路徑（相對 image_root）
-    meta: dict[str, Any] = {}       # rle / polygon / path 三者恰一
+    rle: str | None = None  # COCO 壓縮 RLE
+    polygon: list[list[float]] | None = None  # COCO 多邊形 [[x1, y1, x2, y2, ...], ...]
+    path: str | None = None  # PNG 路徑（相對 image_root）
+    meta: dict[str, Any] = {}  # rle / polygon / path 三者恰一
+
 
 class Labels(BaseModel):
     cls: int | None = None
-    targets: dict[str, float] | None = None    # 多標籤 0/1、回歸值、軟標籤、序數；鍵為 target 名
+    targets: dict[str, float] | None = None  # 多標籤 0/1、回歸值、軟標籤、序數；鍵為 target 名
     boxes: list[Box] | None = None
     masks: list[Mask] | None = None
-    extra: dict[str, Any] = {}      # 尚未建模的標籤型態（關鍵點、文字、圖說）；框架只存不驗
+    extra: dict[str, Any] = {}  # 尚未建模的標籤型態（關鍵點、文字、圖說）；框架只存不驗
+
 
 class Sample(BaseModel):
     sample_id: str
-    views: list[View]               # 長度 ≥ 1
+    views: list[View]  # 長度 ≥ 1
     labels: Labels | None = None
     label_source: Literal["gold", "derived", "pseudo", "none"]
-    group: str | None = None        # 防洩漏分組鍵（病人、場景、近重複群）
+    group: str | None = None  # 防洩漏分組鍵（病人、場景、近重複群）
     meta: dict[str, Any] = {}
+
 
 class Category(BaseModel):
     id: int
     name: str
     meta: dict[str, Any] = {}
 
+
 class SourceInfo(BaseModel):
     importer: str
     importer_version: str
     raw_path: str
-    raw_hash: str                   # sha256 over sorted "relpath\tsize\tmd5" 行
+    raw_hash: str  # sha256 over sorted "relpath\tsize\tmd5" 行
     license: str
     url: str
-    downloaded_at: str              # UTC
+    downloaded_at: str  # UTC
     notes: str = ""
+
 
 class DatasetCard(BaseModel):
     name: str
-    task: str                       # 必須在任務登記表內
-    categories: list[Category] = [] # cls / det / seg 的類別；multilabel / regression 的 target 名；可為空
-    image_root: str                 # 絕對路徑，或相對資料根目錄
+    task: str  # 必須在任務登記表內
+    categories: list[
+        Category
+    ] = []  # cls / det / seg 的類別；multilabel / regression 的 target 名；可為空
+    image_root: str  # 絕對路徑，或相對資料根目錄
     source: SourceInfo
     created_at: str
     sample_count: int
-    samples_hash: str               # samples.jsonl 的 sha256
+    samples_hash: str  # samples.jsonl 的 sha256
     schema_version: int = 1
 ```
 
@@ -319,14 +335,15 @@ class SubsetSpec(BaseModel):
     role: Literal["train", "eval", "sealed"]
     ratio: float
 
+
 class SplitPlan(BaseModel):
     plan_id: str
     dataset: str
-    dataset_hash: str                     # 產生時的 samples_hash
-    strategy: str                         # 必須在切分策略登記表內；v1 只有 "fixed"
-    params: dict[str, Any]                # seed, stratify_key, group_key, eval_gold_only
+    dataset_hash: str  # 產生時的 samples_hash
+    strategy: str  # 必須在切分策略登記表內；v1 只有 "fixed"
+    params: dict[str, Any]  # seed, stratify_key, group_key, eval_gold_only
     subsets: list[SubsetSpec]
-    assignment: dict[str, str]            # sample_id → subset name
+    assignment: dict[str, str]  # sample_id → subset name
     created_at: str
 ```
 

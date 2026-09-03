@@ -13,9 +13,7 @@ def clean_eval_subsets(plan: SplitPlan, trained_on: set[str]) -> list[str]:
     known = {s.name for s in plan.subsets}
     unknown = sorted(trained_on - known)
     if unknown:
-        raise PlanMismatchError(
-            f"unknown subsets in trained_on: {unknown}; known: {sorted(known)}"
-        )
+        raise PlanMismatchError(f"unknown subsets in trained_on: {unknown}; known: {sorted(known)}")
     trained_ids = {sid for sid, sub in plan.assignment.items() if sub in trained_on}
     clean: list[str] = []
     for s in plan.subsets:

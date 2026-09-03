@@ -10,14 +10,16 @@ from helpers import (
     multilabel_samples,
     regression_samples,
 )
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.data.dataset import Dataset
+from vcp.data.schema import Labels
 from vcp.data.split import (
     DEFAULT_SUBSETS,
     STRATEGIES,
     assert_plan_invariants,
     build_plan,
     distribution_table,
+    generate_fixed,
     normalize_keys,
     parse_subsets,
     stratified_take,
@@ -191,6 +193,9 @@ def test_meta_stratify_and_group_keys():
     assert_plan_invariants(plan, ds, group_of=lambda s: s.meta["patient"])
     for i in range(0, 80, 2):
         assert plan.assignment[f"s{i:04d}"] == plan.assignment[f"s{i + 1:04d}"]
+    table = distribution_table(plan, ds)
+    assert set(table["train"]) <= {"S0", "S1", "S2", "S3"}
+    assert set(table["val"]) <= {"S0", "S1", "S2", "S3"}
     with pytest.raises(ValidationFailed):
         build_plan(
             ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, stratify_key="site"
@@ -198,10 +203,14 @@ def test_meta_stratify_and_group_keys():
 
 
 def test_strategy_registry_and_plan_id_validation():
-    assert STRATEGIES["fixed"] is build_plan
+    assert STRATEGIES["fixed"] is generate_fixed
     ds = Dataset.from_parts(make_card("det"), det_samples(4))
     with pytest.raises(ValidationFailed):
         build_plan(ds, plan_id="../x", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    with pytest.raises(RegistryError):
+        build_plan(
+            ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, strategy="nope"
+        )
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
@@ -220,3 +229,19 @@ def test_vector_tasks_honour_ratios_exactly_on_small_pools():
     ds = Dataset.from_parts(make_card("det"), det_samples(62, seed=0))
     plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     assert _counts(plan) == {"train": 44, "valA": 6, "valB": 6, "holdout": 6}
+
+
+def test_empty_categories_falls_back_to_random_split():
+    samples = [s.model_copy(update={"labels": Labels(boxes=[])}) for s in det_samples(20, seed=0)]
+    ds = Dataset.from_parts(make_card("det", categories=[]), samples)
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0
+    )
+    assert _counts(plan) == {"train": 10, "val": 10}
+
+
+def test_tiny_pool_reports_empty_subsets():
+    ds = Dataset.from_parts(make_card("det"), det_samples(5, seed=0))
+    plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    assert plan.params["empty_subsets"] == ["valA", "valB", "holdout"]
+    assert _counts(plan) == {"train": 5}

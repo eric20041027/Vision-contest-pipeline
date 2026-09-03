@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from vcp.core.errors import InvariantError, PlanMismatchError, ValidationFailed, VcpError
+from vcp.core.errors import (
+    InvariantError,
+    PlanMismatchError,
+    RegistryError,
+    ValidationFailed,
+    VcpError,
+)
 from vcp.core.paths import DatasetPaths, validate_name
 from vcp.core.time import stamp
 from vcp.data.schema import Sample
@@ -233,7 +239,8 @@ def normalize_keys(raw: dict[str, StratKey | None]) -> dict[str, NormKey]:
         if len(lengths) != 1:
             raise InvariantError(f"stratify vectors have inconsistent lengths: {sorted(lengths)}")
         width = lengths.pop()
-        return {k: (v if isinstance(v, tuple) else tuple([0] * width)) for k, v in raw.items()}
+        if width > 0:
+            return {k: (v if isinstance(v, tuple) else tuple([0] * width)) for k, v in raw.items()}
     floats = [v for v in values if isinstance(v, float)]
     if floats and all(v is None or isinstance(v, float) for v in values):
         edges = np.quantile(np.array(floats), np.linspace(0, 1, QUANTILE_BINS + 1)[1:-1])
@@ -398,11 +405,17 @@ def generate_fixed(
     for uid in pool + forced:
         for m in units[uid]:
             assignment[m.sample_id] = train_name
+    empty = [
+        s.name
+        for s in subsets
+        if s.role != "train" and not any(v == s.name for v in assignment.values())
+    ]
     info = {
         "units": len(units),
         "eligible_units": n_eligible,
         "forced_train_units": len(forced),
         "audit_group_conflicts": conflicts,
+        "empty_subsets": empty,
     }
     return assignment, info
 
@@ -417,9 +430,16 @@ def build_plan(
     group_key: str = "auto",
     eval_gold_only: bool = True,
     audit_groups: dict[str, str] | None = None,
+    strategy: str = "fixed",
 ) -> SplitPlan:
     validate_name(plan_id)
-    assignment, info = generate_fixed(
+    try:
+        generator = STRATEGIES[strategy]
+    except KeyError:
+        raise RegistryError(
+            f"unknown split strategy {strategy!r}; known: {sorted(STRATEGIES)}"
+        ) from None
+    assignment, info = generator(
         dataset,
         subsets,
         seed=seed,
@@ -440,7 +460,7 @@ def build_plan(
         plan_id=plan_id,
         dataset=dataset.card.name,
         dataset_hash=dataset.card.samples_hash,
-        strategy="fixed",
+        strategy=strategy,
         params=params,
         subsets=subsets,
         assignment=assignment,
@@ -452,9 +472,9 @@ def build_plan(
 
 def distribution_table(plan: SplitPlan, dataset: Dataset) -> dict[str, dict[str, int]]:
     """subset -> stratification label -> count. Vector keys count per-category presence."""
-    task = get_task(dataset.card.task)
     card = dataset.card
-    keys = normalize_keys({s.sample_id: task.stratify_key(s, card) for s in dataset.samples})
+    key_fn = resolve_stratify_fn(str(plan.params.get("stratify_key", "auto")), dataset)
+    keys = normalize_keys({s.sample_id: key_fn(s) for s in dataset.samples})
     names = [c.name for c in card.categories]
     id_to_name = {str(c.id): c.name for c in card.categories}
     table: dict[str, dict[str, int]] = {sub.name: {} for sub in plan.subsets}
@@ -472,4 +492,6 @@ def distribution_table(plan: SplitPlan, dataset: Dataset) -> dict[str, dict[str,
     return table
 
 
-STRATEGIES: dict[str, Callable[..., SplitPlan]] = {"fixed": build_plan}
+STRATEGIES: dict[str, Callable[..., tuple[dict[str, str], dict[str, Any]]]] = {
+    "fixed": generate_fixed
+}

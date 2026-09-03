@@ -17,19 +17,32 @@ STAMP = "2026-09-02T00:00:00.000Z"
 
 def make_source() -> SourceInfo:
     return SourceInfo(
-        importer="test", importer_version="1", raw_path="/raw", raw_hash="deadbeef",
-        license="CC0", url="https://example.org", downloaded_at=STAMP,
+        importer="test",
+        importer_version="1",
+        raw_path="/raw",
+        raw_hash="deadbeef",
+        license="CC0",
+        url="https://example.org",
+        downloaded_at=STAMP,
     )
 
 
 def make_card(
-    task: str, *, name: str = "tiny", categories: list[Category] | None = None,
+    task: str,
+    *,
+    name: str = "tiny",
+    categories: list[Category] | None = None,
     image_root: str = "/img",
 ) -> DatasetCard:
     return DatasetCard(
-        name=name, task=task, categories=CATS if categories is None else categories,
-        image_root=image_root, source=make_source(), created_at=STAMP,
-        sample_count=0, samples_hash="",
+        name=name,
+        task=task,
+        categories=CATS if categories is None else categories,
+        image_root=image_root,
+        source=make_source(),
+        created_at=STAMP,
+        sample_count=0,
+        samples_hash="",
     )
 
 
@@ -46,7 +59,10 @@ def det_samples(
         gold = rng.random() < gold_frac
         boxes = [
             Box(
-                x=rng.randint(0, 4), y=rng.randint(0, 4), w=rng.randint(1, 4), h=rng.randint(1, 4),
+                x=rng.randint(0, 4),
+                y=rng.randint(0, 4),
+                w=rng.randint(1, 4),
+                h=rng.randint(1, 4),
                 category_id=rng.choice([0, 1, 2]),
             )
             for _ in range(rng.randint(0, 3))
@@ -54,9 +70,11 @@ def det_samples(
         group = f"g{i // group_every}" if group_every else None
         out.append(
             Sample(
-                sample_id=f"s{i:04d}", views=[_view(i)],
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
                 labels=Labels(boxes=boxes) if gold else None,
-                label_source="gold" if gold else "none", group=group,
+                label_source="gold" if gold else "none",
+                group=group,
             )
         )
     return out
@@ -72,7 +90,8 @@ def cls_samples(
         cls = rng.choices([0, 1, 2], weights=weights)[0]
         out.append(
             Sample(
-                sample_id=f"s{i:04d}", views=[_view(i)],
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
                 labels=Labels(cls=cls) if gold else None,
                 label_source="gold" if gold else "none",
             )
@@ -91,7 +110,8 @@ def multilabel_samples(
         targets = {name: float(rng.random() < p) for name, p in zip(names, probs, strict=True)}
         out.append(
             Sample(
-                sample_id=f"s{i:04d}", views=[_view(i)],
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
                 labels=Labels(targets=targets) if gold else None,
                 label_source="gold" if gold else "none",
             )
@@ -103,8 +123,10 @@ def regression_samples(n: int, *, seed: int = 0) -> list[Sample]:
     rng = random.Random(seed)
     return [
         Sample(
-            sample_id=f"s{i:04d}", views=[_view(i)],
-            labels=Labels(targets={"age": rng.uniform(0, 100)}), label_source="gold",
+            sample_id=f"s{i:04d}",
+            views=[_view(i)],
+            labels=Labels(targets={"age": rng.uniform(0, 100)}),
+            label_source="gold",
         )
         for i in range(n)
     ]

@@ -45,10 +45,14 @@ def test_parse_rejects(bad):
 
 def _plan(ds, assignment, subsets=None, eval_gold_only=True):
     return SplitPlan(
-        plan_id="p1", dataset=ds.card.name, dataset_hash=ds.card.samples_hash, strategy="fixed",
+        plan_id="p1",
+        dataset=ds.card.name,
+        dataset_hash=ds.card.samples_hash,
+        strategy="fixed",
         params={"eval_gold_only": eval_gold_only, "group_key": "auto"},
         subsets=subsets or parse_subsets("train:train:0.5,val:eval:0.5"),
-        assignment=assignment, created_at="2026-09-02T00:00:00.000Z",
+        assignment=assignment,
+        created_at="2026-09-02T00:00:00.000Z",
     )
 
 

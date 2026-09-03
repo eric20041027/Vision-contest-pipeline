@@ -41,9 +41,7 @@ def sha256_json(obj: Any) -> str:
 
 def dir_manifest(root: Path) -> list[str]:
     """One line per file under ``root``: ``relpath<TAB>size<TAB>md5``, sorted by posix relpath."""
-    entries = sorted(
-        (p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file()
-    )
+    entries = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file())
     return [f"{rel}\t{p.stat().st_size}\t{md5_file(p)}" for rel, p in entries]
 
 

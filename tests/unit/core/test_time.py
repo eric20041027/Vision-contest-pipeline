@@ -59,8 +59,16 @@ def test_ruff_bans_naive_clock_calls(tmp_path, code):
     target.write_text(code, encoding="utf-8")
     proc = subprocess.run(
         [
-            sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "TID251",
-            "--config", str(REPO / "pyproject.toml"), str(target),
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--no-cache",
+            "--select",
+            "TID251",
+            "--config",
+            str(REPO / "pyproject.toml"),
+            str(target),
         ],
         capture_output=True,
         text=True,

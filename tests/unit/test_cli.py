@@ -25,9 +25,24 @@ def _import_tiny(roots, tmp_path, name="tiny", n=60):
     return runner.invoke(
         app,
         [
-            "data", "import", "--importer", "jsonl", "--src", str(src), "--name", name,
-            "--license", "CC0", "--url", "https://example.org", "--downloaded-at", "2026-09-02",
-            "--opt", "task=det", "--opt", "categories=cats.json",
+            "data",
+            "import",
+            "--importer",
+            "jsonl",
+            "--src",
+            str(src),
+            "--name",
+            name,
+            "--license",
+            "CC0",
+            "--url",
+            "https://example.org",
+            "--downloaded-at",
+            "2026-09-02",
+            "--opt",
+            "task=det",
+            "--opt",
+            "categories=cats.json",
         ],
     )
 
@@ -93,8 +108,14 @@ def test_custom_subsets_and_failures(roots, tmp_path):
     r = runner.invoke(
         app,
         [
-            "data", "split", "--name", "tiny", "--plan-id", "two",
-            "--subsets", "train:train:0.8,val:eval:0.2",
+            "data",
+            "split",
+            "--name",
+            "tiny",
+            "--plan-id",
+            "two",
+            "--subsets",
+            "train:train:0.8,val:eval:0.2",
         ],
     )
     assert r.exit_code == 0 and "val=12" in _last_verdict(r.output)
@@ -116,8 +137,20 @@ def test_custom_subsets_and_failures(roots, tmp_path):
     r = runner.invoke(
         app,
         [
-            "data", "import", "--importer", "nope", "--src", str(tmp_path), "--name", "x",
-            "--license", "a", "--url", "b", "--downloaded-at", "c",
+            "data",
+            "import",
+            "--importer",
+            "nope",
+            "--src",
+            str(tmp_path),
+            "--name",
+            "x",
+            "--license",
+            "a",
+            "--url",
+            "b",
+            "--downloaded-at",
+            "c",
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)

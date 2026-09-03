@@ -332,8 +332,16 @@ def test_ruff_bans_naive_clock_calls(tmp_path, code):
     target.write_text(code, encoding="utf-8")
     proc = subprocess.run(
         [
-            sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "TID251",
-            "--config", str(REPO / "pyproject.toml"), str(target),
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--no-cache",
+            "--select",
+            "TID251",
+            "--config",
+            str(REPO / "pyproject.toml"),
+            str(target),
         ],
         capture_output=True,
         text=True,
@@ -599,9 +607,7 @@ def sha256_json(obj: Any) -> str:
 
 def dir_manifest(root: Path) -> list[str]:
     """One line per file under ``root``: ``relpath<TAB>size<TAB>md5``, sorted by posix relpath."""
-    entries = sorted(
-        (p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file()
-    )
+    entries = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file())
     return [f"{rel}\t{p.stat().st_size}\t{md5_file(p)}" for rel, p in entries]
 
 
@@ -1163,8 +1169,13 @@ def view(**kw):
 
 def source():
     return SourceInfo(
-        importer="jsonl", importer_version="1", raw_path="/raw", raw_hash="h",
-        license="CC-BY", url="https://x", downloaded_at="2026-09-02T00:00:00.000Z",
+        importer="jsonl",
+        importer_version="1",
+        raw_path="/raw",
+        raw_hash="h",
+        license="CC-BY",
+        url="https://x",
+        downloaded_at="2026-09-02T00:00:00.000Z",
     )
 
 
@@ -1243,22 +1254,45 @@ def test_views_non_empty_and_ids_non_empty():
 
 def test_card_category_uniqueness_and_empty_categories_allowed():
     DatasetCard(
-        name="d", task="det", categories=[Category(id=1, name="a"), Category(id=2, name="b")],
-        image_root="/img", source=source(), created_at="t", sample_count=0, samples_hash="",
+        name="d",
+        task="det",
+        categories=[Category(id=1, name="a"), Category(id=2, name="b")],
+        image_root="/img",
+        source=source(),
+        created_at="t",
+        sample_count=0,
+        samples_hash="",
     )
     DatasetCard(
-        name="d", task="regression", image_root="/img", source=source(), created_at="t",
-        sample_count=0, samples_hash="",
+        name="d",
+        task="regression",
+        image_root="/img",
+        source=source(),
+        created_at="t",
+        sample_count=0,
+        samples_hash="",
     )
     with pytest.raises(ValidationError, match="unique"):
         DatasetCard(
-            name="d", task="det", categories=[Category(id=1, name="a"), Category(id=1, name="b")],
-            image_root="/img", source=source(), created_at="t", sample_count=0, samples_hash="",
+            name="d",
+            task="det",
+            categories=[Category(id=1, name="a"), Category(id=1, name="b")],
+            image_root="/img",
+            source=source(),
+            created_at="t",
+            sample_count=0,
+            samples_hash="",
         )
     with pytest.raises(ValidationError, match="unique"):
         DatasetCard(
-            name="d", task="det", categories=[Category(id=1, name="a"), Category(id=2, name="a")],
-            image_root="/img", source=source(), created_at="t", sample_count=0, samples_hash="",
+            name="d",
+            task="det",
+            categories=[Category(id=1, name="a"), Category(id=2, name="a")],
+            image_root="/img",
+            source=source(),
+            created_at="t",
+            sample_count=0,
+            samples_hash="",
         )
 
 
@@ -1464,8 +1498,13 @@ def card(task, names=("a", "b", "c")):
         categories=[Category(id=i, name=n) for i, n in enumerate(names)],
         image_root="/img",
         source=SourceInfo(
-            importer="t", importer_version="1", raw_path="/r", raw_hash="h",
-            license="", url="", downloaded_at="",
+            importer="t",
+            importer_version="1",
+            raw_path="/r",
+            raw_hash="h",
+            license="",
+            url="",
+            downloaded_at="",
         ),
         created_at="",
         sample_count=0,
@@ -1532,16 +1571,23 @@ def test_det_validation_bounds_and_presence_key():
     t = get_task("det")
     c = card("det")
     ok = sample(
-        Labels(boxes=[Box(x=0, y=0, w=8, h=8, category_id=0), Box(x=1, y=1, w=2, h=2, category_id=2)]),
-        width=8, height=8,
+        Labels(
+            boxes=[Box(x=0, y=0, w=8, h=8, category_id=0), Box(x=1, y=1, w=2, h=2, category_id=2)]
+        ),
+        width=8,
+        height=8,
     )
     t.validate(ok, c)
     assert t.stratify_key(ok, c) == (1, 0, 1)
     t.validate(sample(Labels(boxes=[]), width=8, height=8), c)
     assert t.stratify_key(sample(Labels(boxes=[]), width=8, height=8), c) == (0, 0, 0)
-    t.validate(sample(Labels(boxes=[Box(x=0, y=0, w=8.9, h=8, category_id=0)]), width=8, height=8), c)
+    t.validate(
+        sample(Labels(boxes=[Box(x=0, y=0, w=8.9, h=8, category_id=0)]), width=8, height=8), c
+    )
     with pytest.raises(ValidationFailed, match="exceeds view bounds"):
-        t.validate(sample(Labels(boxes=[Box(x=0, y=0, w=10, h=8, category_id=0)]), width=8, height=8), c)
+        t.validate(
+            sample(Labels(boxes=[Box(x=0, y=0, w=10, h=8, category_id=0)]), width=8, height=8), c
+        )
     with pytest.raises(ValidationFailed, match="view index"):
         t.validate(sample(Labels(boxes=[Box(x=0, y=0, w=1, h=1, category_id=0, view=3)])), c)
     with pytest.raises(ValidationFailed, match="unknown category id"):
@@ -1810,19 +1856,32 @@ STAMP = "2026-09-02T00:00:00.000Z"
 
 def make_source() -> SourceInfo:
     return SourceInfo(
-        importer="test", importer_version="1", raw_path="/raw", raw_hash="deadbeef",
-        license="CC0", url="https://example.org", downloaded_at=STAMP,
+        importer="test",
+        importer_version="1",
+        raw_path="/raw",
+        raw_hash="deadbeef",
+        license="CC0",
+        url="https://example.org",
+        downloaded_at=STAMP,
     )
 
 
 def make_card(
-    task: str, *, name: str = "tiny", categories: list[Category] | None = None,
+    task: str,
+    *,
+    name: str = "tiny",
+    categories: list[Category] | None = None,
     image_root: str = "/img",
 ) -> DatasetCard:
     return DatasetCard(
-        name=name, task=task, categories=CATS if categories is None else categories,
-        image_root=image_root, source=make_source(), created_at=STAMP,
-        sample_count=0, samples_hash="",
+        name=name,
+        task=task,
+        categories=CATS if categories is None else categories,
+        image_root=image_root,
+        source=make_source(),
+        created_at=STAMP,
+        sample_count=0,
+        samples_hash="",
     )
 
 
@@ -1839,7 +1898,10 @@ def det_samples(
         gold = rng.random() < gold_frac
         boxes = [
             Box(
-                x=rng.randint(0, 4), y=rng.randint(0, 4), w=rng.randint(1, 4), h=rng.randint(1, 4),
+                x=rng.randint(0, 4),
+                y=rng.randint(0, 4),
+                w=rng.randint(1, 4),
+                h=rng.randint(1, 4),
                 category_id=rng.choice([0, 1, 2]),
             )
             for _ in range(rng.randint(0, 3))
@@ -1847,9 +1909,11 @@ def det_samples(
         group = f"g{i // group_every}" if group_every else None
         out.append(
             Sample(
-                sample_id=f"s{i:04d}", views=[_view(i)],
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
                 labels=Labels(boxes=boxes) if gold else None,
-                label_source="gold" if gold else "none", group=group,
+                label_source="gold" if gold else "none",
+                group=group,
             )
         )
     return out
@@ -1865,7 +1929,8 @@ def cls_samples(
         cls = rng.choices([0, 1, 2], weights=weights)[0]
         out.append(
             Sample(
-                sample_id=f"s{i:04d}", views=[_view(i)],
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
                 labels=Labels(cls=cls) if gold else None,
                 label_source="gold" if gold else "none",
             )
@@ -1884,7 +1949,8 @@ def multilabel_samples(
         targets = {name: float(rng.random() < p) for name, p in zip(names, probs, strict=True)}
         out.append(
             Sample(
-                sample_id=f"s{i:04d}", views=[_view(i)],
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
                 labels=Labels(targets=targets) if gold else None,
                 label_source="gold" if gold else "none",
             )
@@ -1896,8 +1962,10 @@ def regression_samples(n: int, *, seed: int = 0) -> list[Sample]:
     rng = random.Random(seed)
     return [
         Sample(
-            sample_id=f"s{i:04d}", views=[_view(i)],
-            labels=Labels(targets={"age": rng.uniform(0, 100)}), label_source="gold",
+            sample_id=f"s{i:04d}",
+            views=[_view(i)],
+            labels=Labels(targets={"age": rng.uniform(0, 100)}),
+            label_source="gold",
         )
         for i in range(n)
     ]
@@ -1972,7 +2040,9 @@ def test_read_reports_line_number(tmp_path):
 
 def test_read_rejects_blank_line(tmp_path):
     p = tmp_path / "blank.jsonl"
-    p.write_text('{"sample_id":"a","views":[{"path":"a.jpg"}],"label_source":"none"}\n\n', encoding="utf-8")
+    p.write_text(
+        '{"sample_id":"a","views":[{"path":"a.jpg"}],"label_source":"none"}\n\n', encoding="utf-8"
+    )
     with pytest.raises(ValidationFailed, match="blank"):
         list(read_samples_jsonl(p))
 
@@ -2221,9 +2291,15 @@ from vcp.data.schema import Box, Labels
 
 def _spec(roots, src, **opts):
     return ImportSpec(
-        importer="jsonl", src=src, name="ds", options=opts, license="CC0",
-        url="https://example.org", downloaded_at="2026-09-02T00:00:00.000Z",
-        data_root=roots.data, configs_root=roots.configs,
+        importer="jsonl",
+        src=src,
+        name="ds",
+        options=opts,
+        license="CC0",
+        url="https://example.org",
+        downloaded_at="2026-09-02T00:00:00.000Z",
+        data_root=roots.data,
+        configs_root=roots.configs,
     )
 
 
@@ -2259,7 +2335,9 @@ def test_jsonl_import_writes_dataset(roots, tmp_path):
 
 def test_jsonl_inline_categories_and_default_image_root(roots, tmp_path):
     src = _src(tmp_path, det_samples(2))
-    cats = json.dumps([{"id": 0, "name": "cat"}, {"id": 1, "name": "dog"}, {"id": 2, "name": "bird"}])
+    cats = json.dumps(
+        [{"id": 0, "name": "cat"}, {"id": 1, "name": "dog"}, {"id": 2, "name": "bird"}]
+    )
     res = get_importer("jsonl").run(_spec(roots, src, task="det", categories=cats))
     assert res.dataset.card.image_root == str(src)
     assert len(res.dataset.card.categories) == 3
@@ -2288,7 +2366,7 @@ def test_jsonl_missing_files_reported(roots, tmp_path):
     with pytest.raises(ValidationFailed, match="categories file not found"):
         load_categories("nope.json", src)
     with pytest.raises(ValidationFailed, match="bad categories"):
-        load_categories("[{\"id\": \"x\"}]", src)
+        load_categories('[{"id": "x"}]', src)
     assert load_categories(None, src) == []
 
 
@@ -2594,7 +2672,10 @@ from vcp.data.split import (
 def test_parse_default_subsets():
     subs = parse_subsets(DEFAULT_SUBSETS)
     assert [(s.name, s.role, s.ratio) for s in subs] == [
-        ("train", "train", 0.7), ("valA", "eval", 0.1), ("valB", "eval", 0.1), ("holdout", "sealed", 0.1),
+        ("train", "train", 0.7),
+        ("valA", "eval", 0.1),
+        ("valB", "eval", 0.1),
+        ("holdout", "sealed", 0.1),
     ]
 
 
@@ -2618,10 +2699,14 @@ def test_parse_rejects(bad):
 
 def _plan(ds, assignment, subsets=None, eval_gold_only=True):
     return SplitPlan(
-        plan_id="p1", dataset=ds.card.name, dataset_hash=ds.card.samples_hash, strategy="fixed",
+        plan_id="p1",
+        dataset=ds.card.name,
+        dataset_hash=ds.card.samples_hash,
+        strategy="fixed",
         params={"eval_gold_only": eval_gold_only, "group_key": "auto"},
         subsets=subsets or parse_subsets("train:train:0.5,val:eval:0.5"),
-        assignment=assignment, created_at="2026-09-02T00:00:00.000Z",
+        assignment=assignment,
+        created_at="2026-09-02T00:00:00.000Z",
     )
 
 
@@ -3039,7 +3124,9 @@ def test_groups_kept_together_and_audit_groups():
     assert plan.params["units"] == 40
     ds2 = Dataset.from_parts(make_card("det"), det_samples(60, seed=0))
     audit = {"s0000": "dup1", "s0001": "dup1", "s0002": "dup1"}
-    plan2 = build_plan(ds2, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, audit_groups=audit)
+    plan2 = build_plan(
+        ds2, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, audit_groups=audit
+    )
     assert len({plan2.assignment[k] for k in audit}) == 1
     assert plan2.params["group_from_audit"] is True
     assert plan2.params["audit_group_conflicts"] == 0
@@ -3050,7 +3137,10 @@ def test_audit_group_conflict_counted_but_explicit_group_wins():
     samples[0] = samples[0].model_copy(update={"group": "explicit"})
     ds = Dataset.from_parts(make_card("det"), samples)
     plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0,
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
         audit_groups={"s0000": "dup", "s0001": "dup"},
     )
     assert plan.params["audit_group_conflicts"] == 1
@@ -3059,7 +3149,10 @@ def test_audit_group_conflict_counted_but_explicit_group_wins():
 def test_no_eval_gold_only_allows_unlabeled_in_eval():
     ds = Dataset.from_parts(make_card("det"), det_samples(100, seed=0, gold_frac=0.0))
     plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0,
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
         eval_gold_only=False,
     )
     assert _counts(plan) == {"train": 50, "val": 50}
@@ -3067,26 +3160,38 @@ def test_no_eval_gold_only_allows_unlabeled_in_eval():
 
 def test_cls_stratification_preserves_class_proportions():
     ds = Dataset.from_parts(make_card("cls"), cls_samples(300, seed=0))
-    plan = build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0)
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0
+    )
     table = distribution_table(plan, ds)
     for name in ("cat", "dog", "bird"):
         assert abs(table["train"].get(name, 0) - table["val"].get(name, 0)) <= 2
 
 
 def test_multilabel_uses_iterative_stratification():
-    ds = Dataset.from_parts(make_card("multilabel", categories=ML_CATS), multilabel_samples(200, seed=0))
-    plan = build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0)
+    ds = Dataset.from_parts(
+        make_card("multilabel", categories=ML_CATS), multilabel_samples(200, seed=0)
+    )
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0
+    )
     table = distribution_table(plan, ds)
     for name in [c.name for c in ML_CATS]:
         assert abs(table["train"].get(name, 0) - table["val"].get(name, 0)) <= 4
 
 
 def test_regression_bins_by_quantile():
-    ds = Dataset.from_parts(make_card("regression", categories=REG_CATS), regression_samples(200, seed=0))
-    plan = build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0)
+    ds = Dataset.from_parts(
+        make_card("regression", categories=REG_CATS), regression_samples(200, seed=0)
+    )
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0
+    )
     medians = {}
     for sub in ("train", "val"):
-        vals = [ds.by_id[sid].labels.targets["age"] for sid, s in plan.assignment.items() if s == sub]
+        vals = [
+            ds.by_id[sid].labels.targets["age"] for sid, s in plan.assignment.items() if s == sub
+        ]
         medians[sub] = float(np.median(vals))
     assert abs(medians["train"] - medians["val"]) < 15
     table = distribution_table(plan, ds)
@@ -3100,14 +3205,20 @@ def test_meta_stratify_and_group_keys():
     ]
     ds = Dataset.from_parts(make_card("det"), samples)
     plan = build_plan(
-        ds, plan_id="p", subsets=parse_subsets("train:train:0.5,val:eval:0.5"), seed=0,
-        stratify_key="meta.site", group_key="meta.patient",
+        ds,
+        plan_id="p",
+        subsets=parse_subsets("train:train:0.5,val:eval:0.5"),
+        seed=0,
+        stratify_key="meta.site",
+        group_key="meta.patient",
     )
     assert_plan_invariants(plan, ds, group_of=lambda s: s.meta["patient"])
     for i in range(0, 80, 2):
         assert plan.assignment[f"s{i:04d}"] == plan.assignment[f"s{i + 1:04d}"]
     with pytest.raises(ValidationFailed):
-        build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, stratify_key="site")
+        build_plan(
+            ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, stratify_key="site"
+        )
 
 
 def test_strategy_registry_and_plan_id_validation():
@@ -3131,7 +3242,7 @@ import math
 
 import numpy as np
 
-from vcp.core.paths import DatasetPaths, validate_name   # 取代原本只匯入 DatasetPaths 的那行
+from vcp.core.paths import DatasetPaths, validate_name  # 取代原本只匯入 DatasetPaths 的那行
 from vcp.core.time import stamp
 from vcp.data.tasks import StratKey, get_task
 ```
@@ -3600,9 +3711,7 @@ def clean_eval_subsets(plan: SplitPlan, trained_on: set[str]) -> list[str]:
     known = {s.name for s in plan.subsets}
     unknown = sorted(trained_on - known)
     if unknown:
-        raise PlanMismatchError(
-            f"unknown subsets in trained_on: {unknown}; known: {sorted(known)}"
-        )
+        raise PlanMismatchError(f"unknown subsets in trained_on: {unknown}; known: {sorted(known)}")
     trained_ids = {sid for sid, sub in plan.assignment.items() if sub in trained_on}
     clean: list[str] = []
     for s in plan.subsets:
@@ -3680,9 +3789,24 @@ def _import_tiny(roots, tmp_path, name="tiny", n=60):
     return runner.invoke(
         app,
         [
-            "data", "import", "--importer", "jsonl", "--src", str(src), "--name", name,
-            "--license", "CC0", "--url", "https://example.org", "--downloaded-at", "2026-09-02",
-            "--opt", "task=det", "--opt", "categories=cats.json",
+            "data",
+            "import",
+            "--importer",
+            "jsonl",
+            "--src",
+            str(src),
+            "--name",
+            name,
+            "--license",
+            "CC0",
+            "--url",
+            "https://example.org",
+            "--downloaded-at",
+            "2026-09-02",
+            "--opt",
+            "task=det",
+            "--opt",
+            "categories=cats.json",
         ],
     )
 
@@ -3702,7 +3826,9 @@ def test_import_validate_split_lineage_flow(roots, tmp_path):
     r = runner.invoke(app, ["data", "validate", "--name", "tiny"])
     assert r.exit_code == 0 and "status=OK" in _last_verdict(r.output)
 
-    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "fixed-v1", "--seed", "1"])
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "fixed-v1", "--seed", "1"]
+    )
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert "status=OK" in v and "train=42" in v and "valA=6" in v and "holdout=6" in v
@@ -3713,12 +3839,14 @@ def test_import_validate_split_lineage_flow(roots, tmp_path):
     assert r.exit_code == 2 and "already exists" in r.output
 
     r = runner.invoke(
-        app, ["data", "lineage", "--name", "tiny", "--plan", "fixed-v1", "--trained-on", "train,valA"]
+        app,
+        ["data", "lineage", "--name", "tiny", "--plan", "fixed-v1", "--trained-on", "train,valA"],
     )
     assert r.exit_code == 0 and "clean=[valB, holdout(sealed)]" in r.output
 
     r = runner.invoke(
-        app, ["data", "lineage", "--name", "tiny", "--plan", "fixed-v1", "--trained-on", "train,nope"]
+        app,
+        ["data", "lineage", "--name", "tiny", "--plan", "fixed-v1", "--trained-on", "train,nope"],
     )
     assert r.exit_code == 2 and "status=ABORT" in _last_verdict(r.output)
 
@@ -3738,14 +3866,27 @@ def test_custom_subsets_and_failures(roots, tmp_path):
     assert _import_tiny(roots, tmp_path).exit_code == 0
     r = runner.invoke(
         app,
-        ["data", "split", "--name", "tiny", "--plan-id", "two", "--subsets", "train:train:0.8,val:eval:0.2"],
+        [
+            "data",
+            "split",
+            "--name",
+            "tiny",
+            "--plan-id",
+            "two",
+            "--subsets",
+            "train:train:0.8,val:eval:0.2",
+        ],
     )
     assert r.exit_code == 0 and "val=12" in _last_verdict(r.output)
 
-    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "bad", "--subsets", "train:train:0.5"])
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "bad", "--subsets", "train:train:0.5"]
+    )
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
 
-    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "aud", "--group-from-audit"])
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "aud", "--group-from-audit"]
+    )
     assert r.exit_code == 2 and "groups.json" in r.output
 
     r = runner.invoke(app, ["data", "validate", "--name", "missing"])
@@ -3754,8 +3895,20 @@ def test_custom_subsets_and_failures(roots, tmp_path):
     r = runner.invoke(
         app,
         [
-            "data", "import", "--importer", "nope", "--src", str(tmp_path), "--name", "x",
-            "--license", "a", "--url", "b", "--downloaded-at", "c",
+            "data",
+            "import",
+            "--importer",
+            "nope",
+            "--src",
+            str(tmp_path),
+            "--name",
+            "x",
+            "--license",
+            "a",
+            "--url",
+            "b",
+            "--downloaded-at",
+            "c",
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
@@ -3765,7 +3918,8 @@ def test_tampered_dataset_fails_validate(roots, tmp_path):
     assert _import_tiny(roots, tmp_path).exit_code == 0
     samples = roots.data / "datasets" / "tiny" / "samples.jsonl"
     samples.write_bytes(
-        samples.read_bytes() + b'{"sample_id":"zz","views":[{"path":"z.jpg"}],"label_source":"none"}\n'
+        samples.read_bytes()
+        + b'{"sample_id":"zz","views":[{"path":"z.jpg"}],"label_source":"none"}\n'
     )
     r = runner.invoke(app, ["data", "validate", "--name", "tiny"])
     assert r.exit_code == 1 and "IntegrityError" in _last_verdict(r.output)

@@ -160,6 +160,8 @@ def import_cmd(
             fields["skipped_reasons"] = str(res.skipped_reasons_path)
         if res.plans_invalidated:
             fields["plans_invalidated"] = res.plans_invalidated
+        if res.unlabeled:
+            fields["unlabeled"] = res.unlabeled
         human = [
             f"imported {res.samples_written} samples into dataset {name!r} "
             f"(task={res.dataset.card.task})"

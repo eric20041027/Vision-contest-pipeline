@@ -40,6 +40,8 @@ class ImageCsvImporter:
         path_col = opts.get("path_col", "path")
         gold_col = opts.get("gold_col")
         header, rows = read_csv(csv_path, required=[path_col, *([gold_col] if gold_col else [])])
+        if not rows:
+            raise ValidationFailed(f"{csv_path.name} has no data rows")
         if "target_cols" in opts:
             target_cols = [c.strip() for c in opts["target_cols"].split(",") if c.strip()]
         else:

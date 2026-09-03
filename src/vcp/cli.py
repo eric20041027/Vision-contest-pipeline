@@ -15,6 +15,7 @@ from vcp import __version__
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.log import FieldValue, Status, Verdict, exit_code, setup_logging
 from vcp.core.paths import DatasetPaths, logs_dir, resolve_data_root
+from vcp.data.audit import AuditContext, AuditOptions, run_audit
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.importers import ImportSpec, get_importer
@@ -354,3 +355,59 @@ def export_cmd(
         return status, fields, payload, human
 
     run_command("export", json_mode, data_root, fn)
+
+
+@data_app.command("audit")
+def audit_cmd(
+    name: NameOpt,
+    against: Annotated[
+        str | None, typer.Option("--against", help="dataset to check overlap against (e.g. test)")
+    ] = None,
+    max_bad_boxes: Annotated[int, typer.Option("--max-bad-boxes")] = 0,
+    hamming: Annotated[int, typer.Option("--hamming", help="max dHash Hamming distance")] = 4,
+    corr: Annotated[float, typer.Option("--corr", help="min 64x64 grey Pearson to confirm")] = 0.95,
+    view_hits: Annotated[int, typer.Option("--view-hits", help="views that must match")] = 1,
+    recompute: Annotated[bool, typer.Option("--recompute", help="ignore the dHash cache")] = False,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Coordinate sanity, near-duplicate / overlap and provenance checks."""
+
+    def fn() -> CmdResult:
+        paths = DatasetPaths.resolve(name, data_root=data_root, configs_root=configs_root)
+        ds = Dataset.load(name, data_root=data_root, configs_root=configs_root)
+        against_ds = against_paths = None
+        if against:
+            against_paths = DatasetPaths.resolve(
+                against, data_root=data_root, configs_root=configs_root
+            )
+            against_ds = Dataset.load(against, data_root=data_root, configs_root=configs_root)
+        ctx = AuditContext(
+            dataset=ds,
+            paths=paths,
+            opts=AuditOptions(
+                max_bad_boxes=max_bad_boxes,
+                hamming=hamming,
+                corr=corr,
+                view_hits=view_hits,
+                recompute=recompute,
+            ),
+            against=against_ds,
+            against_paths=against_paths,
+        )
+        status, results = run_audit(ctx)
+        human = [
+            Verdict(cmd=f"audit.{n}", status=r.status, fields=r.fields).line()
+            for n, r in results.items()
+        ]
+        fields: dict[str, FieldValue] = {"name": name}
+        fields.update({n: r.status for n, r in results.items()})
+        fields["summary"] = str(ctx.out_dir / "summary.json")
+        payload = {
+            "summary": str(ctx.out_dir / "summary.json"),
+            "checks": {n: {"status": r.status, "fields": r.fields} for n, r in results.items()},
+        }
+        return status, fields, payload, human
+
+    run_command("audit", json_mode, data_root, fn)

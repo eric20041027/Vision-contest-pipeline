@@ -208,9 +208,7 @@ def test_strategy_registry_and_plan_id_validation():
     with pytest.raises(ValidationFailed):
         build_plan(ds, plan_id="../x", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     with pytest.raises(RegistryError):
-        build_plan(
-            ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, strategy="nope"
-        )
+        build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0, strategy="nope")
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])

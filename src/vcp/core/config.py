@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypeVar
 
 import yaml
 from pydantic import BaseModel, ValidationError
 
 from vcp.core.errors import ValidationFailed
 
-T = TypeVar("T", bound=BaseModel)
 
-
-def load_yaml_model(path: Path, model_cls: type[T]) -> T:
+def load_yaml_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):

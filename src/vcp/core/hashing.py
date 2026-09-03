@@ -39,10 +39,21 @@ def sha256_json(obj: Any) -> str:
     return sha256_text(canonical_json(obj))
 
 
-def dir_manifest(root: Path) -> list[str]:
-    """One line per file under ``root``: ``relpath<TAB>size<TAB>md5``, sorted by posix relpath."""
+MANIFEST_MODES = ("full", "sizes")
+
+
+def dir_manifest(root: Path, *, mode: str = "full") -> list[str]:
+    """One line per file under ``root``: ``relpath<TAB>size<TAB>md5`` in mode ``full``, or
+    ``relpath<TAB>size<TAB>-`` in mode ``sizes`` (no hashing; for very large raw trees).
+    Sorted by posix relpath."""
+    if mode not in MANIFEST_MODES:
+        raise ValueError(f"manifest mode must be one of {MANIFEST_MODES}, got {mode!r}")
+
+    def digest(p: Path) -> str:
+        return md5_file(p) if mode == "full" else "-"
+
     entries = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file())
-    return [f"{rel}\t{p.stat().st_size}\t{md5_file(p)}" for rel, p in entries]
+    return [f"{rel}\t{p.stat().st_size}\t{digest(p)}" for rel, p in entries]
 
 
 def manifest_hash(lines: list[str]) -> str:

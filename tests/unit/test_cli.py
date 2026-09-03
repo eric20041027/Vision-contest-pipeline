@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from helpers import CATS, det_samples, write_images
@@ -366,6 +367,45 @@ def test_export_cli_flow(roots, tmp_path):
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
+
+
+def _jsonl_import_args(src, name):
+    return [
+        "data",
+        "import",
+        "--importer",
+        "jsonl",
+        "--src",
+        str(src),
+        "--name",
+        name,
+        "--license",
+        "CC0",
+        "--url",
+        "https://example.org",
+        "--downloaded-at",
+        "2026-09-02",
+        "--opt",
+        "task=det",
+        "--opt",
+        "categories=cats.json",
+    ]
+
+
+def test_import_raw_manifest_mode(roots, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    write_samples_jsonl(src / "samples.jsonl", det_samples(5, seed=0))
+    (src / "cats.json").write_text(json.dumps([c.model_dump() for c in CATS]), encoding="utf-8")
+    r = runner.invoke(app, [*_jsonl_import_args(src, "tiny"), "--raw-manifest", "sizes"])
+    assert r.exit_code == 0, r.output
+    card = yaml.safe_load(
+        (roots.configs / "datasets" / "tiny" / "dataset.yaml").read_text(encoding="utf-8")
+    )
+    assert card["source"]["raw_manifest_mode"] == "sizes" and card["exif_policy"] == "stored"
+    r = runner.invoke(app, [*_jsonl_import_args(src, "tiny2"), "--raw-manifest", "md5"])
+    assert r.exit_code == 1
+    assert "status=FAIL" in _last_verdict(r.output) and "raw-manifest" in r.output
 
 
 def test_audit_cli(roots, tmp_path):

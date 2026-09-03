@@ -496,6 +496,10 @@ dicom = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pydicom" },
+    { name = "pylibjpeg" },
+    { name = "pylibjpeg-libjpeg" },
+    { name = "pylibjpeg-openjpeg" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -519,6 +523,10 @@ provides-extras = ["dicom"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pydicom", specifier = ">=3.0" },
+    { name = "pylibjpeg", specifier = ">=2.0" },
+    { name = "pylibjpeg-libjpeg", specifier = ">=2.0" },
+    { name = "pylibjpeg-openjpeg", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.5" },

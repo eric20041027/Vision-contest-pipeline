@@ -12,6 +12,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LabelSource = Literal["gold", "derived", "pseudo", "none"]
+ExifPolicy = Literal["stored", "oriented"]
+RawManifestMode = Literal["full", "sizes"]
 
 
 class _Strict(BaseModel):
@@ -102,6 +104,7 @@ class SourceInfo(_Strict):
     url: str
     downloaded_at: str
     notes: str = ""
+    raw_manifest_mode: RawManifestMode = "full"
 
 
 class DatasetCard(_Strict):
@@ -113,6 +116,7 @@ class DatasetCard(_Strict):
     created_at: str
     sample_count: int = Field(ge=0)
     samples_hash: str
+    exif_policy: ExifPolicy = "stored"
     schema_version: int = 1
 
     @model_validator(mode="after")

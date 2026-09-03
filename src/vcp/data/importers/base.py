@@ -14,7 +14,7 @@ from vcp.core.hashing import dir_manifest, write_manifest
 from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset, samples_digest
-from vcp.data.schema import Category, DatasetCard, Sample, SourceInfo
+from vcp.data.schema import Category, DatasetCard, RawManifestMode, Sample, SourceInfo
 
 
 class ImportSpec(BaseModel):
@@ -28,6 +28,7 @@ class ImportSpec(BaseModel):
     url: str
     downloaded_at: str
     notes: str = ""
+    raw_manifest: RawManifestMode = "full"
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -47,6 +48,7 @@ class ImportResult(BaseModel):
     skipped_reasons_path: Path | None
     plans_invalidated: int = 0
     unlabeled: int = 0
+    exif_rotated: int = 0
 
 
 class Importer(Protocol):
@@ -96,11 +98,15 @@ def finalize_import(
     rows_read: int,
     skipped: list[dict[str, Any]],
     unlabeled: int = 0,
+    exif_policy: str = "stored",
+    exif_rotated: int = 0,
 ) -> ImportResult:
     """Common tail of every importer: validate, then provenance, save, skip report.
 
     Validation runs before the raw manifest so a bad dataset never pays for hashing every raw
     file. Paths inside the data root are stored relative to it (portable cards).
+    ``exif_policy`` / ``exif_rotated`` are supplied by image importers (see
+    ``importers/common.py``).
     """
     paths = spec.paths()
     if not spec.src.is_dir():
@@ -114,6 +120,7 @@ def finalize_import(
         url=spec.url,
         downloaded_at=spec.downloaded_at,
         notes=spec.notes,
+        raw_manifest_mode=spec.raw_manifest,
     )
     card = DatasetCard(
         name=spec.name,
@@ -124,10 +131,11 @@ def finalize_import(
         created_at=stamp(),
         sample_count=len(samples),
         samples_hash="",
+        exif_policy=exif_policy,
     )
     dataset = Dataset.from_parts(card, samples)
     plans_invalidated = count_invalidated_plans(paths, samples_digest(dataset.samples))
-    raw_hash = write_manifest(dir_manifest(spec.src), paths.raw_manifest)
+    raw_hash = write_manifest(dir_manifest(spec.src, mode=spec.raw_manifest), paths.raw_manifest)
     dataset.card = dataset.card.model_copy(
         update={"source": source.model_copy(update={"raw_hash": raw_hash})}
     )
@@ -147,4 +155,5 @@ def finalize_import(
         skipped_reasons_path=skipped_path,
         plans_invalidated=plans_invalidated,
         unlabeled=unlabeled,
+        exif_rotated=exif_rotated,
     )

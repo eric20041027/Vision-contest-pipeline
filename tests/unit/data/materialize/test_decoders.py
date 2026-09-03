@@ -53,6 +53,19 @@ def test_dicom_decoder_signed_and_float_rescale(tmp_path):
     assert get_decoder("dicom").decode(tmp_path / "float.dcm").array.dtype == np.float32
 
 
+def test_dicom_decoder_zero_rescale_slope_is_not_missing(tmp_path):
+    import pydicom
+
+    [f] = write_dicom_study(tmp_path, series=1, slices=1)
+    ds = pydicom.dcmread(f)
+    ds.RescaleSlope = 0
+    ds.save_as(tmp_path / "zero_slope.dcm", enforce_file_format=True)
+    d = get_decoder("dicom").decode(tmp_path / "zero_slope.dcm")
+    assert np.all(d.array == 0)
+    assert np.issubdtype(d.array.dtype, np.integer)
+    assert d.info["rescale"] == [0.0, 0.0]
+
+
 def test_image_decoder_exif_policy(tmp_path):
     write_exif_image(tmp_path / "o.jpg", size=(8, 4), orientation=6)
     dec = get_decoder("image")

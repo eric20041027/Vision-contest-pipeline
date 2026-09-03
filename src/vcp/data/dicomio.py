@@ -67,7 +67,13 @@ def _optional_int(ds: Any, keyword: str) -> int | None:
 
 def _floats(ds: Any, keyword: str, n: int) -> tuple[float, ...] | None:
     value = getattr(ds, keyword, None)
-    if value is None or len(value) != n:
+    if value is None:
+        return None
+    try:
+        length = len(value)
+    except TypeError:
+        return None  # scalar (e.g. malformed VM=1 tag), not the n-length sequence we need
+    if length != n:
         return None
     try:
         return tuple(float(v) for v in value)

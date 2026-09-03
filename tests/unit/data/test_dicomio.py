@@ -48,6 +48,28 @@ def test_read_header_skip_reasons(tmp_path):
     assert read_header(tmp_path / "multi.dcm") == "multiframe"
 
 
+def test_read_header_tolerates_malformed_position_and_orientation(tmp_path):
+    import pydicom
+
+    [f] = write_dicom_study(tmp_path, series=1, slices=1, missing_instance_number=True)
+    ds = pydicom.dcmread(f)
+    ds.ImagePositionPatient = [5.0]  # wrong VM (3 expected): pydicom stores a bare scalar
+    ds.ImageOrientationPatient = [1.0, 0.0]  # wrong VM (6 expected): a length-2 MultiValue
+    ds.save_as(tmp_path / "badpos.dcm", enforce_file_format=True)
+    bad = read_header(tmp_path / "badpos.dcm")
+    assert isinstance(bad, SliceHeader)
+    assert bad.position is None
+    assert bad.orientation is None
+
+    [other] = write_dicom_study(
+        tmp_path / "other", series=1, slices=1, missing_instance_number=True
+    )
+    good = read_header(other)
+    assert isinstance(good, SliceHeader)
+    ordered = sort_slices([bad, good])
+    assert [h.path.name for h in ordered] == sorted([bad.path.name, good.path.name])
+
+
 def test_require_pydicom_reports_install_hint(monkeypatch):
     import builtins
 

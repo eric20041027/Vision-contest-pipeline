@@ -42,8 +42,12 @@ class DicomDecoder:
         pydicom = require_pydicom()
         ds = pydicom.dcmread(path)
         arr = ds.pixel_array
-        slope = _first_float(getattr(ds, "RescaleSlope", None)) or 1.0
-        intercept = _first_float(getattr(ds, "RescaleIntercept", None)) or 0.0
+        slope = _first_float(getattr(ds, "RescaleSlope", None))
+        if slope is None:
+            slope = 1.0
+        intercept = _first_float(getattr(ds, "RescaleIntercept", None))
+        if intercept is None:
+            intercept = 0.0
         signed = int(getattr(ds, "PixelRepresentation", 0) or 0) == 1 or intercept < 0
         info = {
             "window_center": _first_float(getattr(ds, "WindowCenter", None)),

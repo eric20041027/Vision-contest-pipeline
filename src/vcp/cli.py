@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import TypeAdapter, ValidationError
 
 from vcp import __version__
 from vcp.core.errors import ValidationFailed, VcpError
@@ -82,7 +83,7 @@ def render_table(table: dict[str, dict[str, int]], counts: dict[str, int]) -> st
 def _logger(data_root: Path | None) -> logging.Logger:
     try:
         return setup_logging(logs_dir(resolve_data_root(data_root)))
-    except OSError:
+    except Exception:
         return logging.getLogger("vcp")
 
 
@@ -206,6 +207,9 @@ def split_cmd(
     no_eval_gold_only: Annotated[
         bool, typer.Option("--no-eval-gold-only", help="allow non-gold samples in eval/sealed")
     ] = False,
+    strategy: Annotated[
+        str, typer.Option("--strategy", help="split strategy from the registry")
+    ] = "fixed",
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -227,7 +231,14 @@ def split_cmd(
                 raise VcpError(
                     f"--group-from-audit needs {groups_file}; run `vcp data audit` first"
                 )
-            audit_groups = json.loads(groups_file.read_text(encoding="utf-8"))
+            try:
+                audit_groups = TypeAdapter(dict[str, str]).validate_json(
+                    groups_file.read_text(encoding="utf-8")
+                )
+            except ValidationError as e:
+                raise ValidationFailed(
+                    f"bad audit groups file: {e}", location=str(groups_file)
+                ) from e
         plan = build_plan(
             ds,
             plan_id=plan_id,
@@ -237,12 +248,15 @@ def split_cmd(
             group_key=group_key,
             eval_gold_only=not no_eval_gold_only,
             audit_groups=audit_groups,
+            strategy=strategy,
         )
-        save_plan(plan, paths)
         table = distribution_table(plan, ds)
         counts = {sub.name: len(plan.ids_in(sub.name)) for sub in plan.subsets}
-        status: Status = "WARN" if plan.params.get("audit_group_conflicts") else "OK"
+        empty = list(plan.params.get("empty_subsets", []))
+        status: Status = "WARN" if plan.params.get("audit_group_conflicts") or empty else "OK"
         fields: dict[str, FieldValue] = {"plan": plan_id, **counts, "seed": seed}
+        if empty:
+            fields["empty_subsets"] = ",".join(empty)
         human = [f"plan {plan_id!r} written to {target}", render_table(table, counts)]
         payload = {
             "plan_path": str(target),
@@ -250,6 +264,7 @@ def split_cmd(
             "distribution": table,
             "params": plan.params,
         }
+        save_plan(plan, paths)
         return status, fields, payload, human
 
     run_command("split", json_mode, data_root, fn)

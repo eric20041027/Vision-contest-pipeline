@@ -13,6 +13,7 @@ from vcp.data.importers.base import ImportSpec
 from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.materialize.base import safe_dir_name
 from vcp.data.materialize.manifest import read_manifest, row_key
+from vcp.data.schema import Sample, View
 
 
 def _image_ds(roots, name="tiny", n=6):
@@ -137,3 +138,73 @@ def test_process_pool_and_safe_dir_names(roots):
     assert safe_dir_name("a/b.jpg") == "a__b.jpg"
     assert safe_dir_name("1.2.826.0.1") == "1.2.826.0.1"
     assert len(safe_dir_name("weird:name?")) == 16 and safe_dir_name("..") != ".."
+
+
+def test_decoder_override_invalidates_cache(roots):
+    _dicom_ds(roots, "dcm")
+    first = materialize(_spec(roots, name="dcm", mode="npy"))
+    assert first.materialized == 6
+    res = materialize(_spec(roots, name="dcm", mode="npy", decoder="image"))
+    # The override must not be silently treated as "already current": every dicom-tagged row
+    # is stale under decoder="image", so all 6 are re-attempted, not skipped. Pillow cannot
+    # read raw DICOM bytes, so all 6 re-attempts fail -- that is the correct outcome here, not
+    # a regression, and the fix still deletes the now-invalid dicom rows rather than leaving
+    # them pointing at files nobody re-checked under the new decoder.
+    assert res.skipped == 0
+    assert res.failed == 6
+    rows = read_manifest(res.manifest_path)
+    assert all(r.decoder != "dicom" for r in rows.values())
+
+
+def test_stack_seq_after_plain_run_writes_the_volume(roots):
+    _dicom_ds(roots, "dcm")
+    plain = materialize(_spec(roots, name="dcm", mode="npy"))
+    assert plain.materialized == 6
+    res = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert res.materialized == 2  # one row per sequence, not satisfied by the old per-view rows
+    assert (res.out_dir / "1.2.1" / "1.2.1.1.npy").is_file()
+    assert (res.out_dir / "1.2.1" / "1.2.1.2.npy").is_file()
+    row = read_manifest(res.manifest_path)[row_key("1.2.1", None, "1.2.1.1")]
+    assert row.shape == [3, 16, 16]
+
+
+def test_stale_row_removed_after_failed_reattempt(roots):
+    _image_ds(roots, n=3)
+    res = materialize(_spec(roots, mode="npy"))
+    assert res.materialized == 3
+    key = row_key("s0001", 0, None)
+    assert key in read_manifest(res.manifest_path)
+    (res.out_dir / "s0001" / "0.npy").unlink()
+    src_file = roots.data / "raw" / "tiny" / "s0001.jpg"
+    original = src_file.read_bytes()
+    src_file.write_bytes(b"broken")
+    failed_run = materialize(_spec(roots, mode="npy"))
+    assert failed_run.failed == 1
+    assert key not in read_manifest(failed_run.manifest_path)
+    src_file.write_bytes(original)
+    fixed_run = materialize(_spec(roots, mode="npy"))
+    assert fixed_run.materialized == 1
+    assert key in read_manifest(fixed_run.manifest_path)
+
+
+def test_read_manifest_rejects_garbage_line(tmp_path):
+    path = tmp_path / "manifest.jsonl"
+    path.write_text("not even json{\n", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="bad manifest row"):
+        read_manifest(path)
+
+
+def test_plan_jobs_rejects_output_directory_collision(roots):
+    paths = DatasetPaths.resolve("coll", data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        Sample(
+            sample_id="a/b", views=[View(path="a/b.jpg", width=8, height=8)], label_source="none"
+        ),
+        Sample(
+            sample_id="a__b", views=[View(path="a__b.jpg", width=8, height=8)], label_source="none"
+        ),
+    ]
+    write_images(roots.data / "raw" / "coll", samples)
+    Dataset.from_parts(make_card("det", name="coll", image_root="raw/coll"), samples).save(paths)
+    with pytest.raises(ValidationFailed, match="collision"):
+        materialize(_spec(roots, name="coll", mode="npy"))

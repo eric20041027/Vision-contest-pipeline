@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
 
+from helpers import write_exif_image
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers import get_importer
 from vcp.data.importers.base import ImportSpec
@@ -115,6 +117,42 @@ def test_import_seg(roots, tmp_path):
     b = ds.by_id["sub/b.jpg"].labels.masks
     assert b[0].rle == "0,3,5" and b[0].meta["rle_encoding"] == "uncompressed"
     assert res.rows_skipped == 2  # unknown image_id + annotation without segmentation
+
+
+def _exif_doc(with_size: bool) -> dict[str, Any]:
+    image: dict[str, Any] = {"id": 1, "file_name": "a.jpg"}
+    if with_size:
+        image["width"], image["height"] = 8, 4
+    return {
+        "images": [image],
+        "annotations": [],
+        "categories": [{"id": 1, "name": "bottle"}],
+    }
+
+
+def _exif_src(root: Path, doc: dict[str, Any]) -> Path:
+    write_exif_image(root / "images" / "a.jpg", size=(8, 4), orientation=6)
+    (root / "instances.json").write_text(json.dumps(doc), encoding="utf-8")
+    return root
+
+
+def test_coco_oriented_with_json_sizes_fails_closed(roots, tmp_path):
+    """F5: COCO width/height describe stored pixels; under exif=oriented a swapping
+    orientation makes the JSON size a contradiction, so import must fail rather than record
+    a silently-wrong (unswapped) size."""
+    src = _exif_src(tmp_path / "with_size", _exif_doc(with_size=True))
+    with pytest.raises(ValidationFailed, match="exif=stored"):
+        get_importer("coco").run(_spec(roots, src, exif="oriented"))
+
+    res = get_importer("coco").run(_spec(roots, src, exif="stored"))
+    view = res.dataset.by_id["a.jpg"].views[0]
+    assert view.meta["exif_orientation"] == 6
+    assert (view.width, view.height) == (8, 4)
+
+    src2 = _exif_src(tmp_path / "no_size", _exif_doc(with_size=False))
+    res2 = get_importer("coco").run(_spec(roots, src2, exif="oriented"))
+    view2 = res2.dataset.by_id["a.jpg"].views[0]
+    assert (view2.width, view2.height) == (4, 8)
 
 
 def test_missing_image_and_bad_task(roots, tmp_path):

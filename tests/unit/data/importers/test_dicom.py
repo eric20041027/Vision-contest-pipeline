@@ -146,6 +146,19 @@ def test_dicom_import_validates_labels_before_scanning_headers(roots, monkeypatc
         get_importer("dicom").run(_spec(roots, src, labels_csv="labels.csv"))
 
 
+def test_dicom_import_validates_task_before_scanning_headers_without_labels(roots, monkeypatch):
+    """F8: with no labels_csv, --opt task= is validated before the header scan, same as the
+    CSV-join options already are."""
+    src = _tree(roots)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("scan must not run")
+
+    monkeypatch.setattr(dicom, "read_headers", boom)
+    with pytest.raises(ValidationFailed, match="task="):
+        get_importer("dicom").run(_spec(roots, src, task="cls"))
+
+
 def test_dicom_import_validates_workers_option(roots):
     src = _tree(roots)
     with pytest.raises(ValidationFailed, match="workers="):

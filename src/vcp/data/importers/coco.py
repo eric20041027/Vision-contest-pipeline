@@ -149,7 +149,14 @@ def _load_views(
         meta: dict[str, Any] = {}
         if orientation is not None:
             meta["exif_orientation"] = orientation
-            if exif_policy == "oriented" and not from_json and orientation in SWAPPED_ORIENTATIONS:
+            swapped = exif_policy == "oriented" and orientation in SWAPPED_ORIENTATIONS
+            if swapped and from_json:
+                raise ValidationFailed(
+                    f"{rel}: COCO width/height are stored-pixel sizes but EXIF orientation "
+                    f"{orientation} swaps axes under exif=oriented; import with --opt exif=stored "
+                    "or drop width/height from the JSON"
+                )
+            if swapped and not from_json:
                 width, height = height, width
         views[image_id] = (rel, View(path=rel, width=width, height=height, meta=meta))
     if missing:

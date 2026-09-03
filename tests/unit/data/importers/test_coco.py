@@ -108,7 +108,8 @@ def test_import_seg(roots, tmp_path):
     assert ds.card.task == "seg"
     masks = ds.by_id["a.jpg"].labels.masks
     assert masks[0].polygon == [[1.0, 1.0, 5.0, 1.0, 5.0, 4.0]] and masks[0].category_id == 1
-    assert masks[1].rle == "abc" and masks[1].meta == {"iscrowd": 1, "size": [8, 16]}
+    assert masks[0].meta["area"] == 12.0
+    assert masks[1].rle == "abc" and masks[1].meta == {"iscrowd": 1, "size": [8, 16], "area": 25.0}
     b = ds.by_id["sub/b.jpg"].labels.masks
     assert b[0].rle == "0,3,5" and b[0].meta["rle_encoding"] == "uncompressed"
     assert res.rows_skipped == 2  # unknown image_id + annotation without segmentation

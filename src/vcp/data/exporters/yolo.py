@@ -53,6 +53,7 @@ class YoloExporter:
         files: list[Path] = []
         fell_back = False
         dropped_views = 0
+        used: dict[str, str] = {}
         for s in samples:
             vi, view = select_view(s, view_opt)
             if view.width is None or view.height is None:
@@ -61,6 +62,12 @@ class YoloExporter:
             if not src.is_file():
                 raise ValidationFailed(f"image missing: {src}")
             flat = view.path.replace("/", "__")
+            if flat in used:
+                raise ValidationFailed(
+                    f"flattened image name collision: {view.path!r} and "
+                    f"{used[flat]!r} both map to {flat!r}"
+                )
+            used[flat] = view.path
             dst = images_out / flat
             fell_back = _place_image(src, dst, copy=copy) or fell_back
             files.append(dst)

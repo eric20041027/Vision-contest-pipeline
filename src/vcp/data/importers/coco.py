@@ -85,6 +85,8 @@ class CocoImporter:
                 x, y, w, h = bbox
                 boxes[iid].append(Box(x=x, y=y, w=w, h=h, category_id=cid, meta=meta))
                 continue
+            if task == "seg" and "area" in ann:
+                meta["area"] = float(ann["area"])
             mask = mask_from_segmentation(ann.get("segmentation"), cid, meta)
             if mask is None:
                 skipped.append({"annotation": ann_id, "reason": "annotation without segmentation"})

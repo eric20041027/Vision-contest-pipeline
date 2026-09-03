@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from helpers import CATS, det_samples, make_card, write_images
-from vcp.core.errors import RegistryError, SealedSubsetError, ValidationFailed
+from vcp.core.errors import RegistryError, SealedSubsetError, ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import get_exporter
@@ -53,7 +53,7 @@ def test_registry_and_select_view():
     )
     assert select_view(multi, "1")[1].path == "b.jpg"
     assert select_view(multi, "nir")[1].path == "b.jpg"
-    with pytest.raises(ValidationFailed, match="views"):
+    with pytest.raises(VcpError, match="views"):
         select_view(multi, None)
     with pytest.raises(ValidationFailed):
         select_view(multi, "depth")
@@ -127,6 +127,17 @@ def test_export_coco_seg_rle_roundtrip(roots, tmp_path):
     assert segs[1] == {"counts": [1, 2, 3], "size": [8, 8]}
     assert segs[2] == {"counts": "abc", "size": [8, 8]}
     assert len(segs) == 3 and any("PNG" in w for w in res.warnings)
+    areas = [a["area"] for a in doc["annotations"] if a["image_id"] == 1]
+    assert areas == [8.0, 0.0, 0.0]
+
+
+def test_polygon_area_and_mask_area():
+    from vcp.data.exporters.coco import mask_area, polygon_area
+
+    assert polygon_area([[0, 0, 4, 0, 4, 4]]) == 8.0
+    assert polygon_area([[0, 0, 2, 0, 2, 2, 0, 2], [0, 0, 1, 0, 1, 1]]) == 4.5
+    assert mask_area(Mask(category_id=0, rle="x", meta={"area": 3})) == 3.0
+    assert mask_area(Mask(category_id=0, rle="x")) == 0.0
 
 
 def test_export_yolo_copy_and_symlink_fallback(roots, tmp_path, det_ds, monkeypatch):
@@ -176,3 +187,35 @@ def test_export_guards(roots, tmp_path, det_ds):
         export_subset(_spec(roots, "coco", busy))
     with pytest.raises(RegistryError):
         export_subset(_spec(roots, "nope", tmp_path / "n"))
+
+
+def test_export_yolo_rejects_flatten_collisions(roots, tmp_path):
+    paths = DatasetPaths.resolve("col", data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        Sample(
+            sample_id=p,
+            views=[View(path=p, width=8, height=8)],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        )
+        for p in ("a/b.jpg", "a__b.jpg", "c.jpg", "d.jpg")
+    ]
+    image_root = roots.data / "raw" / "col"
+    write_images(image_root, samples)
+    ds = Dataset.from_parts(make_card("det", name="col", image_root="raw/col"), samples)
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:1.0"), seed=0)
+    save_plan(plan, paths)
+    with pytest.raises(ValidationFailed, match="collision"):
+        export_subset(
+            ExportSpec(
+                name="col",
+                plan_id="p",
+                subset="train",
+                format="yolo",
+                out=tmp_path / "y",
+                options={"copy": "true"},
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )

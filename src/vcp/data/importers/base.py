@@ -49,6 +49,7 @@ class ImportResult(BaseModel):
     plans_invalidated: int = 0
     unlabeled: int = 0
     exif_rotated: int = 0
+    extra_fields: dict[str, int] = Field(default_factory=dict)
 
 
 class Importer(Protocol):
@@ -100,6 +101,7 @@ def finalize_import(
     unlabeled: int = 0,
     exif_policy: str = "stored",
     exif_rotated: int = 0,
+    extra_fields: dict[str, int] | None = None,
 ) -> ImportResult:
     """Common tail of every importer: validate, then provenance, save, skip report.
 
@@ -156,4 +158,5 @@ def finalize_import(
         plans_invalidated=plans_invalidated,
         unlabeled=unlabeled,
         exif_rotated=exif_rotated,
+        extra_fields=dict(extra_fields or {}),
     )

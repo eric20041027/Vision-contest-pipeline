@@ -165,7 +165,9 @@ def import_cmd(
         )
         res = get_importer(importer).run(spec)
         status: Status = (
-            "WARN" if res.rows_skipped or res.plans_invalidated or res.exif_rotated else "OK"
+            "WARN"
+            if res.rows_skipped or res.plans_invalidated or res.exif_rotated or res.extra_fields
+            else "OK"
         )
         fields: dict[str, FieldValue] = {
             "name": name,
@@ -182,6 +184,7 @@ def import_cmd(
             fields["unlabeled"] = res.unlabeled
         if res.exif_rotated:
             fields["exif_rotated"] = res.exif_rotated
+        fields.update(res.extra_fields)
         human = [
             f"imported {res.samples_written} samples into dataset {name!r} "
             f"(task={res.dataset.card.task})"

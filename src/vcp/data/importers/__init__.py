@@ -11,6 +11,7 @@ from vcp.data.importers.base import (
 )
 from vcp.data.importers.coco import CocoImporter
 from vcp.data.importers.csv_boxes import CsvBoxesImporter
+from vcp.data.importers.dicom import DicomImporter
 from vcp.data.importers.image_csv import ImageCsvImporter
 from vcp.data.importers.imagefolder import ImageFolderImporter
 from vcp.data.importers.jsonl import JsonlImporter
@@ -22,11 +23,13 @@ register_importer(CocoImporter())
 register_importer(YoloImporter())
 register_importer(ImageFolderImporter())
 register_importer(ImageCsvImporter())
+register_importer(DicomImporter())
 
 __all__ = [
     "IMPORTERS",
     "CocoImporter",
     "CsvBoxesImporter",
+    "DicomImporter",
     "ImageCsvImporter",
     "ImageFolderImporter",
     "Importer",

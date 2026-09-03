@@ -133,7 +133,19 @@ def regression_samples(n: int, *, seed: int = 0) -> list[Sample]:
 
 
 def write_images(directory: Path, samples: list[Sample], size: tuple[int, int] = (8, 8)) -> None:
+    """One distinct random-pixel image per view (seeded by sample index), so
+    perceptual hashes differ.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     for i, s in enumerate(samples):
+        rng = random.Random(i)
         for v in s.views:
-            Image.new("RGB", size, (i % 256, 64, 128)).save(directory / v.path)
+            img = Image.new("RGB", size)
+            img.putdata(
+                [
+                    (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                    for _ in range(size[0] * size[1])
+                ]
+            )
+            (directory / v.path).parent.mkdir(parents=True, exist_ok=True)
+            img.save(directory / v.path)

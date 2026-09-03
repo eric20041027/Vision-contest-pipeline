@@ -272,3 +272,94 @@ def test_reimport_after_split_warns_about_invalidated_plans(roots, tmp_path):
     assert r.exit_code == 0
     v = _last_verdict(r.output)
     assert "status=WARN" in v and "plans_invalidated=1" in v
+
+
+def _split_tiny(roots, tmp_path, name="tiny"):
+    assert _import_tiny(roots, tmp_path, name=name).exit_code == 0
+    r = runner.invoke(
+        app, ["data", "split", "--name", name, "--plan-id", "fixed-v1", "--seed", "0"]
+    )
+    assert r.exit_code == 0, r.output
+
+
+def test_export_cli_flow(roots, tmp_path):
+    _split_tiny(roots, tmp_path)
+    out = tmp_path / "exp"
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "valA",
+            "--format",
+            "coco",
+            "--out",
+            str(out),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "files=1" in v and "format=coco" in v
+    assert (out / "manifest.json").is_file()
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "holdout",
+            "--format",
+            "coco",
+            "--out",
+            str(tmp_path / "h"),
+        ],
+    )
+    assert r.exit_code == 2 and "SealedSubsetError" in _last_verdict(r.output)
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "holdout",
+            "--format",
+            "coco",
+            "--out",
+            str(tmp_path / "h"),
+            "--unseal",
+            "--reason",
+            "final decision",
+        ],
+    )
+    assert r.exit_code == 0 and "status=OK" in _last_verdict(r.output)
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "valA",
+            "--format",
+            "nope",
+            "--out",
+            str(tmp_path / "n"),
+        ],
+    )
+    assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)

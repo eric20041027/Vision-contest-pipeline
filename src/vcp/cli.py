@@ -16,6 +16,7 @@ from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.log import FieldValue, Status, Verdict, exit_code, setup_logging
 from vcp.core.paths import DatasetPaths, logs_dir, resolve_data_root
 from vcp.data.dataset import Dataset
+from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.importers import ImportSpec, get_importer
 from vcp.data.lineage import clean_eval_subsets
 from vcp.data.split import (
@@ -299,3 +300,57 @@ def lineage_cmd(
         return "OK", fields, {"clean": clean, "trained_on": sorted(trained)}, human
 
     run_command("lineage", json_mode, data_root, fn)
+
+
+@data_app.command("export")
+def export_cmd(
+    name: NameOpt,
+    plan: Annotated[str, typer.Option("--plan", help="plan id")],
+    subset: Annotated[str, typer.Option("--subset", help="subset name from the plan")],
+    fmt: Annotated[str, typer.Option("--format", help="registered exporter: coco | yolo")],
+    out: Annotated[Path, typer.Option("--out", help="output directory (must be empty)")],
+    opt: Annotated[
+        list[str] | None, typer.Option("--opt", help="exporter option key=value (repeatable)")
+    ] = None,
+    unseal: Annotated[
+        bool, typer.Option("--unseal", help="open a sealed subset (recorded)")
+    ] = False,
+    reason: Annotated[
+        str | None, typer.Option("--reason", help="why a sealed subset is opened")
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Export one subset to a training-framework layout, with a hashed manifest."""
+
+    def fn() -> CmdResult:
+        spec = ExportSpec(
+            name=name,
+            plan_id=plan,
+            subset=subset,
+            format=fmt,
+            out=out,
+            options=parse_opts(opt),
+            unseal=unseal,
+            reason=reason,
+            data_root=data_root,
+            configs_root=configs_root,
+        )
+        res = export_subset(spec)
+        status: Status = "WARN" if res.warnings else "OK"
+        fields: dict[str, FieldValue] = {
+            "name": name,
+            "plan": plan,
+            "subset": subset,
+            "format": fmt,
+            "files": res.files,
+            "out": str(res.out),
+        }
+        if res.warnings:
+            fields["warnings"] = "; ".join(res.warnings)
+        human = [f"exported {res.files} files to {res.out}", *res.warnings]
+        payload = {"manifest": str(res.manifest_path), "warnings": res.warnings}
+        return status, fields, payload, human
+
+    run_command("export", json_mode, data_root, fn)

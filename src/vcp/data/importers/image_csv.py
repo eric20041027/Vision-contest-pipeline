@@ -7,7 +7,7 @@ from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
-from vcp.data.importers.common import make_view, read_csv
+from vcp.data.importers.common import count_exif_rotated, exif_policy_option, make_view, read_csv
 from vcp.data.schema import Category, Labels, Sample
 
 TASKS = ("cls", "multilabel", "regression")
@@ -63,10 +63,11 @@ class ImageCsvImporter:
         )
         cls_index = {c.name: c.id for c in categories}
         meta_cols = [c for c in header if c not in (path_col, gold_col, *target_cols)]
+        exif_policy = exif_policy_option(opts)
         samples: list[Sample] = []
         for lineno, row in enumerate(rows, start=2):
             rel = Path(row[path_col].strip()).as_posix()
-            view = make_view(images_dir, rel)
+            view = make_view(images_dir, rel, exif_policy=exif_policy)
             labels = _labels_for(row, task, target_cols, cls_index, csv_path, lineno)
             gold = gold_col is None or row[gold_col].strip().lower() in _TRUE
             samples.append(
@@ -87,6 +88,8 @@ class ImageCsvImporter:
             samples=samples,
             rows_read=len(rows),
             skipped=[],
+            exif_policy=exif_policy,
+            exif_rotated=count_exif_rotated(samples),
         )
 
 

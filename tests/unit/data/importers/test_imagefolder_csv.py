@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from helpers import write_exif_image
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers import get_importer
 from vcp.data.importers.base import ImportSpec
@@ -119,3 +120,21 @@ def test_image_csv_empty_fails(roots, tmp_path):
     src = _csv_src(tmp_path, "path,label\n")
     with pytest.raises(ValidationFailed, match="no data rows"):
         get_importer("image_csv").run(_spec(roots, "image_csv", src))
+
+
+def test_image_csv_exif_policy(roots, tmp_path):
+    src = tmp_path / "src"
+    write_exif_image(src / "images" / "a.jpg", size=(8, 4), orientation=6)
+    _img(src / "images" / "b.jpg")
+    (src / "labels.csv").write_text("path,label\na.jpg,0\nb.jpg,1\n", encoding="utf-8")
+    res = get_importer("image_csv").run(_spec(roots, "image_csv", src, task="cls"))
+    a = res.dataset.by_id["a.jpg"].views[0]
+    assert (a.width, a.height, a.meta["exif_orientation"]) == (8, 4, 6)
+    assert res.exif_rotated == 1 and res.dataset.card.exif_policy == "stored"
+    res2 = get_importer("image_csv").run(
+        _spec(roots, "image_csv", src, task="cls", exif="oriented")
+    )
+    a2 = res2.dataset.by_id["a.jpg"].views[0]
+    assert (a2.width, a2.height) == (4, 8) and res2.dataset.card.exif_policy == "oriented"
+    with pytest.raises(ValidationFailed, match="exif="):
+        get_importer("image_csv").run(_spec(roots, "image_csv", src, task="cls", exif="x"))

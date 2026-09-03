@@ -5,7 +5,7 @@ import pytest
 import yaml
 from PIL import Image
 
-from helpers import CATS, det_samples, make_card, write_images
+from helpers import CATS, det_samples, make_card, write_exif_image, write_images
 from vcp.core.errors import RegistryError, SealedSubsetError, ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
@@ -320,3 +320,42 @@ def test_export_yolo_image_and_label_namespaces_are_separate(roots, tmp_path):
     _det_dataset(roots, "pair", ["x.jpg", "x.txt"])
     with pytest.raises(ValidationFailed, match="label name collision"):
         export_subset(_yolo_spec(roots, "pair", tmp_path / "pair"))
+
+
+def test_export_manifest_records_exif(roots, tmp_path):
+    paths = DatasetPaths.resolve("ex", data_root=roots.data, configs_root=roots.configs)
+    raw = roots.data / "raw" / "ex"
+    write_exif_image(raw / "a.jpg", size=(8, 4), orientation=6)
+    Image.new("RGB", (8, 8)).save(raw / "b.jpg")
+    samples = [
+        Sample(
+            sample_id="a.jpg",
+            views=[View(path="a.jpg", width=8, height=4, meta={"exif_orientation": 6})],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        ),
+        Sample(
+            sample_id="b.jpg",
+            views=[View(path="b.jpg", width=8, height=8)],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        ),
+    ]
+    ds = Dataset.from_parts(make_card("det", name="ex", image_root="raw/ex"), samples)
+    ds.save(paths)
+    save_plan(build_plan(ds, plan_id="p", subsets=parse_subsets("train:train:1.0"), seed=0), paths)
+    res = export_subset(
+        ExportSpec(
+            name="ex",
+            plan_id="p",
+            subset="train",
+            format="coco",
+            out=tmp_path / "o",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    manifest = json.loads((tmp_path / "o" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["exif_policy"] == "stored" and manifest["exif_rotated"] == 1
+    assert res.fields["exif_rotated"] == 1
+    assert any("EXIF" in w for w in res.warnings)

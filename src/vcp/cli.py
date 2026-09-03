@@ -370,6 +370,7 @@ def export_cmd(
             "files": res.files,
             "out": str(res.out),
         }
+        fields.update(res.fields)
         if res.warnings:
             fields["warnings"] = "; ".join(res.warnings)
         human = [f"exported {res.files} files to {res.out}", *res.warnings]

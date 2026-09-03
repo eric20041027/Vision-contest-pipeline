@@ -6,12 +6,13 @@ import csv
 import json
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 
 from vcp.core.errors import ValidationFailed
-from vcp.data.schema import Category, View
+from vcp.data.schema import Category, Sample, View
 
 IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"})
 
@@ -28,20 +29,58 @@ def iter_images(root: Path) -> list[Path]:
     return sorted(files, key=lambda p: rel_posix(p, root))
 
 
-def image_size(path: Path) -> tuple[int, int]:
-    """(width, height) read from the file header; pixels are never decoded."""
+EXIF_ORIENTATION_TAG = 0x0112
+SWAPPED_ORIENTATIONS = frozenset({5, 6, 7, 8})
+EXIF_POLICIES = ("stored", "oriented")
+
+
+def choice_option(opts: dict[str, str], key: str, allowed: tuple[str, ...], default: str) -> str:
+    """``--opt key=value`` restricted to ``allowed``; a bad value is the user's problem (FAIL)."""
+    value = opts.get(key, default)
+    if value not in allowed:
+        raise ValidationFailed(f"--opt {key}= must be one of {allowed}, got {value!r}")
+    return value
+
+
+def exif_policy_option(opts: dict[str, str]) -> str:
+    return choice_option(opts, "exif", EXIF_POLICIES, "stored")
+
+
+def image_header(path: Path) -> tuple[int, int, int | None]:
+    """(width, height, exif_orientation) from the file header; pixels are never decoded.
+    Orientation is None when the tag is absent or 1 (normal)."""
     try:
         with Image.open(path) as im:
-            return im.size
+            width, height = im.size
+            orientation = im.getexif().get(EXIF_ORIENTATION_TAG)
     except FileNotFoundError:
         raise ValidationFailed(f"image not found: {path}") from None
     except UnidentifiedImageError:
         raise ValidationFailed(f"not a readable image: {path}") from None
+    if not isinstance(orientation, int) or orientation == 1:
+        orientation = None
+    return width, height, orientation
 
 
-def make_view(root: Path, rel: str) -> View:
-    width, height = image_size(root / rel)
-    return View(path=rel, width=width, height=height)
+def image_size(path: Path) -> tuple[int, int]:
+    width, height, _ = image_header(path)
+    return width, height
+
+
+def make_view(root: Path, rel: str, *, exif_policy: str = "stored") -> View:
+    """View with header size. Under ``oriented`` the size is the EXIF-transposed one; the raw
+    orientation tag is always recorded in ``meta`` so audits and exporters can warn."""
+    width, height, orientation = image_header(root / rel)
+    meta: dict[str, Any] = {}
+    if orientation is not None:
+        meta["exif_orientation"] = orientation
+        if exif_policy == "oriented" and orientation in SWAPPED_ORIENTATIONS:
+            width, height = height, width
+    return View(path=rel, width=width, height=height, meta=meta)
+
+
+def count_exif_rotated(samples: Iterable[Sample]) -> int:
+    return sum(1 for s in samples for v in s.views if "exif_orientation" in v.meta)
 
 
 def read_csv(path: Path, *, required: Iterable[str]) -> tuple[list[str], list[dict[str, str]]]:

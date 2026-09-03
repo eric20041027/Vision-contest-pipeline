@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
-from vcp.data.importers.common import iter_images, make_view, rel_posix
+from vcp.data.importers.common import (
+    count_exif_rotated,
+    exif_policy_option,
+    iter_images,
+    make_view,
+    rel_posix,
+)
 from vcp.data.schema import Category, Labels, Sample
 
 
@@ -20,6 +26,7 @@ class ImageFolderImporter:
         if not class_dirs:
             raise ValidationFailed(f"no class directories under {root}")
         categories = [Category(id=i, name=d.name) for i, d in enumerate(class_dirs)]
+        exif_policy = exif_policy_option(spec.options)
         samples: list[Sample] = []
         for cid, d in enumerate(class_dirs):
             for p in iter_images(d):
@@ -27,7 +34,7 @@ class ImageFolderImporter:
                 samples.append(
                     Sample(
                         sample_id=rel,
-                        views=[make_view(root, rel)],
+                        views=[make_view(root, rel, exif_policy=exif_policy)],
                         labels=Labels(cls=cid),
                         label_source="gold",
                     )
@@ -43,4 +50,6 @@ class ImageFolderImporter:
             samples=samples,
             rows_read=len(samples),
             skipped=[],
+            exif_policy=exif_policy,
+            exif_rotated=count_exif_rotated(samples),
         )

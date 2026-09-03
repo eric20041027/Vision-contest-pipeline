@@ -9,7 +9,7 @@ import yaml
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import Dataset
-from vcp.data.exporters.base import select_view
+from vcp.data.exporters.base import ExportOutput, select_view
 from vcp.data.schema import Sample
 
 _TRUE = {"1", "true", "yes"}
@@ -41,7 +41,7 @@ class YoloExporter:
         out: Path,
         image_root: Path,
         options: dict[str, str],
-    ) -> tuple[list[Path], list[str]]:
+    ) -> ExportOutput:
         if dataset.card.task != "det":
             raise ValidationFailed(f"yolo export supports det datasets, not {dataset.card.task!r}")
         copy = options.get("copy", "false").lower() in _TRUE
@@ -110,4 +110,4 @@ class YoloExporter:
             warnings.append("symlink not permitted; images were copied")
         if dropped_views:
             warnings.append(f"{dropped_views} boxes on non-exported views dropped")
-        return files, warnings
+        return ExportOutput(files, warnings)

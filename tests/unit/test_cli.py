@@ -4,7 +4,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from helpers import CATS, det_samples, write_images
+from helpers import CATS, det_samples, write_exif_image, write_images
 from vcp.cli import app, parse_opts, render_table
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
@@ -427,3 +427,33 @@ def test_audit_cli(roots, tmp_path):
     assert doc["result"]["checks"]["dedup"]["status"] == "OK"
     assert "VERDICT cmd=audit.coords" in r.stderr and "VERDICT cmd=audit status=OK" in r.stderr
     assert "VERDICT" not in r.stdout
+
+
+def test_import_warns_on_exif_rotated_views(roots, tmp_path):
+    src = tmp_path / "src"
+    write_exif_image(src / "images" / "a.jpg", orientation=6)
+    (src / "labels.csv").write_text("path,label\na.jpg,0\n", encoding="utf-8")
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "import",
+            "--importer",
+            "image_csv",
+            "--src",
+            str(src),
+            "--name",
+            "ex",
+            "--license",
+            "CC0",
+            "--url",
+            "u",
+            "--downloaded-at",
+            "2026-09-03",
+            "--opt",
+            "task=cls",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "exif_rotated=1" in v

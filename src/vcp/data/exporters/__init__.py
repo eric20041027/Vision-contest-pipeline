@@ -3,6 +3,7 @@
 from vcp.data.exporters.base import (
     EXPORTERS,
     Exporter,
+    ExportOutput,
     ExportResult,
     ExportSpec,
     export_subset,
@@ -19,6 +20,7 @@ register_exporter(YoloExporter())
 __all__ = [
     "EXPORTERS",
     "CocoExporter",
+    "ExportOutput",
     "ExportResult",
     "ExportSpec",
     "Exporter",

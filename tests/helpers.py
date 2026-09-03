@@ -149,3 +149,11 @@ def write_images(directory: Path, samples: list[Sample], size: tuple[int, int] =
             )
             (directory / v.path).parent.mkdir(parents=True, exist_ok=True)
             img.save(directory / v.path)
+
+
+def write_exif_image(path: Path, *, size: tuple[int, int] = (8, 4), orientation: int = 6) -> None:
+    """A JPEG whose stored pixels are ``size`` and whose EXIF Orientation tag is ``orientation``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    Image.new("RGB", size, (10, 20, 30)).save(path, format="JPEG", exif=exif.tobytes())

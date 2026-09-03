@@ -8,6 +8,11 @@ from typing import Any
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
 from vcp.data.importers.common import (
+    choice_option as _choice,
+)
+from vcp.data.importers.common import (
+    count_exif_rotated,
+    exif_policy_option,
     iter_images,
     load_categories,
     make_view,
@@ -28,13 +33,6 @@ BOX_FORMATS = ("xywh", "xyxy", "cxcywh")
 COORD_MODES = ("abs", "norm")
 BAD_ROW_MODES = ("abort", "skip")
 BOUNDS_TOLERANCE_PX = 1.0
-
-
-def _choice(opts: dict[str, str], key: str, allowed: tuple[str, ...], default: str) -> str:
-    value = opts.get(key, default)
-    if value not in allowed:
-        raise ValidationFailed(f"--opt {key}= must be one of {allowed}, got {value!r}")
-    return value
 
 
 def to_abs_xywh(
@@ -83,10 +81,11 @@ class CsvBoxesImporter:
         box_format = _choice(opts, "box_format", BOX_FORMATS, "xywh")
         coords = _choice(opts, "coords", COORD_MODES, "abs")
         on_bad_row = _choice(opts, "on_bad_row", BAD_ROW_MODES, "abort")
+        exif_policy = exif_policy_option(opts)
         _, rows = read_csv(csv_path, required=cols.values())
         views = {
-            rel_posix(p, images_dir): make_view(images_dir, rel_posix(p, images_dir))
-            for p in iter_images(images_dir)
+            rel: make_view(images_dir, rel, exif_policy=exif_policy)
+            for rel in (rel_posix(p, images_dir) for p in iter_images(images_dir))
         }
         if not views:
             raise ValidationFailed(f"no images found under {images_dir}")
@@ -124,6 +123,8 @@ class CsvBoxesImporter:
             samples=samples,
             rows_read=len(rows),
             skipped=skipped,
+            exif_policy=exif_policy,
+            exif_rotated=count_exif_rotated(samples),
         )
 
 

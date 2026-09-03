@@ -39,7 +39,7 @@ packages = ["src/vcp"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
-extend-exclude = ["projects"]
+extend-exclude = ["projects", "docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "TID"]

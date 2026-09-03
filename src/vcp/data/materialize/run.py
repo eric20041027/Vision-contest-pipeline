@@ -80,8 +80,7 @@ def _decoder_name(rel_path: str, image_root: Path, override: str | None) -> str:
     return decoder_for(Path(rel_path)).name
 
 
-def plan_jobs(dataset: Dataset, spec: MaterializeSpec) -> list[Job]:
-    image_root = spec.paths().resolve_image_root(dataset.card)
+def plan_jobs(dataset: Dataset, spec: MaterializeSpec, image_root: Path) -> list[Job]:
     jobs: list[Job] = []
     dirs: dict[str, str] = {}
     for s in dataset.samples:
@@ -134,8 +133,15 @@ def _write(decoded: Decoded, out: Path, cfg: Settings) -> tuple[list[int], str]:
         np.save(out, decoded.array)
         return list(decoded.array.shape), str(decoded.array.dtype)
     arr = to_uint8(decoded, cfg.window)
-    if arr.ndim == 3 and arr.shape[-1] not in (1, 3, 4) or arr.ndim > 3:
+    is_volume = (
+        "slices" in decoded.info
+        or arr.ndim > 3
+        or (arr.ndim == 3 and arr.shape[-1] not in (1, 3, 4))
+    )
+    if is_volume:
         raise ValidationFailed("png mode needs single 2-D views; use npy for volumes")
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]  # (H, W, 1) -> (H, W): Image.fromarray rejects a singleton channel
     if cfg.resize is not None:
         arr = resize_long_side(arr, cfg.resize)
     Image.fromarray(arr).save(out, format="PNG")
@@ -173,9 +179,9 @@ def _row(
 
 def run_job(job: Job, cfg: Settings) -> JobOutcome:
     """Decode and write one job. Never raises: problems become ``failures`` rows."""
-    dec = get_decoder(job.decoder)
     ext = cfg.mode
     try:
+        dec = get_decoder(job.decoder)
         paths = [cfg.image_root / s for s in job.srcs]
         if len(paths) == 1 and paths[0].is_dir():  # series-level view: a dir of slices
             files = sorted(p for p in paths[0].iterdir() if p.is_file())
@@ -194,7 +200,10 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
             stacked = Decoded(
                 np.stack([f.array for f in frames]), {**frames[0].info, "slices": len(frames)}
             )
-            out = cfg.out_root / job.out_dir / f"{safe_dir_name(job.seq_id or 'seq')}.{ext}"
+            # job.view is None here (only a stack job ever has len(frames) > 1), so job.seq_id
+            # is guaranteed set (stack jobs are only built from grouped, non-None seq ids).
+            seq_dir = safe_dir_name(job.seq_id)  # type: ignore[arg-type]
+            out = cfg.out_root / job.out_dir / f"{seq_dir}.{ext}"
             shape, dtype = _write(stacked, out, cfg)
             row = _row(job, None, job.srcs[0], out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
@@ -219,27 +228,32 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
 def _is_current(
     job: Job, existing: dict[str, ManifestRow], spec: MaterializeSpec, out_root: Path
 ) -> bool:
-    """Skip when a matching row exists and its file is still there with the recorded size."""
+    """Skip only when this exact job's own manifest row exists, matches this spec (decoder
+    identity + version, resize, window) and its output file is still there at the recorded
+    size. A stack job has no row under its own key once it has fallen back to per-view files,
+    so it is always re-attempted (and will warn and fall back again if still mismatched)."""
+    r = existing.get(row_key(job.sample_id, job.view, job.seq_id))
+    if r is None:
+        return False
     version = get_decoder(job.decoder).version
     window = spec.window if spec.mode == "png" else None
-    keys = [row_key(job.sample_id, job.view, job.seq_id)]
-    if job.view is None:  # a stack may have fallen back to per-view rows last time
-        keys = [keys[0], *(row_key(job.sample_id, i, job.seq_id) for i in job.views)]
-    rows = [existing.get(k) for k in keys]
-    candidates = [rows[0]] if rows[0] is not None else [r for r in rows[1:]]
-    stack_fallback_incomplete = (
-        job.view is None and rows[0] is None and len(candidates) != len(job.views)
-    )
-    if not candidates or stack_fallback_incomplete:
+    if r.decoder != job.decoder or r.decoder_version != version:
         return False
-    for r in candidates:
-        stale = r is None or r.resize != spec.resize or r.window != window
-        if stale or r.decoder_version != version:
-            return False
-        f = out_root / r.out
-        if not f.is_file() or f.stat().st_size != r.bytes:
-            return False
-    return True
+    if r.resize != spec.resize or r.window != window:
+        return False
+    f = out_root / r.out
+    return f.is_file() and f.stat().st_size == r.bytes
+
+
+def _planned_keys(jobs: list[Job]) -> set[str]:
+    """Manifest keys this run's plan can legitimately produce or carry over: each job's own
+    key, plus (for a stack job) the per-view keys a shape-mismatch fallback would write."""
+    keys: set[str] = set()
+    for j in jobs:
+        keys.add(row_key(j.sample_id, j.view, j.seq_id))
+        if j.view is None:
+            keys.update(row_key(j.sample_id, i, j.seq_id) for i in j.views)
+    return keys
 
 
 def materialize(spec: MaterializeSpec) -> MaterializeResult:
@@ -258,7 +272,7 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         spec.window,
         dataset.card.exif_policy,
     )
-    jobs = plan_jobs(dataset, spec)
+    jobs = plan_jobs(dataset, spec, cfg.image_root)
     todo = [j for j in jobs if not _is_current(j, existing, spec, out_root)]
     skipped = len(jobs) - len(todo)
     if spec.workers <= 1 or len(todo) < 2:
@@ -266,7 +280,8 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
     else:
         with ProcessPoolExecutor(max_workers=spec.workers) as pool:
             outcomes = list(pool.map(partial(run_job, cfg=cfg), todo))
-    rows = dict(existing)
+    planned = _planned_keys(jobs)
+    rows = {k: v for k, v in existing.items() if k in planned}
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
     for o in outcomes:
@@ -274,6 +289,8 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
             rows[row_key(r.sample_id, r.view, r.seq_id)] = r
         failures.extend(o.failures)
         warnings.extend(o.warnings)
+    for failure in failures:
+        rows.pop(row_key(failure["sample_id"], failure["view"], failure["seq_id"]), None)
     write_manifest(manifest_path, rows.values())
     failed_path = out_root / "failed.jsonl"
     if failures:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -9,14 +10,15 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from vcp.core.config import dump_yaml_model, load_yaml_model
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, PlanMismatchError, SealedSubsetError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
+from vcp.core.time import stamp
 from vcp.data.schema import DatasetCard, Sample, sample_json_line
 from vcp.data.tasks import get_task
 
 if TYPE_CHECKING:
-    from vcp.data.split import SplitPlan  # noqa: F401  (used by subset() in a later task)
+    from vcp.data.split import SplitPlan
 
 
 def write_samples_jsonl(path: Path, samples: Iterable[Sample]) -> str:
@@ -112,3 +114,47 @@ class Dataset:
             update={"sample_count": len(self.samples), "samples_hash": digest}
         )
         dump_yaml_model(self.card, paths.card_yaml)
+
+    def subset(
+        self,
+        name: str,
+        plan: SplitPlan,
+        *,
+        unseal: bool = False,
+        reason: str | None = None,
+        caller: str | None = None,
+        paths: DatasetPaths | None = None,
+    ) -> list[Sample]:
+        """Samples of one subset. A sealed subset opens only with an explicit, recorded unseal."""
+        if plan.dataset != self.card.name:
+            raise PlanMismatchError(
+                f"plan {plan.plan_id!r} belongs to dataset {plan.dataset!r}, not {self.card.name!r}"
+            )
+        if plan.dataset_hash != self.card.samples_hash:
+            raise PlanMismatchError(
+                f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
+                f"dataset now has {self.card.samples_hash[:12]}"
+            )
+        spec = plan.subset(name)
+        if spec.role == "sealed":
+            if not unseal:
+                raise SealedSubsetError(
+                    f"subset {name!r} is sealed; pass unseal=True with a reason to open it"
+                )
+            if not reason:
+                raise SealedSubsetError("unseal requires a non-empty reason")
+            if paths is None:
+                raise SealedSubsetError("unseal requires paths so the unseal can be recorded")
+            record = {
+                "ts": stamp(),
+                "plan_id": plan.plan_id,
+                "dataset_hash": plan.dataset_hash,
+                "subset": name,
+                "reason": reason,
+                "caller": caller or "unknown",
+            }
+            target = paths.unseal_jsonl(plan.plan_id)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return [s for s in self.samples if plan.assignment.get(s.sample_id) == name]

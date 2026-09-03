@@ -412,11 +412,14 @@ def test_audit_cli(roots, tmp_path):
     assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0
     r = runner.invoke(app, ["data", "audit", "--name", "tiny"])
     assert r.exit_code == 0, r.output
-    assert "VERDICT cmd=audit.coords status=OK" in r.output
+    # det_samples boxes are randint(1, 4) px wide/tall; the spec default min_box_px=2.0
+    # legitimately flags the w=1 / h=1 ones as "tiny", so coords (and the overall run) WARN.
+    assert "VERDICT cmd=audit.coords status=WARN" in r.output
+    assert "suspicious=" in r.output and "out_of_bounds=0" in r.output
     assert "VERDICT cmd=audit.dedup status=OK" in r.output
     assert "VERDICT cmd=audit.provenance status=OK" in r.output
     v = _last_verdict(r.output)
-    assert v.startswith("VERDICT cmd=audit status=OK") and "dedup=OK" in v
+    assert v.startswith("VERDICT cmd=audit status=WARN") and "dedup=OK" in v
     assert (roots.data / "datasets" / "tiny" / "cache" / "audit" / "summary.json").is_file()
     r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--against", "missing"])
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
@@ -425,8 +428,12 @@ def test_audit_cli(roots, tmp_path):
     assert r.exit_code == 0
     doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
     assert doc["result"]["checks"]["dedup"]["status"] == "OK"
-    assert "VERDICT cmd=audit.coords" in r.stderr and "VERDICT cmd=audit status=OK" in r.stderr
+    assert "VERDICT cmd=audit.coords" in r.stderr and "VERDICT cmd=audit status=WARN" in r.stderr
     assert "VERDICT" not in r.stdout
+
+    r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--min-box-px", "100"])
+    assert r.exit_code == 0 and "VERDICT cmd=audit.coords status=WARN" in r.output
+    assert "suspicious=" in r.output
 
 
 def test_import_warns_on_exif_rotated_views(roots, tmp_path):

@@ -387,6 +387,15 @@ def audit_cmd(
         str | None, typer.Option("--against", help="dataset to check overlap against (e.g. test)")
     ] = None,
     max_bad_boxes: Annotated[int, typer.Option("--max-bad-boxes")] = 0,
+    min_box_px: Annotated[
+        float, typer.Option("--min-box-px", help="boxes thinner than this are suspicious")
+    ] = 2.0,
+    max_aspect: Annotated[
+        float, typer.Option("--max-aspect", help="max w/h or h/w before suspicious")
+    ] = 20.0,
+    max_cover: Annotated[
+        float, typer.Option("--max-cover", help="box area / view area that is suspicious")
+    ] = 0.98,
     hamming: Annotated[int, typer.Option("--hamming", help="max dHash Hamming distance")] = 4,
     corr: Annotated[float, typer.Option("--corr", help="min 64x64 grey Pearson to confirm")] = 0.95,
     view_hits: Annotated[int, typer.Option("--view-hits", help="views that must match")] = 1,
@@ -411,6 +420,9 @@ def audit_cmd(
             paths=paths,
             opts=AuditOptions(
                 max_bad_boxes=max_bad_boxes,
+                min_box_px=min_box_px,
+                max_aspect=max_aspect,
+                max_cover=max_cover,
                 hamming=hamming,
                 corr=corr,
                 view_hits=view_hits,

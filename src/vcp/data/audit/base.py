@@ -24,6 +24,9 @@ class AuditOptions(BaseModel):
     corr: float = 0.95
     view_hits: int = 1
     recompute: bool = False
+    min_box_px: float = 2.0
+    max_aspect: float = 20.0
+    max_cover: float = 0.98
 
 
 @dataclass(frozen=True)

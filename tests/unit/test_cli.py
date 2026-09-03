@@ -97,11 +97,12 @@ def test_json_mode_puts_result_on_stdout(roots, tmp_path):
     assert _import_tiny(roots, tmp_path).exit_code == 0
     r = runner.invoke(app, ["data", "validate", "--name", "tiny", "--json"])
     assert r.exit_code == 0
-    json_line = next(line for line in r.output.splitlines() if line.startswith("{"))
+    json_line = next(line for line in r.stdout.splitlines() if line.startswith("{"))
     doc = json.loads(json_line)
     assert doc["cmd"] == "validate" and doc["status"] == "OK"
     assert doc["fields"]["samples"] == 60 and doc["result"]["card"]["task"] == "det"
-    assert "VERDICT cmd=validate status=OK" in r.output
+    assert "VERDICT" not in r.stdout
+    assert "VERDICT cmd=validate status=OK" in r.stderr
 
 
 def test_custom_subsets_and_failures(roots, tmp_path):
@@ -157,6 +158,44 @@ def test_custom_subsets_and_failures(roots, tmp_path):
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
 
 
+def test_split_validates_audit_groups_file(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path).exit_code == 0
+    groups_path = roots.data / "datasets" / "tiny" / "cache" / "audit" / "groups.json"
+    groups_path.parent.mkdir(parents=True, exist_ok=True)
+
+    groups_path.write_text(json.dumps([1, 2]), encoding="utf-8")
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "aud1", "--group-from-audit"]
+    )
+    assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
+
+    groups_path.write_text(json.dumps({"s0000": "dup", "s0001": "dup"}), encoding="utf-8")
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "aud2", "--group-from-audit"]
+    )
+    assert r.exit_code == 0, r.output
+    plan_path = roots.configs / "datasets" / "tiny" / "splits" / "aud2.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan["params"]["group_from_audit"] is True
+    assert plan["assignment"]["s0000"] == plan["assignment"]["s0001"]
+
+
+def test_split_reports_warn_for_empty_subsets(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path, name="tiny5", n=5).exit_code == 0
+    r = runner.invoke(app, ["data", "split", "--name", "tiny5", "--plan-id", "p", "--seed", "0"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "empty_subsets=valA,valB,holdout" in v
+
+
+def test_split_unknown_strategy_aborts(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path).exit_code == 0
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "s1", "--strategy", "nope"]
+    )
+    assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
+
+
 def test_tampered_dataset_fails_validate(roots, tmp_path):
     assert _import_tiny(roots, tmp_path).exit_code == 0
     samples = roots.data / "datasets" / "tiny" / "samples.jsonl"
@@ -168,9 +207,10 @@ def test_tampered_dataset_fails_validate(roots, tmp_path):
     assert r.exit_code == 1 and "IntegrityError" in _last_verdict(r.output)
 
 
-def test_logger_falls_back_to_plain_logger_on_oserror(roots, monkeypatch):
+@pytest.mark.parametrize("error", [OSError, ValueError])
+def test_logger_falls_back_to_plain_logger_on_error(roots, monkeypatch, error):
     def _boom(*args, **kwargs):
-        raise OSError("disk full")
+        raise error("boom")
 
     monkeypatch.setattr("vcp.cli.setup_logging", _boom)
     r = runner.invoke(app, ["version"])

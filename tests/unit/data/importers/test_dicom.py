@@ -5,7 +5,7 @@ import pytest
 from helpers import write_dicom_study
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.data import dicomio
-from vcp.data.importers import get_importer
+from vcp.data.importers import dicom, get_importer
 from vcp.data.importers.base import ImportSpec
 
 
@@ -133,3 +133,40 @@ def test_dicom_import_without_pydicom_aborts(roots, monkeypatch):
     monkeypatch.setattr(dicomio, "require_pydicom", boom)
     with pytest.raises(VcpError, match="uv sync --extra dicom"):
         get_importer("dicom").run(_spec(roots, src))
+
+
+def test_dicom_import_validates_labels_before_scanning_headers(roots, monkeypatch):
+    src = _tree(roots)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("scan must not run")
+
+    monkeypatch.setattr(dicom, "read_headers", boom)
+    with pytest.raises(ValidationFailed, match="target_cols"):
+        get_importer("dicom").run(_spec(roots, src, labels_csv="labels.csv"))
+
+
+def test_dicom_import_validates_workers_option(roots):
+    src = _tree(roots)
+    with pytest.raises(ValidationFailed, match="workers="):
+        get_importer("dicom").run(_spec(roots, src, workers="abc"))
+    with pytest.raises(ValidationFailed, match="workers="):
+        get_importer("dicom").run(_spec(roots, src, workers="0"))
+
+
+def test_dicom_import_rejects_duplicate_seq_csv_id(roots):
+    src = _tree(roots)
+    (src / "series.csv").write_text(
+        "SeriesInstanceUID,Plane\n1.2.1.1,Sagittal\n1.2.1.1,Coronal\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationFailed, match="duplicate id"):
+        get_importer("dicom").run(_spec(roots, src, seq_csv="series.csv", seq_cols="Plane"))
+
+
+def test_dicom_import_rejects_meta_cols_named_series(roots):
+    src = _tree(roots)
+    with pytest.raises(ValidationFailed, match="reserved"):
+        get_importer("dicom").run(
+            _spec(roots, src, labels_csv="labels.csv", target_cols="ACL,MCL", meta_cols="series")
+        )

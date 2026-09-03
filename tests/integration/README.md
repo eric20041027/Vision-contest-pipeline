@@ -26,7 +26,7 @@ uv run vcp data import --importer coco --src C:/vcp-data/raw/marine-val282 --nam
 ## 準備 RSNA Knee 子集（一次）
 
 1. `uvx --from kaggle python projects/rsna-knee/list_files.py`（列出 82 萬筆檔案清單，可中斷續跑）。
-2. `uvx --from kaggle python projects/rsna-knee/download_subset.py --extra 142 --workers 6`（58 個 gold study + 142 個隨機 study，約 26 GB，保留 `train_series/<study>/<series>/*.dcm` 佈局；CSV 已在 `raw/rsna-knee/`）。
+2. `uvx --from kaggle --with requests python projects/rsna-knee/download_subset_zip.py --workers 4`（58 個 gold study + 142 個隨機 study，透過整包 zip 的 HTTP Range 讀取抓約 11 GiB 壓縮資料、解壓成約 24 GiB，保留 `train_series/<study>/<series>/*.dcm` 佈局，可中斷續跑；逐檔的 `download_subset.py` 會撞 Kaggle 配額，只留作備援）。
 3. 以 README 的 `vcp data import --importer dicom ...` 匯入為 `rsna-knee`。
 4. `uv run pytest tests/integration -m realdata`。
 

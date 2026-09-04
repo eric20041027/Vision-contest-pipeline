@@ -31,7 +31,7 @@ DET_CSV = HEADER + "s0000,1,0,0\n"
 
 
 def test_registry():
-    assert set(CONVERTERS) == {"jsonl", "scores_csv"}
+    assert set(CONVERTERS) == {"coco_results", "jsonl", "scores_csv", "yolo_txt"}
     assert get_converter("jsonl").name == "jsonl"
     with pytest.raises(RegistryError):
         get_converter("parquet")

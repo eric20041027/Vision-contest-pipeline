@@ -24,6 +24,7 @@ class TaskSpec:
     label_field: LabelField
     validate: Callable[[Sample, DatasetCard], None]
     stratify_key: Callable[[Sample, DatasetCard], StratKey | None]
+    pred_payload: str  # which vcp.measure.schema.Prediction field carries this task's predictions
 
 
 TASKS: dict[str, TaskSpec] = {}
@@ -170,10 +171,12 @@ def _key_presence(sample: Sample, card: DatasetCard) -> StratKey | None:
 
 
 for _spec in (
-    TaskSpec("cls", "cls", _validate_cls, _key_cls),
-    TaskSpec("multilabel", "targets", _validate_multilabel, _key_vector),
-    TaskSpec("regression", "targets", _validate_regression, _key_regression),
-    TaskSpec("det", "boxes", _validate_det, _key_presence),
-    TaskSpec("seg", "masks", _validate_seg, _key_presence),
+    TaskSpec("cls", "cls", _validate_cls, _key_cls, pred_payload="scores"),
+    TaskSpec("multilabel", "targets", _validate_multilabel, _key_vector, pred_payload="scores"),
+    TaskSpec(
+        "regression", "targets", _validate_regression, _key_regression, pred_payload="targets"
+    ),
+    TaskSpec("det", "boxes", _validate_det, _key_presence, pred_payload="boxes"),
+    TaskSpec("seg", "masks", _validate_seg, _key_presence, pred_payload="masks"),
 ):
     register_task(_spec)

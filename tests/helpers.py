@@ -8,7 +8,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from vcp.data.schema import Box, Category, DatasetCard, Labels, Sample, SourceInfo, View
+from vcp.core.errors import ValidationFailed
+from vcp.data.schema import Box, Category, DatasetCard, Labels, Mask, Sample, SourceInfo, View
+from vcp.measure.schema import PredBox, Prediction, PredMask
 
 CATS = [Category(id=0, name="cat"), Category(id=1, name="dog"), Category(id=2, name="bird")]
 ML_CATS = [Category(id=0, name="acl"), Category(id=1, name="mcl"), Category(id=2, name="effusion")]
@@ -220,3 +222,136 @@ def write_dicom_study(
             ds.save_as(path, enforce_file_format=True)
             written.append(path)
     return written
+
+
+SEG_CATS = [Category(id=0, name="road"), Category(id=1, name="water")]
+
+
+def seg_samples(n: int, *, seed: int = 0) -> list[Sample]:
+    """8x8 views with one axis-aligned polygon per sample (category alternates)."""
+    rng = random.Random(seed)
+    out: list[Sample] = []
+    for i in range(n):
+        x0, y0 = rng.randint(0, 3), rng.randint(0, 3)
+        x1, y1 = x0 + rng.randint(2, 4), y0 + rng.randint(2, 4)
+        poly = [[x0, y0, x1, y0, x1, y1, x0, y1]]
+        out.append(
+            Sample(
+                sample_id=f"s{i:04d}",
+                views=[_view(i)],
+                labels=Labels(masks=[Mask(category_id=i % 2, polygon=poly)]),
+                label_source="gold",
+            )
+        )
+    return out
+
+
+def perfect_predictions(samples: list[Sample], card: DatasetCard) -> list[Prediction]:
+    """Predictions that reproduce the gold labels exactly (score 1.0 / one-hot).
+
+    A gold seg mask stored as ``path`` has no polygon/RLE to copy, so that case is refused
+    with a located ``ValidationFailed`` rather than raising a raw pydantic error deep inside
+    ``PredMask`` construction.
+    """
+    names = [c.name for c in card.categories]
+    by_id = {c.id: c.name for c in card.categories}
+    out: list[Prediction] = []
+    for s in samples:
+        labels = s.labels
+        if card.task == "det":
+            boxes = [
+                PredBox(
+                    x=b.x, y=b.y, w=b.w, h=b.h, category_id=b.category_id, score=1.0, view=b.view
+                )
+                for b in ((labels.boxes if labels else None) or [])
+            ]
+            out.append(Prediction(sample_id=s.sample_id, boxes=boxes))
+        elif card.task == "seg":
+            masks: list[PredMask] = []
+            for m in (labels.masks if labels else None) or []:
+                if m.path is not None:
+                    raise ValidationFailed(
+                        "perfect_predictions: seg predictions need polygon or RLE "
+                        "(path-form gold masks are not supported)",
+                        location=s.sample_id,
+                    )
+                masks.append(
+                    PredMask(
+                        category_id=m.category_id,
+                        score=1.0,
+                        view=m.view,
+                        rle=m.rle,
+                        polygon=m.polygon,
+                        meta=dict(m.meta),
+                    )
+                )
+            out.append(Prediction(sample_id=s.sample_id, masks=masks))
+        elif card.task == "cls":
+            gold = by_id[labels.cls] if labels and labels.cls is not None else names[0]
+            out.append(
+                Prediction(
+                    sample_id=s.sample_id,
+                    scores={n: (1.0 if n == gold else 0.0) for n in names},
+                )
+            )
+        elif card.task == "multilabel":
+            targets = (labels.targets if labels else None) or {n: 0.0 for n in names}
+            out.append(
+                Prediction(sample_id=s.sample_id, scores={n: float(targets[n]) for n in names})
+            )
+        else:  # regression
+            out.append(
+                Prediction(
+                    sample_id=s.sample_id, targets=dict((labels.targets if labels else None) or {})
+                )
+            )
+    return out
+
+
+def noisy_predictions(
+    samples: list[Sample], card: DatasetCard, *, seed: int = 0, flip: float = 0.3
+) -> list[Prediction]:
+    """Perfect predictions degraded at random: scores jittered, a fraction of boxes dropped,
+    remaining boxes shifted by up to 2 px, cls/multilabel scores flipped and jittered,
+    regression targets shifted by up to 5. Deterministic per seed.
+
+    Task ``seg`` is unsupported here: mask perturbation is exercised directly by the seg
+    metric tests (which shift the perfect polygons themselves), so this refuses with a
+    ``ValidationFailed`` rather than silently returning a "degraded" prediction identical to
+    the perfect one.
+    """
+    if card.task == "seg":
+        raise ValidationFailed("noisy_predictions does not support task 'seg'")
+    rng = random.Random(seed)
+    names = [c.name for c in card.categories]
+    out: list[Prediction] = []
+    for p in perfect_predictions(samples, card):
+        if p.boxes is not None:
+            boxes = [
+                b.model_copy(
+                    update={
+                        "x": b.x + rng.uniform(-2, 2),
+                        "y": b.y + rng.uniform(-2, 2),
+                        "score": rng.uniform(0.3, 1.0),
+                    }
+                )
+                for b in p.boxes
+                if rng.random() > flip
+            ]
+            out.append(Prediction(sample_id=p.sample_id, boxes=boxes))
+        elif p.scores is not None:
+            scores = {}
+            for n in names:
+                v = p.scores[n]
+                if rng.random() < flip:
+                    v = 1.0 - v
+                scores[n] = min(1.0, max(0.0, v * 0.7 + rng.uniform(0.0, 0.3)))
+            out.append(Prediction(sample_id=p.sample_id, scores=scores))
+        else:  # targets
+            out.append(
+                Prediction(
+                    sample_id=p.sample_id,
+                    targets={k: v + rng.uniform(-5, 5) for k, v in (p.targets or {}).items()},
+                )
+            )
+    return out

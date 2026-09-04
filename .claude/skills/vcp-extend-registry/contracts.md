@@ -20,7 +20,7 @@
 
 ## 解碼器 `src/vcp/data/materialize/decoders/`
 
-- 契約（`base.py`）：`name`、`version`；`decode(self, path, *, exif_policy="stored") -> Decoded`；`decode_series(self, paths: list[Path]) -> Decoded`（S×H×W）。`Decoded(array: np.ndarray, info: dict)`，`info` 供 png 映射：`window_center`、`window_width`、`photometric`、`slices`。
+- 契約（`base.py`）：`name`、`version`；`decode(self, path, *, exif_policy="stored") -> Decoded`；`decode_series(self, paths: list[Path], *, exif_policy="stored") -> Decoded`（S×H×W；exif_policy 只對影像解碼器有意義，DICOM 忽略）。`Decoded(array: np.ndarray, info: dict)`，`info` 供 png 映射：`window_center`、`window_width`、`photometric`、`slices`。
 - 分派：`_BY_SUFFIX`（`.dcm` → dicom，其餘 → image）；新副檔名 = 在 `_BY_SUFFIX` 加一項 + `register_decoder`。`version` 變了 materialize 會重做快取。
 - 缺選用套件 → 在 `decode` 內呼叫類似 `dicomio.require_pydicom()` 的檢查，拋 `VcpError` 並附安裝提示。
 - 測試：`tests/unit/data/materialize/test_decoders.py`；夾具 `write_dicom_study`。

@@ -43,15 +43,15 @@
 
 ## 4. 範圍限定再審的殘餘
 
-- **M3 的回歸測試為套套邏輯**（`tests/unit/data/materialize/test_run.py` 的 `--decoder` 測試沒先建立資料集，`match="decoder"` 命中的是 tmp_path 裡的測試函式名）。生產修正正確；測試在 Plan 3 hygiene 補強：先建資料集，`match="must be one of"`。裁決：park，不再開第二波修正。
-- **dedup 的副檔名白名單是語法代理**：路徑無常見副檔名的 jsonl / image_csv 資料集會讓 dedup 靜默不跑（`run_audit` 只是略過，無 WARN）。與 `iter_images` 的慣例一致，接受；Plan 3 可考慮在 summary 記 `skipped_checks`。
+- **M3 的回歸測試為套套邏輯**（`tests/unit/data/materialize/test_run.py` 的 `--decoder` 測試沒先建立資料集，`match="decoder"` 命中的是 tmp_path 裡的測試函式名）。生產修正正確；測試在 Plan 3 hygiene 補強：先建資料集，`match="must be one of"`。裁決：park，不再開第二波修正。→ Plan 2c Task 1 完成（`45bce05`）。
+- **dedup 的副檔名白名單是語法代理**：路徑無常見副檔名的 jsonl / image_csv 資料集會讓 dedup 靜默不跑（`run_audit` 只是略過，無 WARN）。與 `iter_images` 的慣例一致，接受；Plan 3 可考慮在 summary 記 `skipped_checks`。→ Plan 2c Task 3 完成（`c186052`：`summary.json["skipped"]` 與 audit VERDICT 的 `skipped=`）。
 
 ## 5. Plan 3 待辦（spec v5 補充 + hygiene）
 
-1. **spec v5 收錄的計畫層決定**：`--resize` 只對 png；png 遇體積記 failed；`--workers` 預設 1；dicom 無 labels_csv 時 task 預設 `multilabel`；series 層級 view 的 `seq_index` 為 None；`ManifestRow.bytes`；I5 的 COCO 規則；`old_card=unreadable` 的措辭。
-2. **materialize**：堆疊列只記 `srcs[0]`（M4，manifest 應能還原完整來源）；`decode_series` 缺 `exif_policy`（M5）；`--stack-seq` 來回切換留下孤兒檔（M6）；npy 模式靜默忽略 `--window`（M7，與 `--resize` 不對稱）；`--window` 變動使快取失效沒測、`resize` 比對是死碼（M9）；`to_uint8` 對 uint8 輸入不做 MONOCHROME1 反相（M10）；RSNA 全量時 `is_dir()` + `stat()` 兩百萬次（M11）。
-3. **稽核**：boxes / polygons 各自的尺寸快取（T3#43）；duplicate 短路早於越界檢查（T3#44）；dedup 不適用時在 summary 記錄。
-4. **測試**：M3 測試補強；`rescale` signed→int16 與 `sort_slices` 預設法線的分支（T4#51）；`test_rsna_knee` 假設每個 study 的 Report 非空，資料到位後驗證。
-5. **依賴**：dicom 四個套件同時列在 extra 與 dev 群組（T1#30），改 dev 依賴 `vcp[dicom]`。
+1. **spec v5 收錄的計畫層決定**：`--resize` 只對 png；png 遇體積記 failed；`--workers` 預設 1；dicom 無 labels_csv 時 task 預設 `multilabel`；series 層級 view 的 `seq_index` 為 None；`ManifestRow.bytes`；I5 的 COCO 規則；`old_card=unreadable` 的措辭。→ Plan 2c Task 4 完成：spec v5 §16。
+2. **materialize**：堆疊列只記 `srcs[0]`（M4，manifest 應能還原完整來源）；`decode_series` 缺 `exif_policy`（M5）；`--stack-seq` 來回切換留下孤兒檔（M6）；npy 模式靜默忽略 `--window`（M7，與 `--resize` 不對稱）；`--window` 變動使快取失效沒測、`resize` 比對是死碼（M9）；`to_uint8` 對 uint8 輸入不做 MONOCHROME1 反相（M10）；RSNA 全量時 `is_dir()` + `stat()` 兩百萬次（M11）。→ M4、M5、M6、M7、M9、M10 由 Plan 2c Task 2 完成（`92570e4`）；M11 留待（效能，量測層之後）。
+3. **稽核**：boxes / polygons 各自的尺寸快取（T3#43）；duplicate 短路早於越界檢查（T3#44）；dedup 不適用時在 summary 記錄。→ Plan 2c Task 3 完成（`c186052`）。
+4. **測試**：M3 測試補強；`rescale` signed→int16 與 `sort_slices` 預設法線的分支（T4#51）；`test_rsna_knee` 假設每個 study 的 Report 非空，資料到位後驗證。→ M3 與 T4#51 由 Plan 2c Task 1 完成（`45bce05`）；`test_rsna_knee` 已於 2026-09-04 以真資料驗證通過。
+5. **依賴**：dicom 四個套件同時列在 extra 與 dev 群組（T1#30），改 dev 依賴 `vcp[dicom]`。→ Plan 2c Task 1 以守門測試取代（`tests/unit/test_package.py`），不改依賴結構。
 6. **README 命令表**省略次要旗標（T8#90）為設計取捨，維持。
-7. **下一步**：Plan 2b 合併後先寫三個專案 skill（`vcp-data-pipeline`、`vcp-extend-registry`、`vcp-contest-onboarding`），再進子專案 2（量測）的 spec。
+7. **下一步**：Plan 2b 合併後先寫三個專案 skill（`vcp-data-pipeline`、`vcp-extend-registry`、`vcp-contest-onboarding`），再進子專案 2（量測）的 spec。→ skill 已完成（`48184ef`），量測層 spec 已寫（`docs/superpowers/specs/2026-09-04-vcp-measurement-layer-design.md`）。

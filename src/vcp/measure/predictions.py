@@ -13,7 +13,13 @@ from vcp.core.hashing import sha256_file
 from vcp.data.dataset import Dataset
 from vcp.measure.schema import Prediction, payload_field
 
-CLS_LIKE = frozenset({"cls", "multilabel", "regression"})
+# A mapping payload (scores / targets) has no legitimate empty value -- _check_categories
+# already requires every category name to be present -- so every subset sample must carry a
+# row. A list payload (boxes / masks) may legitimately be empty, so a missing row means
+# "predicted nothing". Derived from the task registry so that registering a task stays a
+# one-place change; a hand-written task set here would silently give a new task det/seg
+# semantics and fold its missing rows into ``empty``.
+MAPPING_PAYLOADS = frozenset({"scores", "targets"})
 
 
 def read_predictions(path: Path) -> list[Prediction]:
@@ -83,7 +89,7 @@ def check_predictions(
         _check_categories(p, names, ids)
         kept.append(p)
     missing = sorted(subset_ids - seen)
-    if task in CLS_LIKE and missing:
+    if field_name in MAPPING_PAYLOADS and missing:
         raise ValidationFailed(f"missing predictions for {len(missing)} samples: {missing[:5]}")
     stats = PredictionStats(
         samples=len(subset_ids), predicted=len(kept), empty=len(missing), unknown=unknown

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from vcp.core.errors import IntegrityError, ValidationFailed
@@ -56,6 +58,14 @@ def test_save_load_and_verify(roots):
     path.write_text('{"sample_id": "a", "boxes": []}\n\n', encoding="utf-8", newline="\n")
     with pytest.raises(IntegrityError):
         verify_prediction(roots.data, card, "valA")
-    append_history(roots.data, "r1", {"event": "replace", "subset": "valA", "old_sha": sha})
+    # The clock wins over a caller-supplied ts: this log's timestamps prove ordering.
+    append_history(
+        roots.data,
+        "r1",
+        {"event": "replace", "subset": "valA", "old_sha": sha, "ts": "1999-01-01T00:00:00.000Z"},
+    )
     lines = (roots.data / "runs" / "r1" / "history.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1 and '"event": "replace"' in lines[0]
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["event"] == "replace" and row["old_sha"] == sha
+    assert row["ts"].endswith("Z") and row["ts"] != "1999-01-01T00:00:00.000Z"

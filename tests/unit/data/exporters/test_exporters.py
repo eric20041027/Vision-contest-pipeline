@@ -191,7 +191,48 @@ def test_yolo_manifest_categories_and_images_field(det_ds, roots, tmp_path):
     assert res2.fields["images"] in ("copied", "symlinked")
     ids = {s.sample_id for s in det_ds[0].subset("valA", det_ds[1])}
     assert set(manifest["images"].values()) == ids
-    assert all("/" not in flat for flat in manifest["images"])
+    # The keys must be the flattened ON-DISK file names, not the view paths: the yolo_txt
+    # converter reverses this map by stem to match labels/<stem>.txt, so a nested view path
+    # that kept its separator would leave every prediction of that sample unmatched.
+    assert set(manifest["images"]) == {
+        f.split("/")[-1] for f in manifest["files"] if f.startswith("images/")
+    }
+
+
+def test_yolo_manifest_images_keys_are_flattened_names(roots, tmp_path):
+    """The det_ds fixture's view paths are already flat, so it cannot tell a key built from
+    ``flat`` apart from one built from ``view.path``. This one can."""
+    paths = DatasetPaths.resolve("nested", data_root=roots.data, configs_root=roots.configs)
+    samples = det_samples(6, seed=1)
+    samples = [
+        s.model_copy(update={"views": [s.views[0].model_copy(update={"path": f"sub/dir/{i}.jpg"})]})
+        for i, s in enumerate(samples)
+    ]
+    write_images(roots.data / "raw" / "nested", samples)
+    ds = Dataset.from_parts(make_card("det", name="nested", image_root="raw/nested"), samples)
+    ds.save(paths)
+    plan = build_plan(
+        ds, plan_id="all-v1", subsets=parse_subsets("train:train:0.5,valA:eval:0.5"), seed=0
+    )
+    save_plan(plan, paths)
+    res = export_subset(
+        ExportSpec(
+            name="nested",
+            plan_id="all-v1",
+            subset="valA",
+            format="yolo",
+            out=tmp_path / "n",
+            data_root=roots.data,
+            configs_root=roots.configs,
+            options={"copy": "true"},
+        )
+    )
+    manifest = json.loads(res.manifest_path.read_text(encoding="utf-8"))
+    exported = {s.sample_id for s in ds.subset("valA", plan)}
+    assert exported and set(manifest["images"].values()) == exported
+    assert set(manifest["images"]) == {
+        f"sub__dir__{i}.jpg" for i, s in enumerate(samples) if s.sample_id in exported
+    }
 
 
 def test_export_manifest_base_keys_beat_exporter_manifest(det_ds, roots, tmp_path):

@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import numpy as np
 import pytest
@@ -24,13 +25,11 @@ def _image_ds(roots, name="tiny", n=6):
     return paths
 
 
-def _dicom_ds(roots, name, **opts):
-    src = roots.data / "raw" / name
-    write_dicom_study(src, study_uid="1.2.1", series=2, slices=3)
+def _import_dicom(roots, name, **opts):
     return get_importer("dicom").run(
         ImportSpec(
             importer="dicom",
-            src=src,
+            src=roots.data / "raw" / name,
             name=name,
             options=opts,
             license="CC0",
@@ -40,6 +39,11 @@ def _dicom_ds(roots, name, **opts):
             configs_root=roots.configs,
         )
     )
+
+
+def _dicom_ds(roots, name, **opts):
+    write_dicom_study(roots.data / "raw" / name, study_uid="1.2.1", series=2, slices=3)
+    return _import_dicom(roots, name, **opts)
 
 
 def _spec(roots, name="tiny", **kw):
@@ -318,3 +322,99 @@ def test_old_manifest_without_srcs_still_loads(roots):
         f.writelines(json.dumps(row) + "\n" for row in stripped)
     assert len(read_manifest(res.manifest_path)) == 1
     assert materialize(_spec(roots, mode="npy")).skipped == 1
+
+
+def test_stack_seq_single_slice_series_are_named_by_seq_id(roots):
+    """F1: a sequence of one slice is still a stack job (view is None), so its output must be
+    named after seq_id like every other sequence -- naming it after the view index writes
+    ``None.npy`` and makes every one-slice sequence of the study overwrite the same file."""
+    write_dicom_study(roots.data / "raw" / "one", study_uid="1.2.7", series=2, slices=1)
+    _import_dicom(roots, "one")
+    res = materialize(_spec(roots, name="one", mode="npy", stack_seq=True))
+    assert (res.materialized, res.failed) == (2, 0)
+    assert sorted(p.name for p in (res.out_dir / "1.2.7").iterdir()) == [
+        "1.2.7.1.npy",
+        "1.2.7.2.npy",
+    ]
+    rows = read_manifest(res.manifest_path)
+    assert {r.out for r in rows.values()} == {"1.2.7/1.2.7.1.npy", "1.2.7/1.2.7.2.npy"}
+    assert int(np.load(res.out_dir / "1.2.7" / "1.2.7.1.npy")[0, 0]) == 100
+    assert int(np.load(res.out_dir / "1.2.7" / "1.2.7.2.npy")[0, 0]) == 200
+
+
+def test_row_pointing_at_another_path_is_not_current(roots):
+    """F1: the skip test must check where the row points, so a cache written under an older
+    naming scheme is re-materialized (and its stale file then removed) instead of skipped."""
+    _image_ds(roots, n=2)
+    res = materialize(_spec(roots, mode="npy"))
+    assert res.materialized == 2
+    rows = [json.loads(line) for line in res.manifest_path.read_text(encoding="utf-8").splitlines()]
+    for row in rows:
+        if row["sample_id"] == "s0000":
+            row["out"] = "s0001/0.npy"  # a real file of the same size: only the path is wrong
+    with res.manifest_path.open("w", encoding="utf-8", newline="\n") as f:
+        f.writelines(json.dumps(row) + "\n" for row in rows)
+    again = materialize(_spec(roots, mode="npy"))
+    assert (again.materialized, again.skipped) == (1, 1)
+    assert read_manifest(again.manifest_path)[row_key("s0000", 0, None)].out == "s0000/0.npy"
+
+
+def test_appending_a_slice_invalidates_the_stack_cache(roots):
+    """F2: the skip test must compare the source list. A re-import that adds a slice leaves
+    decoder / resize / window / exif_policy and the cached file's own size untouched, so
+    without the srcs comparison the run skips and the manifest keeps claiming 3 slices."""
+    src = roots.data / "raw" / "grow"
+    write_dicom_study(src, study_uid="1.2.8", series=1, slices=3)
+    _import_dicom(roots, "grow")
+    first = materialize(_spec(roots, name="grow", mode="npy", stack_seq=True))
+    assert (first.materialized, first.skipped) == (1, 0)
+    assert np.load(first.out_dir / "1.2.8" / "1.2.8.1.npy").shape == (3, 16, 16)
+    write_dicom_study(src, study_uid="1.2.8", series=1, slices=4)
+    _import_dicom(roots, "grow")
+    second = materialize(_spec(roots, name="grow", mode="npy", stack_seq=True))
+    assert (second.materialized, second.skipped) == (1, 0)
+    assert np.load(second.out_dir / "1.2.8" / "1.2.8.1.npy").shape == (4, 16, 16)
+    row = read_manifest(second.manifest_path)[row_key("1.2.8", None, "1.2.8.1")]
+    assert row.srcs is not None and len(row.srcs) == 4 and row.shape == [4, 16, 16]
+
+
+def test_current_stack_rows_still_supersede_per_view_rows(roots):
+    """F3: supersession must come from the final row set, not from this run's todo. A stack
+    row that is already current is filtered out of todo, so the per-view rows it replaced used
+    to survive every later run (the mixed manifest pre-branch vcp left behind)."""
+    _dicom_ds(roots, "dcm")
+    plain = materialize(_spec(roots, name="dcm", mode="npy"))
+    assert plain.materialized == 6
+    per_view_lines = plain.manifest_path.read_text(encoding="utf-8").splitlines()
+    backup = roots.data / "per_view_backup"
+    shutil.copytree(plain.out_dir, backup)
+    stacked = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert stacked.materialized == 2
+    # Rebuild the legacy mixed state: the 2 stack rows plus the 6 per-view rows they replaced,
+    # with every file back on disk.
+    with stacked.manifest_path.open("a", encoding="utf-8", newline="\n") as f:
+        f.writelines(line + "\n" for line in per_view_lines)
+    for i in range(6):
+        shutil.copy2(backup / "1.2.1" / f"{i}.npy", stacked.out_dir / "1.2.1" / f"{i}.npy")
+    assert len(read_manifest(stacked.manifest_path)) == 8
+    again = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert (again.materialized, again.skipped, again.orphans_removed) == (0, 2, 6)
+    rows = read_manifest(again.manifest_path)
+    assert set(rows) == {row_key("1.2.1", None, "1.2.1.1"), row_key("1.2.1", None, "1.2.1.2")}
+    assert not (again.out_dir / "1.2.1" / "0.npy").exists()
+
+
+def test_failed_stack_job_leaves_its_per_view_rows_alone(roots):
+    """F3 guard: supersession runs after the failure pops, so a stack job that produced no row
+    of its own must not evict the per-view rows that are still the only cache for that view."""
+    _dicom_ds(roots, "dcm")
+    plain = materialize(_spec(roots, name="dcm", mode="npy"))
+    assert plain.materialized == 6
+    for f in sorted((roots.data / "raw" / "dcm" / "1.2.1" / "1.2.1.1").iterdir()):
+        f.write_bytes(b"not a dicom")
+    res = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert (res.materialized, res.failed) == (1, 1)
+    rows = read_manifest(res.manifest_path)
+    assert row_key("1.2.1", None, "1.2.1.1") not in rows
+    kept = [r for r in rows.values() if r.seq_id == "1.2.1.1" and r.view is not None]
+    assert len(kept) == 3 and all((res.out_dir / r.out).is_file() for r in kept)

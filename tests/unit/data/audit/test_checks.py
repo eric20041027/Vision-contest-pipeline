@@ -292,6 +292,7 @@ def test_provenance_and_run_audit(roots):
     assert status == "OK" and set(results) == {"coords", "dedup", "provenance"}
     summary = json.loads((paths.cache_dir / "audit" / "summary.json").read_text(encoding="utf-8"))
     assert summary["status"] == "OK" and summary["checks"]["dedup"]["fields"]["dup_groups"] == 0
+    assert summary["skipped"] == []  # the key is always written, empty when every check applies
     assert summary["audited_at"].endswith("Z") and list(AUDITS) == ["coords", "dedup", "provenance"]
 
 

@@ -55,3 +55,4 @@
 5. **依賴**：dicom 四個套件同時列在 extra 與 dev 群組（T1#30），改 dev 依賴 `vcp[dicom]`。→ Plan 2c Task 1 以守門測試取代（`tests/unit/test_package.py`），不改依賴結構。
 6. **README 命令表**省略次要旗標（T8#90）為設計取捨，維持。
 7. **下一步**：Plan 2b 合併後先寫三個專案 skill（`vcp-data-pipeline`、`vcp-extend-registry`、`vcp-contest-onboarding`），再進子專案 2（量測）的 spec。→ skill 已完成（`48184ef`），量測層 spec 已寫（`docs/superpowers/specs/2026-09-04-vcp-measurement-layer-design.md`）。
+8. **coords 的 view 索引未做範圍檢查**：標註帶著超出 `sample.views` 範圍的 view 索引時，`coords` 會拋裸的 `IndexError`（→ ABORT）而非有定位的 `ValidationFailed`（→ FAIL）。既有問題，只有 jsonl 匯入器這條逃生門到得了；真正的修正在 `tasks.py` 的驗證器補範圍檢查。→ Plan 2c 最終審查裁決 park，留給下一個 plan。

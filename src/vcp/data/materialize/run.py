@@ -139,6 +139,15 @@ def plan_jobs(dataset: Dataset, spec: MaterializeSpec, image_root: Path) -> list
     return jobs
 
 
+def _job_stem(job: Job) -> str:
+    """Output file stem for a job. A stack job (``view is None``) is named after its sequence,
+    a per-view job after its view index. A one-view sequence is a stack job too, so it is named
+    after ``seq_id`` like any other sequence: ``job.seq_id`` is never None when ``view`` is."""
+    if job.view is None:
+        return safe_dir_name(job.seq_id)  # type: ignore[arg-type]
+    return str(job.view)
+
+
 def _write(decoded: Decoded, out: Path, cfg: Settings) -> tuple[list[int], str]:
     out.parent.mkdir(parents=True, exist_ok=True)
     if cfg.mode == "npy":
@@ -193,6 +202,7 @@ def _row(
 def run_job(job: Job, cfg: Settings) -> JobOutcome:
     """Decode and write one job. Never raises: problems become ``failures`` rows."""
     ext = cfg.mode
+    stem = _job_stem(job)
     try:
         dec = get_decoder(job.decoder)
         paths = [cfg.image_root / s for s in job.srcs]
@@ -207,13 +217,13 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
             if not files:
                 raise ValidationFailed(f"no {job.decoder} files in {paths[0]}")
             decoded = dec.decode_series(files, exif_policy=cfg.exif_policy)
-            out = cfg.out_root / job.out_dir / f"{job.view}.{ext}"
+            out = cfg.out_root / job.out_dir / f"{stem}.{ext}"
             shape, dtype = _write(decoded, out, cfg)
             row = _row(job, job.view, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
         frames = [dec.decode(p, exif_policy=cfg.exif_policy) for p in paths]
         if len(frames) == 1:
-            out = cfg.out_root / job.out_dir / f"{job.view}.{ext}"
+            out = cfg.out_root / job.out_dir / f"{stem}.{ext}"
             shape, dtype = _write(frames[0], out, cfg)
             row = _row(job, job.view, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
@@ -221,10 +231,7 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
             stacked = Decoded(
                 np.stack([f.array for f in frames]), {**frames[0].info, "slices": len(frames)}
             )
-            # job.view is None here (only a stack job ever has len(frames) > 1), so job.seq_id
-            # is guaranteed set (stack jobs are only built from grouped, non-None seq ids).
-            seq_dir = safe_dir_name(job.seq_id)  # type: ignore[arg-type]
-            out = cfg.out_root / job.out_dir / f"{seq_dir}.{ext}"
+            out = cfg.out_root / job.out_dir / f"{stem}.{ext}"
             shape, dtype = _write(stacked, out, cfg)
             row = _row(job, None, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
@@ -248,9 +255,10 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
 
 def _is_current(job: Job, existing: dict[str, ManifestRow], cfg: Settings) -> bool:
     """Skip only when this exact job's own manifest row exists, matches this run's settings
-    (decoder identity + version, resize, window, exif_policy) and its output file is still there
-    at the recorded size. A stack job has no row under its own key once it has fallen back to
-    per-view files, so it is always re-attempted (and will warn and fall back again if still
+    (decoder identity + version, resize, window, exif_policy), still lists the same sources,
+    still points at the path this job would write now, and its output file is still there at the
+    recorded size. A stack job has no row under its own key once it has fallen back to per-view
+    files, so it is always re-attempted (and will warn and fall back again if still
     mismatched)."""
     r = existing.get(row_key(job.sample_id, job.view, job.seq_id))
     if r is None:
@@ -263,6 +271,11 @@ def _is_current(job: Job, existing: dict[str, ManifestRow], cfg: Settings) -> bo
         return False
     if r.exif_policy != cfg.exif_policy:
         return False
+    # ``srcs is None`` only in a manifest written before the field existed; those stay skippable.
+    if r.srcs is not None and r.srcs != list(job.srcs):
+        return False
+    if r.out != f"{job.out_dir}/{_job_stem(job)}.{cfg.mode}":
+        return False  # a cache written under an older name is stale, whatever its size
     f = cfg.out_root / r.out
     return f.is_file() and f.stat().st_size == r.bytes
 
@@ -319,10 +332,6 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
             outcomes = list(pool.map(partial(run_job, cfg=cfg), todo))
     planned = _planned_keys(jobs)
     rows = {k: v for k, v in existing.items() if k in planned}
-    for job, o in zip(todo, outcomes, strict=True):
-        if job.view is None and any(r.view is None for r in o.rows):  # stack succeeded
-            for i in job.views:
-                rows.pop(row_key(job.sample_id, i, job.seq_id), None)
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
     for o in outcomes:
@@ -332,6 +341,14 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         warnings.extend(o.warnings)
     for failure in failures:
         rows.pop(row_key(failure["sample_id"], failure["view"], failure["seq_id"]), None)
+    # A stack row supersedes the per-view rows of its own sequence. Read off the final row set
+    # over *every* job (not just this run's todo) so an already-current stack row still evicts
+    # them, and only after the failure pops so a stack job that failed -- or fell back to
+    # per-view files -- leaves those per-view rows in place.
+    for j in jobs:
+        if j.view is None and row_key(j.sample_id, None, j.seq_id) in rows:
+            for i in j.views:
+                rows.pop(row_key(j.sample_id, i, j.seq_id), None)
     write_manifest(manifest_path, rows.values())
     failed_path = out_root / "failed.jsonl"
     if failures:

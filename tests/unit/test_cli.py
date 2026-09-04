@@ -476,6 +476,7 @@ def test_audit_cli(roots, tmp_path):
     assert "VERDICT cmd=audit.provenance status=OK" in r.output
     v = _last_verdict(r.output)
     assert v.startswith("VERDICT cmd=audit status=WARN") and "dedup=OK" in v
+    assert "skipped=" not in v  # every check applies here, so the field is left out entirely
     assert (roots.data / "datasets" / "tiny" / "cache" / "audit" / "summary.json").is_file()
     r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--against", "missing"])
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
@@ -484,6 +485,7 @@ def test_audit_cli(roots, tmp_path):
     assert r.exit_code == 0
     doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
     assert doc["result"]["checks"]["dedup"]["status"] == "OK"
+    assert doc["result"]["skipped"] == []
     assert "VERDICT cmd=audit.coords" in r.stderr and "VERDICT cmd=audit status=WARN" in r.stderr
     assert "VERDICT" not in r.stdout
 
@@ -511,6 +513,11 @@ def test_audit_cli_reports_skipped_checks(roots):
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert "skipped=coords,dedup" in v and "provenance=OK" in v
+
+    r = runner.invoke(app, ["data", "audit", "--name", "dcm", "--json"])
+    assert r.exit_code == 0, r.output
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["result"]["skipped"] == ["coords", "dedup"]
 
 
 def test_import_warns_on_exif_rotated_views(roots, tmp_path):
@@ -628,3 +635,26 @@ def test_materialize_cli(roots, tmp_path):
     (tmp_path / "src" / "s0003.jpg").unlink()
     r = runner.invoke(app, ["data", "materialize", "--name", "tiny", "--mode", "npy"])
     assert r.exit_code == 1 and "failed=1" in _last_verdict(r.output)
+    assert "orphans_removed=" not in _last_verdict(r.output)  # nothing to delete: no field
+
+    write_dicom_study(roots.data / "raw" / "dcm", study_uid="1.2.4", series=2, slices=3)
+    get_importer("dicom").run(
+        ImportSpec(
+            importer="dicom",
+            src=roots.data / "raw" / "dcm",
+            name="dcm",
+            license="CC0",
+            url="u",
+            downloaded_at="2026-09-04",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    r = runner.invoke(app, ["data", "materialize", "--name", "dcm", "--mode", "npy", "--stack-seq"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "materialized=2" in v and "orphans_removed=" not in v
+    r = runner.invoke(app, ["data", "materialize", "--name", "dcm", "--mode", "npy"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "materialized=6" in v and "orphans_removed=2" in v

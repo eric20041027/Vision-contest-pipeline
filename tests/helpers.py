@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image
 
 from vcp.core.errors import ValidationFailed
+from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Category, DatasetCard, Labels, Mask, Sample, SourceInfo, View
 from vcp.measure.schema import PredBox, Prediction, PredMask
 
@@ -355,3 +357,35 @@ def noisy_predictions(
                 )
             )
     return out
+
+
+def write_yolo_txt(
+    pred_dir: Path,
+    ds: Dataset,
+    preds: list[Prediction],
+    manifest: dict[str, Any],
+    *,
+    score: float = 0.8,
+) -> None:
+    """Write ultralytics ``predict --save-txt --save-conf`` style label files for ``preds``
+    under ``pred_dir / "labels"``, using a YOLO export's ``manifest.json`` to map sample ids to
+    flattened image stems and category ids to class indexes. A prediction with no boxes gets no
+    file, matching how ``ultralytics predict`` only writes labels for images it found something
+    in.
+    """
+    flat_of = {sample_id: flat for flat, sample_id in manifest["images"].items()}
+    index_of = {c["id"]: c["index"] for c in manifest["categories"]}
+    labels_dir = pred_dir / "labels"
+    labels_dir.mkdir(parents=True, exist_ok=True)
+    for p in preds:
+        if not p.boxes:
+            continue
+        view = ds.by_id[p.sample_id].views[0]
+        lines = [
+            f"{index_of[b.category_id]} {(b.x + b.w / 2) / view.width:.6f} "
+            f"{(b.y + b.h / 2) / view.height:.6f} {b.w / view.width:.6f} "
+            f"{b.h / view.height:.6f} {score:.6f}"
+            for b in p.boxes
+        ]
+        stem = Path(flat_of[p.sample_id]).stem
+        (labels_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -83,3 +83,11 @@ def test_require_pydicom_reports_install_hint(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(VcpError, match="uv sync --extra dicom"):
         dicomio.require_pydicom()
+
+
+def test_sort_by_position_uses_default_normal_without_orientation():
+    def header(name: str, z: float) -> SliceHeader:
+        return SliceHeader(Path(name), "s", "se", name, 4, 4, None, (0.0, 0.0, z), None, {})
+
+    ordered = sort_slices([header("b.dcm", 9.0), header("a.dcm", 3.0), header("c.dcm", 6.0)])
+    assert [h.path.name for h in ordered] == ["a.dcm", "c.dcm", "b.dcm"]

@@ -117,24 +117,12 @@ def _check_boxes(
     opts: AuditOptions,
     rows: list[Row],
     counts: dict[str, int],
+    sizes: dict[int, tuple[int, int] | None],
 ) -> None:
+    """Bounds before duplicates: a duplicated out-of-bounds box is two bad boxes, not one."""
     boxes = (s.labels.boxes if s.labels else None) or []
-    sizes: dict[int, tuple[int, int] | None] = {}
     seen: dict[tuple[int, int, float, float, float, float], int] = {}
     for i, b in enumerate(boxes):
-        key = (b.view, b.category_id, b.x, b.y, b.w, b.h)
-        if key in seen:
-            counts["suspicious"] += 1
-            rows.append(
-                {
-                    "sample_id": s.sample_id,
-                    "kind": "suspicious",
-                    "index": i,
-                    "problems": [f"duplicate of box {seen[key]}"],
-                }
-            )
-            continue
-        seen[key] = i
         size = _view_size(s, b.view, image_root, exif_policy, sizes)
         if size is None:
             counts["unsized"] += 1
@@ -154,6 +142,19 @@ def _check_boxes(
                     }
                 )
                 continue
+        key = (b.view, b.category_id, b.x, b.y, b.w, b.h)
+        if key in seen:
+            counts["suspicious"] += 1
+            rows.append(
+                {
+                    "sample_id": s.sample_id,
+                    "kind": "suspicious",
+                    "index": i,
+                    "problems": [f"duplicate of box {seen[key]}"],
+                }
+            )
+            continue
+        seen[key] = i
         problems = suspicious_problems(b, *size, opts)
         if problems:
             counts["suspicious"] += 1
@@ -163,10 +164,14 @@ def _check_boxes(
 
 
 def _check_polygons(
-    s: Sample, image_root: Path, exif_policy: str, rows: list[Row], counts: dict[str, int]
+    s: Sample,
+    image_root: Path,
+    exif_policy: str,
+    rows: list[Row],
+    counts: dict[str, int],
+    sizes: dict[int, tuple[int, int] | None],
 ) -> None:
     masks = (s.labels.masks if s.labels else None) or []
-    sizes: dict[int, tuple[int, int] | None] = {}
     for i, m in enumerate(masks):
         if m.polygon is None:
             continue
@@ -203,8 +208,9 @@ class CoordsCheck:
         for s in ctx.dataset.samples:
             if s.labels is None:
                 continue
-            _check_boxes(s, image_root, exif_policy, ctx.opts, rows, counts)
-            _check_polygons(s, image_root, exif_policy, rows, counts)
+            sizes: dict[int, tuple[int, int] | None] = {}
+            _check_boxes(s, image_root, exif_policy, ctx.opts, rows, counts, sizes)
+            _check_polygons(s, image_root, exif_policy, rows, counts, sizes)
         skipped = read_import_skipped(ctx.paths.cache_dir / "import_skipped.jsonl")
         rows.extend(skipped)
         report = write_jsonl(ctx.out_dir / "coords_bad.jsonl", rows)

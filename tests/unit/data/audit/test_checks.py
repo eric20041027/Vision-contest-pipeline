@@ -187,6 +187,33 @@ def test_coords_check_unsized_view_honors_exif_policy(roots):
     assert res_stored.fields["out_of_bounds"] == 1
 
 
+def test_duplicate_of_out_of_bounds_box_counts_as_out_of_bounds(roots):
+    box = Box(x=0, y=0, w=100, h=100, category_id=0)
+    ds, paths = _dataset(roots, "dupoob", [("u.png", _gradient(3), Labels(boxes=[box, box]), {})])
+    res = get_check("coords").run(AuditContext(dataset=ds, paths=paths, opts=AuditOptions()))
+    assert res.fields["out_of_bounds"] == 2 and res.fields["suspicious"] == 0
+
+
+def test_size_cache_is_shared_between_boxes_and_polygons(roots, monkeypatch):
+    import vcp.data.audit.coords as coords
+
+    calls = []
+    real = coords.image_header
+
+    def counting(path):
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(coords, "image_header", counting)
+    labels = Labels(
+        boxes=[Box(x=1, y=1, w=4, h=4, category_id=0)],
+        masks=[Mask(category_id=1, polygon=[[0, 0, 4, 0, 4, 4]])],
+    )
+    ds, paths = _dataset(roots, "shared", [("both.png", _gradient(4), labels, {})])
+    get_check("coords").run(AuditContext(dataset=ds, paths=paths, opts=AuditOptions()))
+    assert len(calls) == 1
+
+
 def test_dedup_groups_and_overlap(roots):
     a, b, c = _gradient(1), _gradient(2), _gradient(3)
     near = a.copy()
@@ -266,3 +293,24 @@ def test_provenance_and_run_audit(roots):
     summary = json.loads((paths.cache_dir / "audit" / "summary.json").read_text(encoding="utf-8"))
     assert summary["status"] == "OK" and summary["checks"]["dedup"]["fields"]["dup_groups"] == 0
     assert summary["audited_at"].endswith("Z") and list(AUDITS) == ["coords", "dedup", "provenance"]
+
+
+def test_run_audit_records_skipped_checks(roots):
+    src = roots.data / "raw" / "dcm"
+    write_dicom_study(src, series=1, slices=1)
+    res = get_importer("dicom").run(
+        ImportSpec(
+            importer="dicom",
+            src=src,
+            name="dcm",
+            license="CC0",
+            url="u",
+            downloaded_at="2026-09-04",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    paths = DatasetPaths.resolve("dcm", data_root=roots.data, configs_root=roots.configs)
+    status, results = run_audit(AuditContext(dataset=res.dataset, paths=paths, opts=AuditOptions()))
+    summary = json.loads((paths.cache_dir / "audit" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["skipped"] == ["coords", "dedup"] and list(results) == ["provenance"]

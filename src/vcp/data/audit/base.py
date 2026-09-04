@@ -84,7 +84,9 @@ def write_jsonl(path: Path, rows: list[dict[str, object]]) -> Path:
 def run_audit(ctx: AuditContext) -> tuple[Status, dict[str, CheckResult]]:
     """Run every applicable registered check; write summary.json; return (worst status, results)."""
     ctx.out_dir.mkdir(parents=True, exist_ok=True)
-    results = {name: check.run(ctx) for name, check in AUDITS.items() if check.applies(ctx.dataset)}
+    applicable = {name: check for name, check in AUDITS.items() if check.applies(ctx.dataset)}
+    skipped = [name for name in AUDITS if name not in applicable]
+    results = {name: check.run(ctx) for name, check in applicable.items()}
     status = worst(*(r.status for r in results.values()))
     summary = {
         "dataset": ctx.dataset.card.name,
@@ -93,6 +95,7 @@ def run_audit(ctx: AuditContext) -> tuple[Status, dict[str, CheckResult]]:
         "options": ctx.opts.model_dump(),
         "audited_at": stamp(),
         "status": status,
+        "skipped": skipped,
         "checks": {n: {"status": r.status, "fields": r.fields} for n, r in results.items()},
     }
     with (ctx.out_dir / "summary.json").open("w", encoding="utf-8", newline="\n") as f:

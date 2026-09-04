@@ -5,12 +5,13 @@ import yaml
 from PIL import Image
 from typer.testing import CliRunner
 
-from helpers import CATS, det_samples, write_exif_image, write_images
+from helpers import CATS, det_samples, write_dicom_study, write_exif_image, write_images
 from vcp.cli import app, parse_opts, render_table
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
 from vcp.data.exporters import EXPORTERS, ExportOutput, register_exporter
-from vcp.data.importers import IMPORTERS, register_importer
+from vcp.data.importers import IMPORTERS, get_importer, register_importer
+from vcp.data.importers.base import ImportSpec
 
 runner = CliRunner()
 
@@ -489,6 +490,27 @@ def test_audit_cli(roots, tmp_path):
     r = runner.invoke(app, ["data", "audit", "--name", "tiny", "--min-box-px", "100"])
     assert r.exit_code == 0 and "VERDICT cmd=audit.coords status=WARN" in r.output
     assert "suspicious=" in r.output
+
+
+def test_audit_cli_reports_skipped_checks(roots):
+    src = roots.data / "raw" / "dcm"
+    write_dicom_study(src, series=1, slices=1)
+    get_importer("dicom").run(
+        ImportSpec(
+            importer="dicom",
+            src=src,
+            name="dcm",
+            license="CC0",
+            url="u",
+            downloaded_at="2026-09-04",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    r = runner.invoke(app, ["data", "audit", "--name", "dcm"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "skipped=coords,dedup" in v and "provenance=OK" in v
 
 
 def test_import_warns_on_exif_rotated_views(roots, tmp_path):

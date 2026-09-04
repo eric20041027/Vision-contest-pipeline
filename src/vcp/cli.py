@@ -16,7 +16,7 @@ from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import MANIFEST_MODES
 from vcp.core.log import FieldValue, Status, Verdict, exit_code, setup_logging
 from vcp.core.paths import DatasetPaths, logs_dir, resolve_data_root
-from vcp.data.audit import AuditContext, AuditOptions, run_audit
+from vcp.data.audit import AUDITS, AuditContext, AuditOptions, run_audit
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.importers import ImportSpec, get_importer
@@ -440,16 +440,20 @@ def audit_cmd(
             against_paths=against_paths,
         )
         status, results = run_audit(ctx)
+        skipped = [n for n in AUDITS if n not in results]
         human = [
             Verdict(cmd=f"audit.{n}", status=r.status, fields=r.fields).line()
             for n, r in results.items()
         ]
         fields: dict[str, FieldValue] = {"name": name}
         fields.update({n: r.status for n, r in results.items()})
+        if skipped:
+            fields["skipped"] = ",".join(skipped)
         fields["summary"] = str(ctx.out_dir / "summary.json")
         payload = {
             "summary": str(ctx.out_dir / "summary.json"),
             "checks": {n: {"status": r.status, "fields": r.fields} for n, r in results.items()},
+            "skipped": skipped,
         }
         return status, fields, payload, human
 

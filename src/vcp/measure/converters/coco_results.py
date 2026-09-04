@@ -32,30 +32,58 @@ def image_id_map(ctx: ConvertContext) -> dict[int, str]:
     instances = ctx.export_dir / "instances.json"
     if not instances.is_file():
         raise ValidationFailed(f"instances.json not found in export dir {ctx.export_dir}")
-    doc = json.loads(instances.read_text(encoding="utf-8"))
-    return {int(im["id"]): str(im["sample_id"]) for im in doc["images"]}
+    try:
+        doc = json.loads(instances.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValidationFailed(f"{instances}: {e}") from e
+    images = doc.get("images") if isinstance(doc, dict) else None
+    valid = isinstance(images, list) and all(
+        isinstance(im, dict) and "id" in im and "sample_id" in im for im in images
+    )
+    if not valid:
+        raise ValidationFailed(
+            f"{instances}: expected the 'images' list from a vcp COCO export (each entry with "
+            "'id' and 'sample_id'); point --export-manifest at the vcp export directory, not "
+            "the original annotations (re-export with the current vcp)"
+        )
+    return {int(im["id"]): str(im["sample_id"]) for im in images}
 
 
-def _mask(seg: Any, category_id: int, score: float) -> PredMask:
-    if isinstance(seg, list) and seg:
-        return PredMask(
-            category_id=category_id,
-            score=score,
-            polygon=[[float(v) for v in poly] for poly in seg],
-        )
-    if isinstance(seg, dict) and "counts" in seg:
-        counts = seg["counts"]
-        meta: dict[str, Any] = {"size": list(seg.get("size", []))}
-        if isinstance(counts, str):
-            return PredMask(category_id=category_id, score=score, rle=counts, meta=meta)
-        meta["rle_encoding"] = "uncompressed"
-        return PredMask(
-            category_id=category_id,
-            score=score,
-            rle=",".join(str(c) for c in counts),
-            meta=meta,
-        )
-    raise ValidationFailed(f"unsupported segmentation value: {type(seg).__name__}")
+def _mask(seg: Any, category_id: int, score: float, *, index: int, location: str) -> PredMask:
+    """Parse a COCO ``segmentation`` value: a list of polygon rings (each a flat list of
+    numbers), or an RLE dict carrying ``counts`` (a compressed string, or an uncompressed list
+    of ints) and a two-element ``size``."""
+    shape = (
+        f"result {index}: segmentation must be a list of polygon rings (each a flat list of "
+        "numbers), or an RLE dict with 'counts' and a two-element 'size'"
+    )
+    try:
+        if isinstance(seg, list) and seg:
+            return PredMask(
+                category_id=category_id,
+                score=score,
+                polygon=[[float(v) for v in poly] for poly in seg],
+            )
+        if isinstance(seg, dict) and "counts" in seg:
+            counts = seg["counts"]
+            size = list(seg.get("size", []))
+            if len(size) != 2:
+                raise ValidationFailed(shape, location=location)
+            if isinstance(counts, str):
+                return PredMask(
+                    category_id=category_id, score=score, rle=counts, meta={"size": size}
+                )
+            return PredMask(
+                category_id=category_id,
+                score=score,
+                rle=",".join(str(c) for c in counts),
+                meta={"size": size, "rle_encoding": "uncompressed"},
+            )
+    except ValidationError as e:
+        raise ValidationFailed(f"result {index}: {e}", location=location) from e
+    except (TypeError, ValueError) as e:
+        raise ValidationFailed(f"{shape} ({type(e).__name__}: {e})", location=location) from e
+    raise ValidationFailed(shape, location=location)
 
 
 class CocoResultsConverter:
@@ -124,12 +152,9 @@ class CocoResultsConverter:
                 except ValidationError as e:
                     raise ValidationFailed(f"result {i}: {e}", location=src.name) from e
             else:
-                try:
-                    masks.setdefault(sid, []).append(
-                        _mask(r.get("segmentation"), category_id, score)
-                    )
-                except ValidationError as e:
-                    raise ValidationFailed(f"result {i}: {e}", location=src.name) from e
+                masks.setdefault(sid, []).append(
+                    _mask(r.get("segmentation"), category_id, score, index=i, location=src.name)
+                )
         try:
             if field == "boxes":
                 return [Prediction(sample_id=s, boxes=b) for s, b in sorted(boxes.items())]

@@ -372,6 +372,8 @@ def write_yolo_txt(
     flattened image stems and category ids to class indexes. A prediction with no boxes gets no
     file, matching how ``ultralytics predict`` only writes labels for images it found something
     in.
+
+    Assumes each sample has exactly one view; ``yolo_txt`` itself rejects a multi-view sample.
     """
     flat_of = {sample_id: flat for flat, sample_id in manifest["images"].items()}
     index_of = {c["id"]: c["index"] for c in manifest["categories"]}
@@ -388,4 +390,6 @@ def write_yolo_txt(
             for b in p.boxes
         ]
         stem = Path(flat_of[p.sample_id]).stem
-        (labels_dir / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (labels_dir / f"{stem}.txt").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+        )

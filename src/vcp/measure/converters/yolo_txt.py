@@ -23,12 +23,23 @@ def _manifest(ctx: ConvertContext) -> tuple[dict[str, str], dict[int, int]]:
     path = ctx.export_dir / "manifest.json"
     if not path.is_file():
         raise ValidationFailed(f"manifest.json not found in export dir {ctx.export_dir}")
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    images = doc.get("images")
-    categories = doc.get("categories")
-    if not isinstance(images, dict) or not isinstance(categories, list):
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValidationFailed(f"{path}: {e}") from e
+    images = doc.get("images") if isinstance(doc, dict) else None
+    categories = doc.get("categories") if isinstance(doc, dict) else None
+    valid_images = isinstance(images, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in images.items()
+    )
+    valid_categories = isinstance(categories, list) and all(
+        isinstance(c, dict) and "index" in c and "id" in c for c in categories
+    )
+    if not (valid_images and valid_categories):
         raise ValidationFailed(
-            f"{path}: manifest lacks 'images' / 'categories' (re-export with the current vcp)"
+            f"{path}: expected the vcp YOLO export's manifest ('images' mapping str to str, "
+            "'categories' entries with 'index' and 'id'); point --export-manifest at the vcp "
+            "export directory, not somewhere else (re-export with the current vcp)"
         )
     stem_to_sample = {Path(flat).stem: sid for flat, sid in images.items()}
     index_to_id = {int(c["index"]): int(c["id"]) for c in categories}
@@ -63,6 +74,14 @@ class YoloTxtConverter:
             sample = ctx.dataset.by_id.get(sid)
             if sample is None:
                 raise ValidationFailed(f"{path.name}: sample {sid!r} not in dataset")
+            if len(sample.views) != 1:
+                raise ValidationFailed(
+                    f"sample {sid!r} has {len(sample.views)} views; the YOLO export manifest "
+                    "does not record which view was exported, so yolo_txt needs a single-view "
+                    "dataset (or the coco_results route, whose instances.json carries sizes "
+                    "per image)",
+                    location=path.name,
+                )
             view = sample.views[0]
             if view.width is None or view.height is None:
                 raise ValidationFailed(f"sample {sid!r} view has no size; re-import the dataset")

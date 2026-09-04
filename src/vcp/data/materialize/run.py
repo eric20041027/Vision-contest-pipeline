@@ -102,6 +102,7 @@ def plan_jobs(dataset: Dataset, spec: MaterializeSpec, image_root: Path) -> list
                 f"output directory collision: {s.sample_id!r} vs {dirs[d]!r} -> {d!r}"
             )
         dirs[d] = s.sample_id
+        sample_jobs: list[Job] = []
         stacked: set[int] = set()
         if spec.stack_seq:
             by_seq: dict[str, list[int]] = {}
@@ -111,7 +112,7 @@ def plan_jobs(dataset: Dataset, spec: MaterializeSpec, image_root: Path) -> list
             for seq_id, idxs in by_seq.items():
                 idxs.sort(key=lambda i: s.views[i].seq_index or 0)
                 stacked.update(idxs)
-                jobs.append(
+                sample_jobs.append(
                     Job(
                         s.sample_id,
                         None,
@@ -125,7 +126,7 @@ def plan_jobs(dataset: Dataset, spec: MaterializeSpec, image_root: Path) -> list
         for i, v in enumerate(s.views):
             if i in stacked:
                 continue
-            jobs.append(
+            sample_jobs.append(
                 Job(
                     s.sample_id,
                     i,
@@ -136,7 +137,22 @@ def plan_jobs(dataset: Dataset, spec: MaterializeSpec, image_root: Path) -> list
                     _decoder_name(v.path, image_root, spec.decoder),
                 )
             )
+        stems: dict[str, Job] = {}
+        for j in sample_jobs:
+            stem = _job_stem(j)
+            if stem in stems:
+                raise ValidationFailed(
+                    f"output file collision in sample {s.sample_id!r}: "
+                    f"{_job_label(stems[stem])} vs {_job_label(j)} -> {stem!r}"
+                )
+            stems[stem] = j
+        jobs.extend(sample_jobs)
     return jobs
+
+
+def _job_label(job: Job) -> str:
+    """How a job is named in an error message: by its sequence, or by its view index."""
+    return f"sequence {job.seq_id!r}" if job.view is None else f"view {job.view}"
 
 
 def _job_stem(job: Job) -> str:
@@ -222,7 +238,7 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
             row = _row(job, job.view, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
         frames = [dec.decode(p, exif_policy=cfg.exif_policy) for p in paths]
-        if len(frames) == 1:
+        if len(frames) == 1 and job.view is not None:
             out = cfg.out_root / job.out_dir / f"{stem}.{ext}"
             shape, dtype = _write(frames[0], out, cfg)
             row = _row(job, job.view, job.srcs, out, shape, dtype, cfg, dec.version)
@@ -331,7 +347,11 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         with ProcessPoolExecutor(max_workers=spec.workers) as pool:
             outcomes = list(pool.map(partial(run_job, cfg=cfg), todo))
     planned = _planned_keys(jobs)
-    rows = {k: v for k, v in existing.items() if k in planned}
+    # A job this run re-attempted owns its outcome: never carry its previous row forward, or a
+    # stale stack row would outlive a run that fell back to per-view files and would then evict
+    # (and delete) the per-view outputs that run had just written.
+    redone = {row_key(j.sample_id, j.view, j.seq_id) for j in todo}
+    rows = {k: v for k, v in existing.items() if k in planned and k not in redone}
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
     for o in outcomes:
@@ -343,8 +363,9 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         rows.pop(row_key(failure["sample_id"], failure["view"], failure["seq_id"]), None)
     # A stack row supersedes the per-view rows of its own sequence. Read off the final row set
     # over *every* job (not just this run's todo) so an already-current stack row still evicts
-    # them, and only after the failure pops so a stack job that failed -- or fell back to
-    # per-view files -- leaves those per-view rows in place.
+    # them. The key is present only when a stack row is authoritative for that sequence -- one
+    # this run wrote, or one carried over because the job was current -- so a stack job that
+    # failed or fell back to per-view files leaves those per-view rows in place.
     for j in jobs:
         if j.view is None and row_key(j.sample_id, None, j.seq_id) in rows:
             for i in j.views:

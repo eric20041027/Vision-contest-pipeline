@@ -338,8 +338,56 @@ def test_stack_seq_single_slice_series_are_named_by_seq_id(roots):
     ]
     rows = read_manifest(res.manifest_path)
     assert {r.out for r in rows.values()} == {"1.2.7/1.2.7.1.npy", "1.2.7/1.2.7.2.npy"}
-    assert int(np.load(res.out_dir / "1.2.7" / "1.2.7.1.npy")[0, 0]) == 100
-    assert int(np.load(res.out_dir / "1.2.7" / "1.2.7.2.npy")[0, 0]) == 200
+    # ...and it is stacked like every other sequence: a --stack-seq output is always S x H x W,
+    # so a consumer can iterate slices without special-casing one-slice series.
+    first = np.load(res.out_dir / "1.2.7" / "1.2.7.1.npy")
+    assert first.shape == (1, 16, 16) and int(first[0, 0, 0]) == 100
+    assert int(np.load(res.out_dir / "1.2.7" / "1.2.7.2.npy")[0, 0, 0]) == 200
+    assert rows[row_key("1.2.7", None, "1.2.7.1")].shape == [1, 16, 16]
+
+
+def test_stack_fallback_keeps_the_outputs_it_just_wrote(roots):
+    """A job this run re-attempted must not keep its previous row: otherwise the stale stack
+    row outlives a run that fell back to per-view files, supersedes the per-view rows that run
+    just wrote, and the orphan sweep deletes their files -- on every run, forever."""
+    src = roots.data / "raw" / "fb"
+    write_dicom_study(src, study_uid="1.2.11", series=1, slices=3)
+    _import_dicom(roots, "fb")
+    first = materialize(_spec(roots, name="fb", mode="npy", stack_seq=True))
+    assert (first.materialized, first.failed) == (1, 0)
+    odd = write_dicom_study(
+        roots.data / "raw" / "scratch", study_uid="1.2.11", series=1, slices=4, size=(8, 8)
+    )[-1]
+    shutil.copy2(odd, src / "1.2.11" / "1.2.11.1" / odd.name)  # a 4th slice of another size
+    _import_dicom(roots, "fb")
+    second = materialize(_spec(roots, name="fb", mode="npy", stack_seq=True))
+    assert any("shapes differ" in w for w in second.warnings)
+    assert (second.materialized, second.skipped, second.failed) == (4, 0, 0)
+    rows = read_manifest(second.manifest_path)
+    assert len(rows) == 4 and all(r.view is not None for r in rows.values())
+    assert all((second.out_dir / r.out).is_file() for r in rows.values())
+    assert second.orphans_removed == 1  # only the stale stack volume goes
+
+
+def test_plan_jobs_rejects_sequence_and_view_output_collision(roots):
+    """A stack output is named after its seq_id and a per-view output after its view index, so
+    a sequence whose id renders as another view's index would write that view's file."""
+    paths = DatasetPaths.resolve("stem", data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        Sample(
+            sample_id="s0",
+            views=[
+                View(path="a.jpg", width=8, height=8, seq_id="1", seq_index=0),
+                View(path="b.jpg", width=8, height=8),
+            ],
+            label_source="none",
+        )
+    ]
+    write_images(roots.data / "raw" / "stem", samples)
+    Dataset.from_parts(make_card("det", name="stem", image_root="raw/stem"), samples).save(paths)
+    assert materialize(_spec(roots, name="stem", mode="npy")).materialized == 2  # stems 0 and 1
+    with pytest.raises(ValidationFailed, match="output file collision"):
+        materialize(_spec(roots, name="stem", mode="npy", stack_seq=True))
 
 
 def test_row_pointing_at_another_path_is_not_current(roots):
@@ -405,16 +453,30 @@ def test_current_stack_rows_still_supersede_per_view_rows(roots):
 
 
 def test_failed_stack_job_leaves_its_per_view_rows_alone(roots):
-    """F3 guard: supersession runs after the failure pops, so a stack job that produced no row
-    of its own must not evict the per-view rows that are still the only cache for that view."""
+    """F3 guard: a stack job that produced no row of its own -- because it failed -- must not
+    evict the per-view rows that are still the only cache for those views, even when a stale
+    stack row for that sequence is still sitting in the manifest."""
     _dicom_ds(roots, "dcm")
     plain = materialize(_spec(roots, name="dcm", mode="npy"))
     assert plain.materialized == 6
+    per_view_lines = plain.manifest_path.read_text(encoding="utf-8").splitlines()
+    backup = roots.data / "failed_backup"
+    shutil.copytree(plain.out_dir, backup)
+    stacked = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert stacked.materialized == 2
+    with stacked.manifest_path.open("a", encoding="utf-8", newline="\n") as f:
+        f.writelines(line + "\n" for line in per_view_lines)
+    for i in range(6):
+        shutil.copy2(backup / "1.2.1" / f"{i}.npy", stacked.out_dir / "1.2.1" / f"{i}.npy")
+    # Series 1's stack output is gone and its slices are unreadable: that job re-runs and fails
+    # while its stale stack row is still in the manifest.
+    (stacked.out_dir / "1.2.1" / "1.2.1.1.npy").unlink()
     for f in sorted((roots.data / "raw" / "dcm" / "1.2.1" / "1.2.1.1").iterdir()):
         f.write_bytes(b"not a dicom")
     res = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
-    assert (res.materialized, res.failed) == (1, 1)
+    assert (res.materialized, res.failed) == (0, 1)
     rows = read_manifest(res.manifest_path)
     assert row_key("1.2.1", None, "1.2.1.1") not in rows
     kept = [r for r in rows.values() if r.seq_id == "1.2.1.1" and r.view is not None]
     assert len(kept) == 3 and all((res.out_dir / r.out).is_file() for r in kept)
+    assert row_key("1.2.1", None, "1.2.1.2") in rows  # the healthy sequence keeps its stack row

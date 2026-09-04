@@ -62,8 +62,8 @@ uv run vcp data import --importer jsonl --src C:/data/work/contest-test --name c
 
 ## materialize `vcp data materialize`
 
-`--mode npy|png`、`--resize <長邊>`（只對 png）、`--stack-seq`（同 seq_id 的 view 依 seq_index 堆成 S×H×W；只對 npy 有意義）、`--window dicom|minmax|percentile`（只對 png 的 8-bit 映射；png 未給時預設 `dicom`，npy 明確給了即 FAIL）、`--workers 1`、`--force`、`--decoder image|dicom`。
-輸出 `datasets/<name>/cache/materialize/<mode>[-r<長邊>]/<sample dir>/<view>.<ext>`（`--stack-seq` 的堆疊輸出改以 `<seq_id>.<ext>` 命名，只有一個 view 的序列也一樣） 與 `manifest.jsonl`（相對路徑，可整包搬到另一台機器）；失敗列在 `failed.jsonl`，`failed>0` → FAIL。重跑會跳過 resize / window / decoder / exif_policy 與來源清單都相同，且輸出檔仍在 manifest 記錄的路徑與大小的輸出。
+`--mode npy|png`、`--resize <長邊>`（只對 png）、`--stack-seq`（同 seq_id 的 view 依 seq_index 堆成 S×H×W，只有一張的序列也堆成 S=1；只對 npy 有意義）、`--window dicom|minmax|percentile`（只對 png 的 8-bit 映射；png 未給時預設 `dicom`，npy 明確給了即 FAIL）、`--workers 1`、`--force`、`--decoder image|dicom`。
+輸出 `datasets/<name>/cache/materialize/<mode>[-r<長邊>]/<sample dir>/<view>.<ext>`（`--stack-seq` 的堆疊輸出改以 `<seq_id>.<ext>` 命名，只有一個 view 的序列也一樣；與逐 view 檔名撞名即 FAIL）與 `manifest.jsonl`（相對路徑，可整包搬到另一台機器）；失敗列在 `failed.jsonl`，`failed>0` → FAIL。重跑會跳過 resize / window / decoder / exif_policy 與來源清單都相同，且輸出檔仍在 manifest 記錄的路徑與大小的輸出（`view_level=series` 的來源是一個目錄，目錄內增減 slice 不會改變來源清單，要靠 `--force`）。
 
 ## EXIF 方向政策
 

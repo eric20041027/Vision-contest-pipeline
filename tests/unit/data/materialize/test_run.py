@@ -77,7 +77,8 @@ def test_npy_mode_and_option_validation(roots):
 
 def test_bad_decoder_option_is_a_validation_failure(roots):
     """F7: an unknown --decoder is the caller's mistake (FAIL), not a registry ABORT."""
-    with pytest.raises(ValidationFailed, match="decoder"):
+    _image_ds(roots, n=1)
+    with pytest.raises(ValidationFailed, match="must be one of"):
         materialize(_spec(roots, mode="npy", decoder="nifti"))
 
 

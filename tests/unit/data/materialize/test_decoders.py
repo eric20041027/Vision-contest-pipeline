@@ -93,3 +93,14 @@ def test_to_uint8_modes_and_resize():
         to_uint8(d, "gamma")
     assert resize_long_side(rgb, 4).shape == (2, 4, 3)
     assert resize_long_side(np.zeros((16, 16), np.uint8), 8).shape == (8, 8)
+
+
+def test_rescale_dtype_ladder():
+    from vcp.data.materialize.decoders.dicom import rescale
+
+    arr = np.array([[5, 7]], dtype=np.uint16)
+    assert rescale(arr, 1.0, 0.0, False).dtype == np.uint16
+    assert rescale(arr, 1.0, 0.0, True).dtype == np.int16  # signed pixels stay signed
+    assert rescale(arr, 1.0, -10.0, False).dtype == np.int16
+    assert rescale(arr, 100000.0, 0.0, False).dtype == np.int32
+    assert rescale(arr, 0.5, 0.0, False).dtype == np.float32

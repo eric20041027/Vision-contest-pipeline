@@ -104,3 +104,17 @@ def test_rescale_dtype_ladder():
     assert rescale(arr, 1.0, -10.0, False).dtype == np.int16
     assert rescale(arr, 100000.0, 0.0, False).dtype == np.int32
     assert rescale(arr, 0.5, 0.0, False).dtype == np.float32
+
+
+def test_to_uint8_inverts_monochrome1_even_for_uint8():
+    arr = np.array([[0, 255]], dtype=np.uint8)
+    assert to_uint8(Decoded(arr, {"photometric": "MONOCHROME1"}), "minmax").tolist() == [[255, 0]]
+    assert to_uint8(Decoded(arr, {}), "minmax") is arr
+
+
+def test_image_decode_series_honours_exif_policy(tmp_path):
+    write_exif_image(tmp_path / "o.jpg", size=(8, 4), orientation=6)
+    dec = get_decoder("image")
+    assert dec.decode_series([tmp_path / "o.jpg"]).array.shape == (1, 4, 8, 3)
+    oriented = dec.decode_series([tmp_path / "o.jpg"], exif_policy="oriented")
+    assert oriented.array.shape == (1, 8, 4, 3)

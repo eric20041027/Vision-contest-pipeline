@@ -25,16 +25,18 @@ def _bounds(decoded: Decoded, mode: str) -> tuple[float, float]:
 
 
 def to_uint8(decoded: Decoded, mode: str) -> np.ndarray:
-    """Map any decoded array to uint8; uint8 input is returned untouched. MONOCHROME1 inverts."""
+    """Map any decoded array to uint8; uint8 input is returned untouched except for the
+    MONOCHROME1 inversion."""
     if mode not in WINDOW_MODES:
         raise ValidationFailed(f"window mode must be one of {WINDOW_MODES}, got {mode!r}")
     arr = decoded.array
+    inverted = decoded.info.get("photometric") == "MONOCHROME1"
     if arr.dtype == np.uint8:
-        return arr
+        return (255 - arr) if inverted else arr
     lo, hi = _bounds(decoded, mode)
     scaled = np.clip((arr.astype(np.float64) - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
     out = np.round(scaled * 255).astype(np.uint8)
-    return (255 - out) if decoded.info.get("photometric") == "MONOCHROME1" else out
+    return (255 - out) if inverted else out
 
 
 def resize_long_side(arr: np.ndarray, long_side: int) -> np.ndarray:

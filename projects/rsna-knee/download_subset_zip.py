@@ -219,17 +219,29 @@ def wanted_entries(entries: list[Entry], studies: set[str], *, test_series: bool
     return sorted(out, key=lambda e: e.offset)
 
 
+MAX_GAP = 1 << 20  # unwanted bytes we tolerate between two entries of one range request
+
+
+def entry_end(e: Entry) -> int:
+    """Byte just past the entry's compressed data (local header + name + a small extra allowance)."""
+    return e.offset + 30 + len(e.name.encode("utf-8")) + 64 + e.csize
+
+
 def plan_chunks(entries: list[Entry]) -> list[list[Entry]]:
-    """Contiguous runs of entries (by zip offset) capped at MAX_CHUNK compressed bytes."""
+    """Runs of entries that are adjacent in the zip, capped by the *span* of bytes the range
+    request will transfer (not just the wanted bytes). Wanted studies are scattered among the
+    4,407 in the archive, so two consecutive wanted entries can be gigabytes apart; a chunk must
+    never bridge such a gap."""
     chunks: list[list[Entry]] = []
     current: list[Entry] = []
-    size = 0
+    span_end = 0
     for e in entries:
-        if current and (size + e.csize > MAX_CHUNK):
+        gap = e.offset - span_end
+        if current and (gap > MAX_GAP or entry_end(e) - current[0].offset > MAX_CHUNK):
             chunks.append(current)
-            current, size = [], 0
+            current = []
         current.append(e)
-        size += e.csize
+        span_end = entry_end(e)
     if current:
         chunks.append(current)
     return chunks

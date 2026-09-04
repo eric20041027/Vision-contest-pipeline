@@ -38,11 +38,11 @@ URL_PATH = KAGGLE_DIR / "zip_url.json"
 CD_SIG = b"PK\x01\x02"
 LOCAL_SIG = b"PK\x03\x04"
 EOCD64_SIG = b"PK\x06\x06"
-MAX_CHUNK = 256 * 1024 * 1024
+MAX_CHUNK = 64 * 1024 * 1024  # per range request; peak RAM ~ workers × 2 × MAX_CHUNK + index
 GIB = 1024**3
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Entry:
     name: str
     offset: int  # local header offset in the zip
@@ -97,10 +97,17 @@ class ZipSource:
     def read(self, start: int, end_inclusive: int) -> bytes:
         for attempt in range(6):
             r = self.session.get(
-                self.url, headers={"Range": f"bytes={start}-{end_inclusive}"}, timeout=300
+                self.url,
+                headers={"Range": f"bytes={start}-{end_inclusive}"},
+                timeout=300,
+                stream=True,  # stream into one buffer instead of holding two copies in memory
             )
             if r.status_code == 206:
-                return r.content
+                buf = bytearray()
+                for piece in r.iter_content(chunk_size=1 << 20):
+                    buf += piece
+                r.close()
+                return bytes(buf)
             if r.status_code in (400, 401, 403) and attempt == 0:
                 print(f"range request got {r.status_code}; refreshing the zip URL", flush=True)
                 self.url = fetch_zip_url()
@@ -262,7 +269,7 @@ def main() -> int:
     ap.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     ap.add_argument("--studies", type=Path, default=DEFAULT_STUDIES)
     ap.add_argument("--limit-studies", type=int, default=0, help="only the first N studies (test)")
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--workers", type=int, default=2, help="parallel range requests (RAM ~ 2 × 64 MiB each)")
     ap.add_argument("--no-test-series", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -273,6 +280,7 @@ def main() -> int:
     src = ZipSource(cached_zip_url())
     entries = load_index(src)
     wanted = wanted_entries(entries, set(studies), test_series=not args.no_test_series)
+    del entries  # 820k entries cost hundreds of MB; only the wanted ones are needed from here on
     todo = [e for e in wanted if not ((args.root / e.name).is_file() and (args.root / e.name).stat().st_size == e.usize)]
     csize = sum(e.csize for e in todo)
     usize = sum(e.usize for e in todo)

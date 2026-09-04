@@ -1,0 +1,55 @@
+name: rsna-knee
+task: multilabel
+categories:
+- id: 0
+  name: ACL
+  meta: {}
+- id: 1
+  name: MCL
+  meta: {}
+- id: 2
+  name: Medial Meniscus
+  meta: {}
+- id: 3
+  name: Lateral Meniscus
+  meta: {}
+- id: 4
+  name: Medial OA
+  meta: {}
+- id: 5
+  name: Lateral OA
+  meta: {}
+- id: 6
+  name: PF OA
+  meta: {}
+- id: 7
+  name: Effusion
+  meta: {}
+- id: 8
+  name: Synovitis
+  meta: {}
+- id: 9
+  name: Baker's
+  meta: {}
+- id: 10
+  name: Contusion
+  meta: {}
+- id: 11
+  name: Fracture
+  meta: {}
+image_root: raw/rsna-knee/train_series
+source:
+  importer: dicom
+  importer_version: '1'
+  raw_path: raw/rsna-knee/train_series
+  raw_hash: 168aa3813c6bfbe786c26c380bdfc075599ad001f0489f40918cdd1015f89799
+  license: Competition rules
+  url: https://www.kaggle.com/competitions/rsna-knee-abnormality-detection
+  downloaded_at: '2026-09-04'
+  notes: ''
+  raw_manifest_mode: full
+created_at: '2026-09-04T01:52:30.335Z'
+sample_count: 200
+samples_hash: df032ce932dd566f1d449fda85c4b666e87a60343053ded8f19e2c4b19a64644
+exif_policy: stored
+schema_version: 1

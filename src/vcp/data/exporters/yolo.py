@@ -62,6 +62,7 @@ class YoloExporter:
         dropped_views = 0
         used_images: dict[str, str] = {}
         used_labels: dict[str, str] = {}
+        images_map: dict[str, str] = {}
         for s in samples:
             vi, view = select_view(s, view_opt)
             if view.width is None or view.height is None:
@@ -83,6 +84,7 @@ class YoloExporter:
                         f"both map to {key!r}"
                     )
                 used[key] = view.path
+            images_map[flat] = s.sample_id
             dst = images_out / flat
             fell_back = _place_image(src, dst, copy=copy) or fell_back
             files.append(dst)
@@ -125,6 +127,7 @@ class YoloExporter:
                 "categories": [
                     {"index": i, "id": c.id, "name": c.name}
                     for i, c in enumerate(dataset.card.categories)
-                ]
+                ],
+                "images": images_map,
             },
         )

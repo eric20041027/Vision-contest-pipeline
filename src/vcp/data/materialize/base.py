@@ -21,7 +21,7 @@ class MaterializeSpec(BaseModel):
     mode: str
     resize: int | None = None
     stack_seq: bool = False
-    window: str = "dicom"
+    window: str | None = None
     workers: int = 1
     force: bool = False
     decoder: str | None = None
@@ -41,6 +41,7 @@ class MaterializeResult(BaseModel):
     skipped: int
     failed: int
     warnings: list[str]
+    orphans_removed: int = 0
 
 
 def mode_dir_name(mode: str, resize: int | None) -> str:

@@ -58,7 +58,8 @@ class DicomDecoder:
         }
         return Decoded(rescale(arr, slope, intercept, signed), info)
 
-    def decode_series(self, paths: list[Path]) -> Decoded:
+    def decode_series(self, paths: list[Path], *, exif_policy: str = "stored") -> Decoded:
+        # exif_policy is accepted for interface parity with the image decoder; DICOM has no EXIF.
         headers = [read_header(p) for p in paths]
         bad = [f"{p.name}: {h}" for p, h in zip(paths, headers, strict=True) if isinstance(h, str)]
         if bad:

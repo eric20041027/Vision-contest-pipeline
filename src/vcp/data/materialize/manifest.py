@@ -17,6 +17,7 @@ class ManifestRow(BaseModel):
     view: int | None
     seq_id: str | None
     src: str
+    srcs: list[str] | None = None
     out: str
     shape: list[int]
     dtype: str

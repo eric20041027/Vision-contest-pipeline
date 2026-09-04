@@ -21,8 +21,8 @@ class ImageDecoder:
                 img = img.convert("RGB")
             return Decoded(np.asarray(img).copy(), {"mode": img.mode})
 
-    def decode_series(self, paths: list[Path]) -> Decoded:
-        frames = [self.decode(p) for p in paths]
+    def decode_series(self, paths: list[Path], *, exif_policy: str = "stored") -> Decoded:
+        frames = [self.decode(p, exif_policy=exif_policy) for p in paths]
         return Decoded(
             np.stack([f.array for f in frames]), {**frames[0].info, "slices": len(frames)}
         )

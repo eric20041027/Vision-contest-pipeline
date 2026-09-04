@@ -467,9 +467,9 @@ def materialize_cmd(
         bool, typer.Option("--stack-seq", help="stack views of a seq into S×H×W")
     ] = False,
     window: Annotated[
-        str,
-        typer.Option("--window", help="png 8-bit mapping: dicom | minmax | percentile"),
-    ] = "dicom",
+        str | None,
+        typer.Option("--window", help="png only: dicom | minmax | percentile (default dicom)"),
+    ] = None,
     workers: Annotated[int, typer.Option("--workers", help="decode processes")] = 1,
     force: Annotated[bool, typer.Option("--force", help="redo outputs that already exist")] = False,
     decoder: Annotated[
@@ -508,6 +508,8 @@ def materialize_cmd(
                 "out": str(res.out_dir),
             }
         )
+        if res.orphans_removed:
+            fields["orphans_removed"] = res.orphans_removed
         human = [
             f"materialized {res.materialized}, skipped {res.skipped}, "
             f"failed {res.failed} -> {res.out_dir}",

@@ -279,3 +279,42 @@ def test_plan_jobs_rejects_output_directory_collision(roots):
     Dataset.from_parts(make_card("det", name="coll", image_root="raw/coll"), samples).save(paths)
     with pytest.raises(ValidationFailed, match="collision"):
         materialize(_spec(roots, name="coll", mode="npy"))
+
+
+def test_stack_row_records_all_sources_and_window_semantics(roots):
+    _dicom_ds(roots, "dcm")
+    res = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    row = read_manifest(res.manifest_path)[row_key("1.2.1", None, "1.2.1.1")]
+    assert row.srcs is not None and len(row.srcs) == 3 and row.src == row.srcs[0]
+    with pytest.raises(ValidationFailed, match="window"):
+        materialize(_spec(roots, name="dcm", mode="npy", window="minmax"))
+    png = materialize(_spec(roots, name="dcm", mode="png", resize=8))
+    assert next(iter(read_manifest(png.manifest_path).values())).window == "dicom"
+    again = materialize(_spec(roots, name="dcm", mode="png", resize=8, window="minmax"))
+    assert again.materialized == 6 and again.skipped == 0  # window change invalidates the cache
+
+
+def test_orphan_outputs_are_removed_when_plan_changes(roots):
+    _dicom_ds(roots, "dcm")
+    stacked = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert (stacked.out_dir / "1.2.1" / "1.2.1.1.npy").is_file()
+    plain = materialize(_spec(roots, name="dcm", mode="npy"))
+    assert plain.materialized == 6 and plain.orphans_removed == 2
+    assert not (plain.out_dir / "1.2.1" / "1.2.1.1.npy").exists()
+    assert (plain.out_dir / "manifest.jsonl").is_file()
+    back = materialize(_spec(roots, name="dcm", mode="npy", stack_seq=True))
+    assert back.materialized == 2 and back.orphans_removed == 6
+    assert not (back.out_dir / "1.2.1" / "0.npy").exists()
+    assert len(read_manifest(back.manifest_path)) == 2  # the stack rows supersede per-view rows
+
+
+def test_old_manifest_without_srcs_still_loads(roots):
+    _image_ds(roots, n=1)
+    res = materialize(_spec(roots, mode="npy"))
+    lines = res.manifest_path.read_text(encoding="utf-8").splitlines()
+    assert all('"srcs"' in line for line in lines)
+    stripped = [{k: v for k, v in json.loads(line).items() if k != "srcs"} for line in lines]
+    with res.manifest_path.open("w", encoding="utf-8", newline="\n") as f:
+        f.writelines(json.dumps(row) + "\n" for row in stripped)
+    assert len(read_manifest(res.manifest_path)) == 1
+    assert materialize(_spec(roots, mode="npy")).skipped == 1

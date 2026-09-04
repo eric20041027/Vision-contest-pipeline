@@ -600,3 +600,7 @@ def test_materialize_cli(roots, tmp_path):
         app, ["data", "materialize", "--name", "tiny", "--mode", "npy", "--resize", "3"]
     )
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
+    r = runner.invoke(
+        app, ["data", "materialize", "--name", "tiny", "--mode", "npy", "--window", "minmax"]
+    )
+    assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)

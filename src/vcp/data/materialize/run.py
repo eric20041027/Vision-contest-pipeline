@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
@@ -66,8 +67,10 @@ class Settings:
 def _validate(spec: MaterializeSpec) -> None:
     if spec.mode not in MODES:
         raise ValidationFailed(f"--mode must be one of {MODES}, got {spec.mode!r}")
-    if spec.window not in WINDOW_MODES:
+    if spec.window is not None and spec.window not in WINDOW_MODES:
         raise ValidationFailed(f"--window must be one of {WINDOW_MODES}, got {spec.window!r}")
+    if spec.window is not None and spec.mode != "png":
+        raise ValidationFailed("--window applies to png mode only (npy keeps raw values)")
     if spec.resize is not None and spec.mode != "png":
         raise ValidationFailed("--resize applies to png mode only (npy keeps native resolution)")
     if spec.resize is not None and spec.resize < 1:
@@ -160,7 +163,7 @@ def _write(decoded: Decoded, out: Path, cfg: Settings) -> tuple[list[int], str]:
 def _row(
     job: Job,
     view: int | None,
-    src: str,
+    srcs: tuple[str, ...],
     out: Path,
     shape: list[int],
     dtype: str,
@@ -171,7 +174,8 @@ def _row(
         sample_id=job.sample_id,
         view=view,
         seq_id=job.seq_id,
-        src=src,
+        src=srcs[0],
+        srcs=list(srcs),
         out=out.relative_to(cfg.out_root).as_posix(),
         shape=shape,
         dtype=dtype,
@@ -202,16 +206,16 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
             )
             if not files:
                 raise ValidationFailed(f"no {job.decoder} files in {paths[0]}")
-            decoded = dec.decode_series(files)
+            decoded = dec.decode_series(files, exif_policy=cfg.exif_policy)
             out = cfg.out_root / job.out_dir / f"{job.view}.{ext}"
             shape, dtype = _write(decoded, out, cfg)
-            row = _row(job, job.view, job.srcs[0], out, shape, dtype, cfg, dec.version)
+            row = _row(job, job.view, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
         frames = [dec.decode(p, exif_policy=cfg.exif_policy) for p in paths]
         if len(frames) == 1:
             out = cfg.out_root / job.out_dir / f"{job.view}.{ext}"
             shape, dtype = _write(frames[0], out, cfg)
-            row = _row(job, job.view, job.srcs[0], out, shape, dtype, cfg, dec.version)
+            row = _row(job, job.view, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
         if len({f.array.shape for f in frames}) == 1:
             stacked = Decoded(
@@ -222,13 +226,13 @@ def run_job(job: Job, cfg: Settings) -> JobOutcome:
             seq_dir = safe_dir_name(job.seq_id)  # type: ignore[arg-type]
             out = cfg.out_root / job.out_dir / f"{seq_dir}.{ext}"
             shape, dtype = _write(stacked, out, cfg)
-            row = _row(job, None, job.srcs[0], out, shape, dtype, cfg, dec.version)
+            row = _row(job, None, job.srcs, out, shape, dtype, cfg, dec.version)
             return JobOutcome([row])
         rows = []
         for idx, src, frame in zip(job.views, job.srcs, frames, strict=True):
             out = cfg.out_root / job.out_dir / f"{idx}.{ext}"
             shape, dtype = _write(frame, out, cfg)
-            rows.append(_row(job, idx, src, out, shape, dtype, cfg, dec.version))
+            rows.append(_row(job, idx, (src,), out, shape, dtype, cfg, dec.version))
         warning = f"{job.sample_id}/{job.seq_id}: slice shapes differ; wrote per-view files"
         return JobOutcome(rows, [], [warning])
     except Exception as e:  # noqa: BLE001 - every failure goes to failed.jsonl, run continues
@@ -274,6 +278,21 @@ def _planned_keys(jobs: list[Job]) -> set[str]:
     return keys
 
 
+def _remove_orphans(out_root: Path, rows: Iterable[ManifestRow]) -> int:
+    """Delete outputs under ``out_root`` no manifest row references (superseded stacks, files
+    of failed re-attempts); manifest.jsonl / failed.jsonl stay. Empty sample dirs go too."""
+    keep = {r.out for r in rows} | {"manifest.jsonl", "failed.jsonl"}
+    removed = 0
+    for p in sorted(out_root.rglob("*")):
+        if p.is_file() and p.relative_to(out_root).as_posix() not in keep:
+            p.unlink()
+            removed += 1
+    for d in sorted((p for p in out_root.rglob("*") if p.is_dir()), reverse=True):
+        if not any(d.iterdir()):
+            d.rmdir()
+    return removed
+
+
 def materialize(spec: MaterializeSpec) -> MaterializeResult:
     _validate(spec)
     paths = spec.paths()
@@ -287,7 +306,7 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         out_root,
         spec.mode,
         spec.resize,
-        spec.window,
+        spec.window or "dicom",
         dataset.card.exif_policy,
     )
     jobs = plan_jobs(dataset, spec, cfg.image_root)
@@ -300,6 +319,10 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
             outcomes = list(pool.map(partial(run_job, cfg=cfg), todo))
     planned = _planned_keys(jobs)
     rows = {k: v for k, v in existing.items() if k in planned}
+    for job, o in zip(todo, outcomes, strict=True):
+        if job.view is None and any(r.view is None for r in o.rows):  # stack succeeded
+            for i in job.views:
+                rows.pop(row_key(job.sample_id, i, job.seq_id), None)
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
     for o in outcomes:
@@ -317,6 +340,7 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
                 f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     elif failed_path.exists():
         failed_path.unlink()
+    orphans = _remove_orphans(out_root, rows.values())
     return MaterializeResult(
         out_dir=out_root,
         manifest_path=manifest_path,
@@ -324,4 +348,5 @@ def materialize(spec: MaterializeSpec) -> MaterializeResult:
         skipped=skipped,
         failed=len(failures),
         warnings=warnings,
+        orphans_removed=orphans,
     )

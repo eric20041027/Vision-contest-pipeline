@@ -593,14 +593,16 @@ def test_materialize_cli(roots, tmp_path):
         app, ["data", "materialize", "--name", "tiny", "--mode", "png", "--resize", "4"]
     )
     assert "skipped=60" in _last_verdict(r.output)
-    (tmp_path / "src" / "s0003.jpg").unlink()
-    r = runner.invoke(app, ["data", "materialize", "--name", "tiny", "--mode", "npy"])
-    assert r.exit_code == 1 and "failed=1" in _last_verdict(r.output)
     r = runner.invoke(
         app, ["data", "materialize", "--name", "tiny", "--mode", "npy", "--resize", "3"]
     )
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
+    assert "png mode only" in _last_verdict(r.output)
     r = runner.invoke(
         app, ["data", "materialize", "--name", "tiny", "--mode", "npy", "--window", "minmax"]
     )
     assert r.exit_code == 1 and "status=FAIL" in _last_verdict(r.output)
+    assert "png mode only" in _last_verdict(r.output)
+    (tmp_path / "src" / "s0003.jpg").unlink()
+    r = runner.invoke(app, ["data", "materialize", "--name", "tiny", "--mode", "npy"])
+    assert r.exit_code == 1 and "failed=1" in _last_verdict(r.output)

@@ -1,6 +1,16 @@
 import pytest
 
-from helpers import cls_samples, det_samples, make_card, perfect_predictions
+from helpers import (
+    CATS,
+    ML_CATS,
+    REG_CATS,
+    cls_samples,
+    det_samples,
+    make_card,
+    multilabel_samples,
+    perfect_predictions,
+    regression_samples,
+)
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import Dataset
 from vcp.measure.predictions import (
@@ -64,3 +74,31 @@ def test_check_predictions_cls_requires_every_sample():
     with pytest.raises(ValidationFailed, match="category names"):
         check_predictions(wrong_keys, ds, ids)
     assert set(predictions_by_id(preds)) == ids
+
+
+@pytest.mark.parametrize("task", ["cls", "multilabel", "regression"])
+def test_a_mapping_payload_task_requires_a_row_for_every_subset_sample(task):
+    """scores / targets have no legitimate empty value, so a missing row is an error. The rule
+    is derived from the task registry, not from a hand-written task set: dropping any one task
+    from such a set would silently fold its missing rows into ``empty`` and every later reading
+    would be computed over fewer samples than the subset."""
+    builder, cats = {
+        "cls": (cls_samples, CATS),
+        "multilabel": (multilabel_samples, ML_CATS),
+        "regression": (regression_samples, REG_CATS),
+    }[task]
+    samples = builder(4, seed=0)
+    ds = Dataset.from_parts(make_card(task, categories=cats), samples)
+    preds = perfect_predictions(samples, ds.card)
+    ids = {s.sample_id for s in samples}
+    assert check_predictions(preds, ds, ids)[1].empty == 0
+    with pytest.raises(ValidationFailed, match="missing predictions"):
+        check_predictions(preds[:-1], ds, ids)
+
+
+def test_a_list_payload_task_treats_a_missing_row_as_predicted_nothing():
+    samples = det_samples(4, seed=0)
+    ds = Dataset.from_parts(make_card("det"), samples)
+    preds = perfect_predictions(samples, ds.card)
+    kept, stats = check_predictions(preds[:-1], ds, {s.sample_id for s in samples})
+    assert len(kept) == 3 and stats.empty == 1 and stats.samples == 4

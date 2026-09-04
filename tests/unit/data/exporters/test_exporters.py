@@ -189,6 +189,9 @@ def test_yolo_manifest_categories_and_images_field(det_ds, roots, tmp_path):
     assert res.fields["images"] == "copied"
     res2 = export_subset(_spec(roots, "yolo", tmp_path / "y2"))
     assert res2.fields["images"] in ("copied", "symlinked")
+    ids = {s.sample_id for s in det_ds[0].subset("valA", det_ds[1])}
+    assert set(manifest["images"].values()) == ids
+    assert all("/" not in flat for flat in manifest["images"])
 
 
 def test_export_manifest_base_keys_beat_exporter_manifest(det_ds, roots, tmp_path):

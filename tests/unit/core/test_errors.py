@@ -1,4 +1,5 @@
 from vcp.core.errors import (
+    GuardrailError,
     IntegrityError,
     InvariantError,
     PlanMismatchError,
@@ -23,3 +24,9 @@ def test_location_in_message():
     assert str(err) == "bad box (at sample s1)"
     assert err.location == "sample s1"
     assert str(ValidationFailed("plain")) == "plain"
+
+
+def test_guardrail_error_is_abort():
+    e = GuardrailError("anchor mismatch", location="valA/coco_map")
+    assert isinstance(e, VcpError) and e.status == "ABORT"
+    assert "anchor mismatch" in str(e) and "valA/coco_map" in str(e)

@@ -62,6 +62,15 @@ def logs_dir(data_root: Path) -> Path:
     return data_root / "logs"
 
 
+def runs_root(data_root: Path) -> Path:
+    return data_root / "runs"
+
+
+def run_path(data_root: Path, run_id: str) -> Path:
+    validate_name(run_id)
+    return runs_root(data_root) / run_id
+
+
 def store_path(path: Path, data_root: Path) -> str:
     """How a filesystem path is written into a git-tracked card.
 
@@ -134,6 +143,25 @@ class DatasetPaths:
     def unseal_jsonl(self, plan_id: str) -> Path:
         validate_name(plan_id)
         return self.splits_dir / f"{plan_id}.unseal.jsonl"
+
+    @property
+    def runs_dir(self) -> Path:
+        return runs_root(self.data_root)
+
+    def run_dir(self, run_id: str) -> Path:
+        return run_path(self.data_root, run_id)
+
+    @property
+    def measure_dir(self) -> Path:
+        return self.data_root / "measure" / self.name
+
+    @property
+    def prereg_dir(self) -> Path:
+        return self.config_dir / "prereg"
+
+    @property
+    def prereg_log(self) -> Path:
+        return self.config_dir / "prereg.log.jsonl"
 
     def resolve_image_root(self, card: DatasetCard) -> Path:
         """Absolute image root for this dataset on this machine (see ``store_path``)."""

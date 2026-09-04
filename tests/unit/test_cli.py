@@ -219,7 +219,7 @@ def test_logger_falls_back_to_plain_logger_on_error(roots, monkeypatch, error):
     def _boom(*args, **kwargs):
         raise error("boom")
 
-    monkeypatch.setattr("vcp.cli.setup_logging", _boom)
+    monkeypatch.setattr("vcp.cli_common.setup_logging", _boom)
     r = runner.invoke(app, ["version"])
     assert r.exit_code == 0
     assert _last_verdict(r.output) == "VERDICT cmd=version status=OK version=0.1.0"

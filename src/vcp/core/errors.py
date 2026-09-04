@@ -43,3 +43,7 @@ class SealedSubsetError(VcpError):
 
 class InvariantError(VcpError):
     """A generator produced output that violates its own invariants (a bug, not bad input)."""
+
+
+class GuardrailError(VcpError):
+    """The anchor reading could not be reproduced: the measurement environment is suspect."""

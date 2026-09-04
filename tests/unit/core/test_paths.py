@@ -95,3 +95,14 @@ def test_dataset_paths_resolve_image_root(tmp_path):
     assert p.resolve_image_root(card) == (tmp_path / "d").resolve() / "raw" / "ds1"
     absolute = (tmp_path / "abs").resolve().as_posix()
     assert p.resolve_image_root(make_card("det", name="ds1", image_root=absolute)) == Path(absolute)
+
+
+def test_measure_paths(roots):
+    p = paths.DatasetPaths.resolve("ds", data_root=roots.data, configs_root=roots.configs)
+    assert p.runs_dir == roots.data / "runs"
+    assert p.run_dir("run-a") == roots.data / "runs" / "run-a"
+    assert p.measure_dir == roots.data / "measure" / "ds"
+    assert p.prereg_dir == roots.configs / "datasets" / "ds" / "prereg"
+    assert p.prereg_log == roots.configs / "datasets" / "ds" / "prereg.log.jsonl"
+    with pytest.raises(ValidationFailed):
+        p.run_dir("bad/name")

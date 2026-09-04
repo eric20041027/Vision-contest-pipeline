@@ -1,10 +1,10 @@
 # vcp 骨架與資料層設計（子專案 0 + 1）
 
 - 日期：2026-09-02
-- 版本：v4。v1 依對話逐段核可；v2 依使用者要求提高通用性，移除核心 schema 與 CLI 中所有綁定特定比賽的假設，並把每一個變異軸改為登記表；v3（2026-09-03）依 Plan 1 執行後的整支審查，新增 §14 補充決定並修正 §5.2 的 regression 規則；v4（2026-09-03）依 Plan 2a 後記與 RSNA Knee 真實資料形態，新增 §15 供 Plan 2b 使用。
-- 狀態：v2 由 Plan 1 實作合併；v3 由 Plan 2a 實作合併；v4 §15 已於對話逐節核可，供 Plan 2b 使用
+- 版本：v5。v1 依對話逐段核可；v2 依使用者要求提高通用性，移除核心 schema 與 CLI 中所有綁定特定比賽的假設，並把每一個變異軸改為登記表；v3（2026-09-03）依 Plan 1 執行後的整支審查，新增 §14 補充決定並修正 §5.2 的 regression 規則；v4（2026-09-03）依 Plan 2a 後記與 RSNA Knee 真實資料形態，新增 §15 供 Plan 2b 使用；v5（2026-09-04）依 Plan 2b 後記與 Plan 2c hygiene，新增 §16 收錄計畫層決定。
+- 狀態：v2 由 Plan 1 實作合併；v3 由 Plan 2a 實作合併；v4 §15 已於對話逐節核可，供 Plan 2b 使用；v5 §16 為 Plan 2b / 2c 實作結果的紀錄（裁決已記在後記，不另行核可）
 - 素材：`docs/postmortems/2026-08-aidea-marine-debris-detection.md`（下稱「報告」）§6、§8、§9；Plan 1 後記 `docs/superpowers/plans/2026-09-02-vcp-skeleton-data-core-followups.md`
-- 後續：Plan 2a（海廢形態，已合併）→ Plan 2b（RSNA 形態：dicom 匯入器、materialize、EXIF 與 coords 稽核的落地、Plan 2a 遺留 hygiene）
+- 後續：Plan 2a（海廢形態，已合併）→ Plan 2b（RSNA 形態：dicom 匯入器、materialize、EXIF 與 coords 稽核的落地、Plan 2a 遺留 hygiene）→ Plan 2c（hygiene）→ 子專案 2 量測層（`2026-09-04-vcp-measurement-layer-design.md`）
 
 ## 1. 目的
 
@@ -542,3 +542,15 @@ vcp data audit --name <名> [--against <test 資料集名>] [--max-bad-boxes 0] 
 ### 15.8 不在 Plan 2b 範圍
 
 多幀 DICOM；NIfTI、TIFF、影片解碼器；由報告文字推導標籤的工具（屬 `projects/rsna-knee/`）；Kaggle Dataset 上傳自動化；訓練層對 materialize 快取的讀取介面（子專案 3 的 spec 決定，資料層只保證 manifest 穩定）；dedup 對多 view 共享檔案的判定單位（留待有真實案例）。
+
+## 16. v5 補充決定（Plan 2b 實作與 Plan 2c hygiene 的定案，2026-09-04）
+
+以下為實作期間由計畫或審查裁決、原 spec 未明說的規則，與前文衝突時以本節為準。
+
+1. **materialize**：`--resize` 只對 `png`（npy 保留原解析度，給了即 FAIL）；`--window` 只對 `png`（npy 明確給了即 FAIL，未給時 png 預設 `dicom`）；png 模式遇到體積（series 層級 view 或堆疊）記入 `failed.jsonl` 而非另開目錄；`--workers` 預設 1；manifest 列多 `bytes`（skip 判斷用）與 `srcs`（每列都寫，堆疊列為完整來源，`src` 恆等於 `srcs[0]`；舊 manifest 無此欄仍可讀）；堆疊工作只認自己的列，尺寸不一致的序列每次重試並 WARN；成功的堆疊列取代其 views 的逐 view 列；每輪結束後 manifest 只保留本輪規劃且未失敗的列，未被任何列引用的輸出檔會被刪除（VERDICT `orphans_removed=`）；快取比對含解碼器名與版本、resize、window、exif_policy、檔案大小；`to_uint8` 對 uint8 輸入不重新映射，但 MONOCHROME1 仍反相；uint8 MONOCHROME1 的反相與 series 目錄的 `exif_policy` 是 2026-09-04（commit `92570e4`）才修的，解碼器版本未跟著跳號，因此在那之前產生的快取若來自 8-bit MONOCHROME1 或以 `--decoder image` 讀 series 目錄，需要跑一次 `--force` 才會更新。同一個 `out_dir` 不要並行跑兩種規劃（例如同時跑 `--stack-seq` 與不加），先完成的一輪會刪掉另一輪的輸出。
+2. **dicom 匯入器**：沒有 `labels_csv` 時 task 預設 `multilabel`（可 `--opt task=regression`）；series 層級 view 的 `seq_index` 為 None；目錄 view 一律由 dicom 解碼器讀取（`Path.suffix` 對 UID 目錄名不可靠）；所有選項在 header 掃描之前驗證。
+3. **COCO 匯入 + EXIF**：COCO 的 `width`/`height` 視為儲存像素尺寸；`--opt exif=oriented` 下遇到會對調軸的方向即 `ValidationFailed`，提示改用 `stored` 或拿掉 JSON 尺寸。
+4. **檢查適用性**：dedup 只在所有 view 副檔名屬 `IMAGE_EXTS` 時執行；不適用的檢查（登記順序）記在 `summary.json["skipped"]` 與 audit VERDICT 的 `skipped=`，不改狀態。
+5. **coords**：越界檢查先於重複檢查（重複的越界框計入 out_of_bounds）；boxes 與 polygons 共用每個 sample 的尺寸快取。
+6. **import 的 `old_card=unreadable`**：只在 `plans_invalidated > 0` 時輸出。
+7. **依賴**：選用 extra 的每個 pin 都同時列在 dev 群組，由 `tests/unit/test_package.py` 守門；不改成 dev 依賴 `vcp[dicom]`。

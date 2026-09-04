@@ -10,7 +10,8 @@ from pydantic import ValidationError
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.common import read_csv
 from vcp.measure.converters.base import ConvertContext, parse_mapping
-from vcp.measure.schema import Prediction
+from vcp.measure.predictions import MAPPING_PAYLOADS
+from vcp.measure.schema import Prediction, payload_field
 
 _TRUE = {"1", "true", "yes"}
 
@@ -21,8 +22,15 @@ class ScoresCsvConverter:
 
     def convert(self, src: Path, ctx: ConvertContext) -> list[Prediction]:
         task = ctx.dataset.card.task
-        if task not in ("cls", "multilabel", "regression"):
-            raise ValidationFailed(f"scores_csv converts cls/multilabel/regression, not {task!r}")
+        # Which tasks this converter serves is derived from the task registry, not listed here:
+        # a wide table of per-column numbers IS a mapping payload. Registering a new mapping-
+        # payload task must not require editing this converter.
+        field = payload_field(task)
+        if field not in MAPPING_PAYLOADS:
+            raise ValidationFailed(
+                f"scores_csv converts tasks whose predictions are {sorted(MAPPING_PAYLOADS)}, "
+                f"but task {task!r} predicts {field!r}"
+            )
         rename = parse_mapping(ctx.options.get("columns"), "columns")
         header, rows = read_csv(src, required=[])
         if not rows:
@@ -41,18 +49,22 @@ class ScoresCsvConverter:
                 f"{src.name}: unexpected columns {extra}; pass --opt ignore_extra=true to drop them"
             )
         preds: list[Prediction] = []
+        needed = [id_col, *(value_cols[n] for n in wanted)]
         for lineno, row in enumerate(rows, start=2):
             location = f"{src.name}:{lineno}"
+            # csv.DictReader pads a short row with None; float(None) and None.strip() would
+            # escape as TypeError / AttributeError, i.e. ABORT for what is bad user data.
+            if any(row.get(c) is None for c in needed):
+                raise ValidationFailed(
+                    f"row has fewer fields than the header {header}", location=location
+                )
             try:
                 values = {n: float(row[value_cols[n]]) for n in wanted}
             except ValueError as e:
                 raise ValidationFailed(f"unparsable number: {e}", location=location) from e
             sample_id = row[id_col].strip()
             try:
-                if task == "regression":
-                    preds.append(Prediction(sample_id=sample_id, targets=values))
-                else:
-                    preds.append(Prediction(sample_id=sample_id, scores=values))
+                preds.append(Prediction(sample_id=sample_id, **{field: values}))
             except ValidationError as e:
                 raise ValidationFailed(str(e), location=location) from e
         return preds

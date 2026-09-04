@@ -58,6 +58,12 @@ def add_tree(zf: zipfile.ZipFile, root: Path, rel: Path, manifest: list[tuple[st
 
 
 def main() -> None:
+    if not (INPUT / "train_series").is_dir():
+        available = sorted(p.name for p in Path("/kaggle/input").iterdir()) if Path("/kaggle/input").is_dir() else []
+        raise SystemExit(
+            f"competition data not found at {INPUT}. Attach it via Add Input -> Competitions -> "
+            f"{COMPETITION}. Currently mounted under /kaggle/input: {available}"
+        )
     studies = part_studies(PART)
     target = OUT / f"rsna_subset_part{PART}.zip"
     manifest: list[tuple[str, int]] = []

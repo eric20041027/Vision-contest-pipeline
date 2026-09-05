@@ -80,7 +80,10 @@ def check_predictions(
             if allow_unknown:
                 unknown.append(p.sample_id)
                 continue
-            raise ValidationFailed(f"unknown sample_id {p.sample_id!r} (not in this subset)")
+            raise ValidationFailed(
+                f"unknown sample_id {p.sample_id!r} (not in this subset); "
+                "pass --opt allow_unknown=true to skip such rows"
+            )
         if p.payload_field() != field_name:
             raise ValidationFailed(
                 f"sample {p.sample_id!r}: task {task!r} expects {field_name!r} predictions, "

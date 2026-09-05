@@ -52,7 +52,8 @@ def test_check_predictions_det_rules():
     with pytest.raises(ValidationFailed, match="category"):
         check_predictions(bad_cat, ds, ids)
     ghost = [Prediction(sample_id="ghost", boxes=[])]
-    with pytest.raises(ValidationFailed, match="unknown"):
+    # F3: the hint must actually say how to skip such rows, not just say "unknown".
+    with pytest.raises(ValidationFailed, match="allow_unknown"):
         check_predictions(ghost, ds, ids)
     kept, stats = check_predictions(ghost, ds, ids, allow_unknown=True)
     assert kept == [] and stats.unknown == ["ghost"] and stats.empty == 6

@@ -22,9 +22,9 @@ from helpers import (
     regression_samples,
 )
 from vcp.core.errors import RegistryError, ValidationFailed
+from vcp.data.schema import Category, Labels, Sample, View
 from vcp.measure.metrics import METRICS, applicable_metrics, get_metric, register_metric
 from vcp.measure.metrics.base import effective_params, params_key
-from vcp.measure.metrics.tabular import EPS
 from vcp.measure.predictions import predictions_by_id
 from vcp.measure.schema import Prediction
 
@@ -128,7 +128,9 @@ def test_cls_metrics_match_sklearn_directly():
     expected_f1 = f1_score(y_true, y_pred, labels=[0, 1, 2], average="macro", zero_division=0)
     assert _run("macro_f1", samples, card, noisy).value == pytest.approx(expected_f1)
 
-    probs = np.clip(scores, EPS, 1.0)
+    # Literal, not vcp.measure.metrics.tabular.EPS: this cross-check must move independently of
+    # the module's own constant, or a change to EPS would silently drag both sides together.
+    probs = np.clip(scores, 1e-15, 1.0)
     probs = probs / probs.sum(axis=1, keepdims=True)
     expected_log_loss = log_loss(y_true, probs, labels=[0, 1, 2])
     assert _run("log_loss", samples, card, noisy).value == pytest.approx(expected_log_loss)
@@ -199,3 +201,127 @@ def test_mae_requires_target_present_in_prediction():
     missing = [Prediction(sample_id=p.sample_id, targets={}) for p in perfect]
     with pytest.raises(ValidationFailed, match="missing target"):
         _run("mae", samples, card, missing)
+
+
+# --- fix round 1 -----------------------------------------------------------------------------
+# F1 (Critical): an empty subset (a real reachable state -- SubsetSpec.ratio allows 0.0, so a
+# split can round an eval subset down to zero samples) must fail loudly, never a silent nan and
+# never a raw numpy/sklearn crash.
+
+_EMPTY_SUBSET_CARDS = {
+    "accuracy": make_card("cls"),
+    "macro_f1": make_card("cls"),
+    "log_loss": make_card("cls"),
+    "macro_auc": make_card("multilabel", categories=ML_CATS),
+    "rmse": make_card("regression", categories=REG_CATS),
+    "mae": make_card("regression", categories=REG_CATS),
+}
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning", "error::UserWarning")
+@pytest.mark.parametrize("metric_name", list(_EMPTY_SUBSET_CARDS))
+def test_empty_subset_raises_validation_failed_not_nan_or_crash(metric_name):
+    """Previously: rmse/mae returned a silent nan (two leaked RuntimeWarnings, and a nan that
+    pydantic serialises as JSON null, breaking readings.jsonl on the next load); accuracy /
+    macro_f1 / log_loss raised numpy.exceptions.AxisError; macro_auc raised IndexError. All six
+    must now raise a located ValidationFailed instead, before any array is built."""
+    card = _EMPTY_SUBSET_CARDS[metric_name]
+    with pytest.raises(ValidationFailed, match="no samples"):
+        _run(metric_name, [], card, [])
+
+
+# F2 (Important): _validate_regression (vcp.data.tasks) rejects an UNKNOWN target name but does
+# NOT require every declared target to be present in gold -- so a gold sample may legitimately
+# carry only some of a multi-target regression card's targets. rmse/mae guarded the prediction
+# side (`p.targets is None or n not in p.targets`) but indexed the gold side unguarded.
+
+
+def test_rmse_and_mae_require_target_in_gold_not_just_prediction():
+    two_targets = [Category(id=0, name="age"), Category(id=1, name="weight")]
+    card = make_card("regression", categories=two_targets)
+    sample = Sample(
+        sample_id="s0000",
+        views=[View(path="s0000.jpg", width=8, height=8)],
+        labels=Labels(targets={"age": 30.0}),  # "weight" is declared but absent from gold
+        label_source="gold",
+    )
+    pred = Prediction(sample_id="s0000", targets={"age": 30.0, "weight": 70.0})
+    for metric_name in ("rmse", "mae"):
+        with pytest.raises(ValidationFailed, match="weight"):
+            _run(metric_name, [sample], card, [pred])
+
+
+# F3 (Important, plan-mandated gap): Task 11's judge assumes higher-is-better; every metric must
+# declare its direction, and a plugin metric that forgets to must fail loudly at registration.
+
+
+def test_all_metrics_declare_higher_is_better():
+    assert {name: m.higher_is_better for name, m in METRICS.items()} == {
+        "accuracy": True,
+        "macro_f1": True,
+        "log_loss": False,
+        "macro_auc": True,
+        "rmse": False,
+        "mae": False,
+    }
+
+
+def test_register_metric_requires_higher_is_better():
+    class _NoDirectionMetric:
+        name = "no_direction_metric"
+        version = "1"
+        tasks = frozenset({"cls"})
+        defaults: dict[str, str] = {}
+
+        def compute(self, samples, predictions, card, params):
+            raise NotImplementedError
+
+    try:
+        with pytest.raises(RegistryError, match="higher_is_better"):
+            register_metric(_NoDirectionMetric())
+    finally:
+        METRICS.pop("no_direction_metric", None)
+
+
+# --- fix round 1 minors ------------------------------------------------------------------------
+
+
+def test_log_loss_clip_avoids_infinite_loss_for_confidently_wrong_prediction():
+    """The EPS clip in LogLoss.compute is a numerical guard, not input validation: without it, a
+    score of exactly 0.0 for the true class makes log_loss blow up to inf. Pin the guard actually
+    mattering, not just being exercised at values nowhere near the boundary."""
+    samples = cls_samples(20, seed=0)
+    card = make_card("cls")
+    by_id = {c.id: c.name for c in card.categories}
+    names = [c.name for c in card.categories]
+    wrong = []
+    for s in samples:
+        true_name = by_id[s.labels.cls]  # type: ignore[union-attr]
+        other = next(n for n in names if n != true_name)
+        scores = {n: 0.0 for n in names}
+        scores[other] = 1.0
+        wrong.append(Prediction(sample_id=s.sample_id, scores=scores))
+    value = _run("log_loss", samples, card, wrong).value
+    assert math.isfinite(value)
+    assert value > 10.0
+
+
+def test_effective_params_merges_metric_defaults_with_overrides():
+    """No Task 6 metric declares non-empty defaults, so the merge branch of effective_params was
+    untested; a throwaway stub (never registered) exercises it directly."""
+
+    class _StubMetricWithDefaults:
+        name = "stub_metric_with_defaults"
+        version = "1"
+        tasks = frozenset({"cls"})
+        defaults = {"k": "1"}
+        higher_is_better = True
+
+        def compute(self, samples, predictions, card, params):
+            raise NotImplementedError
+
+    stub = _StubMetricWithDefaults()
+    assert effective_params(stub, {}) == {"k": "1"}
+    assert effective_params(stub, {"k": "2"}) == {"k": "2"}
+    with pytest.raises(ValidationFailed, match="params"):
+        effective_params(stub, {"unknown": "x"})

@@ -9,7 +9,7 @@ from sklearn.metrics import accuracy_score, f1_score, log_loss, roc_auc_score
 
 from vcp.core.errors import ValidationFailed
 from vcp.data.schema import DatasetCard
-from vcp.measure.metrics.base import gold_only, require_predictions
+from vcp.measure.metrics.base import gold_only, require_nonempty, require_predictions
 from vcp.measure.schema import MetricResult
 
 EPS = 1e-15
@@ -22,14 +22,19 @@ def _names(card: DatasetCard) -> list[str]:
 def _cls_arrays(samples, predictions, card) -> tuple[np.ndarray, np.ndarray, list[str]]:
     names = _names(card)
     index_of = {c.id: i for i, c in enumerate(card.categories)}
-    preds = require_predictions(gold_only(samples), predictions)
+    samples = require_nonempty(samples)
+    samples = gold_only(samples)
+    preds = require_predictions(samples, predictions)
     y_true = np.array([index_of[s.labels.cls] for s in samples], dtype=int)  # type: ignore[union-attr]
     scores = np.array([[p.scores[n] for n in names] for p in preds], dtype=float)  # type: ignore[index]
     return y_true, scores, names
 
 
 class Accuracy:
+    """Fraction of samples whose top-scoring class matches gold. Higher is better."""
+
     name, version, tasks, defaults = "accuracy", "1", frozenset({"cls"}), {}
+    higher_is_better = True
 
     def compute(self, samples, predictions, card, params) -> MetricResult:
         y_true, scores, _ = _cls_arrays(samples, predictions, card)
@@ -39,7 +44,10 @@ class Accuracy:
 
 
 class MacroF1:
+    """Macro-averaged F1 across classes (unweighted mean of per-class F1). Higher is better."""
+
     name, version, tasks, defaults = "macro_f1", "1", frozenset({"cls"}), {}
+    higher_is_better = True
 
     def compute(self, samples, predictions, card, params) -> MetricResult:
         y_true, scores, names = _cls_arrays(samples, predictions, card)
@@ -53,10 +61,17 @@ class MacroF1:
 
 
 class LogLoss:
+    """Multi-class cross-entropy of the predicted score distribution against gold. Lower is
+    better."""
+
     name, version, tasks, defaults = "log_loss", "1", frozenset({"cls"}), {}
+    higher_is_better = False
 
     def compute(self, samples, predictions, card, params) -> MetricResult:
         y_true, scores, names = _cls_arrays(samples, predictions, card)
+        # Numerical guard, not input validation: without this clip, a score of exactly 0.0 for
+        # the true class makes log_loss return inf. Scores outside [0, 1] are the
+        # converter/ingest layer's problem, not this metric's.
         probs = np.clip(scores, EPS, 1.0)
         probs = probs / probs.sum(axis=1, keepdims=True)
         return MetricResult(
@@ -65,10 +80,16 @@ class LogLoss:
 
 
 class MacroAuc:
+    """Macro-averaged ROC AUC across multilabel classes; a class with no positive or no negative
+    gold sample is skipped (undefined) rather than folded in as if it were 0 or 1. Higher is
+    better."""
+
     name, version, tasks, defaults = "macro_auc", "1", frozenset({"multilabel"}), {}
+    higher_is_better = True
 
     def compute(self, samples, predictions, card, params) -> MetricResult:
         names = _names(card)
+        samples = require_nonempty(samples)
         preds = require_predictions(gold_only(samples), predictions)
         y_true = np.array([[s.labels.targets[n] for n in names] for s in samples], dtype=float)  # type: ignore[index]
         scores = np.array([[p.scores[n] for n in names] for p in preds], dtype=float)  # type: ignore[index]
@@ -88,18 +109,35 @@ class MacroAuc:
 
 def _regression_errors(samples, predictions, card) -> np.ndarray:
     names = _names(card)
+    samples = require_nonempty(samples)
     preds = require_predictions(gold_only(samples), predictions)
     errors = []
     for s, p in zip(samples, preds, strict=True):
         for n in names:
             if p.targets is None or n not in p.targets:
-                raise ValidationFailed(f"sample {s.sample_id!r}: missing target {n!r}")
-            errors.append(p.targets[n] - s.labels.targets[n])  # type: ignore[index]
+                raise ValidationFailed(
+                    f"sample {s.sample_id!r}: missing target {n!r} in prediction",
+                    location=s.sample_id,
+                )
+            # _validate_regression (vcp.data.tasks) rejects an unknown target name but does NOT
+            # require every declared target to be present in gold, so a sample may legitimately
+            # carry only some of the card's targets. This side needs the same guard as the
+            # prediction side above, or a missing key here raises a bare KeyError.
+            gold_targets = s.labels.targets  # type: ignore[union-attr]
+            if gold_targets is None or n not in gold_targets:
+                raise ValidationFailed(
+                    f"sample {s.sample_id!r}: missing target {n!r} in gold labels",
+                    location=s.sample_id,
+                )
+            errors.append(p.targets[n] - gold_targets[n])
     return np.array(errors, dtype=float)
 
 
 class Rmse:
+    """Root-mean-squared error of regression targets against gold. Lower is better."""
+
     name, version, tasks, defaults = "rmse", "1", frozenset({"regression"}), {}
+    higher_is_better = False
 
     def compute(self, samples, predictions, card, params) -> MetricResult:
         e = _regression_errors(samples, predictions, card)
@@ -107,7 +145,10 @@ class Rmse:
 
 
 class Mae:
+    """Mean absolute error of regression targets against gold. Lower is better."""
+
     name, version, tasks, defaults = "mae", "1", frozenset({"regression"}), {}
+    higher_is_better = False
 
     def compute(self, samples, predictions, card, params) -> MetricResult:
         e = _regression_errors(samples, predictions, card)

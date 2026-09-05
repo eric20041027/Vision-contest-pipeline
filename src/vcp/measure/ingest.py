@@ -82,7 +82,11 @@ def _export_sha(export_dir: Path | None) -> str | None:
 
 
 def _run_card(
-    spec: IngestSpec, data_root: Path, dataset: Dataset, plan_subsets: set[str]
+    spec: IngestSpec,
+    data_root: Path,
+    dataset: Dataset,
+    plan_subsets: set[str],
+    export_sha: str | None,
 ) -> tuple[RunCard, bool]:
     """Existing run (checked against dataset / plan) or a fresh card."""
     if (run_dir(data_root, spec.run_id) / "run.yaml").is_file():
@@ -97,18 +101,12 @@ def _run_card(
                 f"run {spec.run_id!r} already declares trained_on={card.trained_on}; "
                 f"got {spec.trained_on}"
             )
-        # F1b: a differing --export-manifest / --framework / --notes on a later ingest into the
-        # same run must not be silently dropped -- treat each exactly like the trained_on
-        # conflict above (a located ValidationFailed), not a value the loaded, unchanged card
-        # keeps hiding.
-        export_sha = _export_sha(spec.export_dir)
-        if spec.export_dir is not None and export_sha != card.source.export_manifest_sha:
-            raise ValidationFailed(
-                f"run {spec.run_id!r} already declares "
-                f"export_manifest_sha={card.source.export_manifest_sha!r}; got {export_sha!r} "
-                f"from --export-manifest {spec.export_dir}; omit "
-                "--export-manifest"
-            )
+        # F1b: a differing --framework / --notes on a later ingest into the same run must not be
+        # silently dropped -- treat each exactly like the trained_on conflict above (a located
+        # ValidationFailed), not a value the loaded, unchanged card keeps hiding.
+        # --export-manifest is deliberately NOT among them: it varies per subset by design (one
+        # export directory per subset), so it is recorded on that subset's PredictionFile below
+        # instead of being compared against the run's.
         if spec.framework and spec.framework != card.source.framework:
             raise ValidationFailed(
                 f"run {spec.run_id!r} already declares framework={card.source.framework!r}; "
@@ -134,7 +132,7 @@ def _run_card(
         source=RunSource(
             framework=spec.framework,
             notes=spec.notes,
-            export_manifest_sha=_export_sha(spec.export_dir),
+            export_manifest_sha=export_sha,
         ),
         created_at=stamp(),
     )
@@ -154,7 +152,12 @@ def ingest(spec: IngestSpec) -> IngestResult:
         )
     plan.subset(spec.subset)  # PlanMismatchError for an unknown subset
     ids = plan.ids_in(spec.subset)
-    card, created = _run_card(spec, paths.data_root, dataset, {s.name for s in plan.subsets})
+    # Read once, on every path: a --export-manifest that is not a vcp export directory must fail
+    # here (F1a) whether the run is new or already exists.
+    export_sha = _export_sha(spec.export_dir)
+    card, created = _run_card(
+        spec, paths.data_root, dataset, {s.name for s in plan.subsets}, export_sha
+    )
     converter = get_converter(spec.format)
     ctx = ConvertContext(dataset, ids, spec.export_dir, dict(spec.options))
     preds = converter.convert(spec.src, ctx)
@@ -195,6 +198,7 @@ def ingest(spec: IngestSpec) -> IngestResult:
         empty=stats.empty,
         format_in=spec.format,
         ingested_at=stamp(),
+        export_manifest_sha=export_sha,
     )
     card = card.model_copy(update={"predictions": {**card.predictions, spec.subset: entry}})
     save_run(paths.data_root, card)

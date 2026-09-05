@@ -559,3 +559,93 @@ def test_load_plugins_returns_loaded_names_and_raises_on_bad_module():
     assert load_plugins(["json"]) == ["json"]
     with pytest.raises(VcpError, match="cannot import plugin"):
         load_plugins(["definitely_not_a_real_module_xyz"])
+
+
+PREREG_BASE = [
+    "eval",
+    "preregister",
+    "--dataset",
+    "tiny",
+    "--id",
+    "p1",
+    "--claim",
+    "cand beats base",
+    "--component",
+    "full-coverage",
+    "--class",
+    "model",
+    "--baseline-run",
+    "base",
+    "--candidate-run",
+    "cand",
+    "--metric",
+    "coco_map",
+]
+
+
+def test_eval_preregister_and_judge_cli(roots, tmp_path):
+    ds, plan, _ = seed_det(roots, n=60)
+    # each eval subset holds 6 samples: base leaves 4 of them unpredicted, cand covers all 6
+    for run_id, drop in (("base", 4), ("cand", 0)):
+        for subset in ("valA", "valB"):
+            r = ingest_perfect(roots, tmp_path, ds, plan, run_id, subset, drop=drop)
+            assert r.exit_code == 0, r.output
+    assert runner.invoke(app, ["eval", "measure", "--run", "base"]).exit_code == 0
+    args = PREREG_BASE
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0, r.output
+    assert "prereg=p1" in _last_verdict(r.output)
+    assert (roots.configs / "datasets" / "tiny" / "prereg" / "p1.yaml").is_file()
+    r = runner.invoke(app, ["eval", "judge", "--dataset", "tiny", "--prereg", "p1"])
+    assert r.exit_code == 0 and "verdict=FAIL" in _last_verdict(r.output)  # cand not measured yet
+    assert "missing_readings" in r.output
+    # the verdict is data, not a tool status -- until --strict says otherwise
+    r = runner.invoke(app, ["eval", "judge", "--dataset", "tiny", "--prereg", "p1", "--strict"])
+    assert r.exit_code == 1 and "verdict=FAIL" in _last_verdict(r.output)
+    assert runner.invoke(app, ["eval", "measure", "--run", "cand"]).exit_code == 0
+    judge_args = ["eval", "judge", "--dataset", "tiny", "--prereg", "p1", "--resamples", "30"]
+    r = runner.invoke(app, judge_args)
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "verdict=PASS" in v and "bases_positive=2" in v
+    r = runner.invoke(app, [*args[:4], "--id", "p2", *args[6:]])  # same candidate, now measured
+    assert r.exit_code == 1 and "already_measured" in _last_verdict(r.output)
+    r = runner.invoke(app, ["eval", "judge", "--dataset", "tiny", "--prereg", "p404", "--strict"])
+    assert r.exit_code == 1
+    # --json puts the judgement on stdout and the VERDICT on stderr
+    r = runner.invoke(app, [*judge_args, "--json"])
+    assert r.exit_code == 0, r.output
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    judgement = doc["result"]["judgement"]
+    assert judgement["verdict"] == "PASS" and judgement["higher_is_better"] is True
+    assert set(judgement["per_subset"]) == {"valA", "valB"}
+    assert "VERDICT" not in r.stdout and "VERDICT cmd=eval.judge" in r.stderr
+
+
+def test_eval_preregister_and_judge_failures_cli(roots, tmp_path):
+    """Each way a user can get these two commands wrong maps to its own status and exit code."""
+    ds, plan, _ = seed_det(roots, n=40)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "base", "valA").exit_code == 0
+    assert runner.invoke(app, PREREG_BASE).exit_code == 0
+    other_id = [*PREREG_BASE[:4], "--id", "p9", *PREREG_BASE[6:]]
+    judge = ["eval", "judge", "--dataset", "tiny", "--prereg", "p1"]
+    cases = [
+        (PREREG_BASE, 1, "already exists"),
+        ([*other_id[:10], "--class", "bogus", *other_id[12:]], 1, "--class must be one of"),
+        ([*other_id, "--subsets", ""], 1, "no subsets"),
+        ([*other_id, "--metric", "accuracy"], 1, "not applicable"),
+        ([*other_id, "--metric", "nope"], 2, "RegistryError"),
+        ([*other_id, "--params", "foo"], 1, "--params expects key=value"),
+        ([*other_id, "--sigma-ratio", "nan"], 1, "ValidationFailed"),
+        ([*other_id, "--t-min", "inf"], 1, "ValidationFailed"),
+        (judge + ["--seed", "-1"], 1, "seed"),
+        (judge + ["--resamples", "1"], 1, "resamples"),
+        (["eval", "judge", "--dataset", "tiny", "--prereg", "ghost"], 1, "not found"),
+    ]
+    for args, code, needle in cases:
+        r = runner.invoke(app, args)
+        assert r.exit_code == code, (args, r.output)
+        assert needle in _last_verdict(r.output), (args, r.output)
+    assert sorted(p.name for p in (roots.configs / "datasets" / "tiny" / "prereg").iterdir()) == [
+        "p1.yaml"
+    ]

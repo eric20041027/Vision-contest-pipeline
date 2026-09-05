@@ -191,6 +191,15 @@ class PreRegistration(_Strict):
     sigma_ratio: float = 1.0
     created_at: str
 
+    @field_validator("t_min", "sigma_ratio")
+    @classmethod
+    def _finite_threshold(cls, v: float) -> float:
+        # A pre-registration exists to make a bar binding, and nan silently un-binds one:
+        # `t >= nan` is False for every subset (nothing ever counts) and `mean_delta < nan`
+        # is False too (the sigma_p condition passes vacuously). Mirrors Anchor.tolerance.
+        _finite([v], "pre-registration threshold")
+        return v
+
 
 class SubsetJudgement(_Strict):
     baseline: float
@@ -214,6 +223,9 @@ class Judgement(_Strict):
     candidate_run: str
     metric: str
     params: dict[str, str]
+    # Which way is up for this metric, so a reader of judgements.jsonl can interpret `delta`
+    # (always signed so that positive means better) without consulting the metric registry.
+    higher_is_better: bool
     per_subset: dict[str, SubsetJudgement]
     bases_positive: int
     sigma_p: SigmaRef | None

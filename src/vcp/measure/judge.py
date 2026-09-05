@@ -177,7 +177,13 @@ def _assert_reading_matches_card(run_id: str, subset: str, reading: Reading, car
     judging on a stale reading would silently mix its old baseline/candidate value with a
     fresh bootstrap over the NEW file.
     """
-    current = card.predictions[subset].sha256
+    entry = card.predictions.get(subset)
+    if entry is None:  # only a hand-edited run.yaml can get here; keep it a located FAIL
+        raise ValidationFailed(
+            f"run {run_id!r} has no predictions for subset {subset!r} but a reading for it "
+            f"exists; re-ingest and re-measure {run_id!r} before judging"
+        )
+    current = entry.sha256
     if reading.prediction_sha != current:
         raise ValidationFailed(
             f"reading {reading.reading_id[:12]} for {run_id!r}/{subset!r} was taken on "

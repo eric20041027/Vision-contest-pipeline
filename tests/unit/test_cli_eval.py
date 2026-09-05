@@ -640,7 +640,7 @@ def test_eval_preregister_and_judge_failures_cli(roots, tmp_path):
         ([*other_id, "--params", "foo"], 1, "--params expects key=value"),
         # Minor 6: the class name alone doesn't say WHICH validation failed.
         ([*other_id, "--sigma-ratio", "nan"], 1, "must be finite"),
-        ([*other_id, "--t-min", "inf"], 1, "ValidationFailed"),
+        ([*other_id, "--t-min", "inf"], 1, "must be finite"),
         (judge + ["--seed", "-1"], 1, "seed"),
         (judge + ["--resamples", "1"], 1, "resamples"),
         (["eval", "judge", "--dataset", "tiny", "--prereg", "ghost"], 1, "not found"),

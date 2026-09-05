@@ -31,3 +31,5 @@ uv run vcp data import --importer coco --src C:/vcp-data/raw/marine-val282 --nam
 4. `uv run pytest tests/integration -m realdata`。
 
 期望值由 CSV 推算（子集內的 study 數、十二欄皆有值的 gold 數、每 study 的 series 數），不寫死。
+
+`-m realdata` 也會跑量測層的 `test_rsna_knee_eval.py`：拿 gold 標籤本身當「完美預測」、亂數當「隨機預測」，斷言真實 12 類多標籤 card 的 macro AUC 分別是 1.0 與大約 0.5（夾在 0.25–0.75）。它只用 `rsna-knee` 的 `dataset.yaml` 與 `samples.jsonl`，不需要影像，資料缺席一樣 skip。

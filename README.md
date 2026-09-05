@@ -1,6 +1,6 @@
 # vcp — vision contest pipeline
 
-可重複使用的影像競賽框架：標準資料格式、多重驗證集切分、lineage、進場稽核、materialize 快取；後續子專案接量測護欄與提交治理。設計文件見 `docs/superpowers/specs/`，操作慣例見 `CLAUDE.md`。
+可重複使用的影像競賽框架：標準資料格式、多重驗證集切分、lineage、進場稽核、materialize 快取；量測層接標準預測格式、指標、護欄、σ_p、預登記與判決，提交治理留後續子專案。設計文件見 `docs/superpowers/specs/`，操作慣例見 `CLAUDE.md`。
 
 ```bash
 uv sync                      # 核心 venv；DICOM 支援：uv sync --extra dicom
@@ -21,6 +21,51 @@ uv run pytest --cov=vcp
 | `vcp data materialize` | 每個 view 解碼一次成 npy / png 快取 + manifest | `--mode`、`--resize`、`--stack-seq`、`--window`、`--workers`、`--force`、`--decoder` |
 
 每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。
+
+## 量測層命令 `vcp eval`
+
+| 命令 | 作用 | 主要選項 |
+|---|---|---|
+| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--keep-input`、`--replace`、`--opt allow_unknown=true` |
+| `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數 | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
+| `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
+| `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method splithalf\|bootstrap\|prior`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
+| `vcp eval preregister` | 量候選之前先把主張寫死（進 git） | `--dataset`、`--id`、`--claim`、`--component`、`--class model\|tuning`、`--baseline-run`、`--candidate-run`、`--metric`、`--params`、`--subsets`、`--t-min`、`--min-bases`、`--sigma-method`、`--sigma-ratio` |
+| `vcp eval judge` | 配對 bootstrap → Δ、se、t、基底數、σ_p 條件 → 判決 | `--dataset`、`--prereg`、`--resamples`、`--seed`、`--strict`、`--unseal --reason` |
+| `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p | `--dataset`、`--max-age-hours` |
+| `vcp eval report` | 全部 run × subset 讀數（全精度）+ 每個判決的 last-vs-last | `--dataset`、`--metric`、`--plan` |
+
+共用選項：`--json`、`--data-root`、`--configs-root`、`--plugin <module>`（可重複）。狀態與 exit code：未知 sample_id、缺讀數、選項不合法 → FAIL(1)；沒有錨點、σ_p 為 0、有孤兒預登記 → WARN(0)；護欄對不上 → ABORT(2) 且一列讀數都不寫，VERDICT 帶 `guardrail=FAIL anchor=<reading_id> got=<值>`。判決本身不是工具錯誤：`status=OK verdict=PASS|FAIL|INVALID`，要讓 FAIL 擋 CI 就加 `--strict`。
+
+### 標準預測格式
+
+`runs/<run_id>/predictions/<subset>.jsonl`，一列一個 sample，依 `sample_id` 排序、LF、UTF-8。payload 欄位由 task 決定，其餘為 null：
+
+```json
+{"sample_id": "s0001", "boxes": [{"x": 12.0, "y": 8.0, "w": 40.0, "h": 25.0, "category_id": 3, "score": 0.91, "view": 0}]}
+{"sample_id": "s0002", "masks": [{"category_id": 1, "score": 0.88, "rle": "<COCO compressed RLE>", "meta": {"size": [512, 512]}}]}
+{"sample_id": "s0003", "scores": {"cat": 0.7, "dog": 0.2, "bird": 0.1}}
+{"sample_id": "s0004", "targets": {"age": 41.5}}
+```
+
+det → `boxes`、seg → `masks`（`rle` 與 `polygon` 恰一）、cls / multilabel → `scores`（鍵 = card 的類別名）、regression → `targets`。cls / multilabel / regression 每個 sample 都要有一列，缺列即 FAIL；det / seg 缺列視為零偵測，計入 `empty`。四種轉換器負責把框架輸出轉成這個格式，`yolo_txt` 與 `coco_results` 需要 `--export-manifest` 指向對應子集的 `vcp data export` 目錄。
+
+### 一次判決的流程
+
+```bash
+uv run vcp eval ingest --run base --dataset D --plan fixed-v1 --subset valA --format yolo_txt \
+  --src runs/base/valA --export-manifest exports/valA --trained-on train   # valB 同樣再跑一次
+uv run vcp eval measure --run base
+uv run vcp eval anchor --run base --subset valA --metric coco_map          # 之後每次 measure 都重驗
+uv run vcp eval preregister --dataset D --id p1 --claim "新 backbone 更好" --component backbone-v2 \
+  --class model --baseline-run base --candidate-run cand --metric coco_map # 先寫死，才准量候選
+uv run vcp eval measure --run cand
+uv run vcp eval judge --dataset D --prereg p1 --strict
+```
+
+`--class tuning` 的主張還要先有 σ_p（`vcp eval sigma --method splithalf|bootstrap|prior`），否則判決 `FAIL reason=no_sigma`。最後用 `vcp eval status --dataset D` 看有沒有寫了卻沒判的主張，`vcp eval report --dataset D` 看全部讀數與 last-vs-last。
+
+比賽官方計分器或比賽專屬格式放在 `projects/<contest>/`，以 `--plugin projects.<contest>.metrics` 匯入登記，`src/vcp` 不出現比賽名稱。
 
 ## 匯入器與 `rows_read` 的語意
 

@@ -13,7 +13,7 @@
 - 設定根目錄：`VCP_CONFIGS_ROOT`（預設 repo 的 `configs/`）。`configs/datasets/<name>/dataset.yaml` 與 `splits/*.json` 進 git；plan 檔一旦寫入不可修改，要改就換 plan-id。
 - 整合測試讀 `VCP_REALDATA_ROOT` / `VCP_REALDATA_CONFIGS`，資料缺席即 skip；`raw/<name>/` 永不修改。
 - `datasets/<name>/cache/materialize/<mode>[-r<長邊>]/` 是可搬移的解碼快取，`manifest.jsonl` 為權威對照。
-- `runs/<run_id>/`（`run.yaml`、`predictions/<subset>.jsonl`）與 `measure/<name>/`（`readings.jsonl`、`judgements.jsonl`、`sigma.jsonl`、`anchors.json`、`anchors.log.jsonl`）只增不改：讀數、判決、σ_p 是 append-only 台帳，錨點整份換寫但每次都先寫 `anchors.log.jsonl`。預登記 `configs/datasets/<name>/prereg/<id>.yaml` 與 `prereg.log.jsonl` 進 git，寫下就不改，要改就換 id。
+- `measure/<name>/` 只增不改：`readings.jsonl`、`judgements.jsonl`、`sigma.jsonl` 是 append-only 台帳，錨點 `anchors.json` 整份換寫但每次都先寫 `anchors.log.jsonl`。`runs/<run_id>/`（`run.yaml`、`predictions/<subset>.jsonl`）不是只增不改，而是「換寫留痕」：`ingest --replace` 會重寫 `run.yaml` 與該子集的預測檔，舊 sha 進 `history.jsonl`（`history.jsonl` 本身只增不改）。預登記 `configs/datasets/<name>/prereg/<id>.yaml` 與 `prereg.log.jsonl` 進 git，寫下就不改，要改就換 id。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`

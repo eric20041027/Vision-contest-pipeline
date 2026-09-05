@@ -34,6 +34,10 @@ def parse_opts(opts: list[str] | None, option: str = "--opt") -> dict[str, str]:
     return out
 
 
+def parse_csv(value: str | None) -> list[str]:
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
 def render_table(table: dict[str, dict[str, int]], counts: dict[str, int]) -> str:
     subsets = list(table)
     labels = sorted({label for row in table.values() for label in row})

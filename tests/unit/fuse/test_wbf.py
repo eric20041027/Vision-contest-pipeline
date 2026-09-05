@@ -84,6 +84,18 @@ def test_non_overlapping_boxes_stay_apart_and_are_penalised():
     ]
 
 
+def test_iou_exactly_at_threshold_does_not_merge():
+    # (0,0,4,4) vs (0,0,4,8): inter = 4*4 = 16, union = 16+32-16 = 32, IoU = 0.5 exactly
+    # (an exact binary fraction, so no floating-point rounding hides the boundary).
+    s = [_sample("s1")]
+    m1 = _member("a", 1.0, {"s1": [_box(0, 0, 4, 4, 0.8)]})
+    m2 = _member("b", 1.0, {"s1": [_box(0, 0, 4, 8, 0.6)]})
+    boxes = _fuse([m1, m2], _ctx(s, iou=0.5))["s1"]
+    assert len(boxes) == 2  # IoU == iou is not "> iou" -- the boundary itself does not merge
+    boxes = _fuse([m1, m2], _ctx(s, iou=0.49))["s1"]
+    assert len(boxes) == 1  # a slightly lower threshold does merge them
+
+
 def test_categories_and_views_are_never_merged():
     s = [
         Sample(sample_id="s1", views=[View(path="a.jpg"), View(path="b.jpg")], label_source="none")
@@ -197,6 +209,9 @@ def test_bad_params_fail_with_param_field():
         assert ei.value.fields == {"param": next(iter(params))}
 
 
+# The equivalence was verified by hand against upstream ensemble_boxes_wbf.py
+# (weighted_boxes_fusion, allows_overflow=False) on 2026-09-05 during the Plan 4 final review;
+# this test re-checks it whenever the package happens to be installed.
 def test_matches_ensemble_boxes_when_installed():
     eb = pytest.importorskip("ensemble_boxes")
     size = 100.0

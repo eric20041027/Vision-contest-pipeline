@@ -86,7 +86,7 @@ uv run vcp eval measure --run fuse-r1 && uv run vcp eval measure --run fuse-r1-m
 uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自己的位置；FAIL = 降權或移除，換新配方 id 再來
 ```
 
-準入 = 「有它 vs 沒它」：候選是完整配方、基準是少了該成員的變體，主張 class 固定為 model。完整配方量測過就不能再寫準入預登記（`candidate_measured`），所以先 ablate 再 measure。
+準入 = 「有它 vs 沒它」：候選是完整配方、基準是少了該成員的變體，主張 class 固定為 model。完整配方量測過就不能再寫準入預登記（`candidate_measured`），所以先 ablate 再 measure。`ablate` 沒有 `--replace`：成員重新 ingest 後，先對每個 `fuse-<R>*` run 跑 `vcp fuse build --replace`，再重跑 ablate（會是 cached）。
 
 `wbf`（boxes）：`iou`、`skip`（輸入框門檻）、`min_score`（融合後門檻）、`max_per_image`、`conf_type=avg|max`，語意同 ensemble-boxes 的 `weighted_boxes_fusion(allows_overflow=False)` 但在像素座標運算、依 (view, category) 分群、有尺寸才裁邊。`mean`（scores / targets）加權平均；`rank_mean`（scores）以子集為母體的名次平均，AUC 型指標用、不是機率。
 

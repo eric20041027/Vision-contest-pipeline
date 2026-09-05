@@ -12,6 +12,7 @@ from vcp.cli_common import (
     ConfigsRootOpt,
     DataRootOpt,
     JsonOpt,
+    parse_csv,
     parse_opts,
     run_command,
 )
@@ -37,10 +38,6 @@ PluginOpt = Annotated[
     list[str] | None,
     typer.Option("--plugin", help="python module to import (registers fusers / metrics)"),
 ]
-
-
-def _csv(value: str | None) -> list[str]:
-    return [v.strip() for v in (value or "").split(",") if v.strip()]
 
 
 @fuse_app.command("recipe")
@@ -126,7 +123,7 @@ def build_cmd(
                 dataset=dataset,
                 recipe_id=recipe_id,
                 run_id=run,
-                subsets=_csv(subsets),
+                subsets=parse_csv(subsets),
                 replace=replace,
                 data_root=data_root,
                 configs_root=configs_root,
@@ -191,12 +188,12 @@ def ablate_cmd(
             spec = AblateSpec(
                 dataset=dataset,
                 recipe_id=recipe_id,
-                subsets=_csv(subsets),
+                subsets=parse_csv(subsets),
                 build=build,
                 preregister=preregister,
                 metric=metric,
                 metric_params=parse_opts(metric_params, "--metric-params"),
-                bases=_csv(bases),
+                bases=parse_csv(bases),
                 t_min=t_min,
                 min_bases=min_bases,
                 data_root=data_root,

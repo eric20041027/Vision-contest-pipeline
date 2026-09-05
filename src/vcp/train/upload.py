@@ -1,10 +1,8 @@
-"""Upload registered checkpoints to an rclone remote or a local directory, and
-verify (spec 6.3).
+"""Upload registered checkpoints to an rclone remote or a local directory, and verify (spec 6.3).
 
-A copy is not a backup until its bytes are known to match: rclone destinations
-are checked with ``rclone hashsum sha256``, local ones by reading the copy back.
-rclone is not a dependency; it is shelled out through an injectable runner so
-the whole path is testable without a remote.
+A copy is not a backup until its bytes are known to match: rclone destinations are checked with
+``rclone hashsum sha256``, local ones by reading the copy back. rclone is not a dependency; it is
+shelled out through an injectable runner so the whole path is testable without a remote.
 """
 
 from __future__ import annotations
@@ -42,17 +40,12 @@ def dest_kind(dest: str) -> Literal["rclone", "local"]:
     return "rclone" if _REMOTE.match(dest) and not _DRIVE.match(dest) else "local"
 
 
-def default_runner(
-    args: list[str],
-) -> subprocess.CompletedProcess[str]:
+def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
-def _targets(
-    checkpoints: list[CheckpointRecord],
-) -> dict[str, CheckpointRecord]:
-    """Checkpoints by destination file name; two different files with one name
-    cannot coexist."""
+def _targets(checkpoints: list[CheckpointRecord]) -> dict[str, CheckpointRecord]:
+    """Checkpoints by destination file name; two different files with one name cannot coexist."""
     by_name: dict[str, CheckpointRecord] = {}
     for c in checkpoints:
         name = Path(c.path).name
@@ -74,8 +67,7 @@ def _source(c: CheckpointRecord, data_root: Path) -> Path:
     if sha256_file(src) != c.sha256:
         raise ValidationFailed(
             f"checkpoint {c.path} changed since it was registered (sha256 differs); "
-            "register the new file with a new attempt instead of uploading it "
-            "under the old sha",
+            "register the new file with a new attempt instead of uploading it under the old sha",
             fields={"checkpoint": c.path},
         )
     return src
@@ -83,20 +75,12 @@ def _source(c: CheckpointRecord, data_root: Path) -> Path:
 
 def _record(dest: str, kind: str, name: str, sha: str, verified: bool) -> UploadRecord:
     return UploadRecord(
-        dest=dest,
-        kind=kind,
-        name=name,
-        sha256=sha,
-        verified=verified,
-        uploaded_at=stamp(),
+        dest=dest, kind=kind, name=name, sha256=sha, verified=verified, uploaded_at=stamp()
     )
 
 
 def _upload_local(
-    record: TrainRecord,
-    dest: str,
-    targets: dict[str, CheckpointRecord],
-    data_root: Path,
+    record: TrainRecord, dest: str, targets: dict[str, CheckpointRecord], data_root: Path
 ) -> UploadOutcome:
     sources = {name: _source(c, data_root) for name, c in targets.items()}  # all checks first
     base = Path(dest) / record.run_id
@@ -116,8 +100,7 @@ def _upload_local(
 
 
 def _hashsum(runner: Runner, base: str) -> dict[str, str]:
-    """``rclone hashsum sha256 <base>`` as {name: sha}; an unlistable base is
-    simply empty."""
+    """``rclone hashsum sha256 <base>`` as {name: sha}; an unlistable base is simply empty."""
     proc = runner(["rclone", "hashsum", "sha256", base])
     if proc.returncode != 0:
         return {}
@@ -144,15 +127,7 @@ def _upload_rclone(
         if before.get(name) == c.sha256:
             skipped += 1
             continue
-        proc = runner(
-            [
-                "rclone",
-                "copyto",
-                str(sources[name]),
-                f"{base}/{name}",
-                "--checksum",
-            ]
-        )
+        proc = runner(["rclone", "copyto", str(sources[name]), f"{base}/{name}", "--checksum"])
         if proc.returncode != 0:
             raise VcpError(
                 f"rclone copyto failed (exit {proc.returncode}) for {name}: "
@@ -175,8 +150,7 @@ def upload(
     only_final: bool = False,
     runner: Runner | None = None,
 ) -> UploadOutcome:
-    """Copy the run's registered checkpoints to ``dest/<run_id>/`` and verify
-    every one."""
+    """Copy the run's registered checkpoints to ``dest/<run_id>/`` and verify every one."""
     chosen = [c for c in record.checkpoints if c.final] if only_final else list(record.checkpoints)
     targets = _targets(chosen)
     if dest_kind(dest) == "local":

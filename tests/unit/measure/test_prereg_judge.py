@@ -20,9 +20,9 @@ from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import T_CAP, JudgeSpec, _append_judgement, _t, judge_prereg
-from vcp.measure.ledger import ReadingsLedger, read_rows
+from vcp.measure.ledger import ReadingsLedger, read_rows, reading_id
 from vcp.measure.measure import MeasureSpec, measure_run
-from vcp.measure.metrics import METRICS, register_metric
+from vcp.measure.metrics import METRICS, params_key, register_metric
 from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg, list_preregs, load_prereg, prereg_time
 from vcp.measure.schema import Judgement, MetricResult, PreRegistration, SubsetJudgement
@@ -223,6 +223,9 @@ def test_judge_fail_pass_and_sigma_rules(roots, tmp_path):
     j3 = _judge(roots, "p002")
     assert j3.verdict == "PASS" and j3.sigma_p.method == "prior" and j3.bases_positive == 2
     assert j3.higher_is_better is True and j3.params == COCO_PARAMS
+    # The metric implementation the numbers beside it came from (spec 7: a changed
+    # implementation bumps the version), so the row is reproducible from the ledgers alone.
+    assert j3.metric_version == "1" == METRICS["coco_map"].version
     assert all(s.t >= 2.0 for s in j3.per_subset.values())
     _sigma(roots, 5.0, "huge")
     j4 = _judge(roots, "p002")
@@ -410,6 +413,45 @@ def test_judge_failures(roots, tmp_path):
         _judge(roots)
 
 
+def test_judge_records_the_metric_version_and_refuses_two_of_them(roots, tmp_path):
+    """A judgement must be readable from the ledgers alone: ``metric_version`` says which
+    implementation produced the values on the row, without hopping through ``reading_ids``.
+
+    Two versions in one judgement is not a version to record but a comparison that should not
+    be made -- the baseline and the candidate were scored by different code -- so it is a
+    refusal, like the two-plans one, not a verdict.
+    """
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    create_prereg(paths, _pr(), _ledger(paths))
+    _measure(roots, "perfect")
+    _measure(roots, "noisy")
+    assert _judge(roots).metric_version == "1"
+    # The candidate re-measured by a bumped coco_map: a distinct reading (metric_version is
+    # part of reading_id) and, being newer, the one the judge would now pick for that cell.
+    original = next(r for r in _ledger(paths).rows if r.run_id == "noisy" and r.subset == "valA")
+    _ledger(paths).append(
+        original.model_copy(
+            update={
+                "metric_version": "2",
+                "ts": "2099-01-01T00:00:00.000Z",
+                "reading_id": reading_id(
+                    "noisy",
+                    "fixed-v1",
+                    "valA",
+                    "coco_map",
+                    "2",
+                    params_key(original.params),
+                    original.prediction_sha,
+                ),
+            }
+        )
+    )
+    before = len(read_rows(paths.measure_dir / "judgements.jsonl", Judgement))
+    with pytest.raises(ValidationFailed, match="different coco_map versions"):
+        _judge(roots)
+    assert len(read_rows(paths.measure_dir / "judgements.jsonl", Judgement)) == before
+
+
 def test_judge_refuses_readings_from_two_different_plans(roots, tmp_path):
     """A subset name means different samples under each plan, so comparing readings taken
     under two of them would score one run's predictions against the other's samples."""
@@ -503,6 +545,7 @@ def test_append_judgement_refuses_a_non_finite_field(tmp_path):
         baseline_run="a",
         candidate_run="b",
         metric="coco_map",
+        metric_version="1",
         params={},
         higher_is_better=True,
         per_subset={

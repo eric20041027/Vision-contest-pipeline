@@ -229,6 +229,10 @@ class Judgement(_Strict):
     baseline_run: str
     candidate_run: str
     metric: str
+    # The metric implementation the readings underneath were taken with (spec 7: a changed
+    # implementation bumps the version). Recorded here, as it is on a Reading, so a judgement
+    # is reproducible from the ledgers alone instead of through its reading_ids.
+    metric_version: str
     params: dict[str, str]
     # Which way is up for this metric, so a reader of judgements.jsonl can interpret `delta`
     # (always signed so that positive means better) without consulting the metric registry.

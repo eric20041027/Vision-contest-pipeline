@@ -303,3 +303,16 @@ def effective_params(fuser: Fuser, params: dict[str, str]) -> dict[str, str]   #
 ## 13. 不在範圍
 
 權重 / iou / skip 的搜尋與 OOF 防過擬合、class-aware 權重、seg（masks）融合、TTA 與多 checkpoint 推論、內建 rescorer 或任何學習型後處理、跨 dataset 套用配方與 eval/test 兩側核對（子專案 5）、NMS / soft-NMS（日後登記項）、per-class 門檻、唯讀的 `vcp fuse show`。以上皆為已預留的擴充點，不是設計缺口。
+
+## 14. v2 補充決定（Plan 4 實作與審查的定案，2026-09-05）
+
+以下為實作期間由計畫或審查裁決、原 spec 未明說或已被推翻的規則，與前文衝突時以本節為準。
+
+1. **`Fuser` 多一個 `check_params(params) -> None`**（§7.1 列的五項之外）：`recipe` 命令要在寫檔前拒絕解析不了的參數值（§6「params 可解析」），登記表無法知道各融合器的型別。`mean` / `rank_mean` 的實作是空的；`resolve_params` = `effective_params` + `check_params`。
+2. **`ablate --preregister` 的 `--bases` 在任何寫入前驗**：非空、無重複、每個都是 plan 的子集（`PlanMismatchError`），**含 `--no-build`**；建構時再驗 bases ⊆ 建的子集。原 §6.3 只寫了後者，`create_prereg` 的寫入時驗證不算數（它在配方與 run 寫完之後才跑）。
+3. **`fuse.json` 每次 build 重算中繼資料**：`method_version`、`vcp_version`、`members[].trained_on`、`params` 都以本次 build 為準，只把既有的 `subsets` 帶過去——§4.2 的「整檔重寫」明確為此意。`load_record` 驗 `run_id` 與目錄相符（同 `load_run` / `load_recipe`）。
+4. **`fields` 的字彙補 `sample=`**：§7.3 / §7.4 的缺 sample、鍵不齊錯誤帶 `member=` 與 `sample=`（計畫的 Global Constraints 清單漏了後者）。
+5. **§11 的「半對」判決只斷言存在且非 INVALID**：合成資料上 Δ 的符號不可靠，端到端測試斷言 `good` PASS、`noise` FAIL（噪音 = 與 gold 永不重疊的遠處假陽性，Δ ≤ 0 是結構保證）、`half` ∈ {PASS, FAIL}。§12 第 3 條依此解讀。
+6. **共用 helper**：`cli_common.parse_csv` 取代 `cli_eval` / `cli_fuse` 各自的 `_csv`；`measure/predictions.predictions_text` 是 `write_predictions` 與 `build.content_sha` 唯一的序列化來源（原計畫層決定 2 的「刻意重複」作廢）。
+7. **`ablate` 沒有 `--replace`**：成員重新 ingest 後，先對每個 `fuse-<R>*` run 跑 `vcp fuse build --replace`，再重跑 ablate（會是 cached）。
+8. **WBF 的 oracle**：ensemble-boxes 不進任何依賴群組；等價性於 2026-09-05 對上游 `weighted_boxes_fusion(allows_overflow=False)` 人工逐行核對，紀錄在 `test_wbf.py` 的 oracle 測試上方。

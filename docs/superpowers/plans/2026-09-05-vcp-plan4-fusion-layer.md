@@ -18,7 +18,7 @@
 - 不可變性：配方檔與變體配方檔寫後不改（要改就換 id）；`run.yaml` 與 `fuse.json` 換寫留痕；預測檔取代必經 `--replace` 並在 `history.jsonl` 記舊 sha；預登記走量測層的 `create_prereg`，不另寫。
 - 全有或全無：`recipe` / `build` / `ablate` 三個命令都先做完所有檢查再寫第一個檔（spec §6.2、§6.3）。
 - 寫入會被 hash 或被 git 紀錄的文字檔一律 `encoding="utf-8", newline="\n"`；讀檔一律指定 `encoding="utf-8"`；JSON 用 `json.dumps(..., ensure_ascii=False)`。
-- 錯誤語意：使用者資料或選項問題 → `ValidationFailed`（FAIL）；成員預測檔 sha 不符 → `IntegrityError`（FAIL）；成員 dataset / hash / plan 不符、subset 不在 plan → `PlanMismatchError`（ABORT）；未知 method、重複登記 → `RegistryError`（ABORT）。`reason=` 的固定字彙（`recipe_exists`、`no_common_subset`、`single_member`、`candidate_measured`、`output_exists`、`run_bound_elsewhere`、`variant_conflict`）以**訊息前綴**呈現（同量測層的 `already_measured`：`run_command` 把例外文字放進 `reason=`），不放進 `VcpError.fields`；`fields` 只放 `member=` / `subset=` / `run=` / `recipe=` / `prereg=` / `param=` / `method=` / `payload=`。
+- 錯誤語意：使用者資料或選項問題 → `ValidationFailed`（FAIL）；成員預測檔 sha 不符 → `IntegrityError`（FAIL）；成員 dataset / hash / plan 不符、subset 不在 plan → `PlanMismatchError`（ABORT）；未知 method、重複登記 → `RegistryError`（ABORT）。`reason=` 的固定字彙（`recipe_exists`、`no_common_subset`、`single_member`、`candidate_measured`、`output_exists`、`run_bound_elsewhere`、`variant_conflict`）以**訊息前綴**呈現（同量測層的 `already_measured`：`run_command` 把例外文字放進 `reason=`），不放進 `VcpError.fields`；`fields` 只放 `member=` / `subset=` / `run=` / `recipe=` / `prereg=` / `param=` / `method=` / `payload=` / `sample=`（最後一個是 spec §7.3 的缺 sample / 鍵不齊錯誤；後記修正）。
 - 決定性：同成員 sha + 同配方 ⇒ 同輸出 sha。所有排序穩定、沒有隨機、tie 依成員順序再依檔內順序。
 - 測試：`tests/conftest.py` 的 autouse fixture 已把兩個根目錄指到 tmp；需要真實路徑物件時用 `roots` fixture（`roots.data`、`roots.configs`）；夾具 helper 在 `tests/helpers.py`（`from helpers import ...`，`det_with_runs` 給 det 資料集 + `perfect`（valA/valB/holdout）與 `noisy`（valA/valB）兩個 run，`dataset_with_perfect_run` 給任意任務的一個 run）；真資料測試放 `tests/integration/`、標記 `realdata`、資料缺席即 skip。
 - ruff：line-length 100、select `E F I UP B TID`；`uv run ruff format --check .` 也要過。覆蓋率門檻 80%（`uv run pytest --cov=vcp`）。
@@ -812,7 +812,7 @@ from vcp.fuse.fusers import FuseContext, MemberPredictions, get_fuser, resolve_p
 from vcp.measure.schema import PredBox, Prediction
 
 
-def _sample(sid: str, size: tuple[int, int] | None = (8, 8)) -> Sample:
+def _sample(sid: str, size: tuple[int, int] | None = (64, 64)) -> Sample:  # 後記 R4：原 (8, 8) 會裁掉 10–14 px 的框
     view = View(path=f"{sid}.jpg") if size is None else View(path=f"{sid}.jpg", width=size[0], height=size[1])
     return Sample(sample_id=sid, views=[view], label_source="none")
 

@@ -45,6 +45,18 @@ def _measure(roots, run_id: str) -> None:
     measure_run(MeasureSpec(run_id=run_id, data_root=roots.data, configs_root=roots.configs))
 
 
+def _judge(roots, prereg_id: str, *, resamples: int):
+    return judge_prereg(
+        JudgeSpec(
+            dataset="tiny",
+            prereg_id=prereg_id,
+            resamples=resamples,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+
+
 def test_status_orphans_and_report(roots, tmp_path):
     ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
     _measure(roots, "perfect")
@@ -99,6 +111,63 @@ def test_status_orphans_and_report(roots, tmp_path):
     lvl = last_vs_last(paths)
     assert len(lvl) == 2 and {r["subset"] for r in lvl} == {"valA", "valB"}
     assert all(r["verdict"] == "FAIL" and r["delta"] < 0 for r in lvl)
+
+
+def test_report_keeps_only_the_newest_judgement_per_claim_and_filters_it(roots, tmp_path):
+    """spec 6: one row per claim per subset, last-vs-last.
+
+    A claim judged twice must not appear twice: the older row would sit beside the newer one
+    carrying a verdict that no longer holds, and a reader has no way to tell which is current.
+    And ``--metric`` / ``--plan`` must reach the judgement half exactly as they reach the
+    readings half, or a filtered report answers about one metric in its top table and about
+    every metric in its bottom one.
+    """
+    _, _, paths = det_with_runs(roots, tmp_path, n=60)
+    create_prereg(
+        paths,
+        PreRegistration(
+            prereg_id="p1",
+            claim="perfect beats noisy",
+            component="x",
+            # a tuning claim cannot pass without a sigma_p, so the same claim decides
+            # differently before and after one is estimated -- a real verdict flip, not a
+            # bootstrap coincidence.
+            component_class="tuning",
+            baseline_run="noisy",
+            candidate_run="perfect",
+            metric="coco_map",
+            sigma_method="prior",
+            subsets=["valA", "valB"],
+            created_at="2026-09-01T00:00:00.000Z",
+        ),
+        ReadingsLedger(paths.measure_dir / "readings.jsonl"),
+    )
+    _measure(roots, "perfect")
+    _measure(roots, "noisy")
+    first = _judge(roots, "p1", resamples=20)
+    assert first.verdict == "FAIL" and "no_sigma" in first.reasons
+    estimate_sigma_result(
+        SigmaSpec(
+            dataset="tiny",
+            plan_id="fixed-v1",
+            metric="coco_map",
+            method="prior",
+            prior=0.001,
+            note="history",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    second = _judge(roots, "p1", resamples=30)
+    assert second.verdict == "PASS"
+    lvl = last_vs_last(paths)
+    assert len(lvl) == 2  # one row per subset for the one claim, not two judgements' worth
+    assert {(r["subset"], r["verdict"], r["t"]) for r in lvl} == {
+        (name, "PASS", s.t) for name, s in second.per_subset.items()
+    }
+    assert last_vs_last(paths, plan_id="fixed-v1") == lvl
+    assert last_vs_last(paths, metric="accuracy") == []
+    assert last_vs_last(paths, plan_id="other-v1") == []
 
 
 def test_status_reports_the_latest_sigma_per_metric_and_method(roots, tmp_path):

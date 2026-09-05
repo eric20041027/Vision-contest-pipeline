@@ -444,6 +444,43 @@ def test_eval_status_and_report_on_an_empty_measure_dir(roots, tmp_path):
     assert not paths.measure_dir.exists()
 
 
+def test_eval_status_and_report_refuse_a_dataset_that_does_not_exist(roots):
+    """A typo'd --dataset must not read as "nothing outstanding".
+
+    Every ledger these two views open is ``is_file()``-guarded, so an absent dataset used to
+    answer ``status=OK ... preregs=0 judged=0`` -- a false all-clear from the very orphan
+    detector ``status`` exists to be, and the one command a user runs to check nothing was
+    forgotten. Every other eval command already refuses an unknown dataset.
+    """
+    seed_det(roots)
+    for cmd in ("status", "report"):
+        r = runner.invoke(app, ["eval", cmd, "--dataset", "ghost"])
+        assert r.exit_code == 1, (cmd, r.output)
+        v = _last_verdict(r.output)
+        assert "status=FAIL" in v and "dataset card not found" in v, (cmd, r.output)
+
+
+def test_eval_status_warns_instead_of_failing_on_an_unreadable_run_card(roots):
+    """``runs/`` is shared by every dataset on the machine, so one unreadable ``run.yaml`` --
+    another project's, a half-written one, a hand-edited one -- used to FAIL ``status`` for
+    every dataset. It is now counted and named, and everything else the command answers
+    (orphans above all) still gets answered."""
+    seed_det(roots)
+    assert runner.invoke(app, PREREG_BASE).exit_code == 0
+    foreign = roots.data / "runs" / "foreign" / "run.yaml"
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_text("not: a run card\n", encoding="utf-8", newline="\n")
+    args = ["eval", "status", "--dataset", "tiny", "--max-age-hours", "0"]
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "runs=0" in v and "unreadable=1" in v and "orphans=p1" in v
+    r = runner.invoke(app, [*args, "--json"])
+    assert r.exit_code == 0, r.output
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["result"]["status"]["unreadable"] == [str(foreign)]
+
+
 def test_eval_measure_and_anchor_failures_cli(roots, tmp_path):
     """Each way a user can get these two commands wrong maps to its own status and exit code."""
     ds, plan, _ = seed_det(roots)

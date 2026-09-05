@@ -2,11 +2,13 @@ import pytest
 
 from helpers import det_with_runs
 from vcp.core.errors import ValidationFailed
+from vcp.core.time import stamp
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ledger import ReadingsLedger, append_row, read_rows, reading_id
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.metrics import params_key
-from vcp.measure.schema import Reading, SigmaEstimate
+from vcp.measure.schema import Anchor, Reading, SigmaEstimate
 from vcp.measure.sigma import (
     SIGMA_ESTIMATORS,
     SIGMA_METHODS,
@@ -20,9 +22,14 @@ PARAMS = {"iou": "50:95", "max_dets": "100"}
 PK = "iou=50:95,max_dets=100"
 
 
-def _fake_reading(run, subset, value, ts):
+def _fake_reading(run, subset, value, ts, *, sha=None):
+    # reading_id is derived from (run, plan, subset, metric, version, params, prediction_sha) --
+    # never from value or ts (that is what makes re-measuring an unchanged prediction a no-op
+    # append) -- so a genuinely SECOND reading for the same run/subset needs its own sha, as a
+    # re-measurement after new predictions would have.
+    sha = sha or f"sha-{run}"
     return Reading(
-        reading_id=reading_id(run, "fixed-v1", subset, "coco_map", "1", PK, f"sha-{run}"),
+        reading_id=reading_id(run, "fixed-v1", subset, "coco_map", "1", PK, sha),
         ts=ts,
         run_id=run,
         dataset="tiny",
@@ -35,7 +42,7 @@ def _fake_reading(run, subset, value, ts):
         value=value,
         per_class=None,
         n_samples=6,
-        prediction_sha=f"sha-{run}",
+        prediction_sha=sha,
     )
 
 
@@ -83,6 +90,22 @@ def test_splithalf_needs_three_runs_then_estimates(roots, tmp_path):
     # the same estimate again: same id, already in the ledger, nothing appended.
     assert estimate_sigma(_spec(roots, method="splithalf")).estimate_id == est.estimate_id
     assert len(_sigma_rows(paths)) == 1
+    # `_latest_per_run` must take the newest reading per run, not just any -- with one reading
+    # per run that rule is untested (earliest and latest are the same row). A second, later
+    # reading for r1's valA changes the diff outright: it must be the one used.
+    assert est.inputs["diffs"] == pytest.approx([-0.02, 0.02, -0.01])
+    ledger.append(_fake_reading("r1", "valA", 0.90, "2026-09-04T00:00:07.000Z", sha="sha-r1-v2"))
+    est2 = estimate_sigma(_spec(roots, method="splithalf", subsets=["valA", "valB"]))
+    assert est2.inputs["diffs"] == pytest.approx([0.38, 0.02, -0.01])
+    assert est2.estimate_id != est.estimate_id
+
+
+def test_splithalf_rejects_duplicate_subsets(roots, tmp_path):
+    """Two identical subsets would make both halves the same mapping, so every diff is exactly
+    0 -- a sigma_p of 0 indistinguishable in the ledger from a genuinely noiseless pair (I2)."""
+    det_with_runs(roots, tmp_path, n=40)
+    with pytest.raises(ValidationFailed, match="different"):
+        estimate_sigma(_spec(roots, method="splithalf", subsets=["valA", "valA"]))
 
 
 def test_prior_and_bootstrap(roots, tmp_path):
@@ -179,3 +202,28 @@ def test_bootstrap_refuses_a_run_from_another_plan(roots, tmp_path):
                 configs_root=roots.configs,
             )
         )
+
+
+def test_bootstrap_explicit_subset_must_have_eval_role(roots, tmp_path):
+    """Only the default subset path (no --subsets) enforced role == eval; an explicit --subsets
+    naming train or a sealed subset must be refused too, or a run trained on it would report
+    its own training noise as sigma_p."""
+    det_with_runs(roots, tmp_path, n=40)
+    with pytest.raises(ValidationFailed, match="role"):
+        estimate_sigma(_spec(roots, method="bootstrap", run_id="noisy", subsets=["train"]))
+
+
+def test_bootstrap_defaults_to_the_anchor_run_when_no_run_is_given(roots, tmp_path):
+    """spec 6.3: bootstrap resamples --run, defaulting to the anchor run for this
+    (plan, subset, metric, params) when --run is omitted."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    key = anchor_key("fixed-v1", "valB", "coco_map", PK)
+    set_anchor(
+        paths,
+        key,
+        Anchor(run_id="noisy", reading_id="fake", value=0.0, tolerance=0.0, set_at=stamp()),
+    )
+    est = estimate_sigma(_spec(roots, method="bootstrap", subsets=["valB"], resamples=20))
+    assert est.value > 0
+    assert est.inputs["run_id"] == "noisy"
+    assert est.inputs["run_source"] == "anchor"

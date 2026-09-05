@@ -500,7 +500,7 @@ SIGMA_BASE = ["eval", "sigma", "--dataset", "tiny", "--plan", "fixed-v1", "--met
 PRIOR_OK = ["--prior", "0.008", "--note", "history"]
 
 
-def test_eval_sigma_cli(roots, tmp_path):
+def test_eval_sigma_cli(roots):
     _, _, paths = seed_det(roots)
     prior = [*SIGMA_BASE, "--method", "prior", *PRIOR_OK]
     r = runner.invoke(app, prior)
@@ -519,9 +519,16 @@ def test_eval_sigma_cli(roots, tmp_path):
     r = runner.invoke(app, [*SIGMA_BASE, "--method", "prior", "--prior", "0", "--note", "flat"])
     assert r.exit_code == 0, r.output
     assert "status=WARN" in _last_verdict(r.output) and "value=0.0" in _last_verdict(r.output)
+    # I2: duplicate subsets would make both halves the same mapping, so sigma_p = 0 looks like a
+    # real, noiseless estimate instead of the degenerate input it is.
+    rows_before = len(sigma_jsonl.read_text(encoding="utf-8").splitlines())
+    r = runner.invoke(app, [*SIGMA_BASE, "--method", "splithalf", "--subsets", "valA,valA"])
+    assert r.exit_code == 1 and "different" in _last_verdict(r.output)
+    rows_after = len(sigma_jsonl.read_text(encoding="utf-8").splitlines())
+    assert rows_after == rows_before  # nothing appended
 
 
-def test_eval_sigma_failures_cli(roots, tmp_path):
+def test_eval_sigma_failures_cli(roots):
     """Each way a user can get `eval sigma` wrong maps to its own status and exit code."""
     seed_det(roots)
     other = ["eval", "sigma", "--dataset", "tiny", "--plan", "fixed-v1"]
@@ -529,6 +536,7 @@ def test_eval_sigma_failures_cli(roots, tmp_path):
         ([*SIGMA_BASE, "--method", "prior", "--prior", "0.008"], 1, "prior needs --prior"),
         ([*SIGMA_BASE, "--method", "magic"], 1, "--method must be one of"),
         ([*SIGMA_BASE, "--method", "prior", *PRIOR_OK, "--resamples", "1"], 1, "resamples"),
+        ([*SIGMA_BASE, "--method", "prior", *PRIOR_OK, "--seed", "-1"], 1, "seed"),
         ([*SIGMA_BASE, "--method", "bootstrap"], 1, "bootstrap needs --run"),
         ([*SIGMA_BASE, "--method", "bootstrap", "--run", "ghost"], 1, "run not found"),
         ([*other, "--metric", "nope", "--method", "prior", *PRIOR_OK], 2, "RegistryError"),

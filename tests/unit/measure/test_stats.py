@@ -11,12 +11,12 @@ from helpers import (
     perfect_predictions,
     seg_samples,
 )
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import ValidationFailed, VcpError
 from vcp.data.schema import Labels, Sample, View
-from vcp.measure.metrics import get_metric
+from vcp.measure.metrics import METRICS, get_metric, register_metric
 from vcp.measure.predictions import predictions_by_id
-from vcp.measure.schema import Prediction
-from vcp.measure.stats import bootstrap_sd, paired_bootstrap
+from vcp.measure.schema import MetricResult, Prediction
+from vcp.measure.stats import bootstrap_sd, paired_bootstrap, resample_indexes
 
 # Pinned from a fresh process (see the task report). Any change to how the resample indexes are
 # drawn -- another RNG, another draw order, an unsorted sample list -- moves these. The two
@@ -69,6 +69,13 @@ def test_bootstrap_sd():
     # a single metric runs.
     with pytest.raises(ValidationFailed, match="resamples must be >= 2"):
         bootstrap_sd(samples, noisy, metric, card, {}, resamples=1, seed=0)
+
+
+def test_resample_indexes_rejects_a_negative_seed():
+    """I1: ``numpy.random.default_rng`` raises a bare ``ValueError`` on a negative seed, which
+    would reach a CLI ``--seed -1`` unguarded and ABORT instead of FAIL."""
+    with pytest.raises(ValidationFailed, match="seed"):
+        resample_indexes(10, 5, -1)
 
 
 def test_bootstrap_is_bit_identical_across_calls_and_sample_order():
@@ -164,3 +171,71 @@ def test_a_metric_refusing_a_resample_names_the_resample_and_the_seed():
     message = str(excinfo.value)
     assert "resample" in message and "seed=0" in message and "'dice'" in message
     assert "no category has any gold or predicted pixels" in message
+
+
+def _all_empty_seg(n: int) -> list[Sample]:
+    """Every sample gold-empty: unlike ``_mostly_empty_seg`` the FULL subset is unscoreable,
+    not just some resamples of it."""
+    return [
+        Sample(
+            sample_id=f"s{i:04d}",
+            views=[View(path=f"s{i:04d}.jpg", width=8, height=8)],
+            labels=Labels(masks=[]),
+            label_source="gold",
+        )
+        for i in range(n)
+    ]
+
+
+def test_bootstrap_sd_reports_a_subset_wide_failure_without_a_resample_label():
+    """A problem with the WHOLE subset (no predictions anywhere, so every category is
+    undefined) must surface as the metric's own message. 'refused bootstrap resample 0' would
+    say the failure was bad luck on one draw, when really every draw fails the same way."""
+    samples = _all_empty_seg(4)
+    card = make_card("seg", categories=SEG_CATS)
+    metric = get_metric("dice")
+    with pytest.raises(ValidationFailed) as excinfo:
+        bootstrap_sd(samples, {}, metric, card, {}, resamples=5, seed=0)
+    message = str(excinfo.value)
+    assert "no category has any gold or predicted pixels" in message
+    assert "resample" not in message
+
+
+class _FlakyMetric:
+    """A plugin bug -- a plain exception, not ``ValidationFailed`` -- on its third call.
+    Registered only for the duration of one test (Task 12 ruling 2's leak concern)."""
+
+    name = "flaky"
+    version = "1"
+    tasks = frozenset({"cls"})
+    defaults: dict[str, str] = {}
+    higher_is_better = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def compute(self, samples, predictions, card, params) -> MetricResult:
+        self.calls += 1
+        if self.calls == 3:
+            raise ZeroDivisionError("boom")
+        return MetricResult(value=1.0, per_class=None, n=len(samples))
+
+
+def test_a_plugin_exception_inside_a_resample_is_wrapped_with_its_location():
+    """Ruling 0 covers a metric's own ValidationFailed; a plain bug (ZeroDivisionError, ...) in
+    a plugin metric must not escape bare either. It is a programming error (ABORT, not FAIL),
+    but still needs the resample index and seed to be diagnosable from the VERDICT line alone."""
+    samples = cls_samples(20, seed=0)
+    card = make_card("cls")
+    metric = _FlakyMetric()
+    register_metric(metric)
+    try:
+        with pytest.raises(VcpError) as excinfo:
+            # base = 2 calls (preds_b, preds_a), then resample 0's preds_b is the 3rd call.
+            paired_bootstrap(samples, {}, {}, get_metric("flaky"), card, {}, resamples=5, seed=0)
+    finally:
+        METRICS.pop("flaky", None)
+    assert not isinstance(excinfo.value, ValidationFailed)
+    message = str(excinfo.value)
+    assert "resample 0" in message and "seed=0" in message
+    assert "ZeroDivisionError" in message and "boom" in message

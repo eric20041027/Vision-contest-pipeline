@@ -28,6 +28,7 @@ from vcp.core.hashing import sha256_json
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.split import SplitPlan, load_plan
+from vcp.measure.anchors import anchor_key, load_anchors
 from vcp.measure.ledger import ReadingsLedger, append_row, read_rows
 from vcp.measure.measure import load_context
 from vcp.measure.metrics import effective_params, get_metric, params_key
@@ -57,7 +58,9 @@ class SigmaSpec(BaseModel):
     # Fewer than two draws leaves no spread to measure (ruling 1). The CLI wraps construction
     # so this arrives as a FAIL the user can act on, not a pydantic error escaping as an ABORT.
     resamples: int = Field(default=200, ge=2)
-    seed: int = 0
+    # A negative seed reaches numpy's default_rng raw otherwise (I1): a bare ValueError, ABORT
+    # instead of FAIL. Same CLI-wrapping story as resamples above.
+    seed: int = Field(default=0, ge=0)
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -146,6 +149,10 @@ def _splithalf(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
     subsets = ctx.spec.subsets or _eval_subsets(ctx.plan)[:SPLITHALF_SUBSETS]
     if len(subsets) != SPLITHALF_SUBSETS:
         raise ValidationFailed(f"splithalf needs exactly two eval subsets, got {subsets}")
+    if subsets[0] == subsets[1]:
+        # Both halves would be the same mapping and every diff exactly 0 -- a sigma_p of 0 that
+        # is indistinguishable in the ledger from a genuinely noiseless pair (I2).
+        raise ValidationFailed(f"splithalf needs two different eval subsets, got {subsets}")
     rows = [
         r
         for r in ReadingsLedger(ctx.paths.measure_dir / READINGS_LEDGER).rows
@@ -170,20 +177,41 @@ def _splithalf(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
     return sample_sd(diffs) / math.sqrt(2), inputs
 
 
+def _check_eval_role(plan: SplitPlan, subset: str) -> None:
+    """bootstrap on a train or sealed subset would report training noise, or an unaudited
+    unseal's, as sigma_p. The default subset path already only ever offers an eval subset
+    (``_first_eval_subset``); an explicit ``--subsets`` must be held to the same rule."""
+    role = next((s.role for s in plan.subsets if s.name == subset), None)
+    if role is not None and role != "eval":
+        raise ValidationFailed(f"bootstrap needs an eval subset, but {subset!r} has role {role!r}")
+
+
 def _bootstrap(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
     """spec 6.3: resample one run's subset and take the standard deviation of the metric --
     the sampling-noise floor under a reading, and a lower bound on sigma_p rather than a
-    substitute for it (it says nothing about how two different eval sets differ)."""
+    substitute for it (it says nothing about how two different eval sets differ).
+
+    ``--run`` defaults to the anchor run for this (plan, subset, metric, params) when omitted
+    (spec 6.3's "對 --run，預設錨點 run").
+    """
     spec = ctx.spec
-    if not spec.run_id:
-        raise ValidationFailed("bootstrap needs --run <run_id> (the run to resample)")
     subset = spec.subsets[0] if spec.subsets else _first_eval_subset(ctx.plan)
-    card, dataset, _, _ = load_context(spec.run_id, spec.data_root, spec.configs_root)
+    _check_eval_role(ctx.plan, subset)
+    run_id = spec.run_id
+    from_anchor = False
+    if not run_id:
+        key = anchor_key(spec.plan_id, subset, spec.metric, ctx.pk)
+        anchor = load_anchors(ctx.paths).get(key)
+        if anchor is None:
+            raise ValidationFailed(f"bootstrap needs --run <run_id> or an anchor for {key}")
+        run_id = anchor.run_id
+        from_anchor = True
+    card, dataset, _, _ = load_context(run_id, spec.data_root, spec.configs_root)
     if card.dataset != spec.dataset or card.plan_id != spec.plan_id:
         # The estimate is filed under spec.dataset / spec.plan_id and the judge looks it up by
         # them, so resampling a run made elsewhere would file that run's noise under this plan.
         raise ValidationFailed(
-            f"run {spec.run_id!r} was made on {card.dataset}/{card.plan_id}, but this estimate "
+            f"run {run_id!r} was made on {card.dataset}/{card.plan_id}, but this estimate "
             f"is for {spec.dataset}/{spec.plan_id}"
         )
     samples = dataset.subset(subset, ctx.plan, paths=ctx.paths)
@@ -197,12 +225,15 @@ def _bootstrap(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
         resamples=spec.resamples,
         seed=spec.seed,
     )
-    return value, {
-        "run_id": spec.run_id,
+    inputs: dict[str, Any] = {
+        "run_id": run_id,
         "subset": subset,
         "resamples": spec.resamples,
         "seed": spec.seed,
     }
+    if from_anchor:
+        inputs["run_source"] = "anchor"
+    return value, inputs
 
 
 def _prior(ctx: _Inputs) -> tuple[float, dict[str, Any]]:

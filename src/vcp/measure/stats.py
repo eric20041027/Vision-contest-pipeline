@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import ValidationFailed, VcpError
 from vcp.data.schema import DatasetCard, Sample
 from vcp.measure.metrics.base import Metric, require_nonempty
 from vcp.measure.schema import Prediction
@@ -38,6 +38,10 @@ def resample_indexes(n: int, resamples: int, seed: int) -> list[np.ndarray]:
         raise ValidationFailed(
             f"resamples must be >= {MIN_RESAMPLES} to have any spread to measure, got {resamples}"
         )
+    if seed < 0:
+        # numpy's default_rng raises a bare ValueError on a negative seed (I1); a CLI --seed -1
+        # would otherwise reach it unguarded and ABORT instead of FAIL.
+        raise ValidationFailed(f"seed must be a non-negative integer, got {seed}")
     rng = np.random.default_rng(seed)
     return [rng.integers(0, n, n) for _ in range(resamples)]
 
@@ -64,6 +68,15 @@ def _value(
     except ValidationFailed as e:
         raise ValidationFailed(
             f"metric {metric.name!r} refused bootstrap resample {index} (seed={seed}): {e}",
+            location=f"resample {index}",
+        ) from e
+    except Exception as e:
+        # Anything else is a bug in the metric, not bad input (ABORT, not FAIL) -- but it must
+        # still name the draw that triggered it, or a plugin crash is undebuggable from the
+        # VERDICT line alone.
+        raise VcpError(
+            f"metric {metric.name!r} raised {type(e).__name__} on bootstrap resample {index} "
+            f"(seed={seed}): {e}",
             location=f"resample {index}",
         ) from e
 
@@ -122,6 +135,10 @@ def bootstrap_sd(
     """
     ordered = _ordered(samples)
     draws = resample_indexes(len(ordered), resamples, seed)
+    # A problem with the WHOLE subset (no predictions anywhere, every category undefined) must
+    # surface as the metric's own message, not as "refused bootstrap resample 0" -- that framing
+    # says the failure is bad luck on one draw, when really every draw would fail the same way.
+    metric.compute(ordered, preds, card, params)
     values = [
         _value(metric, [ordered[j] for j in idx], preds, card, params, index=i, seed=seed)
         for i, idx in enumerate(draws)

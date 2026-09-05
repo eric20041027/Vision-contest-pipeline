@@ -15,6 +15,7 @@ from vcp.cli_common import (
     ConfigsRootOpt,
     DataRootOpt,
     JsonOpt,
+    parse_csv,
     parse_opts,
     run_command,
 )
@@ -48,10 +49,6 @@ PluginOpt = Annotated[
 
 COMPONENT_CLASSES = ("model", "tuning")
 READINGS_LEDGER = "readings.jsonl"
-
-
-def _csv(value: str | None) -> list[str]:
-    return [v.strip() for v in (value or "").split(",") if v.strip()]
 
 
 def _read_only_paths(
@@ -122,7 +119,7 @@ def ingest_cmd(
             format=fmt,
             src=src,
             export_dir=export_manifest,
-            trained_on=_csv(trained_on),
+            trained_on=parse_csv(trained_on),
             framework=framework,
             notes=notes,
             keep_input=keep_input,
@@ -191,8 +188,8 @@ def measure_cmd(
         res = measure_run(
             MeasureSpec(
                 run_id=run,
-                metrics=_csv(metrics),
-                subsets=_csv(subsets),
+                metrics=parse_csv(metrics),
+                subsets=parse_csv(subsets),
                 params=parse_opts(params, "--params"),
                 unseal=unseal,
                 reason=reason,
@@ -316,7 +313,7 @@ def sigma_cmd(
                 metric=metric,
                 params=parse_opts(params, "--params"),
                 method=method,
-                subsets=_csv(subsets),
+                subsets=parse_csv(subsets),
                 run_id=run,
                 prior=prior,
                 note=note,
@@ -394,7 +391,7 @@ def preregister_cmd(
                 candidate_run=candidate_run,
                 metric=metric,
                 params=parse_opts(params, "--params"),
-                subsets=_csv(subsets),
+                subsets=parse_csv(subsets),
                 t_min=t_min,
                 min_bases=min_bases,
                 sigma_method=sigma_method,

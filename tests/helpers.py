@@ -10,8 +10,12 @@ import numpy as np
 from PIL import Image
 
 from vcp.core.errors import ValidationFailed
+from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Category, DatasetCard, Labels, Mask, Sample, SourceInfo, View
+from vcp.data.split import DEFAULT_SUBSETS, SplitPlan, build_plan, parse_subsets, save_plan
+from vcp.measure.ingest import IngestSpec, ingest
+from vcp.measure.predictions import write_predictions
 from vcp.measure.schema import PredBox, Prediction, PredMask
 
 CATS = [Category(id=0, name="cat"), Category(id=1, name="dog"), Category(id=2, name="bird")]
@@ -357,6 +361,45 @@ def noisy_predictions(
                 )
             )
     return out
+
+
+def det_with_runs(
+    roots: Any, tmp_path: Path, *, n: int = 60
+) -> tuple[Dataset, SplitPlan, DatasetPaths]:
+    """det dataset + fixed-v1 plan + run 'perfect' (valA, valB, holdout) and run 'noisy'
+    (valA, valB), all ingested. Returns (dataset, plan, paths).
+
+    Shared by every measurement test that needs runs to read from (measure, sigma, judge,
+    report), so those tests all speak about the same two runs.
+    """
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    samples = det_samples(n, seed=0)
+    write_images(roots.data / "raw" / "tiny", samples)
+    ds = Dataset.from_parts(make_card("det", image_root="raw/tiny"), samples)
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    save_plan(plan, paths)
+    for run_id, maker in (("perfect", perfect_predictions), ("noisy", noisy_predictions)):
+        for subset in ("valA", "valB", "holdout"):
+            if run_id == "noisy" and subset == "holdout":
+                continue
+            sub = ds.subset(subset, plan, unseal=True, reason="fixture", paths=paths)
+            src = tmp_path / f"{run_id}-{subset}.jsonl"
+            write_predictions(src, maker(sub, ds.card))
+            ingest(
+                IngestSpec(
+                    run_id=run_id,
+                    dataset="tiny",
+                    plan_id="fixed-v1",
+                    subset=subset,
+                    format="jsonl",
+                    src=src,
+                    trained_on=["train"],
+                    data_root=roots.data,
+                    configs_root=roots.configs,
+                )
+            )
+    return ds, plan, paths
 
 
 def write_yolo_txt(

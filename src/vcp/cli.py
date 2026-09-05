@@ -19,6 +19,7 @@ from vcp.cli_common import (
     render_table,
     run_command,
 )
+from vcp.cli_eval import eval_app
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import MANIFEST_MODES
 from vcp.core.log import FieldValue, Status, Verdict
@@ -41,6 +42,7 @@ from vcp.data.split import (
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="vision contest pipeline")
 data_app = typer.Typer(no_args_is_help=True, help="dataset commands")
 app.add_typer(data_app, name="data")
+app.add_typer(eval_app, name="eval")
 
 
 @app.callback()

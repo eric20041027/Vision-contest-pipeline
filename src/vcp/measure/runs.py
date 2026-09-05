@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from vcp.core.config import dump_yaml_model, load_yaml_model
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import run_path, validate_name
 from vcp.core.time import stamp
+from vcp.data.dataset import Dataset
 from vcp.measure.schema import RunCard
 
 
@@ -37,6 +38,23 @@ def save_run(data_root: Path, card: RunCard) -> Path:
     path = run_dir(data_root, card.run_id) / "run.yaml"
     dump_yaml_model(card, path)
     return path
+
+
+def assert_run_matches(card: RunCard, dataset: Dataset) -> None:
+    """A run must keep pointing at the dataset (by name and content) it was created on.
+
+    Shared by ``eval ingest`` (Task 5) and ``eval measure`` (Task 9) so this check has exactly
+    one implementation.
+    """
+    if card.dataset != dataset.card.name:
+        raise PlanMismatchError(
+            f"run {card.run_id!r} belongs to dataset {card.dataset!r}, not {dataset.card.name!r}"
+        )
+    if card.samples_hash != dataset.card.samples_hash:
+        raise PlanMismatchError(
+            f"run {card.run_id!r} was created on samples_hash {card.samples_hash[:12]}, "
+            f"dataset now has {dataset.card.samples_hash[:12]}"
+        )
 
 
 def verify_prediction(data_root: Path, card: RunCard, subset: str) -> Path:

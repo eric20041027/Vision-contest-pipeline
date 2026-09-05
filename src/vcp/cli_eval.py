@@ -20,13 +20,16 @@ from vcp.cli_common import (
 )
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.log import FieldValue, Status
+from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
+from vcp.measure.judge import JudgeSpec, judge_prereg
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, load_context, measure_run
 from vcp.measure.metrics import effective_params, get_metric, params_key
-from vcp.measure.schema import Anchor
+from vcp.measure.prereg import create_prereg, load_prereg
+from vcp.measure.schema import Anchor, PreRegistration
 from vcp.measure.sigma import SigmaSpec, estimate_sigma_result
 
 eval_app = typer.Typer(no_args_is_help=True, help="measurement commands")
@@ -37,6 +40,9 @@ PluginOpt = Annotated[
     list[str] | None,
     typer.Option("--plugin", help="python module to import (registers metrics / converters)"),
 ]
+
+COMPONENT_CLASSES = ("model", "tuning")
+READINGS_LEDGER = "readings.jsonl"
 
 
 def load_plugins(modules: list[str] | None) -> list[str]:
@@ -335,3 +341,121 @@ def sigma_cmd(
         return status, fields, {"estimate": est.model_dump(mode="json")}, human
 
     run_command("eval.sigma", json_mode, data_root, fn)
+
+
+@eval_app.command("preregister")
+def preregister_cmd(
+    dataset: DatasetOpt,
+    prereg_id: Annotated[str, typer.Option("--id", help="pre-registration id (path-safe)")],
+    claim: Annotated[str, typer.Option("--claim", help="what is being claimed, in words")],
+    component: Annotated[str, typer.Option("--component", help="what changed")],
+    component_class: Annotated[str, typer.Option("--class", help="model | tuning")],
+    baseline_run: Annotated[str, typer.Option("--baseline-run")],
+    candidate_run: Annotated[str, typer.Option("--candidate-run")],
+    metric: Annotated[str, typer.Option("--metric")],
+    params: Annotated[list[str] | None, typer.Option("--params")] = None,
+    subsets: Annotated[str, typer.Option("--subsets", help="comma-separated bases")] = "valA,valB",
+    t_min: Annotated[float, typer.Option("--t-min")] = 2.0,
+    min_bases: Annotated[int, typer.Option("--min-bases")] = 2,
+    sigma_method: Annotated[str, typer.Option("--sigma-method")] = "splithalf",
+    sigma_ratio: Annotated[float, typer.Option("--sigma-ratio")] = 1.0,
+    plugin: PluginOpt = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Write the claim down before measuring the candidate."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        if component_class not in COMPONENT_CLASSES:
+            raise ValidationFailed(
+                f"--class must be one of {COMPONENT_CLASSES}, got {component_class!r}"
+            )
+        paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+        try:
+            pr = PreRegistration(
+                prereg_id=prereg_id,
+                claim=claim,
+                component=component,
+                component_class=component_class,
+                baseline_run=baseline_run,
+                candidate_run=candidate_run,
+                metric=metric,
+                params=parse_opts(params, "--params"),
+                subsets=_csv(subsets),
+                t_min=t_min,
+                min_bases=min_bases,
+                sigma_method=sigma_method,
+                sigma_ratio=sigma_ratio,
+                created_at=stamp(),
+            )
+        except ValidationError as e:
+            # A nan threshold silently un-binds the bar it names; that is a FAIL the user can
+            # act on, not a pydantic error escaping as an ABORT.
+            raise ValidationFailed(str(e), location="vcp eval preregister") from e
+        path = create_prereg(paths, pr, ReadingsLedger(paths.measure_dir / READINGS_LEDGER))
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "prereg": prereg_id,
+            "metric": metric,
+            "candidate": candidate_run,
+            "baseline": baseline_run,
+            "subsets": ",".join(pr.subsets),
+            "path": str(path),
+        }
+        # Read back what was committed: the params on disk are the metric's effective ones.
+        stored = load_prereg(paths, prereg_id)
+        payload = {"prereg": stored.model_dump(mode="json"), "path": str(path)}
+        return "OK", fields, payload, [f"pre-registered {prereg_id} -> {path}"]
+
+    run_command("eval.preregister", json_mode, data_root, fn)
+
+
+@eval_app.command("judge")
+def judge_cmd(
+    dataset: DatasetOpt,
+    prereg_id: Annotated[str, typer.Option("--prereg", help="pre-registration id")],
+    resamples: Annotated[int, typer.Option("--resamples")] = 200,
+    seed: Annotated[int, typer.Option("--seed")] = 0,
+    strict: Annotated[bool, typer.Option("--strict", help="exit 1 unless PASS")] = False,
+    plugin: PluginOpt = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Judge a pre-registered claim from the readings ledger (never max-of-N)."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        try:
+            spec = JudgeSpec(
+                dataset=dataset,
+                prereg_id=prereg_id,
+                resamples=resamples,
+                seed=seed,
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        except ValidationError as e:
+            raise ValidationFailed(str(e), location="vcp eval judge") from e
+        j = judge_prereg(spec)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "prereg": prereg_id,
+            "verdict": j.verdict,
+            "bases_positive": j.bases_positive,
+        }
+        if j.sigma_p is not None:
+            fields["sigma_p"] = j.sigma_p.value
+        human = [
+            f"{name:>10}  baseline={s.baseline!r} candidate={s.candidate!r} "
+            f"delta={s.delta!r} t={s.t:.2f}"
+            for name, s in j.per_subset.items()
+        ]
+        human += [f"reason: {r}" for r in j.reasons]
+        # The verdict is the answer, not a tool failure: only --strict turns it into one.
+        status: Status = "FAIL" if strict and j.verdict != "PASS" else "OK"
+        return status, fields, {"judgement": j.model_dump(mode="json")}, human
+
+    run_command("eval.judge", json_mode, data_root, fn)

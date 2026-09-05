@@ -25,7 +25,7 @@ from vcp.core.errors import (
 )
 from vcp.core.paths import DatasetPaths, validate_name
 from vcp.core.time import stamp
-from vcp.data.schema import Sample
+from vcp.data.schema import DatasetCard, Sample
 from vcp.data.tasks import StratKey, get_task
 
 if TYPE_CHECKING:
@@ -136,6 +136,19 @@ def load_plan(paths: DatasetPaths, plan_id: str) -> SplitPlan:
         return SplitPlan.model_validate_json(target.read_text(encoding="utf-8"))
     except ValueError as e:
         raise ValidationFailed(str(e), location=str(target)) from e
+
+
+def assert_plan_matches(plan: SplitPlan, card: DatasetCard) -> None:
+    """The plan must belong to this dataset version: same name, same samples_hash."""
+    if plan.dataset != card.name:
+        raise PlanMismatchError(
+            f"plan {plan.plan_id!r} belongs to dataset {plan.dataset!r}, not {card.name!r}"
+        )
+    if plan.dataset_hash != card.samples_hash:
+        raise PlanMismatchError(
+            f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
+            f"dataset now has {card.samples_hash[:12]}"
+        )
 
 
 def _group_auto(s: Sample) -> str | None:

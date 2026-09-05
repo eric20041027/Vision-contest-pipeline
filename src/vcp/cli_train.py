@@ -1,0 +1,123 @@
+"""``vcp train``: training-layer commands. Every command ends with a VERDICT line."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from pydantic import ValidationError
+
+from vcp.cli_common import (
+    CmdResult,
+    ConfigsRootOpt,
+    DataRootOpt,
+    JsonOpt,
+    parse_csv,
+    run_command,
+)
+from vcp.core.errors import ValidationFailed
+from vcp.core.log import FieldValue, Status
+from vcp.train.run import RunSpec, train_run
+
+train_app = typer.Typer(no_args_is_help=True, help="training commands")
+
+RunOpt = Annotated[str, typer.Option("--run", help="run id (path-safe name)")]
+
+
+@train_app.command(
+    "run", context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
+)
+def run_cmd(
+    ctx: typer.Context,
+    run: RunOpt,
+    dataset: Annotated[str, typer.Option("--dataset", help="dataset name")],
+    plan: Annotated[str, typer.Option("--plan", help="plan id")],
+    export: Annotated[
+        list[Path] | None, typer.Option("--export", help="vcp data export directory (repeatable)")
+    ] = None,
+    trained_on: Annotated[
+        str | None, typer.Option("--trained-on", help="comma-separated subsets (when no --export)")
+    ] = None,
+    venv: Annotated[
+        Path | None, typer.Option("--venv", help="framework virtualenv directory")
+    ] = None,
+    config: Annotated[
+        Path | None, typer.Option("--config", help="config file to hash and copy")
+    ] = None,
+    seed: Annotated[int | None, typer.Option("--seed")] = None,
+    framework: Annotated[
+        str, typer.Option("--framework", help="free text, e.g. 'ultralytics 8.3.0'")
+    ] = "",
+    cwd: Annotated[
+        Path | None, typer.Option("--cwd", help="where the command runs (default: here)")
+    ] = None,
+    checkpoints: Annotated[
+        list[str] | None, typer.Option("--checkpoints", help="glob relative to --cwd (repeatable)")
+    ] = None,
+    final: Annotated[
+        str | None, typer.Option("--final", help="glob of THE checkpoint (exactly one file)")
+    ] = None,
+    upload: Annotated[
+        list[str] | None,
+        typer.Option("--upload", help="remote:path (rclone) or a directory (repeatable)"),
+    ] = None,
+    resume: Annotated[
+        bool, typer.Option("--resume", help="add an attempt to an existing training run")
+    ] = False,
+    notes: Annotated[str, typer.Option("--notes")] = "",
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Run a training command and record it as a run: -- COMMAND... after the options."""
+
+    def fn() -> CmdResult:
+        try:
+            spec = RunSpec(
+                run_id=run,
+                dataset=dataset,
+                plan_id=plan,
+                exports=list(export or []),
+                trained_on=parse_csv(trained_on),
+                venv=venv,
+                config=config,
+                seed=seed,
+                framework=framework,
+                cwd=cwd,
+                checkpoints=list(checkpoints or []),
+                final=final,
+                uploads=list(upload or []),
+                resume=resume,
+                notes=notes,
+                command=list(ctx.args),
+                on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        except ValidationError as e:
+            raise ValidationFailed(str(e), location="vcp train run") from e
+        res = train_run(spec)
+        fields: dict[str, FieldValue] = {
+            "run": run,
+            "attempt": res.attempt.n,
+            "exit_code": res.attempt.exit_code if res.attempt.exit_code is not None else -1,
+            "duration_s": res.attempt.duration_s or 0.0,
+            "checkpoints": len(res.record.checkpoints),
+            "final": res.final.sha256[:12] if res.final else "none",
+            "uploaded": res.uploaded,
+            "verified": res.verified,
+            "seed": spec.seed if spec.seed is not None else "none",
+            "venv": spec.venv.name if spec.venv is not None else "inherited",
+        }
+        if res.skipped:
+            fields["skipped"] = res.skipped
+        failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
+        status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
+        if res.attempt.status != "finished":
+            fields["status_attempt"] = res.attempt.status
+        human = [f"attempt {res.attempt.n}: {res.attempt.status} (exit {res.attempt.exit_code})"]
+        human += [f"warning: {w}" for w in res.warnings]
+        return status, fields, res.record.model_dump(mode="json"), human
+
+    run_command("train.run", json_mode, data_root, fn)

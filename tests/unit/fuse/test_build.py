@@ -23,6 +23,7 @@ from vcp.fuse.build import (
     content_sha,
     load_record,
     record_path,
+    write_record,
 )
 from vcp.fuse.fusers import FUSERS, register_fuser
 from vcp.fuse.recipes import recipe_sha, save_recipe
@@ -233,6 +234,49 @@ def test_output_exists_replace_and_history(roots, tmp_path):
         == load_run(roots.data, "noisy").predictions["valA"].sha256
     )
     assert rec.subsets["valB"].output_sha256 == first.subsets["valB"].sha256
+
+
+def test_rebuild_refreshes_metadata_but_keeps_prior_subsets(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    first = _build(roots)
+    # Simulate a fuse.json written by an older vcp / fuser version.
+    stale = load_record(roots.data, "fuse-r1").model_copy(
+        update={"method_version": "0", "vcp_version": "0.0.0"}
+    )
+    write_record(roots.data, "fuse-r1", stale)
+    # the member changes (re-ingested with other predictions) -> valA's fused bytes would change
+    src = tmp_path / "noisy2-valA.jsonl"
+    write_predictions(src, noisy_predictions(ds.subset("valA", plan), ds.card, seed=99, flip=0.6))
+    ingest(
+        IngestSpec(
+            run_id="noisy",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            subset="valA",
+            format="jsonl",
+            src=src,
+            replace=True,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    res = _build(roots, replace=True)
+    rec = load_record(roots.data, "fuse-r1")
+    assert rec.method_version == "1" and rec.vcp_version == __version__
+    assert rec.subsets["valA"].output_sha256 == res.subsets["valA"].sha256
+    # the untouched subset's SubsetBuild is still carried forward from the first build
+    assert rec.subsets["valB"].output_sha256 == first.subsets["valB"].sha256
+
+
+def test_load_record_checks_run_id_matches(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    _build(roots)
+    rec = load_record(roots.data, "fuse-r1")
+    write_record(roots.data, "fuse-r1", rec.model_copy(update={"run_id": "fuse-other"}))
+    with pytest.raises(ValidationFailed, match="fuse-other"):
+        load_record(roots.data, "fuse-r1")
 
 
 def test_run_id_is_bound_to_one_recipe(roots, tmp_path):

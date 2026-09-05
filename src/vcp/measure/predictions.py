@@ -38,13 +38,19 @@ def read_predictions(path: Path) -> list[Prediction]:
     return out
 
 
+def predictions_text(preds: Iterable[Prediction]) -> str:
+    """The exact text ``write_predictions`` writes: sorted by sample_id, one JSON object per
+    line (``exclude_none``), LF. Shared with ``fuse.build.content_sha``, which hashes this same
+    text without touching disk, so the two can never silently drift apart."""
+    ordered = sorted(preds, key=lambda p: p.sample_id)
+    return "".join(p.model_dump_json(exclude_none=True) + "\n" for p in ordered)
+
+
 def write_predictions(path: Path, preds: Iterable[Prediction]) -> str:
     """Sorted by sample_id, one JSON object per line, LF. Returns the file's sha256."""
-    ordered = sorted(preds, key=lambda p: p.sample_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as f:
-        for p in ordered:
-            f.write(p.model_dump_json(exclude_none=True) + "\n")
+        f.write(predictions_text(preds))
     return sha256_file(path)
 
 

@@ -1,7 +1,7 @@
 import pytest
 
 from helpers import det_with_runs
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.fuse.ablate import (
     CANDIDATE_MEASURED,
     SINGLE_MEMBER,
@@ -152,6 +152,36 @@ def test_ablate_preregister_checks(roots, tmp_path):
     with pytest.raises(ValidationFailed, match="already exists") as ei:
         _ablate(roots, preregister=True, metric="coco_map")
     assert ei.value.fields == {"prereg": "r1-admit-perfect"}
+
+
+def test_ablate_preregister_rejects_duplicate_bases_before_writing(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    with pytest.raises(ValidationFailed, match="duplicate"):
+        _ablate(roots, preregister=True, metric="coco_map", bases=["valA", "valA"])
+    assert not recipe_path(paths, "r1-minus-perfect").exists()
+    assert not run_dir(roots.data, "fuse-r1").exists()
+    assert list_preregs(paths) == []
+
+
+def test_ablate_preregister_rejects_empty_bases_before_writing(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    with pytest.raises(ValidationFailed, match="--bases"):
+        _ablate(roots, preregister=True, metric="coco_map", bases=[])
+    assert not recipe_path(paths, "r1-minus-perfect").exists()
+    assert not run_dir(roots.data, "fuse-r1").exists()
+    assert list_preregs(paths) == []
+
+
+def test_ablate_preregister_rejects_unknown_base_even_without_build(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    with pytest.raises(PlanMismatchError):
+        _ablate(roots, preregister=True, metric="coco_map", build=False, bases=["nope"])
+    assert not recipe_path(paths, "r1-minus-perfect").exists()
+    assert not run_dir(roots.data, "fuse-r1").exists()
+    assert list_preregs(paths) == []
 
 
 def test_measured_subsets_is_public(roots, tmp_path):

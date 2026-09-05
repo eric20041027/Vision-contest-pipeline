@@ -263,8 +263,8 @@ def test_rmse_and_mae_require_target_in_gold_not_just_prediction():
 
 
 def test_all_metrics_declare_higher_is_better():
-    # coco_map registers ahead of the tabular metrics (Task 7); not itself a tabular metric, but
-    # this asserts on the whole METRICS registry so it must be listed here too, or registering it
+    # coco_map (Task 7) and dice/miou (Task 8) register outside the tabular metrics, but this
+    # asserts on the whole METRICS registry so each must be listed here too, or registering one
     # breaks this untouched Task 6 test on an unrelated dict-equality mismatch.
     assert {name: m.higher_is_better for name, m in METRICS.items()} == {
         "coco_map": True,
@@ -274,6 +274,8 @@ def test_all_metrics_declare_higher_is_better():
         "macro_auc": True,
         "rmse": False,
         "mae": False,
+        "dice": True,
+        "miou": True,
     }
 
 

@@ -33,8 +33,10 @@ def seed_det(roots, name="tiny", n=40, seed=0):
     return ds, plan, paths
 
 
-def ingest_perfect(roots, tmp_path, ds, plan, run_id, subset, *, drop=0, extra=()):
-    preds = perfect_predictions(ds.subset(subset, plan), ds.card)
+def ingest_perfect(roots, tmp_path, ds, plan, run_id, subset, *, drop=0, extra=(), unseal=False):
+    paths = DatasetPaths.resolve(ds.card.name, data_root=roots.data, configs_root=roots.configs)
+    sub = ds.subset(subset, plan, unseal=unseal, reason="fixture", paths=paths)
+    preds = perfect_predictions(sub, ds.card)
     src = tmp_path / f"{run_id}-{subset}.jsonl"
     write_predictions(src, preds[: len(preds) - drop] if drop else preds)
     return runner.invoke(
@@ -317,6 +319,89 @@ def test_eval_ingest_plugin_registers_a_contest_converter(roots, tmp_path, monke
     finally:
         CONVERTERS.pop("plug_jsonl", None)
         sys.modules.pop(module, None)
+
+
+def test_eval_measure_and_anchor_cli(roots, tmp_path):
+    ds, plan, paths = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valB").exit_code == 0
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "readings=2" in v and "guardrail=none" in v
+    assert "valA" in r.output and "coco_map" in r.output
+    anchor_args = ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "coco_map"]
+    r = runner.invoke(app, anchor_args)
+    assert r.exit_code == 0, r.output
+    assert "key=fixed-v1/valA/coco_map/iou=50:95,max_dets=100" in _last_verdict(r.output).replace(
+        '"', ""
+    )
+    r = runner.invoke(app, anchor_args)
+    assert r.exit_code == 1 and "replace" in _last_verdict(r.output)
+    r = runner.invoke(
+        app, ["eval", "measure", "--run", "m1", "--params", "iou=50", "--subsets", "valA"]
+    )
+    # different params -> a different anchor key, so this cell has no anchor of its own
+    assert r.exit_code == 0 and "guardrail=none" in _last_verdict(r.output)
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "valA", "--json"])
+    assert r.exit_code == 0
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["fields"]["cached"] == 1 and doc["result"]["readings"][0]["subset"] == "valA"
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "holdout"])
+    assert r.exit_code == 1 and "no predictions" in _last_verdict(r.output)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "holdout", unseal=True).exit_code == 0
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "holdout"])
+    assert r.exit_code == 2 and "SealedSubsetError" in _last_verdict(r.output)
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "holdout", "--unseal"])
+    assert r.exit_code == 2 and "reason" in _last_verdict(r.output)
+    unseal = ["--unseal", "--reason", "final read"]
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "holdout", *unseal])
+    assert r.exit_code == 0 and "readings=1" in _last_verdict(r.output)
+    assert '"caller": "vcp eval measure"' in paths.unseal_jsonl("fixed-v1").read_text(
+        encoding="utf-8"
+    )
+    assert (paths.measure_dir / "anchors.json").is_file()
+
+
+def test_eval_measure_and_anchor_failures_cli(roots, tmp_path):
+    """Each way a user can get these two commands wrong maps to its own status and exit code."""
+    ds, plan, _ = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    only_valA = ["--subsets", "valA"]
+    cases = [
+        (["eval", "measure", "--run", "ghost"], 1, "run not found"),
+        (["eval", "measure", "--run", "m1"], 1, "no predictions"),  # valB never ingested
+        (["eval", "measure", "--run", "m1", *only_valA, "--metrics", "nope"], 2, "RegistryError"),
+        (
+            ["eval", "measure", "--run", "m1", *only_valA, "--metrics", "accuracy"],
+            1,
+            "not applicable",
+        ),
+        (
+            ["eval", "measure", "--run", "m1", *only_valA, "--params", "nms=1"],
+            1,
+            "no registered metric accepts params",
+        ),
+        (
+            ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "nope"],
+            2,
+            "RegistryError",
+        ),
+        (
+            ["eval", "anchor", "--run", "m1", "--subset", "valB", "--metric", "coco_map"],
+            1,
+            "no predictions",
+        ),
+        (
+            ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "coco_map"],
+            1,
+            "run `vcp eval measure` first",
+        ),
+    ]
+    for args, code, needle in cases:
+        r = runner.invoke(app, args)
+        assert r.exit_code == code, (args, r.output)
+        assert needle in _last_verdict(r.output), (args, r.output)
 
 
 def test_load_plugins_returns_loaded_names_and_raises_on_bad_module():

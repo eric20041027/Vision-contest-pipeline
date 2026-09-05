@@ -179,7 +179,10 @@ def _guardrail(
     if abs(got - anchor.value) > anchor.tolerance:
         raise GuardrailError(
             f"anchor {key!r} (reading_id={anchor.reading_id!r}) expected {anchor.value!r}, "
-            f"got {got!r} (tolerance {anchor.tolerance}); no readings written"
+            f"got {got!r} (tolerance {anchor.tolerance}); no readings written",
+            # spec 9 wants this readable by machine as well as by eye: the CLI renders these
+            # beside reason=, so a caller greps `guardrail=FAIL` instead of the message.
+            fields={"guardrail": "FAIL", "anchor": anchor.reading_id, "got": got},
         )
     return GuardrailInfo(anchor_reading_id=anchor.reading_id, ok=True)
 

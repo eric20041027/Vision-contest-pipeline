@@ -10,6 +10,7 @@ from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.predictions import write_predictions
 
@@ -364,6 +365,85 @@ def test_eval_measure_and_anchor_cli(roots, tmp_path):
     assert (paths.measure_dir / "anchors.json").is_file()
 
 
+def test_eval_measure_plugin_registers_a_contest_metric(roots, tmp_path, monkeypatch):
+    """spec 13.7: a contest's official scorer reaches `vcp eval measure` only through --plugin,
+    so the wiring is pinned at the CLI level -- a throwaway module registers a metric under a
+    unique name and `--metrics` must find it through the registry."""
+    import sys
+
+    from vcp.measure.metrics import METRICS, applicable_metrics
+
+    # Task 12 ruling 2: METRICS is process-global, so this test must leave it exactly as it
+    # found it -- a leaked det metric breaks every later exact-equality assertion about it.
+    before = applicable_metrics("det")
+    ds, plan, _ = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    module = "myplug_cli"
+    (tmp_path / f"{module}.py").write_text(
+        "\n".join(
+            [
+                "from vcp.measure.metrics import register_metric",
+                "from vcp.measure.schema import MetricResult",
+                "",
+                "",
+                "class One:",
+                "    name, version, tasks, defaults = 'constant_one', '1', frozenset({'det'}), {}",
+                "    higher_is_better = True",
+                "",
+                "    def compute(self, samples, predictions, card, params):",
+                "        return MetricResult(value=1.0, n=len(samples))",
+                "",
+                "",
+                "register_metric(One())",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        r = runner.invoke(
+            app,
+            [
+                "eval",
+                "measure",
+                "--run",
+                "m1",
+                "--subsets",
+                "valA",
+                "--metrics",
+                "constant_one",
+                "--plugin",
+                module,
+            ],
+        )
+        assert r.exit_code == 0, r.output
+        v = _last_verdict(r.output)
+        assert "metrics=constant_one" in v and "readings=1" in v
+    finally:
+        METRICS.pop("constant_one", None)
+        sys.modules.pop(module, None)
+    assert applicable_metrics("det") == before
+    assert not [name for name in sys.modules if name.startswith("myplug_")]
+
+
+def test_eval_status_and_report_on_an_empty_measure_dir(roots, tmp_path):
+    """Both commands are read-only views: with nothing measured yet they answer "nothing" at
+    exit 0, and neither so much as creates the measure directory."""
+    _, _, paths = seed_det(roots)
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "runs=0" in v and "preregs=0" in v and "judged=0" in v
+    assert "anchors=0" in v and "orphans=" not in v
+    r = runner.invoke(app, ["eval", "report", "--dataset", "tiny"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "rows=0" in v and "judgements=0" in v
+    assert not paths.measure_dir.exists()
+
+
 def test_eval_measure_and_anchor_failures_cli(roots, tmp_path):
     """Each way a user can get these two commands wrong maps to its own status and exit code."""
     ds, plan, _ = seed_det(roots)
@@ -494,6 +574,45 @@ def test_eval_measure_guardrail_abort_is_reported_and_writes_nothing_cli(roots, 
     v = _last_verdict(r.output)
     assert "GuardrailError" in v and anchored.reading_id in v
     assert len(ReadingsLedger(paths.measure_dir / "readings.jsonl").rows) == before
+
+
+def test_eval_measure_guardrail_abort_carries_machine_readable_fields_cli(roots, tmp_path):
+    """Task 12 ruling 0 / spec 9: the guardrail's VERDICT carries `guardrail=`, `anchor=` and
+    `got=` as fields, not only inside the prose `reason=`. A CI step that greps for a drifted
+    measurement environment must not have to parse an English sentence -- and `reason=` still
+    comes first, because it is what a human reads."""
+    ds, plan, paths = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    only_valA = ["eval", "measure", "--run", "m1", "--subsets", "valA"]
+    assert runner.invoke(app, only_valA).exit_code == 0
+    anchor = ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "coco_map"]
+    assert runner.invoke(app, anchor).exit_code == 0
+    anchored = next(
+        r for r in ReadingsLedger(paths.measure_dir / "readings.jsonl").rows if r.subset == "valA"
+    )
+    src = tmp_path / "m1-valA-drifted.jsonl"
+    write_predictions(src, noisy_predictions(ds.subset("valA", plan), ds.card))
+    ingest(
+        IngestSpec(
+            run_id="m1",
+            dataset=ds.card.name,
+            plan_id=plan.plan_id,
+            subset="valA",
+            format="jsonl",
+            src=src,
+            trained_on=["train"],
+            replace=True,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    r = runner.invoke(app, only_valA)
+    assert r.exit_code == 2, r.output
+    v = _last_verdict(r.output)
+    assert v.startswith("VERDICT cmd=eval.measure status=ABORT reason=")
+    assert f" guardrail=FAIL anchor={anchored.reading_id} got=" in v
+    got = float(v.rsplit(" got=", 1)[1].split()[0])
+    assert abs(got - anchored.value) > 1e-6  # the value that actually came out, not the anchor's
 
 
 SIGMA_BASE = ["eval", "sigma", "--dataset", "tiny", "--plan", "fixed-v1", "--metric", "coco_map"]

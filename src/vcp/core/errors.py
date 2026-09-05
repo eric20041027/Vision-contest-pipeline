@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from vcp.core.log import FieldValue
+
 
 class VcpError(Exception):
-    """Base class. ``status`` is the VERDICT status; ``location`` points at the offending data."""
+    """Base class. ``status`` is the VERDICT status; ``location`` points at the offending data.
+
+    ``fields`` are extra VERDICT fields the failure itself wants machine-readable: the CLI
+    renders them beside ``reason=``, so a caller can grep for what went wrong instead of
+    parsing the message (spec 9's guardrail abort is the case this exists for).
+    """
 
     status: str = "ABORT"
 
-    def __init__(self, message: str, *, location: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        location: str | None = None,
+        fields: dict[str, FieldValue] | None = None,
+    ) -> None:
         super().__init__(message)
         self.location = location
+        self.fields: dict[str, FieldValue] = dict(fields or {})
 
     def __str__(self) -> str:
         base = super().__str__()

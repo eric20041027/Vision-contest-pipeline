@@ -14,9 +14,10 @@ from vcp.fuse.fusers.base import (
     require_payload,
     resolve_params,
 )
+from vcp.fuse.fusers.scores import Mean, RankMean
 from vcp.fuse.fusers.wbf import Wbf
 
-for _fuser in (Wbf(),):
+for _fuser in (Wbf(), Mean(), RankMean()):
     register_fuser(_fuser)
 
 __all__ = [

@@ -14,10 +14,10 @@ from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, default_subsets, measure_run
-from vcp.measure.metrics import get_metric
+from vcp.measure.metrics import METRICS, get_metric, register_metric
 from vcp.measure.predictions import write_predictions
-from vcp.measure.runs import load_run, prediction_path
-from vcp.measure.schema import Anchor
+from vcp.measure.runs import load_run, prediction_path, save_run
+from vcp.measure.schema import Anchor, MetricResult
 
 ANCHORED_PARAMS = "iou=50:95,max_dets=100"
 
@@ -73,6 +73,48 @@ def test_params_only_reach_metrics_that_declare_them(roots, tmp_path):
         measure_run(_spec(roots, "perfect", params={"nms": "1"}))
 
 
+class _StubDetMetric:
+    """A throwaway second `det` metric, registered only for the duration of one test.
+
+    `det` has exactly one built-in applicable metric (coco_map), so no existing test can tell
+    "a param reached the metric that declares it" apart from "a param reached every metric" --
+    both look identical with a single metric in play. A second metric with a *different*
+    declared param makes the two behaviours distinguishable (Minor 1)."""
+
+    name = "stub_det"
+    version = "1"
+    tasks = frozenset({"det"})
+    defaults = {"alpha": "1"}
+    higher_is_better = True
+
+    def compute(self, samples, predictions, card, params):
+        return MetricResult(value=1.0, per_class=None, n=len(samples))
+
+
+def test_params_reach_only_the_metric_that_declares_them_with_two_applicable_metrics(
+    roots, tmp_path
+):
+    det_with_runs(roots, tmp_path, n=40)
+    stub = _StubDetMetric()
+    register_metric(stub)
+    try:
+        res = measure_run(
+            _spec(
+                roots,
+                "perfect",
+                metrics=["coco_map", "stub_det"],
+                subsets=["valA"],
+                params={"iou": "50", "alpha": "2"},
+            )
+        )
+    finally:
+        METRICS.pop("stub_det", None)
+    coco_rows = [r for r in res.readings if r.metric == "coco_map"]
+    stub_rows = [r for r in res.readings if r.metric == "stub_det"]
+    assert coco_rows and all(r.params == {"iou": "50", "max_dets": "100"} for r in coco_rows)
+    assert stub_rows and all(r.params == {"alpha": "2"} for r in stub_rows)
+
+
 def test_guardrail_aborts_before_writing(roots, tmp_path, monkeypatch):
     ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
     first = measure_run(_spec(roots, "perfect"))
@@ -107,6 +149,33 @@ def test_guardrail_aborts_before_writing(roots, tmp_path, monkeypatch):
     with pytest.raises(GuardrailError, match="anchor"):
         measure_run(_spec(roots, "noisy", subsets=["valA", "valB"], metrics=["coco_map"]))
     assert len(_rows(paths)) == before
+
+
+def test_guardrail_checks_the_anchor_run_against_the_dataset(roots, tmp_path):
+    """Minor 4: the anchor names a run by id, and that run's own card can go stale relative to
+    the dataset (e.g. the dataset was re-imported after the anchor was set) without the
+    currently-measured run being affected at all. That must surface as the PlanMismatchError it
+    is, not a confusing GuardrailError from recomputing a metric against a mismatched dataset."""
+    ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    first = measure_run(_spec(roots, "perfect"))
+    valA = next(r for r in first.readings if r.subset == "valA")
+    set_anchor(
+        paths,
+        anchor_key("fixed-v1", "valA", "coco_map", ANCHORED_PARAMS),
+        Anchor(
+            run_id="perfect",
+            reading_id=valA.reading_id,
+            value=valA.value,
+            tolerance=1e-6,
+            set_at="2026-09-04T00:00:00.000Z",
+        ),
+    )
+    # Corrupt the anchor run's own card only -- the dataset and the "noisy" run being measured
+    # are untouched, so nothing about *this* command's own run is mismatched.
+    stale = load_run(roots.data, "perfect").model_copy(update={"samples_hash": "0" * 64})
+    save_run(roots.data, stale)
+    with pytest.raises(PlanMismatchError, match="samples_hash"):
+        measure_run(_spec(roots, "noisy"))
 
 
 def test_duplicate_subsets_and_metrics_yield_one_reading(roots, tmp_path):

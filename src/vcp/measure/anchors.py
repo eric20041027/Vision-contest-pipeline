@@ -2,14 +2,16 @@
 reproduce.
 
 ``anchors.json`` is the one file in the measurement layer that is replaced whole; every change
-to it is appended to ``anchors.log.jsonl`` so the history of the guardrail itself is auditable.
+to it is appended to ``anchors.log.jsonl`` *first*, so a crash between the two writes leaves a
+detectable "logged but not applied" state rather than a silent, unaudited mutation.
 """
 
 from __future__ import annotations
 
 import json
+import os
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
@@ -27,7 +29,12 @@ def load_anchors(paths: DatasetPaths) -> dict[str, Anchor]:
     path = paths.measure_dir / "anchors.json"
     if not path.is_file():
         return {}
-    return _ADAPTER.validate_json(path.read_text(encoding="utf-8"))
+    try:
+        return _ADAPTER.validate_json(path.read_text(encoding="utf-8"))
+    except ValidationError as e:
+        # A truncated or otherwise corrupt file (what a non-atomic write used to be able to
+        # leave) must not escape as a bare pydantic error (blanket G / I2).
+        raise ValidationFailed(str(e), location=str(path)) from e
 
 
 def set_anchor(paths: DatasetPaths, key: str, anchor: Anchor, *, replace: bool = False) -> None:
@@ -41,16 +48,21 @@ def set_anchor(paths: DatasetPaths, key: str, anchor: Anchor, *, replace: bool =
         action = "replace"
     anchors[key] = anchor
     paths.measure_dir.mkdir(parents=True, exist_ok=True)
-    with (paths.measure_dir / "anchors.json").open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(
+    row = {"action": action, "key": key, **anchor.model_dump(mode="json")}
+    with (paths.measure_dir / "anchors.log.jsonl").open("a", encoding="utf-8", newline="\n") as f:
+        # Logged before it is applied: a crash between this write and the one below leaves a row
+        # here with no matching change in anchors.json below -- detectable -- never the reverse
+        # (an applied change with no audit trail at all).
+        f.write(json.dumps({**row, "ts": stamp()}, ensure_ascii=False) + "\n")
+    payload = (
+        json.dumps(
             {k: a.model_dump(mode="json") for k, a in sorted(anchors.items())},
-            f,
             ensure_ascii=False,
             indent=1,
         )
-        f.write("\n")
-    row = {"action": action, "key": key, **anchor.model_dump(mode="json")}
-    with (paths.measure_dir / "anchors.log.jsonl").open("a", encoding="utf-8", newline="\n") as f:
-        # The log stamps itself: the anchor's own ``set_at`` is caller-supplied, the log's ``ts``
-        # is what proves the order the guardrail actually changed in.
-        f.write(json.dumps({**row, "ts": stamp()}, ensure_ascii=False) + "\n")
+        + "\n"
+    )
+    target = paths.measure_dir / "anchors.json"
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(payload, encoding="utf-8", newline="\n")
+    os.replace(tmp, target)  # same directory -> atomic; anchors.json is never half-written

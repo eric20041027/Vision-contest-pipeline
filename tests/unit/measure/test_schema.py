@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from vcp.core.errors import ValidationFailed
 from vcp.measure.schema import (
+    Anchor,
     PredBox,
     Prediction,
     PredMask,
@@ -65,3 +66,20 @@ def test_run_card_and_prereg_defaults():
     assert (pr.t_min, pr.min_bases, pr.sigma_method, pr.sigma_ratio) == (2.0, 2, "splithalf", 1.0)
     with pytest.raises(ValidationError):
         PreRegistration(**{**pr.model_dump(), "component_class": "other"})
+
+
+def _anchor(**update):
+    base = dict(
+        run_id="r", reading_id="x", value=0.5, tolerance=1e-6, set_at="2026-09-04T00:00:00.000Z"
+    )
+    return Anchor(**{**base, **update})
+
+
+def test_anchor_tolerance_must_be_finite_and_nonnegative():
+    """I1: a nan/inf tolerance silently disables the guardrail (any drift is `<= tolerance`
+    for inf, and the nan comparison is always False), and a negative one jams it (nothing is
+    ever within tolerance). 0.0 -- exact reproduction required -- must stay legal."""
+    assert _anchor(tolerance=0.0).tolerance == 0.0
+    for bad in (float("nan"), float("inf"), float("-inf"), -1.0):
+        with pytest.raises(ValidationError):
+            _anchor(tolerance=bad)

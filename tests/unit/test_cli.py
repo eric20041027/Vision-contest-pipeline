@@ -264,8 +264,12 @@ def test_run_command_wraps_non_vcp_error_as_abort(roots, tmp_path):
 def test_parse_opts_and_render_table():
     assert parse_opts(["a=1", "b=x=y"]) == {"a": "1", "b": "x=y"}
     assert parse_opts(None) == {}
-    with pytest.raises(ValidationFailed):
+    with pytest.raises(ValidationFailed, match=r"--opt expects key=value"):
         parse_opts(["novalue"])
+    # Minor 7: the option name in the message is a parameter, not a hardcoded "--opt" -- measure
+    # and anchor expose this same parser as --params.
+    with pytest.raises(ValidationFailed, match=r"--params expects key=value"):
+        parse_opts(["novalue"], "--params")
     text = render_table({"train": {"cat": 3}, "val": {"cat": 1, "dog": 2}}, {"train": 3, "val": 3})
     assert text.splitlines()[0].split() == ["label", "train", "val"]
     assert "(total)" in text and "dog" in text

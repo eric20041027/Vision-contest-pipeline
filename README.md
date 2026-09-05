@@ -67,6 +67,29 @@ uv run vcp eval judge --dataset D --prereg p1 --strict
 
 比賽官方計分器、比賽專屬格式或自訂 σ_p 估法放在 `projects/<contest>/`，以 `--plugin projects.<contest>.metrics` 匯入，模組自己呼叫 `register_metric` / `register_converter` / `register_sigma_method` 登記，`src/vcp` 不出現比賽名稱。
 
+## 融合層命令 `vcp fuse`
+
+| 命令 | 作用 | 主要選項 |
+|---|---|---|
+| `vcp fuse recipe` | 驗成員後把配方寫進 git（`configs/datasets/<name>/fuse/<id>.yaml`，寫了不改） | `--dataset`、`--id`、`--plan`、`--method wbf\|mean\|rank_mean`、`--params k=v`、`--member RUN[:WEIGHT]`（可重複，順序有意義）、`--notes` |
+| `vcp fuse build` | 成員預測檔 → 融合 run（`runs/fuse-<id>/`，`fuse.json` 記每個成員的 sha 與輸出 sha） | `--dataset`、`--recipe`、`--run`、`--subsets`、`--replace` |
+| `vcp fuse ablate` | 每位成員一份「少了它」的變體配方與 run；`--preregister` 時每位成員一份準入預登記，交給 `vcp eval judge` | `--dataset`、`--recipe`、`--subsets`、`--no-build`、`--preregister --metric M --metric-params k=v --bases valA,valB --t-min --min-bases` |
+
+共用選項：`--json`、`--data-root`、`--configs-root`、`--plugin <module>`（自訂融合器以 `register_fuser` 登記）。融合結果就是普通 run：`trained_on` 取成員聯集、`source.framework=vcp.fuse`、`source.config_hash` = 配方檔 sha，量測與判決全用 `vcp eval`。同配方再 build 是 `cached=`；成員檔動一個位元是 FAIL `IntegrityError`；同一 run id 只綁一份配方。
+
+### 一輪準入
+
+```bash
+uv run vcp fuse recipe --dataset D --id r1 --plan fixed-v1 --method wbf --params iou=0.6 --params min_score=0.02 --member a --member b:0.5
+uv run vcp fuse ablate --dataset D --recipe r1 --preregister --metric coco_map   # 寫 r1-minus-*、建 fuse-r1 與 fuse-r1-minus-*、寫 r1-admit-*
+uv run vcp eval measure --run fuse-r1 && uv run vcp eval measure --run fuse-r1-minus-a && uv run vcp eval measure --run fuse-r1-minus-b
+uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自己的位置；FAIL = 降權或移除，換新配方 id 再來
+```
+
+準入 = 「有它 vs 沒它」：候選是完整配方、基準是少了該成員的變體，主張 class 固定為 model。完整配方量測過就不能再寫準入預登記（`candidate_measured`），所以先 ablate 再 measure。
+
+`wbf`（boxes）：`iou`、`skip`（輸入框門檻）、`min_score`（融合後門檻）、`max_per_image`、`conf_type=avg|max`，語意同 ensemble-boxes 的 `weighted_boxes_fusion(allows_overflow=False)` 但在像素座標運算、依 (view, category) 分群、有尺寸才裁邊。`mean`（scores / targets）加權平均；`rank_mean`（scores）以子集為母體的名次平均，AUC 型指標用、不是機率。
+
 ## 匯入器與 `rows_read` 的語意
 
 | 匯入器 | 來源 | `rows_read` 數的是 |

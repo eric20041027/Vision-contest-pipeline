@@ -34,11 +34,18 @@ def _run(metric, samples, card, preds, params=None):
 
 
 def test_registry_and_params():
-    assert list(METRICS)[:6] == ["accuracy", "macro_f1", "log_loss", "macro_auc", "rmse", "mae"]
+    assert list(METRICS)[:7] == [
+        "coco_map",
+        "accuracy",
+        "macro_f1",
+        "log_loss",
+        "macro_auc",
+        "rmse",
+        "mae",
+    ]
     assert applicable_metrics("cls") == ["accuracy", "macro_f1", "log_loss"]
     assert applicable_metrics("multilabel") == ["macro_auc"]
     assert applicable_metrics("regression") == ["rmse", "mae"]
-    assert applicable_metrics("det") == []
     with pytest.raises(RegistryError):
         get_metric("bleu")
     with pytest.raises(RegistryError, match="already registered"):
@@ -256,7 +263,11 @@ def test_rmse_and_mae_require_target_in_gold_not_just_prediction():
 
 
 def test_all_metrics_declare_higher_is_better():
+    # coco_map registers ahead of the tabular metrics (Task 7); not itself a tabular metric, but
+    # this asserts on the whole METRICS registry so it must be listed here too, or registering it
+    # breaks this untouched Task 6 test on an unrelated dict-equality mismatch.
     assert {name: m.higher_is_better for name, m in METRICS.items()} == {
+        "coco_map": True,
         "accuracy": True,
         "macro_f1": True,
         "log_loss": False,

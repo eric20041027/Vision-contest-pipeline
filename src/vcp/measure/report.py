@@ -58,7 +58,9 @@ def _runs_for(paths: DatasetPaths) -> tuple[int, list[str]]:
     for p in sorted(paths.runs_dir.glob("*/run.yaml")):
         try:
             card = load_yaml_model(p, RunCard)
-        except (ValidationFailed, OSError):
+        except (ValidationFailed, OSError, UnicodeDecodeError):
+            # UnicodeDecodeError: a binary-corrupt card is decoded before load_yaml_model's own
+            # wrapping runs, and it is a ValueError, not an OSError -- it must count, not abort.
             unreadable.append(str(p))
             continue
         if card.dataset == paths.name:

@@ -8,9 +8,13 @@ from vcp.measure.schema import PredMask
 
 
 def test_rasterize_polygon_axis_aligned():
+    # Ruling 1 (superseded): rasterised via pycocotools (frPyObjects + decode), not Pillow's
+    # boundary-inclusive fill -- 6 px, matching the shoelace area (vcp.data.exporters.coco.
+    # polygon_area) and pycocotools.mask.frPyObjects+decode run directly on this fixture, not
+    # the brief's original 12px Pillow estimate.
     m = rasterize_polygon([[1, 1, 4, 1, 4, 3, 1, 3]], 6, 5)
     assert m.shape == (5, 6) and m.dtype == bool
-    assert m.sum() == 12 and m[1, 1] and m[3, 4] and not m[0, 0] and not m[4, 5]
+    assert m.sum() == 6 and m[1, 1] and m[2, 3] and not m[0, 0] and not m[4, 5]
 
 
 def test_uncompressed_rle_is_column_major():
@@ -33,9 +37,10 @@ def test_compressed_rle_roundtrip_via_pycocotools():
 
 
 def test_mask_array_dispatch_and_errors():
-    # Ruling 1: Pillow's boundary-inclusive fill covers 9 px for this 2x2 square, not 4.
+    # Ruling 1 (superseded): rasterised via pycocotools, which covers 4 px for this 2x2 square
+    # (== width * height == the shoelace area), not Pillow's boundary-inclusive 9 px.
     poly = Mask(category_id=0, polygon=[[0, 0, 2, 0, 2, 2, 0, 2]])
-    assert mask_array(poly, 4, 4).sum() == 9
+    assert mask_array(poly, 4, 4).sum() == 4
     pred = PredMask(category_id=0, score=0.9, rle="1,2,3", meta={"rle_encoding": "uncompressed"})
     assert mask_array(pred, 3, 2).sum() == 2
     with pytest.raises(ValidationFailed, match="degenerate"):
@@ -55,9 +60,8 @@ def test_mask_array_rejects_path_form_mask():
 # different half of the ``len(ring) < 6 or len(ring) % 2`` guard.
 
 
-def test_rasterize_polygon_rejects_fewer_than_three_points():
-    with pytest.raises(ValidationFailed, match="degenerate"):
-        rasterize_polygon([[0, 0, 1, 1]], 4, 4)  # 2 points
+# test_rasterize_polygon_rejects_fewer_than_three_points deleted: it duplicated the same
+# assertion already made in test_mask_array_dispatch_and_errors.
 
 
 def test_rasterize_polygon_rejects_odd_coordinate_count():
@@ -65,7 +69,12 @@ def test_rasterize_polygon_rejects_odd_coordinate_count():
         rasterize_polygon([[0, 0, 2, 0, 2, 2, 0]], 4, 4)  # 7 numbers, not an x/y pairing
 
 
-# --- a vertex outside the view is not an error: Pillow clips the fill to the canvas.
+def test_rasterize_polygon_rejects_no_rings():
+    with pytest.raises(ValidationFailed, match="polygon has no rings"):
+        rasterize_polygon([], 4, 4)
+
+
+# --- a vertex outside the view is not an error: pycocotools clips the fill to the canvas.
 
 
 def test_rasterize_polygon_clips_vertices_outside_the_view():
@@ -85,8 +94,19 @@ def test_decode_rle_size_mismatch_with_view_is_validation_failed():
 
 
 def test_decode_rle_malformed_size_is_validation_failed():
-    with pytest.raises(ValidationFailed, match="size"):
+    with pytest.raises(ValidationFailed, match="two elements"):
         decode_rle("1,2,3", {"rle_encoding": "uncompressed", "size": [3]}, 3, 2)
+
+
+# --- F2: meta["size"] must be validated as a two-element list/tuple BEFORE any indexing or
+# len() call, so a caller's malformed prediction/gold file (an unconstrained dict) never escapes
+# as a raw TypeError (int has no len) or KeyError (dict indexed by position 0).
+
+
+@pytest.mark.parametrize("size", [4, {"h": 2, "w": 3}, [4], "4,5"])
+def test_decode_rle_size_must_be_a_two_element_sequence(size):
+    with pytest.raises(ValidationFailed, match="two elements"):
+        decode_rle("1,2,3", {"size": size}, 3, 2)
 
 
 # --- uncompressed RLE integrity: non-integer counts, negative counts, and a sum that does not
@@ -124,16 +144,8 @@ def test_decode_rle_compressed_that_pycocotools_cannot_decode_is_validation_fail
         decode_rle("not valid rle counts!!!", {"size": [4, 5]}, 5, 4)
 
 
-# --- self-review requirement: rasterising a polygon and re-encoding/decoding it through its own
-# RLE round trip must agree exactly, catching any off-by-one in the boundary rule.
-
-
-def test_rasterize_polygon_roundtrips_through_its_own_rle_encoding():
-    pytest.importorskip("pycocotools")
-    from pycocotools import mask as mask_util
-
-    polygon = [[1, 1, 4, 1, 4, 3, 1, 3]]
-    direct = rasterize_polygon(polygon, 6, 5)
-    encoded = mask_util.encode(np.asfortranarray(direct.astype(np.uint8)))
-    via_rle = decode_rle(encoded["counts"].decode("ascii"), {"size": [5, 6]}, 6, 5)
-    assert via_rle.tolist() == direct.tolist()
+# test_rasterize_polygon_roundtrips_through_its_own_rle_encoding deleted (ruling 1, superseded):
+# an identity round-trip through the mask's OWN encoding cannot detect a boundary-convention
+# error -- it would pass even under the old Pillow-vs-pycocotools mismatch. The external oracle
+# that replaces it is test_gold_polygon_vs_same_polygon_as_rle_scores_perfectly in
+# test_metrics_seg.py, which compares against an INDEPENDENTLY built RLE.

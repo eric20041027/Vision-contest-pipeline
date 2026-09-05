@@ -14,7 +14,7 @@ from vcp.data.schema import DatasetCard, Sample
 from vcp.measure.metrics.base import effective_params, gold_only, require_nonempty
 from vcp.measure.schema import MetricResult, Prediction
 
-INSTALL_HINT = "COCO mAP needs the 'eval' extra: uv sync --extra eval"
+INSTALL_HINT = "segmentation / COCO metrics need the 'eval' extra: uv sync --extra eval"
 IOU_PRESETS: dict[str, list[float]] = {
     "50": [0.5],
     "75": [0.75],

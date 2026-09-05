@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from helpers import SEG_CATS, make_card, perfect_predictions, seg_samples
@@ -58,6 +59,64 @@ def test_empty_shifted_and_threshold():
     ]
     assert _run("dice", samples, card, low).value == 0.0
     assert _run("dice", samples, card, low, {"threshold": "0.1"}).value == pytest.approx(1.0)
+
+
+# --- F1 (ruling 1, superseded): a polygon and an RLE that encode the SAME region must score as
+# a perfect match. Before the fix, rasterize_polygon (Pillow, boundary-inclusive) and decode_rle
+# (pycocotools) disagreed by up to 2x on small masks, so scoring gold polygons against the very
+# same region re-expressed as RLE silently produced dice/miou far below 1.0 -- exactly the
+# mainstream path (the COCO importer stores polygons; detectors emit RLE). This is the external
+# oracle that replaces the deleted identity round-trip test in test_masks.py: the "expected"
+# mask here is built independently (straight from pycocotools), not from rasterize_polygon.
+
+
+def _pycocotools_raster(rings: list[list[float]], h: int, w: int) -> np.ndarray:
+    from pycocotools import mask as mask_util
+
+    rles = mask_util.frPyObjects(rings, h, w)
+    return mask_util.decode(mask_util.merge(rles)).astype(np.uint8)
+
+
+def _uncompressed_rle_counts(arr: np.ndarray) -> str:
+    """vcp's/COCO's own uncompressed-RLE convention (see masks._decode_uncompressed): comma
+    separated, column-major run lengths, always starting with the leading False run (0 if the
+    mask starts True)."""
+    flat = arr.astype(bool).flatten(order="F")
+    counts: list[int] = []
+    current, run = False, 0
+    for v in flat:
+        if bool(v) == current:
+            run += 1
+        else:
+            counts.append(run)
+            current, run = bool(v), 1
+    counts.append(run)
+    return ",".join(str(c) for c in counts)
+
+
+@pytest.mark.parametrize("encoding", ["compressed", "uncompressed"])
+def test_gold_polygon_vs_same_polygon_as_rle_scores_perfectly(encoding):
+    pytest.importorskip("pycocotools")
+    from pycocotools import mask as mask_util
+
+    samples = seg_samples(20)
+    card = make_card("seg", categories=SEG_CATS)
+    preds = []
+    for s in samples:
+        v = s.views[0]
+        pms = []
+        for m in s.labels.masks:
+            arr = _pycocotools_raster(m.polygon, v.height, v.width)
+            if encoding == "compressed":
+                counts = mask_util.encode(np.asfortranarray(arr))["counts"].decode("ascii")
+                meta = {"size": [v.height, v.width]}
+            else:
+                counts = _uncompressed_rle_counts(arr)
+                meta = {"size": [v.height, v.width], "rle_encoding": "uncompressed"}
+            pms.append(PredMask(category_id=m.category_id, score=1.0, rle=counts, meta=meta))
+        preds.append(Prediction(sample_id=s.sample_id, masks=pms))
+    for name in ("dice", "miou"):
+        assert _run(name, samples, card, preds).value == pytest.approx(1.0)
 
 
 # --- registration details beyond the brief's own applicable_metrics() check.
@@ -138,6 +197,38 @@ def test_prediction_mask_with_unknown_category_id_is_validation_failed():
     ]
     with pytest.raises(ValidationFailed, match="unknown category id"):
         _run("dice", [sample], card, preds)
+
+
+# --- F3: ruling 2's "located" is honoured -- a mask-decoding error raised while scoring a
+# 50k-sample subset must name which sample it came from, not just what went wrong. Asserted
+# through the METRIC (not the masks.py helper directly), since that is the path a real user
+# error actually takes.
+
+
+def test_path_form_gold_mask_error_is_located_by_sample_id_through_the_metric():
+    card = make_card("seg", categories=SEG_CATS)
+    sample = Sample(
+        sample_id="s0042",
+        views=[View(path="s0042.jpg", width=8, height=8)],
+        labels=Labels(masks=[Mask(category_id=0, path="masks/s0042.png")]),
+        label_source="gold",
+    )
+    with pytest.raises(ValidationFailed, match="s0042"):
+        _run("dice", [sample], card, [Prediction(sample_id="s0042", masks=[])])
+
+
+def test_mask_decode_error_is_located_by_sample_id_through_the_metric():
+    card = make_card("seg", categories=SEG_CATS)
+    sample = Sample(
+        sample_id="s0099",
+        views=[View(path="s0099.jpg", width=8, height=8)],
+        # a degenerate ring (2 points): decode_rle/rasterize_polygon's own message never
+        # mentions the sample on its own -- the metric must supply it.
+        labels=Labels(masks=[Mask(category_id=0, polygon=[[0, 0, 1, 1]])]),
+        label_source="gold",
+    )
+    with pytest.raises(ValidationFailed, match="s0099"):
+        _run("dice", [sample], card, [Prediction(sample_id="s0099", masks=[])])
 
 
 # --- ruling 0: an empty subset must fail loudly (require_nonempty), for both metrics.
@@ -221,6 +312,20 @@ def test_invalid_threshold_is_validation_failed():
     perfect = perfect_predictions(samples, card)
     with pytest.raises(ValidationFailed, match="threshold"):
         _run("dice", samples, card, perfect, {"threshold": "abc"})
+
+
+# --- minor: threshold must be finite and within [0, 1] -- "nan"/"inf" parse as a float without
+# raising, and a value outside [0, 1] is nonsensical against a score in [0, 1], but neither was
+# rejected before (--opt threshold=nan silently scored 0.0 on every sample).
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-0.1", "1.5"])
+def test_threshold_out_of_range_or_non_finite_is_validation_failed(bad):
+    samples = seg_samples(4, seed=0)
+    card = make_card("seg", categories=SEG_CATS)
+    perfect = perfect_predictions(samples, card)
+    with pytest.raises(ValidationFailed, match="threshold"):
+        _run("dice", samples, card, perfect, {"threshold": bad})
 
 
 # --- determinism: accumulation is a running sum over samples, so the result must not depend on

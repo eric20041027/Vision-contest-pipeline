@@ -44,7 +44,16 @@ class Accuracy:
 
 
 class MacroF1:
-    """Macro-averaged F1 across classes (unweighted mean of per-class F1). Higher is better."""
+    """Macro-averaged F1 across the classes this subset actually contains. Higher is better.
+
+    A class with no gold instance in the subset is undefined here, not zero: it is reported as
+    ``None`` and left out of the mean, the same convention ``macro_auc``, ``dice``, ``miou``
+    and ``coco_map`` already follow. Folding it in as 0.0 would make a perfect prediction score
+    2/3 on a 3-class card whenever the subset simply happens not to contain one of the classes
+    -- and every bootstrap resample is such a subset, so the noise that reaches sigma_p and the
+    judge's ``t`` would be the class lottery rather than the model. A class that IS in gold and
+    was never predicted keeps its 0.0: it was there to be found and was missed.
+    """
 
     name, version, tasks, defaults = "macro_f1", "1", frozenset({"cls"}), {}
     higher_is_better = True
@@ -53,11 +62,15 @@ class MacroF1:
         y_true, scores, names = _cls_arrays(samples, predictions, card)
         labels = list(range(len(names)))
         per = f1_score(y_true, scores.argmax(axis=1), labels=labels, average=None, zero_division=0)
-        return MetricResult(
-            value=float(np.mean(per)),
-            per_class={n: float(v) for n, v in zip(names, per, strict=True)},
-            n=len(y_true),
-        )
+        in_gold = set(np.unique(y_true).tolist())
+        per_class: dict[str, float | None] = {
+            n: (float(v) if i in in_gold else None)
+            for i, (n, v) in enumerate(zip(names, per, strict=True))
+        }
+        defined = [v for v in per_class.values() if v is not None]
+        # `defined` is never empty: _cls_arrays refuses an empty subset (require_nonempty) and
+        # one with no gold labels (gold_only), and any remaining subset has a class in it.
+        return MetricResult(value=float(np.mean(defined)), per_class=per_class, n=len(y_true))
 
 
 class LogLoss:

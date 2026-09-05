@@ -14,6 +14,7 @@ plan that does not match, a metric no registry knows -- is an error.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from vcp.measure.schema import (
     Judgement,
     PreRegistration,
     Reading,
+    RunCard,
     SigmaRef,
     SubsetJudgement,
 )
@@ -42,6 +44,10 @@ from vcp.measure.stats import paired_bootstrap
 JUDGEMENTS_LEDGER = "judgements.jsonl"
 READINGS_LEDGER = "readings.jsonl"
 TUNING_CLASS = "tuning"
+
+# Task 12 ruling 0c: the caller name the data layer records when this command opens a sealed
+# subset, exactly like `vcp eval measure` records "vcp eval measure".
+CALLER = "vcp eval judge"
 
 # A difference with no spread at all is not infinite certainty, but no jsonl ledger can hold
 # an inf (pydantic writes it as JSON null, which then fails to load back), so t saturates.
@@ -67,6 +73,11 @@ class JudgeSpec(BaseModel):
     # The CLI wraps construction so both arrive as a FAIL the user can act on.
     resamples: int = Field(default=200, ge=2)
     seed: int = Field(default=0, ge=0)
+    # Task 12 ruling 0c: a claim on a sealed subset is judgeable only with an explicit,
+    # recorded unseal -- exactly like `eval measure`, and for the same reason (every read of a
+    # sealed subset must be recorded, never silently bypassed).
+    unseal: bool = False
+    reason: str | None = None
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -103,8 +114,21 @@ def _latest(rows: list[Reading], run_id: str, subset: str, metric: str, pk: str)
     return max(hits, key=lambda r: r.ts) if hits else None
 
 
-def _t(delta: float, se: float) -> float:
-    """spec 6.2 step 2, with inf spelled as the cap: no difference and no spread is t = 0."""
+def _t(delta: float, se: float, *, location: str | None = None) -> float:
+    """spec 6.2 step 2, with inf spelled as the cap: no difference and no spread is t = 0.
+
+    I1: a non-finite ``se`` means some resample's metric value was itself non-finite (no
+    built-in metric does this, but a plugin's ``compute()`` can -- spec 2.1, 13.7). Falling
+    through to the ``se == 0`` branch below would report +-T_CAP, "infinite certainty", on a
+    subset whose bootstrap never produced a real answer at all -- silently turning a poisoned
+    resample into a positive base.
+    """
+    if not math.isfinite(se):
+        raise ValidationFailed(
+            f"bootstrap se is not finite ({se!r}); a metric returned a non-finite value on "
+            "some resample",
+            location=location,
+        )
     if se > 0:
         return delta / se
     return 0.0 if delta == 0 else (T_CAP if delta > 0 else -T_CAP)
@@ -144,6 +168,24 @@ def _assert_one_plan(pr: PreRegistration, pairs: dict[str, tuple[Reading, Readin
         )
 
 
+def _assert_reading_matches_card(run_id: str, subset: str, reading: Reading, card: RunCard) -> None:
+    """Minor 2: a reading is only as good as the predictions it was computed from.
+
+    ``verify_prediction`` already checks the file on disk against the run card's CURRENT
+    sha256; it never checks the card against a READING's own ``prediction_sha``. After
+    ``ingest --replace``, the card moves on but a stored reading does not -- so without this,
+    judging on a stale reading would silently mix its old baseline/candidate value with a
+    fresh bootstrap over the NEW file.
+    """
+    current = card.predictions[subset].sha256
+    if reading.prediction_sha != current:
+        raise ValidationFailed(
+            f"reading {reading.reading_id[:12]} for {run_id!r}/{subset!r} was taken on "
+            f"predictions {reading.prediction_sha[:12]}, but run {run_id!r} now has "
+            f"{current[:12]} for {subset!r}; re-measure {run_id!r} before judging"
+        )
+
+
 def _per_subset(
     spec: JudgeSpec,
     pr: PreRegistration,
@@ -164,7 +206,15 @@ def _per_subset(
     sign = 1.0 if metric.higher_is_better else -1.0
     out: dict[str, SubsetJudgement] = {}
     for subset, (a, b) in pairs.items():
-        samples = dataset.subset(subset, plan, paths=run_paths)
+        # Minor 2: catch a stale reading (post ``ingest --replace``) before spending any effort
+        # re-reading the dataset or bootstrapping over files it was never actually taken from.
+        _assert_reading_matches_card(pr.baseline_run, subset, a, card_a)
+        _assert_reading_matches_card(pr.candidate_run, subset, b, card_b)
+        # ruling 0c: threading unseal/reason here covers both the baseline's and the
+        # candidate's predictions for this subset -- they share the one sample list.
+        samples = dataset.subset(
+            subset, plan, unseal=spec.unseal, reason=spec.reason, caller=CALLER, paths=run_paths
+        )
         root = run_paths.data_root
         preds_a = predictions_by_id(read_predictions(verify_prediction(root, card_a, subset)))
         preds_b = predictions_by_id(read_predictions(verify_prediction(root, card_b, subset)))
@@ -180,7 +230,12 @@ def _per_subset(
         )
         delta = sign * raw
         out[subset] = SubsetJudgement(
-            baseline=a.value, candidate=b.value, delta=delta, se=se, t=_t(delta, se), n=len(samples)
+            baseline=a.value,
+            candidate=b.value,
+            delta=delta,
+            se=se,
+            t=_t(delta, se, location=subset),
+            n=len(samples),
         )
     return out
 
@@ -215,6 +270,29 @@ def _sigma_condition(
     return SigmaRef(method=est.method, value=est.value, estimate_id=est.estimate_id)
 
 
+def _append_judgement(path: Path, judgement: Judgement) -> None:
+    """I1: the same discipline ``ReadingsLedger.append`` gives ``readings.jsonl``, for
+    ``judgements.jsonl``. ``_t`` already refuses a non-finite ``se`` at the point one subset's
+    judgement is built, so the common case (a plugin metric returning nan on a resample) never
+    reaches here at all -- this is the backstop for every other numeric field of the row, and
+    for a judgement built by hand rather than through ``judge_prereg``. pydantic writes nan/inf
+    as JSON null, and an append-only ledger can never drop a row once it is in.
+    """
+    bad: list[str] = []
+    for subset, s in judgement.per_subset.items():
+        for field_name in ("baseline", "candidate", "delta", "se", "t"):
+            value = getattr(s, field_name)
+            if not math.isfinite(value):
+                bad.append(f"per_subset[{subset!r}].{field_name}={value!r}")
+    if judgement.sigma_p is not None and not math.isfinite(judgement.sigma_p.value):
+        bad.append(f"sigma_p.value={judgement.sigma_p.value!r}")
+    if bad:
+        raise ValidationFailed(
+            f"judgement {judgement.prereg_id!r} has non-finite fields {bad}; refusing to append it"
+        )
+    append_row(path, judgement)
+
+
 def judge_prereg(spec: JudgeSpec) -> Judgement:
     """Decide one pre-registered claim and append the judgement (spec 6.2, one clause each)."""
     paths = DatasetPaths.resolve(
@@ -240,7 +318,11 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
     verdict = "FAIL"
     per_subset: dict[str, SubsetJudgement] = {}
     sigma_ref: SigmaRef | None = None
-    if any(b.ts < logged_at for _, b in pairs.values()):  # step 1: the answer came first
+    # step 1: the answer came first. This inspects the LATEST candidate reading per cell (spec
+    # 6.2.1 says "any candidate reading" -- but an older, hidden one is unreachable through the
+    # CLI: create_prereg already refuses a candidate with ANY reading on a claimed subset,
+    # regardless of its prediction sha, before the claim is ever written down).
+    if any(b.ts < logged_at for _, b in pairs.values()):
         verdict = "INVALID"
         reasons.block(MEASURED_BEFORE_PREREG)
     elif not reasons.blocking:  # step 2
@@ -272,5 +354,5 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
         reading_ids=[r.reading_id for pair in pairs.values() for r in pair],
         bootstrap={"resamples": spec.resamples, "seed": spec.seed},
     )
-    append_row(paths.measure_dir / JUDGEMENTS_LEDGER, judgement)
+    _append_judgement(paths.measure_dir / JUDGEMENTS_LEDGER, judgement)
     return judgement

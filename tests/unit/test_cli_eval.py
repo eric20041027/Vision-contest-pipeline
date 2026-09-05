@@ -611,7 +611,7 @@ def test_eval_preregister_and_judge_cli(roots, tmp_path):
     r = runner.invoke(app, [*args[:4], "--id", "p2", *args[6:]])  # same candidate, now measured
     assert r.exit_code == 1 and "already_measured" in _last_verdict(r.output)
     r = runner.invoke(app, ["eval", "judge", "--dataset", "tiny", "--prereg", "p404", "--strict"])
-    assert r.exit_code == 1
+    assert r.exit_code == 1 and "not found" in _last_verdict(r.output)
     # --json puts the judgement on stdout and the VERDICT on stderr
     r = runner.invoke(app, [*judge_args, "--json"])
     assert r.exit_code == 0, r.output
@@ -633,10 +633,13 @@ def test_eval_preregister_and_judge_failures_cli(roots, tmp_path):
         (PREREG_BASE, 1, "already exists"),
         ([*other_id[:10], "--class", "bogus", *other_id[12:]], 1, "--class must be one of"),
         ([*other_id, "--subsets", ""], 1, "no subsets"),
+        # Minor 1: "valA,valA" must not silently become a permanent, confusing FAIL.
+        ([*other_id, "--subsets", "valA,valA"], 1, "duplicate subsets"),
         ([*other_id, "--metric", "accuracy"], 1, "not applicable"),
         ([*other_id, "--metric", "nope"], 2, "RegistryError"),
         ([*other_id, "--params", "foo"], 1, "--params expects key=value"),
-        ([*other_id, "--sigma-ratio", "nan"], 1, "ValidationFailed"),
+        # Minor 6: the class name alone doesn't say WHICH validation failed.
+        ([*other_id, "--sigma-ratio", "nan"], 1, "must be finite"),
         ([*other_id, "--t-min", "inf"], 1, "ValidationFailed"),
         (judge + ["--seed", "-1"], 1, "seed"),
         (judge + ["--resamples", "1"], 1, "resamples"),
@@ -649,3 +652,58 @@ def test_eval_preregister_and_judge_failures_cli(roots, tmp_path):
     assert sorted(p.name for p in (roots.configs / "datasets" / "tiny" / "prereg").iterdir()) == [
         "p1.yaml"
     ]
+
+
+def test_eval_judge_unseal_and_reason_cli(roots, tmp_path):
+    """Task 12 ruling 0c: `judge` gains --unseal/--reason exactly like `measure`, so a claim on
+    a sealed subset that was legitimately measured with --unseal --reason is judgeable."""
+    # n=150 (not the usual 60): holdout needs enough samples that a bootstrap resample cannot
+    # land entirely on its handful of gold-box-free samples (coco_map's own "undefined" guard),
+    # which a tiny 6-sample holdout hits often enough to make this test flaky/failing.
+    ds, plan, paths = seed_det(roots, n=150)
+    for run_id, drop in (("base", 13), ("cand", 0)):
+        r = ingest_perfect(roots, tmp_path, ds, plan, run_id, "holdout", drop=drop, unseal=True)
+        assert r.exit_code == 0, r.output
+    measure_holdout = ["--subsets", "holdout", "--unseal", "--reason", "fixture"]
+    assert runner.invoke(app, ["eval", "measure", "--run", "base", *measure_holdout]).exit_code == 0
+    # pre-register BEFORE the candidate is measured (Task 11 ruling 1): only the baseline may
+    # already have a reading.
+    args = [
+        *PREREG_BASE[:4],
+        "--id",
+        "psealed",
+        *PREREG_BASE[6:],
+        "--subsets",
+        "holdout",
+        "--min-bases",
+        "1",
+    ]
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0, r.output
+    assert runner.invoke(app, ["eval", "measure", "--run", "cand", *measure_holdout]).exit_code == 0
+    unseal_log = paths.unseal_jsonl("fixed-v1")
+    before = unseal_log.read_text(encoding="utf-8").splitlines()
+    r = runner.invoke(
+        app, ["eval", "judge", "--dataset", "tiny", "--prereg", "psealed", "--resamples", "30"]
+    )
+    assert r.exit_code == 2 and "SealedSubsetError" in _last_verdict(r.output)
+    r = runner.invoke(
+        app,
+        [
+            "eval",
+            "judge",
+            "--dataset",
+            "tiny",
+            "--prereg",
+            "psealed",
+            "--resamples",
+            "30",
+            "--unseal",
+            "--reason",
+            "final read",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "verdict=PASS" in _last_verdict(r.output)
+    after = unseal_log.read_text(encoding="utf-8").splitlines()
+    assert len(after) == len(before) + 1 and '"caller": "vcp eval judge"' in after[-1]

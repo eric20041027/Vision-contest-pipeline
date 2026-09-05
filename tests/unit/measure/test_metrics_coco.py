@@ -202,6 +202,44 @@ def test_iscrowd_with_an_uncoercible_value_is_validation_failed():
         _run(samples, card, [Prediction(sample_id="s0000", boxes=[])])
 
 
+def test_crowd_only_category_is_none_on_the_all_empty_short_circuit_too():
+    """Fix round 2: a category whose only gold in the subset is a crowd region has no AP on the
+    full pycocotools path (accumulate() ignores iscrowd gold, so npig == 0 and the category is
+    excluded). The all-empty-predictions short-circuit must say the same -- None, not 0.0 --
+    or the same ground truth would answer two ways depending on whether some other category
+    happened to receive a prediction."""
+    card = make_card("det")  # cat(0), dog(1), bird(2)
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[View(path="s0000.jpg", width=8, height=8)],
+            labels=Labels(
+                boxes=[
+                    Box(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0),
+                    Box(x=4.0, y=4.0, w=2.0, h=2.0, category_id=1, meta={"iscrowd": 1}),
+                ]
+            ),
+            label_source="gold",
+        )
+    ]
+    empty = [Prediction(sample_id="s0000", boxes=[])]
+    short = _run(samples, card, empty)
+    assert short.value == 0.0
+    assert short.per_class == {"cat": 0.0, "dog": None, "bird": None}
+    # The full path, forced by one unrelated detection, agrees on the crowd-only category.
+    full = _run(
+        samples,
+        card,
+        [
+            Prediction(
+                sample_id="s0000",
+                boxes=[PredBox(x=6.0, y=6.0, w=1.0, h=1.0, category_id=2, score=0.5)],
+            )
+        ],
+    )
+    assert full.per_class["dog"] is None and full.per_class["cat"] == 0.0
+
+
 # --- fix round 1, F2: a box on a view other than 0 must not be silently folded into view 0's
 # image (mirrors Task 8 ruling 3, which raises the same way on the mask side). Per-view image
 # ids are the fuller fix and are a recorded follow-up, not implemented here.

@@ -156,8 +156,10 @@ class CocoMap:
             # reports 0.0 (every instance is an unrecalled false negative); one with zero gold
             # instances here reports None (undefined), matching what the full pycocotools path
             # below would say for it. The gold -- already in gt.dataset["annotations"] -- is
-            # what tells the two cases apart, not the (absent) detections.
-            gold_cats = {a["category_id"] for a in gt.dataset["annotations"]}
+            # what tells the two cases apart, not the (absent) detections. Crowd regions do not
+            # count: pycocotools' accumulate() ignores iscrowd gold (npig == 0 excludes the
+            # category), so a category whose only gold here is crowd is None on both paths.
+            gold_cats = {a["category_id"] for a in gt.dataset["annotations"] if not a["iscrowd"]}
             per_class = {n: (0.0 if cid in gold_cats else None) for cid, n in names.items()}
             return MetricResult(value=0.0, per_class=per_class, n=len(samples))
         with contextlib.redirect_stdout(io.StringIO()):

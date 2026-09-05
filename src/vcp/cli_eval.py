@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 
 from vcp.cli_common import (
     CmdResult,
@@ -26,6 +27,7 @@ from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, load_context, measure_run
 from vcp.measure.metrics import effective_params, get_metric, params_key
 from vcp.measure.schema import Anchor
+from vcp.measure.sigma import SigmaSpec, estimate_sigma_result
 
 eval_app = typer.Typer(no_args_is_help=True, help="measurement commands")
 
@@ -263,3 +265,73 @@ def anchor_cmd(
         return "OK", fields, payload, [f"anchor {key} = {reading.value!r}"]
 
     run_command("eval.anchor", json_mode, data_root, fn)
+
+
+@eval_app.command("sigma")
+def sigma_cmd(
+    dataset: DatasetOpt,
+    plan: Annotated[str, typer.Option("--plan")],
+    metric: Annotated[str, typer.Option("--metric")],
+    method: Annotated[str, typer.Option("--method", help="splithalf | bootstrap | prior")],
+    params: Annotated[list[str] | None, typer.Option("--params")] = None,
+    subsets: Annotated[
+        str | None,
+        typer.Option("--subsets", help="two eval subsets (splithalf) or one (bootstrap)"),
+    ] = None,
+    run: Annotated[str | None, typer.Option("--run", help="run to resample (bootstrap)")] = None,
+    prior: Annotated[float | None, typer.Option("--prior")] = None,
+    note: Annotated[str, typer.Option("--note", help="source of a prior")] = "",
+    resamples: Annotated[int, typer.Option("--resamples")] = 200,
+    seed: Annotated[int, typer.Option("--seed")] = 0,
+    plugin: PluginOpt = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Estimate sigma_p and append it to the sigma ledger."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        try:
+            spec = SigmaSpec(
+                dataset=dataset,
+                plan_id=plan,
+                metric=metric,
+                params=parse_opts(params, "--params"),
+                method=method,
+                subsets=_csv(subsets),
+                run_id=run,
+                prior=prior,
+                note=note,
+                resamples=resamples,
+                seed=seed,
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        except ValidationError as e:
+            # An out-of-range option (--resamples 1) is a FAIL the user can act on, not a
+            # pydantic error escaping as an ABORT.
+            raise ValidationFailed(str(e), location="vcp eval sigma") from e
+        res = estimate_sigma_result(spec)
+        est = res.estimate
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "plan": plan,
+            "metric": metric,
+            "method": method,
+            "value": est.value,
+            "estimate": est.estimate_id[:12],
+            "cached": res.cached,
+        }
+        if "runs" in est.inputs:
+            fields["runs"] = len(est.inputs["runs"])
+        human = [f"sigma_p ({method}) = {est.value!r}"]
+        # A sigma_p of zero passes every `mean_delta >= sigma_ratio * sigma_p` the judge can
+        # ask, so it must not go by unremarked: it means this estimator found no spread at all.
+        status: Status = "OK"
+        if est.value == 0.0:
+            status = "WARN"
+            human.append(f"sigma_p is 0.0: method {method!r} found no spread to measure here")
+        return status, fields, {"estimate": est.model_dump(mode="json")}, human
+
+    run_command("eval.sigma", json_mode, data_root, fn)

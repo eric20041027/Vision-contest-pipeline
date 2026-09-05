@@ -1,0 +1,166 @@
+import random
+
+import numpy as np
+import pytest
+
+from helpers import (
+    SEG_CATS,
+    cls_samples,
+    make_card,
+    noisy_predictions,
+    perfect_predictions,
+    seg_samples,
+)
+from vcp.core.errors import ValidationFailed
+from vcp.data.schema import Labels, Sample, View
+from vcp.measure.metrics import get_metric
+from vcp.measure.predictions import predictions_by_id
+from vcp.measure.schema import Prediction
+from vcp.measure.stats import bootstrap_sd, paired_bootstrap
+
+# Pinned from a fresh process (see the task report). Any change to how the resample indexes are
+# drawn -- another RNG, another draw order, an unsorted sample list -- moves these. The two
+# coincide because the paired baseline below scores 1.0 on every resample, so the delta is the
+# noisy run's own value shifted by a constant.
+GOLDEN_SD = 0.06232117273791124
+GOLDEN_SE = 0.06232117273791124
+
+
+def _cls_case(n=80, *, seed=0, noise_seed=1, flip=0.3):
+    samples = cls_samples(n, seed=seed)
+    card = make_card("cls")
+    perfect = predictions_by_id(perfect_predictions(samples, card))
+    noisy = predictions_by_id(noisy_predictions(samples, card, seed=noise_seed, flip=flip))
+    return samples, card, perfect, noisy
+
+
+def test_paired_bootstrap_is_deterministic_and_signed():
+    samples, card, perfect, noisy = _cls_case()
+    metric = get_metric("accuracy")
+    delta, se, deltas = paired_bootstrap(
+        samples, perfect, noisy, metric, card, {}, resamples=50, seed=0
+    )
+    assert delta < 0 and se > 0 and len(deltas) == 50
+    delta2, se2, deltas2 = paired_bootstrap(
+        samples, perfect, noisy, metric, card, {}, resamples=50, seed=0
+    )
+    assert (delta2, se2, deltas2) == (delta, se, deltas)
+    _, _, deltas3 = paired_bootstrap(
+        samples, perfect, noisy, metric, card, {}, resamples=50, seed=1
+    )
+    assert deltas3 != deltas
+    d_same, se_same, _ = paired_bootstrap(
+        samples, perfect, perfect, metric, card, {}, resamples=20, seed=0
+    )
+    assert d_same == 0.0 and se_same == 0.0
+
+
+def test_bootstrap_sd():
+    samples = cls_samples(60, seed=2)
+    card = make_card("cls")
+    metric = get_metric("accuracy")
+    perfect = predictions_by_id(perfect_predictions(samples, card))
+    assert bootstrap_sd(samples, perfect, metric, card, {}, resamples=30, seed=0) == 0.0
+    noisy = predictions_by_id(noisy_predictions(samples, card, seed=3, flip=0.3))
+    sd = bootstrap_sd(samples, noisy, metric, card, {}, resamples=30, seed=0)
+    assert 0.0 < sd < 0.2
+    # Ruling 1: one draw has no spread to measure. That is a user-facing ValidationFailed (the
+    # CLI's --resamples reaches straight here), not a bare ValueError, and it is raised before
+    # a single metric runs.
+    with pytest.raises(ValidationFailed, match="resamples must be >= 2"):
+        bootstrap_sd(samples, noisy, metric, card, {}, resamples=1, seed=0)
+
+
+def test_bootstrap_is_bit_identical_across_calls_and_sample_order():
+    """Same seed, same resamples, same inputs -> the same sigma_p to the last bit, whatever
+    order the caller collected the samples in."""
+    samples, card, perfect, noisy = _cls_case()
+    metric = get_metric("accuracy")
+    shuffled = random.Random(11).sample(samples, len(samples))
+    assert [s.sample_id for s in shuffled] != [s.sample_id for s in samples]
+
+    sd = bootstrap_sd(samples, noisy, metric, card, {}, resamples=64, seed=7)
+    assert sd == GOLDEN_SD
+    assert bootstrap_sd(samples, noisy, metric, card, {}, resamples=64, seed=7) == sd
+    assert bootstrap_sd(shuffled, noisy, metric, card, {}, resamples=64, seed=7) == sd
+
+    _, se, deltas = paired_bootstrap(
+        samples, perfect, noisy, metric, card, {}, resamples=64, seed=7
+    )
+    assert se == GOLDEN_SE
+    _, se_shuffled, deltas_shuffled = paired_bootstrap(
+        shuffled, perfect, noisy, metric, card, {}, resamples=64, seed=7
+    )
+    assert (se_shuffled, deltas_shuffled) == (se, deltas)
+
+
+def _top_class(scores: dict[str, float], names: list[str]) -> str:
+    return names[int(np.argmax([scores[n] for n in names]))]
+
+
+def _one_hot(sample: Sample, names: list[str], gold_of: dict[int, str]) -> Prediction:
+    gold = gold_of[sample.labels.cls]
+    return Prediction(
+        sample_id=sample.sample_id, scores={n: (1.0 if n == gold else 0.0) for n in names}
+    )
+
+
+def test_paired_se_is_far_below_the_unpaired_one():
+    """Pairing is the whole point: both runs are scored on the SAME resample, so the sampling
+    noise they share cancels and the SE measures only how much their *difference* moves.
+    Resampling them independently would leave sqrt(sd_a^2 + sd_b^2) in the SE -- five times
+    more on this fixture -- and would call a real improvement noise."""
+    n = 120
+    fixed = 2
+    samples = cls_samples(n, seed=5)
+    card = make_card("cls")
+    metric = get_metric("accuracy")
+    names = [c.name for c in card.categories]
+    gold_of = {c.id: c.name for c in card.categories}
+    a = predictions_by_id(noisy_predictions(samples, card, seed=6, flip=0.3))
+    # b is a, with the first few samples a gets wrong corrected: two runs that agree
+    # everywhere else, so a paired delta only moves when one of those samples is drawn.
+    wrong = [
+        s
+        for s in samples
+        if _top_class(a[s.sample_id].scores or {}, names) != gold_of[s.labels.cls]
+    ][:fixed]
+    b = {**a, **{s.sample_id: _one_hot(s, names, gold_of) for s in wrong}}
+    delta, se, _ = paired_bootstrap(samples, a, b, metric, card, {}, resamples=200, seed=0)
+    assert delta == pytest.approx(fixed / n)  # b is better on exactly those samples
+    sd_a = bootstrap_sd(samples, a, metric, card, {}, resamples=200, seed=1)
+    sd_b = bootstrap_sd(samples, b, metric, card, {}, resamples=200, seed=2)
+    unpaired = float(np.hypot(sd_a, sd_b))  # what independent resampling would report
+    assert se < unpaired / 3
+    # 2 corrected samples out of 120: sd(delta) = sqrt(120 * (1/60) * (59/60)) / 120 = 0.0117
+    assert se < 0.02
+
+
+def _mostly_empty_seg(n: int) -> list[Sample]:
+    """One sample with gold, the rest with none. A resample that happens to miss the only
+    labelled sample leaves every category undefined -- which is what the seg metrics refuse
+    to score."""
+    return seg_samples(1, seed=0) + [
+        Sample(
+            sample_id=f"s{i:04d}",
+            views=[View(path=f"s{i:04d}.jpg", width=8, height=8)],
+            labels=Labels(masks=[]),
+            label_source="gold",
+        )
+        for i in range(1, n)
+    ]
+
+
+def test_a_metric_refusing_a_resample_names_the_resample_and_the_seed():
+    """Ruling 0: a refused resample is a loud, located failure, never a dropped iteration --
+    dropping them would bias sigma_p towards the draws that happen to be scoreable."""
+    samples = _mostly_empty_seg(8)
+    card = make_card("seg", categories=SEG_CATS)
+    preds = predictions_by_id(perfect_predictions(samples, card))
+    metric = get_metric("dice")
+    assert metric.compute(samples, preds, card, {}).value == 1.0  # the full subset scores fine
+    with pytest.raises(ValidationFailed) as excinfo:
+        bootstrap_sd(samples, preds, metric, card, {}, resamples=20, seed=0)
+    message = str(excinfo.value)
+    assert "resample" in message and "seed=0" in message and "'dice'" in message
+    assert "no category has any gold or predicted pixels" in message

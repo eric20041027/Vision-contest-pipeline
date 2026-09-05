@@ -21,6 +21,7 @@ polygon ring with 5 numbers" with nothing identifying which of 50k samples it ca
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -28,6 +29,24 @@ import numpy as np
 from vcp.core.errors import ValidationFailed
 from vcp.data.schema import Mask
 from vcp.measure.schema import PredMask
+
+# pycocotools 2.0.x's compiled decode() trips NumPy 2's "__array__ doesn't accept a copy
+# keyword" DeprecationWarning on every call. It is the library's to fix, not ours; a warning per
+# mask on a 50k-sample dataset is unacceptable output, so the ONE place that calls decode()
+# filters exactly that message -- never a blanket filter in pyproject.
+_PYCOCOTOOLS_ARRAY_COPY_WARNING = r"__array__ implementation doesn't accept a copy keyword"
+
+
+def _decode(rle: Any) -> np.ndarray:
+    """``pycocotools.mask.decode`` as a boolean array, with the library's own NumPy-2
+    deprecation noise filtered at the call site."""
+    from pycocotools import mask as mask_util
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message=_PYCOCOTOOLS_ARRAY_COPY_WARNING, category=DeprecationWarning
+        )
+        return np.asarray(mask_util.decode(rle), dtype=bool)
 
 
 def rasterize_polygon(
@@ -57,7 +76,7 @@ def rasterize_polygon(
 
     rles = mask_util.frPyObjects(polygons, height, width)
     merged = mask_util.merge(rles)
-    return np.asarray(mask_util.decode(merged), dtype=bool)
+    return _decode(merged)
 
 
 def _rle_size(
@@ -130,15 +149,12 @@ def _decode_compressed(
     from vcp.measure.metrics.coco_map import require_pycocotools
 
     require_pycocotools()
-    from pycocotools import mask as mask_util
-
     try:
-        decoded = mask_util.decode({"size": [h, w], "counts": rle.encode("ascii")})
+        return _decode({"size": [h, w], "counts": rle.encode("ascii")})
     except ValueError as e:
         raise ValidationFailed(
             f"pycocotools could not decode RLE counts: {e}", location=location
         ) from e
-    return np.asarray(decoded, dtype=bool)
 
 
 def decode_rle(

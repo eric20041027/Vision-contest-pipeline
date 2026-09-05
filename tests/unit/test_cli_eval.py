@@ -496,6 +496,55 @@ def test_eval_measure_guardrail_abort_is_reported_and_writes_nothing_cli(roots, 
     assert len(ReadingsLedger(paths.measure_dir / "readings.jsonl").rows) == before
 
 
+SIGMA_BASE = ["eval", "sigma", "--dataset", "tiny", "--plan", "fixed-v1", "--metric", "coco_map"]
+PRIOR_OK = ["--prior", "0.008", "--note", "history"]
+
+
+def test_eval_sigma_cli(roots, tmp_path):
+    _, _, paths = seed_det(roots)
+    prior = [*SIGMA_BASE, "--method", "prior", *PRIOR_OK]
+    r = runner.invoke(app, prior)
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "method=prior" in v and "value=0.008" in v and "cached=false" in v
+    r = runner.invoke(app, prior)
+    assert r.exit_code == 0, r.output
+    assert "cached=true" in _last_verdict(r.output)
+    # append-only: the same estimate is one row, for ever
+    sigma_jsonl = paths.measure_dir / "sigma.jsonl"
+    assert len(sigma_jsonl.read_text(encoding="utf-8").splitlines()) == 1
+    r = runner.invoke(app, [*SIGMA_BASE, "--method", "splithalf"])
+    assert r.exit_code == 1 and "at least 3 runs" in _last_verdict(r.output)
+    # a sigma_p of zero makes the judge's sigma_p bar vacuous: written, but not silently
+    r = runner.invoke(app, [*SIGMA_BASE, "--method", "prior", "--prior", "0", "--note", "flat"])
+    assert r.exit_code == 0, r.output
+    assert "status=WARN" in _last_verdict(r.output) and "value=0.0" in _last_verdict(r.output)
+
+
+def test_eval_sigma_failures_cli(roots, tmp_path):
+    """Each way a user can get `eval sigma` wrong maps to its own status and exit code."""
+    seed_det(roots)
+    other = ["eval", "sigma", "--dataset", "tiny", "--plan", "fixed-v1"]
+    cases = [
+        ([*SIGMA_BASE, "--method", "prior", "--prior", "0.008"], 1, "prior needs --prior"),
+        ([*SIGMA_BASE, "--method", "magic"], 1, "--method must be one of"),
+        ([*SIGMA_BASE, "--method", "prior", *PRIOR_OK, "--resamples", "1"], 1, "resamples"),
+        ([*SIGMA_BASE, "--method", "bootstrap"], 1, "bootstrap needs --run"),
+        ([*SIGMA_BASE, "--method", "bootstrap", "--run", "ghost"], 1, "run not found"),
+        ([*other, "--metric", "nope", "--method", "prior", *PRIOR_OK], 2, "RegistryError"),
+        (
+            ["eval", "sigma", "--dataset", "tiny", "--plan", "ghost", "--metric", "coco_map"]
+            + ["--method", "prior", *PRIOR_OK],
+            2,
+            "plan not found",
+        ),
+    ]
+    for args, code, needle in cases:
+        r = runner.invoke(app, args)
+        assert r.exit_code == code, (args, r.output)
+        assert needle in _last_verdict(r.output), (args, r.output)
+
+
 def test_load_plugins_returns_loaded_names_and_raises_on_bad_module():
     """Ruling Task5#1: load_plugins returns the loaded module names (final signature)."""
     assert load_plugins(None) == []

@@ -1,6 +1,18 @@
 import pytest
 
-from helpers import det_samples, det_with_runs, make_card, perfect_predictions, write_images
+from helpers import (
+    ML_CATS,
+    SEG_CATS,
+    cls_samples,
+    dataset_with_perfect_run,
+    det_samples,
+    det_with_runs,
+    make_card,
+    multilabel_samples,
+    perfect_predictions,
+    seg_samples,
+    write_images,
+)
 from vcp.core.errors import (
     GuardrailError,
     IntegrityError,
@@ -63,6 +75,45 @@ def test_measure_default_subsets_and_cache(roots, tmp_path):
     fresh = card.model_copy(update={"trained_on": []})
     assert default_subsets(plan, fresh, unseal=False) == ["valA", "valB"]
     assert default_subsets(plan, fresh, unseal=True) == ["valA", "valB", "holdout"]
+
+
+# spec 13.2 wants readings from all five task shapes; det is covered by every test above, and
+# regression by test_prereg_judge's rmse fixture. cls / multilabel / seg had never been driven
+# through measure_run at all -- their metrics were only ever called directly -- so nothing
+# pinned the path from a real ingested prediction file to a row in readings.jsonl for them.
+# Perfect predictions make the expected value exact, which is what makes this an assertion
+# rather than a smoke test: log_loss (lower is better) bottoms out at 0, the rest top out at 1.
+_TASK_SHAPES = {
+    "cls": (
+        None,
+        lambda: cls_samples(120, seed=1),
+        {"accuracy": 1.0, "macro_f1": 1.0, "log_loss": 0.0},
+    ),
+    "multilabel": (
+        ML_CATS,
+        lambda: multilabel_samples(120, seed=2, probs=(0.5, 0.4, 0.3)),
+        {"macro_auc": 1.0},
+    ),
+    "seg": (SEG_CATS, lambda: seg_samples(60, seed=3), {"dice": 1.0, "miou": 1.0}),
+}
+
+
+@pytest.mark.parametrize("task", list(_TASK_SHAPES))
+def test_measure_run_on_cls_multilabel_and_seg_datasets(roots, tmp_path, task):
+    """spec 13.2: a perfect run scores perfectly on every task shape, and re-measuring caches."""
+    categories, make_samples, expected = _TASK_SHAPES[task]
+    _, _, paths = dataset_with_perfect_run(
+        roots, tmp_path, name=task, task=task, samples=make_samples(), categories=categories
+    )
+    res = measure_run(_spec(roots, "perfect"))
+    assert {r.subset for r in res.readings} == {"valA", "valB"}
+    assert {r.metric for r in res.readings} == set(expected)
+    for r in res.readings:
+        assert r.value == pytest.approx(expected[r.metric], abs=1e-9), (r.metric, r.subset)
+        assert r.n_samples > 0 and r.dataset == task
+    assert res.new == len(expected) * 2 == len(_rows(paths))
+    again = measure_run(_spec(roots, "perfect"))
+    assert again.new == 0 and again.cached == res.new and len(_rows(paths)) == res.new
 
 
 def test_params_only_reach_metrics_that_declare_them(roots, tmp_path):

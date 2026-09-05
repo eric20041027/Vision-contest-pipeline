@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from pathlib import Path
 from typing import Any
@@ -400,6 +401,77 @@ def det_with_runs(
                 )
             )
     return ds, plan, paths
+
+
+def dataset_with_perfect_run(
+    roots: Any,
+    tmp_path: Path,
+    *,
+    name: str,
+    task: str,
+    samples: list[Sample],
+    categories: list[Category] | None = None,
+    run_id: str = "perfect",
+    subsets: tuple[str, ...] = ("valA", "valB"),
+) -> tuple[Dataset, SplitPlan, DatasetPaths]:
+    """A saved dataset + ``fixed-v1`` plan + one run whose predictions reproduce the gold labels.
+
+    The task-agnostic sibling of ``det_with_runs``: same shape and the same route in (a real
+    prediction file through ``ingest``, never a hand-written reading), but the task, samples and
+    categories come from the caller, so cls / multilabel / seg reach ``measure_run`` through the
+    same door det already does.
+    """
+    paths = DatasetPaths.resolve(name, data_root=roots.data, configs_root=roots.configs)
+    write_images(roots.data / "raw" / name, samples)
+    card = make_card(task, name=name, categories=categories, image_root=f"raw/{name}")
+    ds = Dataset.from_parts(card, samples)
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    save_plan(plan, paths)
+    for subset in subsets:
+        sub = ds.subset(subset, plan, paths=paths)
+        src = tmp_path / f"{name}-{run_id}-{subset}.jsonl"
+        write_predictions(src, perfect_predictions(sub, ds.card))
+        ingest(
+            IngestSpec(
+                run_id=run_id,
+                dataset=name,
+                plan_id="fixed-v1",
+                subset=subset,
+                format="jsonl",
+                src=src,
+                trained_on=["train"],
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )
+    return ds, plan, paths
+
+
+def write_coco_results(
+    path: Path, export_dir: Path, preds: list[Prediction], *, score: float = 0.9
+) -> int:
+    """Write a detector's COCO results file (``[{image_id, category_id, bbox, score}]``) for
+    ``preds``, mapping sample ids to image ids through a real ``vcp data export --format coco``
+    directory's ``instances.json``. Returns the number of result rows written.
+
+    A prediction with no boxes contributes no row at all -- that is how a results file says
+    "nothing found in this image", and it is what ``ingest`` counts as ``empty=``.
+    """
+    instances = json.loads((export_dir / "instances.json").read_text(encoding="utf-8"))
+    image_id = {im["sample_id"]: im["id"] for im in instances["images"]}
+    rows = [
+        {
+            "image_id": image_id[p.sample_id],
+            "category_id": b.category_id,
+            "bbox": [b.x, b.y, b.w, b.h],
+            "score": score,
+        }
+        for p in preds
+        for b in (p.boxes or [])
+    ]
+    path.write_text(json.dumps(rows), encoding="utf-8", newline="\n")
+    return len(rows)
 
 
 def write_yolo_txt(

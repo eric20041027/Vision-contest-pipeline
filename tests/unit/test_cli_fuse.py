@@ -88,3 +88,29 @@ def test_fuse_group_is_listed():
     assert r.exit_code == 0 and "fuse" in r.output
     r = runner.invoke(app, ["fuse", "--help"])
     assert r.exit_code == 0 and "recipe" in r.output
+
+
+def test_fuse_build_cli(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    assert _recipe().exit_code == 0
+    r = runner.invoke(app, ["fuse", "build", "--dataset", "tiny", "--recipe", "r1"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert v.startswith("VERDICT cmd=fuse.build status=OK") and "run=fuse-r1" in v
+    assert "subsets=valA,valB" in v and "built=2" in v and "cached=0" in v and "members=2" in v
+    r = runner.invoke(app, ["fuse", "build", "--dataset", "tiny", "--recipe", "r1", "--json"])
+    assert r.exit_code == 0
+    payload = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert payload["fields"]["cached"] == 2 and payload["result"]["run_id"] == "fuse-r1"
+    assert set(payload["result"]["subsets"]) == {"valA", "valB"}
+    assert payload["result"]["subsets"]["valA"]["cached"] is True
+    r = runner.invoke(
+        app, ["fuse", "build", "--dataset", "tiny", "--recipe", "r1", "--subsets", "holdout"]
+    )
+    assert (
+        r.exit_code == 1
+        and "member=noisy" in _last_verdict(r.output)
+        and "subset=holdout" in _last_verdict(r.output)
+    )
+    r = runner.invoke(app, ["fuse", "build", "--dataset", "tiny", "--recipe", "ghost"])
+    assert r.exit_code == 1 and "recipe=ghost" in _last_verdict(r.output)

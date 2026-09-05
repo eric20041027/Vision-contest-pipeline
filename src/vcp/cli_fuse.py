@@ -21,6 +21,7 @@ from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.data.split import load_plan
+from vcp.fuse.build import BuildSpec, build_run
 from vcp.fuse.fusers import get_fuser, require_payload, resolve_params
 from vcp.fuse.members import check_members, check_plan, parse_member
 from vcp.fuse.recipes import save_recipe
@@ -96,3 +97,61 @@ def recipe_cmd(
         return "OK", fields, payload, [f"wrote recipe {recipe_id} -> {path}"]
 
     run_command("fuse.recipe", json_mode, data_root, fn)
+
+
+@fuse_app.command("build")
+def build_cmd(
+    dataset: DatasetOpt,
+    recipe_id: RecipeOpt,
+    run: Annotated[str | None, typer.Option("--run", help="run id; default fuse-<recipe>")] = None,
+    subsets: Annotated[
+        str | None,
+        typer.Option("--subsets", help="comma-separated; default: subsets every member has"),
+    ] = None,
+    replace: Annotated[
+        bool, typer.Option("--replace", help="overwrite an existing, different output")
+    ] = False,
+    plugin: PluginOpt = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Fuse the recipe's members into a run (nothing is written unless every subset validates)."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        res = build_run(
+            BuildSpec(
+                dataset=dataset,
+                recipe_id=recipe_id,
+                run_id=run,
+                subsets=_csv(subsets),
+                replace=replace,
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "run": res.run.run_id,
+            "recipe": recipe_id,
+            "method": res.recipe.method,
+            "members": len(res.recipe.members),
+            "subsets": ",".join(res.subsets),
+            "built": res.built,
+            "cached": res.cached,
+        }
+        payload = {
+            "run_id": res.run.run_id,
+            "recipe_id": recipe_id,
+            "trained_on": res.run.trained_on,
+            "subsets": {s: o.model_dump(mode="json") for s, o in res.subsets.items()},
+        }
+        human = [
+            f"{s}: {'cached' if o.cached else 'built'} {o.samples} rows ({o.empty} empty) "
+            f"sha {o.sha256[:12]}"
+            for s, o in res.subsets.items()
+        ]
+        return "OK", fields, payload, human
+
+    run_command("fuse.build", json_mode, data_root, fn)

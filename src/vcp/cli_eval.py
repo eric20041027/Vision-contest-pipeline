@@ -41,7 +41,9 @@ RunOpt = Annotated[str, typer.Option("--run", help="run id (path-safe name)")]
 DatasetOpt = Annotated[str, typer.Option("--dataset", help="dataset name")]
 PluginOpt = Annotated[
     list[str] | None,
-    typer.Option("--plugin", help="python module to import (registers metrics / converters)"),
+    typer.Option(
+        "--plugin", help="python module to import (registers metrics / converters / sigma methods)"
+    ),
 ]
 
 COMPONENT_CLASSES = ("model", "tuning")

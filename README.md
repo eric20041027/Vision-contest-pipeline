@@ -29,13 +29,13 @@ uv run pytest --cov=vcp
 | `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--keep-input`、`--replace`、`--opt allow_unknown=true` |
 | `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數 | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
 | `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
-| `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method splithalf\|bootstrap\|prior`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
+| `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method splithalf\|bootstrap\|prior`、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
 | `vcp eval preregister` | 量候選之前先把主張寫死（進 git） | `--dataset`、`--id`、`--claim`、`--component`、`--class model\|tuning`、`--baseline-run`、`--candidate-run`、`--metric`、`--params`、`--subsets`、`--t-min`、`--min-bases`、`--sigma-method`、`--sigma-ratio` |
 | `vcp eval judge` | 配對 bootstrap → Δ、se、t、基底數、σ_p 條件 → 判決 | `--dataset`、`--prereg`、`--resamples`、`--seed`、`--strict`、`--unseal --reason` |
 | `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p | `--dataset`、`--max-age-hours` |
 | `vcp eval report` | 全部 run × subset 讀數（全精度）+ 每個判決的 last-vs-last | `--dataset`、`--metric`、`--plan` |
 
-共用選項：`--json`、`--data-root`、`--configs-root`；前六個命令另有 `--plugin <module>`（可重複，import 該模組讓它登記指標或轉換器），`status` / `report` 不碰登記表所以沒有。狀態與 exit code：未知 sample_id、缺讀數、選項不合法 → FAIL(1)；沒有錨點、σ_p 為 0、有孤兒預登記 → WARN(0)；護欄對不上 → ABORT(2) 且一列讀數都不寫，VERDICT 帶 `guardrail=FAIL anchor=<reading_id> got=<值>`。判決本身不是工具錯誤：`status=OK verdict=PASS|FAIL|INVALID`，要讓 FAIL 擋 CI 就加 `--strict`。
+共用選項：`--json`、`--data-root`、`--configs-root`；前六個命令另有 `--plugin <module>`（可重複，import 該模組讓它登記指標、轉換器或 σ_p 估法），`status` / `report` 不碰登記表所以沒有。狀態與 exit code：未知 sample_id、缺讀數、選項不合法 → FAIL(1)；沒有錨點、σ_p 為 0、有孤兒預登記 → WARN(0)；護欄對不上 → ABORT(2) 且一列讀數都不寫，VERDICT 帶 `guardrail=FAIL anchor=<reading_id> got=<值>`。判決本身不是工具錯誤：`status=OK verdict=PASS|FAIL|INVALID`，要讓 FAIL 擋 CI 就加 `--strict`。
 
 ### 標準預測格式
 
@@ -65,7 +65,7 @@ uv run vcp eval judge --dataset D --prereg p1 --strict
 
 `--class tuning` 的主張還要先有 σ_p（`vcp eval sigma --method splithalf|bootstrap|prior`），否則判決 `FAIL reason=no_sigma`。最後用 `vcp eval status --dataset D` 看有沒有寫了卻沒判的主張，`vcp eval report --dataset D` 看全部讀數與 last-vs-last。
 
-比賽官方計分器或比賽專屬格式放在 `projects/<contest>/`，以 `--plugin projects.<contest>.metrics` 匯入登記，`src/vcp` 不出現比賽名稱。
+比賽官方計分器、比賽專屬格式或自訂 σ_p 估法放在 `projects/<contest>/`，以 `--plugin projects.<contest>.metrics` 匯入，模組自己呼叫 `register_metric` / `register_converter` / `register_sigma_method` 登記，`src/vcp` 不出現比賽名稱。
 
 ## 匯入器與 `rows_read` 的語意
 

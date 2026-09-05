@@ -21,6 +21,7 @@ from vcp.cli_common import (
 )
 from vcp.cli_eval import eval_app
 from vcp.cli_fuse import fuse_app
+from vcp.cli_train import train_app
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import MANIFEST_MODES
 from vcp.core.log import FieldValue, Status, Verdict
@@ -45,6 +46,7 @@ data_app = typer.Typer(no_args_is_help=True, help="dataset commands")
 app.add_typer(data_app, name="data")
 app.add_typer(eval_app, name="eval")
 app.add_typer(fuse_app, name="fuse")
+app.add_typer(train_app, name="train")
 
 
 @app.callback()

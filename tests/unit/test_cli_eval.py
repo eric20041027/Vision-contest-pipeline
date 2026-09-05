@@ -826,3 +826,21 @@ def test_eval_judge_unseal_and_reason_cli(roots, tmp_path):
     assert "verdict=PASS" in _last_verdict(r.output)
     after = unseal_log.read_text(encoding="utf-8").splitlines()
     assert len(after) == len(before) + 1 and '"caller": "vcp eval judge"' in after[-1]
+
+
+def test_eval_status_warns_about_an_orphan_prereg_and_shows_sigma_cli(roots):
+    """spec 13.6: a claim that was written down and then abandoned must be visible.
+    `--max-age-hours 0` makes every unjudged claim overdue, so the WARN is reachable without
+    waiting two days for the fixture to age."""
+    seed_det(roots)
+    assert runner.invoke(app, PREREG_BASE).exit_code == 0
+    assert runner.invoke(app, [*SIGMA_BASE, "--method", "prior", *PRIOR_OK]).exit_code == 0
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny", "--max-age-hours", "0"])
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "orphans=p1" in v and "preregs=1" in v and "judged=0" in v
+    assert "sigma[coco_map/prior]=0.008" in v
+    assert "orphan pre-registration" in r.output
+    # ... and the same claim is not overdue under the default 48h window
+    v = _last_verdict(runner.invoke(app, ["eval", "status", "--dataset", "tiny"]).output)
+    assert "status=OK" in v and "orphans=" not in v

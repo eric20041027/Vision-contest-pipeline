@@ -75,8 +75,12 @@ def _dataset_task(paths: DatasetPaths) -> str:
     return load_yaml_model(paths.card_yaml, DatasetCard).task
 
 
-def _measured_subsets(readings: ReadingsLedger, pr: PreRegistration, params_hash: str) -> list[str]:
-    """The claimed subsets on which the candidate already has a reading for this metric."""
+def measured_subsets(readings: ReadingsLedger, pr: PreRegistration, params_hash: str) -> list[str]:
+    """The claimed subsets on which the candidate already has a reading for this metric.
+
+    Public because ``vcp fuse ablate`` must ask this BEFORE it writes anything (all-or-nothing),
+    while ``create_prereg`` asks it again at the moment of writing; one implementation, two callers.
+    """
     return sorted(
         {
             r.subset
@@ -115,7 +119,7 @@ def create_prereg(paths: DatasetPaths, pr: PreRegistration, readings: ReadingsLe
         # would be committed to git before anyone noticed.
         raise ValidationFailed(f"metric {pr.metric!r} is not applicable to task {task!r}")
     params = effective_params(metric, pr.params)
-    measured = _measured_subsets(readings, pr, params_key(params))
+    measured = measured_subsets(readings, pr, params_key(params))
     if measured:
         raise ValidationFailed(
             f"{ALREADY_MEASURED}: candidate {pr.candidate_run!r} has {pr.metric} readings on "

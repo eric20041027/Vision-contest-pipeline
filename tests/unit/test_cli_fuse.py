@@ -114,3 +114,45 @@ def test_fuse_build_cli(roots, tmp_path):
     )
     r = runner.invoke(app, ["fuse", "build", "--dataset", "tiny", "--recipe", "ghost"])
     assert r.exit_code == 1 and "recipe=ghost" in _last_verdict(r.output)
+
+
+def test_fuse_ablate_cli(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    assert _recipe().exit_code == 0
+    r = runner.invoke(
+        app,
+        [
+            "fuse",
+            "ablate",
+            "--dataset",
+            "tiny",
+            "--recipe",
+            "r1",
+            "--preregister",
+            "--metric",
+            "coco_map",
+            "--metric-params",
+            "max_dets=50",
+            "--t-min",
+            "1.5",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert v.startswith("VERDICT cmd=fuse.ablate status=OK") and "variants=2" in v and "runs=3" in v
+    assert "built=6" in v and "cached=0" in v and "preregs=2" in v
+    prereg = yaml.safe_load((paths.prereg_dir / "r1-admit-noisy.yaml").read_text(encoding="utf-8"))
+    assert prereg["params"]["max_dets"] == "50" and prereg["t_min"] == 1.5
+    r = runner.invoke(
+        app, ["fuse", "ablate", "--dataset", "tiny", "--recipe", "r1", "--no-build", "--json"]
+    )
+    assert r.exit_code == 0
+    payload = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert payload["fields"]["runs"] == 0 and payload["result"]["variants"] == [
+        "r1-minus-perfect",
+        "r1-minus-noisy",
+    ]
+    r = runner.invoke(
+        app, ["fuse", "ablate", "--dataset", "tiny", "--recipe", "r1", "--preregister"]
+    )
+    assert r.exit_code == 1 and "--metric" in _last_verdict(r.output)

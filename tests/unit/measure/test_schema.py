@@ -35,6 +35,8 @@ def test_prediction_payload_rules():
     with pytest.raises(ValidationError):
         PredMask(category_id=0, score=0.5)  # needs rle or polygon
     with pytest.raises(ValidationError):
+        PredMask(category_id=0, score=0.5, polygon=[[0, 0, float("nan"), 0, 2, 2]])
+    with pytest.raises(ValidationError):
         Prediction(sample_id="e", scores={"x": float("nan")})
 
 

@@ -1,6 +1,12 @@
 """Dataset-level Dice and mIoU: intersection / areas accumulated per class over all samples,
 then averaged over the classes that have any ground truth or predicted pixels.
 
+Per-pixel semantics: each category is an independent binary channel, rasterised and accumulated
+on its own. A pixel may belong to several categories at once (there is no exclusivity between
+channels), and overlapping masks *of the same category* are unioned rather than double-counted.
+This is the multi-label reading of a pixel grid, not the one-label-per-pixel semantic-
+segmentation reading where every pixel carries exactly one class.
+
 A class with neither gold nor predicted pixels anywhere in the subset is undefined (``None``
 in ``per_class``) rather than 1.0 or 0.0, and is excluded from the macro mean -- the same way
 ``macro_auc`` excludes an all-constant class: an empty intersection over an empty union is
@@ -12,6 +18,7 @@ every class is all-positive or all-negative).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import numpy as np
@@ -63,7 +70,7 @@ def _accumulate(
                 f"{m.category_id}; declared categories: {sorted(dest)}",
                 location=sample_id,
             )
-        dest[m.category_id] |= mask_array(m, width, height)
+        dest[m.category_id] |= mask_array(m, width, height, location=sample_id)
 
 
 def _class_totals(
@@ -104,9 +111,12 @@ def _class_totals(
 
 def _parse_threshold(raw: str) -> float:
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError as e:
         raise ValidationFailed(f"threshold must be a number, got {raw!r}") from e
+    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+        raise ValidationFailed(f"threshold must be finite and within [0, 1], got {raw!r}")
+    return value
 
 
 def _summarise(

@@ -64,6 +64,12 @@ class PredMask(_Strict):
             raise ValueError("PredMask needs exactly one of rle / polygon")
         return self
 
+    @model_validator(mode="after")
+    def _finite_polygon(self) -> PredMask:
+        if self.polygon is not None:
+            _finite([v for ring in self.polygon for v in ring], "mask polygon")
+        return self
+
 
 class Prediction(_Strict):
     sample_id: str = Field(min_length=1)

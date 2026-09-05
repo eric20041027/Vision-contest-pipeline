@@ -91,9 +91,13 @@ def estimate_id(row: SigmaEstimate) -> str:
 
     Derived the way ``reading_id`` is -- from what the estimate IS, never from when it was
     taken -- so re-running the same estimate is recognised as the same row instead of
-    appending a duplicate to an append-only ledger.
+    appending a duplicate to an append-only ledger. ``inputs["run_source"]`` records HOW the
+    run id was resolved (an explicit ``--run`` or the anchor); that is provenance, not identity,
+    so a bootstrap on the anchor's run and one naming that run explicitly are the same estimate.
     """
-    return sha256_json(row.model_dump(mode="json", exclude={"estimate_id", "ts"}))
+    body = row.model_dump(mode="json", exclude={"estimate_id", "ts"})
+    body["inputs"] = {k: v for k, v in body["inputs"].items() if k != "run_source"}
+    return sha256_json(body)
 
 
 def latest_sigma(

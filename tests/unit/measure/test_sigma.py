@@ -227,3 +227,12 @@ def test_bootstrap_defaults_to_the_anchor_run_when_no_run_is_given(roots, tmp_pa
     assert est.value > 0
     assert est.inputs["run_id"] == "noisy"
     assert est.inputs["run_source"] == "anchor"
+    # How the run id was resolved is provenance, not identity: naming the anchor's run
+    # explicitly is the SAME estimate, so it is recognised as cached and appended nowhere.
+    ledger = paths.measure_dir / "sigma.jsonl"
+    before = len(ledger.read_text(encoding="utf-8").splitlines())
+    explicit = estimate_sigma(
+        _spec(roots, method="bootstrap", run_id="noisy", subsets=["valB"], resamples=20)
+    )
+    assert explicit.estimate_id == est.estimate_id and explicit.value == est.value
+    assert len(ledger.read_text(encoding="utf-8").splitlines()) == before

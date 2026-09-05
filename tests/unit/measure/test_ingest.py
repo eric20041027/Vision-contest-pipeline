@@ -156,8 +156,12 @@ def test_ingest_export_manifest_missing_manifest_json_fails_for_any_format(roots
 
 def test_ingest_second_subset_source_metadata_conflicts_and_match(roots, tmp_path):
     """F1(b): a second-subset ingest into an existing run must not silently drop a differing
-    --export-manifest / --framework / --notes (they used to vanish into the unchanged loaded
-    card); the same values on a second subset must still be accepted, not rejected."""
+    --framework / --notes (they used to vanish into the unchanged loaded card); the same values
+    on a second subset must still be accepted, not rejected.
+
+    ``--export-manifest`` is NOT one of them: ``vcp data export`` writes one export directory
+    per SUBSET, so a run covering two eval subsets always has two manifests, and the sha is
+    recorded per prediction file rather than compared against the run's."""
     ds, plan, _ = _det(roots)
     for subset in ("valA", "valB"):
         write_predictions(
@@ -181,12 +185,22 @@ def test_ingest_second_subset_source_metadata_conflicts_and_match(roots, tmp_pat
         )
     )
     assert not res.created_run and set(res.run.predictions) == {"valA", "valB"}
+    run_sha = res.run.source.export_manifest_sha
+    assert run_sha and res.run.predictions["valB"].export_manifest_sha == run_sha
 
+    # A second subset exported separately (the only shape `vcp data export` produces) is the
+    # normal case, not a conflict: its own manifest sha goes on its own prediction file, and
+    # the run-level sha -- the export the run was created from -- is left alone.
     export2 = tmp_path / "export2"
     export2.mkdir()
     (export2 / "manifest.json").write_text('{"x": 1}', encoding="utf-8", newline="\n")
-    with pytest.raises(ValidationFailed, match="export_manifest_sha"):
-        ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", export_dir=export2))
+    res = ingest(
+        _spec(roots, subset="valB", src=tmp_path / "valB.jsonl", export_dir=export2, replace=True)
+    )
+    entry = res.run.predictions["valB"]
+    assert entry.export_manifest_sha != run_sha
+    assert res.run.source.export_manifest_sha == run_sha
+    assert res.run.predictions["valA"].export_manifest_sha == run_sha
     with pytest.raises(ValidationFailed, match="framework"):
         ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", framework="fw2"))
     with pytest.raises(ValidationFailed, match="notes"):

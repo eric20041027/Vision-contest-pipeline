@@ -100,6 +100,9 @@ class RunSource(_Strict):
     framework: str = ""
     config_hash: str | None = None
     weights_hash: str | None = None
+    # The export directory the run was CREATED from. Per-subset provenance lives on each
+    # PredictionFile: `vcp data export` writes one export per subset, so a run covering two
+    # eval subsets legitimately has two manifests and no single run-level answer.
     export_manifest_sha: str | None = None
     notes: str = ""
 
@@ -117,6 +120,10 @@ class PredictionFile(_Strict):
     empty: int
     format_in: str
     ingested_at: str
+    # sha256 of the export directory's manifest.json these predictions were converted against
+    # (yolo_txt and coco_results need one); None when no --export-manifest was given. Optional
+    # so run cards written before this field stay loadable.
+    export_manifest_sha: str | None = None
 
 
 class RunCard(_Strict):

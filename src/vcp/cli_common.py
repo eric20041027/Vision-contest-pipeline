@@ -55,6 +55,17 @@ def _logger(data_root: Path | None) -> logging.Logger:
         return logging.getLogger("vcp")
 
 
+def _error_fields(e: BaseException) -> dict[str, FieldValue]:
+    """The machine-readable VERDICT fields a failure carries (``VcpError.fields``).
+
+    Anything else -- including a third-party exception that happens to have a ``fields``
+    attribute of some other shape -- contributes prose only: a VERDICT must still be printable
+    when the command has already failed.
+    """
+    fields = getattr(e, "fields", None)
+    return dict(fields) if isinstance(fields, dict) else {}
+
+
 def run_command(
     cmd: str, json_mode: bool, data_root: Path | None, fn: Callable[[], CmdResult]
 ) -> None:
@@ -64,10 +75,13 @@ def run_command(
     try:
         status, fields, payload, human = fn()
     except VcpError as e:
-        status, fields = e.status, {"reason": f"{type(e).__name__}: {e}"}  # type: ignore[assignment]
+        # `reason` first: it is what a human reads. The error's own fields follow it.
+        status = e.status  # type: ignore[assignment]
+        fields = {"reason": f"{type(e).__name__}: {e}", **_error_fields(e)}
         logger.error("command failed", exc_info=True, extra={"vcp": {"cmd": cmd}})
     except Exception as e:
-        status, fields = "ABORT", {"reason": f"{type(e).__name__}: {e}"}
+        status = "ABORT"
+        fields = {"reason": f"{type(e).__name__}: {e}", **_error_fields(e)}
         logger.error("command aborted", exc_info=True, extra={"vcp": {"cmd": cmd}})
     verdict = Verdict(cmd=cmd, status=status, fields=fields)
     logger.info(verdict.line(), extra={"vcp": {"cmd": cmd, "status": status}})

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
 import math
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
@@ -18,7 +18,7 @@ from vcp.cli_common import (
     parse_opts,
     run_command,
 )
-from vcp.core.errors import ValidationFailed, VcpError
+from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -28,7 +28,10 @@ from vcp.measure.judge import JudgeSpec, judge_prereg
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, load_context, measure_run
 from vcp.measure.metrics import effective_params, get_metric, params_key
+from vcp.measure.plugins import load_plugins
 from vcp.measure.prereg import create_prereg, load_prereg
+from vcp.measure.report import last_vs_last, report_rows
+from vcp.measure.report import status as status_view  # `status` is a local name in 4 commands
 from vcp.measure.schema import Anchor, PreRegistration
 from vcp.measure.sigma import SigmaSpec, estimate_sigma_result
 
@@ -43,21 +46,6 @@ PluginOpt = Annotated[
 
 COMPONENT_CLASSES = ("model", "tuning")
 READINGS_LEDGER = "readings.jsonl"
-
-
-def load_plugins(modules: list[str] | None) -> list[str]:
-    """Import user modules so they can register metrics / converters.
-
-    Returns the names actually imported. Task 12 moves this to ``measure/plugins.py``.
-    """
-    loaded: list[str] = []
-    for name in modules or []:
-        try:
-            importlib.import_module(name)
-        except Exception as e:  # noqa: BLE001 - surface the plugin's own error text
-            raise VcpError(f"cannot import plugin {name!r}: {type(e).__name__}: {e}") from e
-        loaded.append(name)
-    return loaded
 
 
 def _csv(value: str | None) -> list[str]:
@@ -465,3 +453,75 @@ def judge_cmd(
         return status, fields, {"judgement": j.model_dump(mode="json")}, human
 
     run_command("eval.judge", json_mode, data_root, fn)
+
+
+@eval_app.command("status")
+def status_cmd(
+    dataset: DatasetOpt,
+    max_age_hours: Annotated[
+        int, typer.Option("--max-age-hours", help="a claim older than this and never judged")
+    ] = 48,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Orphan pre-registrations, anchors, latest sigma_p, run count. Reads, never writes."""
+
+    def fn() -> CmdResult:
+        paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+        st = status_view(paths, max_age_hours=max_age_hours)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "runs": st.runs,
+            "preregs": st.preregs,
+            "judged": st.judged,
+            "anchors": st.anchors,
+        }
+        if st.orphans:
+            fields["orphans"] = ",".join(st.orphans)
+        for key, value in st.sigma.items():
+            fields[f"sigma[{key}]"] = value
+        human = [
+            f"orphan pre-registration (> {max_age_hours}h without a judgement): {p}"
+            for p in st.orphans
+        ]
+        # An abandoned claim is the one thing here that wants attention; everything else is a
+        # count of what exists.
+        return ("WARN" if st.orphans else "OK"), fields, {"status": asdict(st)}, human
+
+    run_command("eval.status", json_mode, data_root, fn)
+
+
+@eval_app.command("report")
+def report_cmd(
+    dataset: DatasetOpt,
+    metric: Annotated[str | None, typer.Option("--metric", help="only this metric")] = None,
+    plan: Annotated[str | None, typer.Option("--plan", help="only this plan id")] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Every run x subset reading at full precision, plus last-vs-last deltas per judgement."""
+
+    def fn() -> CmdResult:
+        paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+        rows = report_rows(paths, plan_id=plan, metric=metric)
+        lvl = last_vs_last(paths)
+        human = [
+            f"{r['run_id']:<20} {r['subset']:>8} {r['metric']:<12} {r['value']!r}" for r in rows
+        ]
+        human += [
+            f"{r['prereg_id']:<12} {r['subset']:>8} delta={r['delta']!r} "
+            f"t={r['t']:.2f} {r['verdict']}"
+            for r in lvl
+        ]
+        # `rows=` not `readings=`: `eval measure` already spends `readings=` on the number of
+        # rows it WROTE, and one name may not mean two quantities across the interface.
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "rows": len(rows),
+            "judgements": len(lvl),
+        }
+        return "OK", fields, {"readings": rows, "last_vs_last": lvl}, human
+
+    run_command("eval.report", json_mode, data_root, fn)

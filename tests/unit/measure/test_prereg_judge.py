@@ -85,6 +85,20 @@ def _sigma(roots, prior, note, *, metric="coco_map"):
     )
 
 
+def _assert_delta_is_the_signed_reading_difference(j):
+    """The seam between the two halves of a judgement row.
+
+    ``baseline`` and ``candidate`` are the stored READINGS the ledger already holds; ``delta``
+    comes from the paired bootstrap's full-subset base, computed here and now. They must be the
+    same arithmetic, with the metric's direction applied exactly once -- otherwise the row shows
+    a delta that its own two numbers do not produce, and no reader could tell which is wrong.
+    """
+    sign = 1.0 if j.higher_is_better else -1.0
+    assert j.per_subset
+    for name, s in j.per_subset.items():
+        assert s.delta == pytest.approx(sign * (s.candidate - s.baseline)), name
+
+
 def _log_prereg(paths, prereg_id, ts):
     """Append a log line by hand -- the only way to forge the moment a claim became binding."""
     paths.prereg_log.parent.mkdir(parents=True, exist_ok=True)
@@ -227,6 +241,7 @@ def test_judge_fail_pass_and_sigma_rules(roots, tmp_path):
     # implementation bumps the version), so the row is reproducible from the ledgers alone.
     assert j3.metric_version == "1" == METRICS["coco_map"].version
     assert all(s.t >= 2.0 for s in j3.per_subset.values())
+    _assert_delta_is_the_signed_reading_difference(j3)
     _sigma(roots, 5.0, "huge")
     j4 = _judge(roots, "p002")
     assert j4.verdict == "FAIL" and any("sigma" in r for r in j4.reasons)
@@ -313,6 +328,8 @@ def test_judge_honours_a_lower_is_better_metric(roots, tmp_path):
     assert j.verdict == "PASS" and j.bases_positive == 2
     for s in j.per_subset.values():
         assert s.candidate < s.baseline and s.delta > 0 and s.t >= 2.0
+    # the direction is applied exactly once, and to the same numbers the row itself carries
+    _assert_delta_is_the_signed_reading_difference(j)
 
 
 def test_a_zero_sigma_p_is_recorded_as_a_reason(roots, tmp_path):

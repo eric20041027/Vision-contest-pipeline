@@ -3,7 +3,14 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from helpers import det_samples, make_card, noisy_predictions, perfect_predictions, write_images
+from helpers import (
+    det_samples,
+    make_card,
+    noisy_predictions,
+    perfect_predictions,
+    write_coco_results,
+    write_images,
+)
 from vcp.cli import app
 from vcp.cli_eval import load_plugins
 from vcp.core.errors import VcpError
@@ -13,6 +20,7 @@ from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.predictions import write_predictions
+from vcp.measure.runs import load_run
 
 runner = CliRunner()
 
@@ -102,6 +110,78 @@ def test_eval_ingest_cli(roots, tmp_path):
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
+
+
+def test_eval_ingest_coco_results_against_a_real_coco_export_cli(roots, tmp_path):
+    """spec 13.1: each of the four formats succeeds once, end to end.
+
+    ``coco_results`` was the one that had never been driven through ``vcp eval ingest`` at all
+    -- only its converter, called directly -- so nothing pinned the seam between a real
+    ``vcp data export --format coco`` directory (which is where the image ids come from) and
+    the run card the command writes. A detector's results file names only the images it found
+    something in, so ``predicted=`` and ``empty=`` split the subset between them.
+    """
+    ds, plan, _ = seed_det(roots)
+    export = tmp_path / "coco-valA"
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "valA",
+            "--format",
+            "coco",
+            "--out",
+            str(export),
+            "--opt",
+            "copy=true",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    val = ds.subset("valA", plan)
+    preds = perfect_predictions(val, ds.card)
+    boxed = [p for p in preds if p.boxes]
+    # The interesting shape: some images have detections and some have none. Without both, the
+    # predicted/empty split below would be pinned by nothing.
+    assert 0 < len(boxed) < len(val)
+    results = tmp_path / "results.json"
+    assert write_coco_results(results, export, preds) > 0
+    r = runner.invoke(
+        app,
+        [
+            "eval",
+            "ingest",
+            "--run",
+            "cocorun",
+            "--dataset",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "valA",
+            "--format",
+            "coco_results",
+            "--src",
+            str(results),
+            "--export-manifest",
+            str(export),
+            "--trained-on",
+            "train",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=OK" in v and "format=coco_results" in v
+    assert f"in_subset={len(val)}" in v and f"predicted={len(boxed)}" in v
+    assert f"empty={len(val) - len(boxed)}" in v
+    card = load_run(roots.data, "cocorun")
+    assert card.predictions["valA"].format_in == "coco_results"
+    assert card.predictions["valA"].export_manifest_sha
 
 
 def test_eval_ingest_missing_source_file_fails(roots, tmp_path):

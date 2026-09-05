@@ -14,6 +14,10 @@ from vcp.fuse.fusers.base import (
     require_payload,
     resolve_params,
 )
+from vcp.fuse.fusers.wbf import Wbf
+
+for _fuser in (Wbf(),):
+    register_fuser(_fuser)
 
 __all__ = [
     "FUSERS",

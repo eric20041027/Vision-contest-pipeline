@@ -64,5 +64,9 @@ def set_anchor(paths: DatasetPaths, key: str, anchor: Anchor, *, replace: bool =
     )
     target = paths.measure_dir / "anchors.json"
     tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(payload, encoding="utf-8", newline="\n")
-    os.replace(tmp, target)  # same directory -> atomic; anchors.json is never half-written
+    try:
+        tmp.write_text(payload, encoding="utf-8", newline="\n")
+        os.replace(tmp, target)  # same directory -> atomic; anchors.json is never half-written
+    except OSError:
+        tmp.unlink(missing_ok=True)  # a failed replace must not leave a stray .tmp behind
+        raise

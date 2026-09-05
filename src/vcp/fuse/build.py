@@ -44,6 +44,7 @@ from vcp.measure.predictions import (
     PredictionStats,
     check_predictions,
     predictions_by_id,
+    predictions_text,
     read_predictions,
     write_predictions,
 )
@@ -117,11 +118,18 @@ def load_record(data_root: Path, run_id: str) -> FuseRecord:
     if not path.is_file():
         raise ValidationFailed(f"fusion record not found: {path}", fields={"run": run_id})
     try:
-        return FuseRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        record = FuseRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, ValidationError) as e:
         raise ValidationFailed(
             f"bad fusion record: {e}", location=str(path), fields={"run": run_id}
         ) from e
+    if record.run_id != run_id:
+        raise ValidationFailed(
+            f"fuse.json names run {record.run_id!r}, not {run_id!r}",
+            location=str(path),
+            fields={"run": run_id},
+        )
+    return record
 
 
 def write_record(data_root: Path, run_id: str, record: FuseRecord) -> Path:
@@ -134,10 +142,9 @@ def write_record(data_root: Path, run_id: str, record: FuseRecord) -> Path:
 
 def content_sha(preds: list[Prediction]) -> str:
     """The sha256 ``write_predictions`` would record for these rows, without touching the disk
-    (the cache check runs before any write). Serialisation is kept identical to
-    ``write_predictions`` -- sorted by sample_id, exclude_none, LF -- and a test pins them."""
-    ordered = sorted(preds, key=lambda p: p.sample_id)
-    return sha256_text("".join(p.model_dump_json(exclude_none=True) + "\n" for p in ordered))
+    (the cache check runs before any write). Shares ``predictions_text`` with
+    ``write_predictions`` so the two can never drift apart; a test pins them equal."""
+    return sha256_text(predictions_text(preds))
 
 
 def resolve_subsets(requested: list[str], plan: SplitPlan, cards: list[RunCard]) -> list[str]:
@@ -365,7 +372,12 @@ def build_run(spec: BuildSpec) -> BuildResult:
     )
     card = existing or _new_card(recipe, dataset, run_id, sha, trained_on)
     if existing is not None and record_path(paths.data_root, run_id).is_file():
-        record = load_record(paths.data_root, run_id)
+        # Metadata (method_version, vcp_version, members[].trained_on) is rebuilt fresh every
+        # time -- only the subsets already on disk carry forward (spec 4.2: the file is a
+        # snapshot rewritten whole on each build, not extended in place).
+        record = _new_record(recipe, run_id, sha, fuser, params, cards).model_copy(
+            update={"subsets": load_record(paths.data_root, run_id).subsets}
+        )
     else:
         record = _new_record(recipe, run_id, sha, fuser, params, cards)
     # Steps 2-3: every subset fused and validated in memory before anything is compared or written.

@@ -16,7 +16,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
-from vcp.data.split import load_plan
+from vcp.data.split import SplitPlan, load_plan
 from vcp.fuse.build import (
     RUN_BOUND_ELSEWHERE,
     BuildSpec,
@@ -148,7 +148,12 @@ def _check_variants(
 
 
 def _check_claims(
-    paths: DatasetPaths, recipe: Recipe, dataset: Dataset, spec: AblateSpec, subsets: list[str]
+    paths: DatasetPaths,
+    recipe: Recipe,
+    dataset: Dataset,
+    plan: SplitPlan,
+    spec: AblateSpec,
+    subsets: list[str],
 ) -> tuple[list[PreRegistration], ReadingsLedger]:
     if not spec.metric:
         raise ValidationFailed("--preregister needs --metric")
@@ -158,6 +163,16 @@ def _check_claims(
             f"metric {spec.metric!r} is not applicable to task {dataset.card.task!r}"
         )
     params = metric_params(metric, spec.metric_params)
+    # Unconditional, even with --no-build: a claim's ``subsets`` names the bases it will be
+    # judged on, and that must be well-formed before anything is written, not just when this
+    # command happens to build the runs it points at.
+    if not spec.bases:
+        raise ValidationFailed("--bases must name at least one subset")
+    dupes = sorted({b for b in spec.bases if spec.bases.count(b) > 1})
+    if dupes:
+        raise ValidationFailed(f"--bases has duplicate subsets {dupes}")
+    for b in spec.bases:
+        plan.subset(b)  # PlanMismatchError for a subset the plan does not have
     if spec.build:
         missing = [b for b in spec.bases if b not in subsets]
         if missing:
@@ -216,7 +231,7 @@ def ablate_recipe(spec: AblateSpec) -> AblateResult:
     claims: list[PreRegistration] = []
     readings: ReadingsLedger | None = None
     if spec.preregister:
-        claims, readings = _check_claims(paths, recipe, dataset, spec, subsets)
+        claims, readings = _check_claims(paths, recipe, dataset, plan, spec, subsets)
     # Every check has passed: variant recipes -> builds -> claims (a claim never names a run
     # that does not exist yet, unless the caller asked for --no-build).
     for content, exists in variants:

@@ -193,3 +193,9 @@ def test_eval_flow(roots, tmp_path):
     assert {r["verdict"] for r in lvl} == {"PASS", "FAIL"}
     assert all(r["delta"] > 0 for r in lvl)  # the candidate really is better, on both claims
     assert "VERDICT" not in r.stdout and "VERDICT cmd=eval.report" in r.stderr
+
+    # --metric reaches BOTH halves of the report: a report filtered to a metric this dataset
+    # never measured is empty top and bottom, not empty above and every judgement below.
+    r = runner.invoke(app, ["eval", "report", "--dataset", "flow", "--metric", "accuracy"])
+    assert r.exit_code == 0, r.output
+    assert "rows=0" in _verdicts(r.output)[-1] and "judgements=0" in _verdicts(r.output)[-1]

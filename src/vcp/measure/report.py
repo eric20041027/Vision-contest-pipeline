@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from vcp.core.config import load_yaml_model
+from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
 from vcp.measure.anchors import load_anchors
@@ -30,7 +31,7 @@ SIGMA_LEDGER = "sigma.jsonl"
 @dataclass(frozen=True)
 class StatusResult:
     """What is outstanding for one dataset. ``sigma`` maps ``"<metric>/<method>"`` to the
-    newest estimate's value."""
+    newest estimate's value; ``unreadable`` names the run cards that could not be read at all."""
 
     orphans: list[str]
     preregs: int
@@ -38,15 +39,31 @@ class StatusResult:
     anchors: int
     runs: int
     sigma: dict[str, float] = field(default_factory=dict)
+    unreadable: list[str] = field(default_factory=list)
 
 
-def _runs_for(paths: DatasetPaths) -> int:
-    """Runs are stored per data root, not per dataset, so only the ones whose card names this
-    dataset are counted."""
+def _runs_for(paths: DatasetPaths) -> tuple[int, list[str]]:
+    """Runs of this dataset, and the run cards that could not be read.
+
+    Runs are stored per data root, not per dataset, so this has to open every card under the
+    shared ``runs/`` root just to see which ones name this dataset -- and a card belonging to
+    another project, half-written by a crashed ingest, or hand-edited would then take a
+    read-only view of an unrelated dataset down with it. Counting the unreadable ones instead
+    keeps the answer honest (the count is visibly incomplete) without letting one stranger's
+    file decide whether this dataset can be looked at.
+    """
     if not paths.runs_dir.is_dir():
-        return 0
-    cards = sorted(paths.runs_dir.glob("*/run.yaml"))
-    return sum(1 for p in cards if load_yaml_model(p, RunCard).dataset == paths.name)
+        return 0, []
+    runs, unreadable = 0, []
+    for p in sorted(paths.runs_dir.glob("*/run.yaml")):
+        try:
+            card = load_yaml_model(p, RunCard)
+        except (ValidationFailed, OSError):
+            unreadable.append(str(p))
+            continue
+        if card.dataset == paths.name:
+            runs += 1
+    return runs, unreadable
 
 
 def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = None) -> StatusResult:
@@ -70,6 +87,7 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
             and current - parse_stamp(ts) > timedelta(hours=max_age_hours)
         ):
             orphans.append(pid)
+    runs, unreadable = _runs_for(paths)
     sigma: dict[str, float] = {}
     for est in sorted(
         read_rows(paths.measure_dir / SIGMA_LEDGER, SigmaEstimate), key=lambda e: e.ts
@@ -82,8 +100,9 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
         preregs=len(preregs),
         judged=len(judged_ids),
         anchors=len(load_anchors(paths)),
-        runs=_runs_for(paths),
+        runs=runs,
         sigma=sigma,
+        unreadable=unreadable,
     )
 
 
@@ -115,12 +134,35 @@ def report_rows(
     ]
 
 
-def last_vs_last(paths: DatasetPaths) -> list[dict]:
-    """One row per judged subset: what the candidate did to the baseline it was registered
-    against. ``delta`` is already signed so that positive means better, whichever way the
-    metric runs (the judge applies the metric's direction once, when it judges)."""
+def last_vs_last(
+    paths: DatasetPaths, *, plan_id: str | None = None, metric: str | None = None
+) -> list[dict]:
+    """One row per CLAIM per judged subset: what the candidate did to the baseline it was
+    registered against, as of the newest judgement of that claim (spec 6's last-vs-last).
+
+    Judging the same claim again appends a second row -- a judgement is an event, and the
+    ledger keeps every one -- but a report showing both would put two verdicts for one claim
+    side by side with nothing saying which still holds. The newest wins; stamps have
+    millisecond precision, so a tie goes to the row appended last, as it does everywhere else
+    in this layer.
+
+    ``delta`` is already signed so that positive means better, whichever way the metric runs
+    (the judge applies the metric's direction once, when it judges). ``plan_id`` is not on a
+    judgement row, so it is resolved through the readings the judgement names: every reading in
+    one judgement was taken under the same plan (``judge._assert_one_plan``).
+    """
+    readings = ReadingsLedger(paths.measure_dir / READINGS_LEDGER).rows
+    plan_of = {r.reading_id: r.plan_id for r in readings}
+    rows = read_rows(paths.measure_dir / JUDGEMENTS_LEDGER, Judgement)
+    latest: dict[str, Judgement] = {}
+    for j in sorted(rows, key=lambda j: j.ts):
+        if metric and j.metric != metric:
+            continue
+        if plan_id and plan_id not in {plan_of.get(rid) for rid in j.reading_ids}:
+            continue
+        latest[j.prereg_id] = j
     out: list[dict] = []
-    for j in read_rows(paths.measure_dir / JUDGEMENTS_LEDGER, Judgement):
+    for j in latest.values():
         for subset, s in j.per_subset.items():
             out.append(
                 {

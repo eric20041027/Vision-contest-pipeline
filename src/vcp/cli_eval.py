@@ -52,6 +52,23 @@ def _csv(value: str | None) -> list[str]:
     return [v.strip() for v in (value or "").split(",") if v.strip()]
 
 
+def _read_only_paths(
+    dataset: str, data_root: Path | None, configs_root: Path | None
+) -> DatasetPaths:
+    """Resolve the dataset ``status`` / ``report`` are asked about, refusing one that is not there.
+
+    Both commands are views over ledgers that need not exist yet, and every read of one is
+    ``is_file()``-guarded, so without this a typo'd ``--dataset`` answers ``status=OK ...
+    preregs=0 judged=0``: a false all-clear from the very orphan detector the user ran the
+    command to consult. Same message as ``prereg._dataset_task``, which is how every other
+    command in this group says it.
+    """
+    paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+    if not paths.card_yaml.is_file():
+        raise ValidationFailed(f"dataset card not found: {paths.card_yaml}")
+    return paths
+
+
 def _check_tolerance(tolerance: float) -> None:
     """I1: nan/inf silently disables the guardrail (any drift compares `<= tolerance`, which is
     vacuously true for +inf and always False for nan) and a negative tolerance jams it (nothing
@@ -468,7 +485,7 @@ def status_cmd(
     """Orphan pre-registrations, anchors, latest sigma_p, run count. Reads, never writes."""
 
     def fn() -> CmdResult:
-        paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+        paths = _read_only_paths(dataset, data_root, configs_root)
         st = status_view(paths, max_age_hours=max_age_hours)
         fields: dict[str, FieldValue] = {
             "dataset": dataset,
@@ -477,6 +494,9 @@ def status_cmd(
             "judged": st.judged,
             "anchors": st.anchors,
         }
+        if st.unreadable:
+            # `runs=` is then a count of what could be read, so say how much was not.
+            fields["unreadable"] = len(st.unreadable)
         if st.orphans:
             fields["orphans"] = ",".join(st.orphans)
         for key, value in st.sigma.items():
@@ -485,9 +505,12 @@ def status_cmd(
             f"orphan pre-registration (> {max_age_hours}h without a judgement): {p}"
             for p in st.orphans
         ]
+        human += [f"unreadable run card (not counted in runs=): {p}" for p in st.unreadable]
         # An abandoned claim is the one thing here that wants attention; everything else is a
-        # count of what exists.
-        return ("WARN" if st.orphans else "OK"), fields, {"status": asdict(st)}, human
+        # count of what exists -- except a run card nobody can read, which makes that count a
+        # partial answer rather than the answer.
+        status: Status = "WARN" if st.orphans or st.unreadable else "OK"
+        return status, fields, {"status": asdict(st)}, human
 
     run_command("eval.status", json_mode, data_root, fn)
 
@@ -504,9 +527,11 @@ def report_cmd(
     """Every run x subset reading at full precision, plus last-vs-last deltas per judgement."""
 
     def fn() -> CmdResult:
-        paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+        paths = _read_only_paths(dataset, data_root, configs_root)
         rows = report_rows(paths, plan_id=plan, metric=metric)
-        lvl = last_vs_last(paths)
+        # Both halves answer about the same question, so both take the same filters: a report
+        # narrowed to one metric that still listed every judgement would be two reports.
+        lvl = last_vs_last(paths, plan_id=plan, metric=metric)
         human = [
             f"{r['run_id']:<20} {r['subset']:>8} {r['metric']:<12} {r['value']!r}" for r in rows
         ]

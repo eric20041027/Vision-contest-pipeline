@@ -95,6 +95,13 @@ def _uncompressed_rle_counts(arr: np.ndarray) -> str:
 
 
 @pytest.mark.parametrize("encoding", ["compressed", "uncompressed"])
+# The oracle above calls pycocotools' decode() directly -- on purpose, so it does not share
+# masks._decode() with the code under test -- and therefore inherits the library's NumPy-2
+# "__array__ copy keyword" DeprecationWarning that masks._decode() filters. Silence exactly that
+# message for exactly this test; the production path stays warning-free under -W error.
+@pytest.mark.filterwarnings(
+    "ignore:__array__ implementation doesn't accept a copy keyword:DeprecationWarning"
+)
 def test_gold_polygon_vs_same_polygon_as_rle_scores_perfectly(encoding):
     pytest.importorskip("pycocotools")
     from pycocotools import mask as mask_util

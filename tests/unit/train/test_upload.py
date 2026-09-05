@@ -28,16 +28,8 @@ def _registered(roots):
     w.mkdir(parents=True)
     (w / "best.pt").write_bytes(b"best")
     (w / "last.pt").write_bytes(b"last")
-    rec, _ = register(
-        _record(),
-        [w / "best.pt", w / "last.pt"],
-        data_root=roots.data,
-        attempt=1,
-    )
-    return (
-        mark_final(rec, "work/weights/best.pt", sha256_file(w / "best.pt")),
-        w,
-    )
+    rec, _ = register(_record(), [w / "best.pt", w / "last.pt"], data_root=roots.data, attempt=1)
+    return mark_final(rec, "work/weights/best.pt", sha256_file(w / "best.pt")), w
 
 
 @pytest.mark.parametrize(
@@ -80,7 +72,7 @@ def test_local_upload_refuses_changed_or_missing_source(roots, tmp_path):
     with pytest.raises(ValidationFailed, match="missing") as ei:
         upload(rec, str(tmp_path / "vault"), data_root=roots.data)
     assert ei.value.fields == {"checkpoint": "work/weights/best.pt"}
-    assert not (tmp_path / "vault" / "r1" / "last.pt").exists()
+    assert not (tmp_path / "vault" / "r1" / "last.pt").exists()  # nothing copied before the check
 
 
 def test_name_collision(roots, tmp_path):
@@ -95,8 +87,7 @@ def test_name_collision(roots, tmp_path):
 
 
 class FakeRclone:
-    """A remote that remembers what was copied; ``hashsum`` reports what it
-    holds."""
+    """A remote that remembers what was copied; ``hashsum`` reports what it holds."""
 
     def __init__(self, *, corrupt: str | None = None, fail_copy: bool = False):
         self.store: dict[str, str] = {}
@@ -137,10 +128,7 @@ def test_rclone_upload_reports_unverified_and_failures(roots):
     rec, w = _registered(roots)
     bad = FakeRclone(corrupt="last.pt")
     out = upload(rec, "gdrive:w", data_root=roots.data, runner=bad)
-    assert {r.name: r.verified for r in out.records} == {
-        "best.pt": True,
-        "last.pt": False,
-    }
+    assert {r.name: r.verified for r in out.records} == {"best.pt": True, "last.pt": False}
     with pytest.raises(VcpError, match="copyto failed"):
         upload(rec, "gdrive:w", data_root=roots.data, runner=FakeRclone(fail_copy=True))
 

@@ -170,12 +170,16 @@ def _guardrail(
         return None
     root = ctx.paths.data_root
     anchor_run = load_run(root, anchor.run_id)
+    # A stale anchor run (its card no longer matching the dataset, e.g. after a re-import) must
+    # surface as the PlanMismatchError it is, not a confusing GuardrailError from recomputing a
+    # metric against samples the anchor run was never measured on (Minor 4).
+    assert_run_matches(anchor_run, ctx.dataset)
     anchor_preds = predictions_by_id(read_predictions(verify_prediction(root, anchor_run, subset)))
     got = metric.compute(samples, anchor_preds, ctx.dataset.card, params).value
     if abs(got - anchor.value) > anchor.tolerance:
         raise GuardrailError(
-            f"anchor {key!r} expected {anchor.value!r}, got {got!r} "
-            f"(tolerance {anchor.tolerance}); no readings written"
+            f"anchor {key!r} (reading_id={anchor.reading_id!r}) expected {anchor.value!r}, "
+            f"got {got!r} (tolerance {anchor.tolerance}); no readings written"
         )
     return GuardrailInfo(anchor_reading_id=anchor.reading_id, ok=True)
 

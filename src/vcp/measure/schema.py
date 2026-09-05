@@ -163,8 +163,16 @@ class Anchor(_Strict):
     run_id: str
     reading_id: str
     value: float
-    tolerance: float
+    tolerance: float = Field(ge=0)
     set_at: str
+
+    @field_validator("tolerance")
+    @classmethod
+    def _finite_tolerance(cls, v: float) -> float:
+        # Field(ge=0) already rejects negative values and nan (nan >= 0 is False), but not +inf
+        # -- an infinite tolerance would make every guardrail comparison vacuously pass (I1).
+        _finite([v], "tolerance")
+        return v
 
 
 class PreRegistration(_Strict):

@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from vcp.core.errors import ValidationFailed
@@ -73,6 +75,27 @@ def test_ledger_refuses_a_non_finite_value(tmp_path):
     assert not path.exists() and ledger.rows == []
 
 
+def test_ledger_refuses_a_non_finite_per_class_value(tmp_path):
+    """Adjudication 3: per_class is dict[str, float | None], where None is a legitimate
+    "undefined for this class" -- so a nan there does NOT fail Reading construction, and
+    pydantic serialises it as JSON null, which is a value the field already allows. Without a
+    dedicated guard, a nan class score would round-trip to None *silently*, indistinguishable
+    from a deliberate None."""
+    path = tmp_path / "readings.jsonl"
+    ledger = ReadingsLedger(path)
+    bad = _reading("a").model_copy(update={"per_class": {"dog": 0.5, "cat": float("nan")}})
+    with pytest.raises(ValidationFailed, match="non-finite"):
+        ledger.append(bad)
+    assert not path.exists() and ledger.rows == []
+    for bad_value in (float("inf"), float("-inf")):
+        with pytest.raises(ValidationFailed, match="non-finite"):
+            ledger.append(_reading("a").model_copy(update={"per_class": {"cat": bad_value}}))
+    # None stays legal: it is not a stand-in for a hidden nan, so it must never trip the guard.
+    ok = _reading("a").model_copy(update={"per_class": {"cat": None, "dog": 0.5}})
+    ledger.append(ok)
+    assert ledger.rows == [ok]
+
+
 def test_anchors_set_replace_and_log(roots):
     paths = DatasetPaths.resolve("ds", data_root=roots.data, configs_root=roots.configs)
     key = anchor_key("p", "valA", "accuracy", "")
@@ -90,3 +113,55 @@ def test_anchors_set_replace_and_log(roots):
     assert load_anchors(paths)[key].value == 0.6
     log = (paths.measure_dir / "anchors.log.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(log) == 2 and '"action": "replace"' in log[1]
+
+
+def test_load_anchors_wraps_a_corrupt_file(roots):
+    """I2: anchors.json is rewritten whole; a crash mid-write (or any other corruption) must
+    surface as a located ValidationFailed, never a bare pydantic ValidationError (blanket G)."""
+    paths = DatasetPaths.resolve("ds-corrupt", data_root=roots.data, configs_root=roots.configs)
+    paths.measure_dir.mkdir(parents=True, exist_ok=True)
+    anchors_json = paths.measure_dir / "anchors.json"
+
+    anchors_json.write_text('{"p/valA/accuracy/": {"value": 1', encoding="utf-8", newline="\n")
+    with pytest.raises(ValidationFailed, match="anchors.json"):
+        load_anchors(paths)
+
+    anchors_json.write_text(
+        '{"p/valA/accuracy/": {"not": "an anchor"}}', encoding="utf-8", newline="\n"
+    )
+    with pytest.raises(ValidationFailed, match="anchors.json"):
+        load_anchors(paths)
+
+
+def test_set_anchor_logs_first_then_atomically_replaces_anchors_json(roots, monkeypatch):
+    """Minor 2: log before applying (a crash leaves "logged but not applied" -- detectable --
+    never the reverse), and anchors.json is replaced via a temp file + os.replace so it is never
+    observable half-written."""
+    paths = DatasetPaths.resolve("ds-atomic", data_root=roots.data, configs_root=roots.configs)
+    key = anchor_key("p", "valA", "accuracy", "")
+    a = Anchor(
+        run_id="r", reading_id="x", value=0.5, tolerance=1e-6, set_at="2026-09-04T00:00:00.000Z"
+    )
+    real_replace = os.replace
+    should_crash = True
+
+    def maybe_boom(*args, **kwargs):
+        if should_crash:
+            raise OSError("simulated crash between log and apply")
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", maybe_boom)
+    with pytest.raises(OSError, match="simulated crash"):
+        set_anchor(paths, key, a)
+    log_after_crash = (
+        (paths.measure_dir / "anchors.log.jsonl").read_text(encoding="utf-8").splitlines()
+    )
+    assert len(log_after_crash) == 1 and '"key": "p/valA/accuracy/"' in log_after_crash[0]
+    assert load_anchors(paths) == {}  # the crash never reached anchors.json: detectable, not lost
+
+    should_crash = False
+    set_anchor(paths, key, a)
+    assert load_anchors(paths)[key] == a
+    log_after = (paths.measure_dir / "anchors.log.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(log_after) == 2
+    assert list(paths.measure_dir.glob("*.tmp")) == []

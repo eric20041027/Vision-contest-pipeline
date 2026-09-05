@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 from pathlib import Path
 from typing import Annotated
 
@@ -53,6 +54,14 @@ def load_plugins(modules: list[str] | None) -> list[str]:
 
 def _csv(value: str | None) -> list[str]:
     return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def _check_tolerance(tolerance: float) -> None:
+    """I1: nan/inf silently disables the guardrail (any drift compares `<= tolerance`, which is
+    vacuously true for +inf and always False for nan) and a negative tolerance jams it (nothing
+    is ever within tolerance). 0.0 -- exact reproduction -- must stay legal."""
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ValidationFailed(f"--tolerance must be finite and >= 0, got {tolerance!r}")
 
 
 @eval_app.command("ingest")
@@ -165,7 +174,7 @@ def measure_cmd(
                 run_id=run,
                 metrics=_csv(metrics),
                 subsets=_csv(subsets),
-                params=parse_opts(params),
+                params=parse_opts(params, "--params"),
                 unseal=unseal,
                 reason=reason,
                 data_root=data_root,
@@ -214,8 +223,9 @@ def anchor_cmd(
 
     def fn() -> CmdResult:
         load_plugins(plugin)
+        _check_tolerance(tolerance)
         card, _dataset, plan, paths = load_context(run, data_root, configs_root)
-        pk = params_key(effective_params(get_metric(metric), parse_opts(params)))
+        pk = params_key(effective_params(get_metric(metric), parse_opts(params, "--params")))
         entry = card.predictions.get(subset)
         if entry is None:
             raise ValidationFailed(f"run {run!r} has no predictions for subset {subset!r}")

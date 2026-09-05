@@ -24,12 +24,12 @@ ConfigsRootOpt = Annotated[
 NameOpt = Annotated[str, typer.Option("--name", help="dataset name")]
 
 
-def parse_opts(opts: list[str] | None) -> dict[str, str]:
+def parse_opts(opts: list[str] | None, option: str = "--opt") -> dict[str, str]:
     out: dict[str, str] = {}
     for item in opts or []:
         key, sep, value = item.partition("=")
         if not sep or not key:
-            raise ValidationFailed(f"--opt expects key=value, got {item!r}")
+            raise ValidationFailed(f"{option} expects key=value, got {item!r}")
         out[key] = value
     return out
 

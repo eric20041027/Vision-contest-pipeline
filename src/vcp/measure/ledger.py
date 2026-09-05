@@ -66,6 +66,20 @@ class ReadingsLedger:
                 f"reading {reading.metric!r} on {reading.subset!r} has a non-finite value "
                 f"{reading.value!r}; refusing to append it"
             )
+        bad_classes = sorted(
+            cls_name
+            for cls_name, v in (reading.per_class or {}).items()
+            if v is not None and not math.isfinite(v)
+        )
+        if bad_classes:
+            # None is a legitimate "undefined for this class" and pydantic writes nan/inf as
+            # JSON null too -- so unlike .value above, a bad per_class entry would NOT crash on
+            # reload, it would silently become indistinguishable from a deliberate None.
+            worst = bad_classes[0]
+            raise ValidationFailed(
+                f"reading {reading.metric!r} on {reading.subset!r} has a non-finite per_class "
+                f"value {reading.per_class[worst]!r} for class {worst!r}; refusing to append it"
+            )
         if reading.reading_id in self.by_id:
             raise ValidationFailed(f"reading {reading.reading_id[:12]} already in the ledger")
         append_row(self.path, reading)

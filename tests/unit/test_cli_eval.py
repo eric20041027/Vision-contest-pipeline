@@ -3,13 +3,14 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from helpers import det_samples, make_card, perfect_predictions, write_images
+from helpers import det_samples, make_card, noisy_predictions, perfect_predictions, write_images
 from vcp.cli import app
 from vcp.cli_eval import load_plugins
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.predictions import write_predictions
 
 runner = CliRunner()
@@ -383,6 +384,13 @@ def test_eval_measure_and_anchor_failures_cli(roots, tmp_path):
             "no registered metric accepts params",
         ),
         (
+            # Minor 7: parse_opts must name the option that was actually used, not a hardcoded
+            # "--opt" -- measure/anchor expose it as --params.
+            ["eval", "measure", "--run", "m1", *only_valA, "--params", "foo"],
+            1,
+            "--params expects key=value",
+        ),
+        (
             ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "nope"],
             2,
             "RegistryError",
@@ -402,6 +410,90 @@ def test_eval_measure_and_anchor_failures_cli(roots, tmp_path):
         r = runner.invoke(app, args)
         assert r.exit_code == code, (args, r.output)
         assert needle in _last_verdict(r.output), (args, r.output)
+
+
+def test_eval_anchor_rejects_bad_tolerance_cli(roots, tmp_path):
+    """I1: --tolerance nan/inf silently disables the guardrail (any drift compares `<= tolerance`
+    as vacuously true for inf, and false for nan, which never trips it) and a negative one jams
+    it (nothing is ever within tolerance). 0.0 -- exact reproduction -- must stay legal."""
+    ds, plan, _ = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    assert (
+        runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "valA"]).exit_code == 0
+    )
+    base = ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "coco_map"]
+    for bad in ("nan", "inf", "-1"):
+        r = runner.invoke(app, [*base, "--tolerance", bad])
+        assert r.exit_code == 1, (bad, r.output)
+        v = _last_verdict(r.output)
+        assert "ValidationFailed" in v and bad in v, (bad, r.output)
+    r = runner.invoke(app, [*base, "--tolerance", "0"])
+    assert r.exit_code == 0, r.output
+
+
+def test_eval_measure_with_corrupt_anchors_json_fails_located(roots, tmp_path):
+    """I2: anchors.json is rewritten whole on every `vcp eval anchor`, so a crash partway (or any
+    other corruption) is a real failure mode -- it must be a located FAIL, never a bare pydantic
+    error escaping as an ABORT (blanket G)."""
+    ds, plan, paths = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    paths.measure_dir.mkdir(parents=True, exist_ok=True)
+    (paths.measure_dir / "anchors.json").write_text(
+        '{"fixed-v1/valA/coco_map/iou=50:95,max_dets=100": {"value": 1',
+        encoding="utf-8",
+        newline="\n",
+    )
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "valA"])
+    assert r.exit_code == 1, r.output
+    v = _last_verdict(r.output)
+    assert "status=FAIL" in v and "ValidationFailed" in v and "anchors.json" in v
+
+
+def test_eval_measure_guardrail_abort_is_reported_and_writes_nothing_cli(roots, tmp_path):
+    """Minor 1 / Adjudication 2: replacing the anchor run's own predictions with drifted ones
+    must abort the guardrail with the anchor's reading_id named in the VERDICT reason, and the
+    ledger must not grow by even the readings that were already computed before the abort."""
+    ds, plan, paths = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "valA"])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        app, ["eval", "anchor", "--run", "m1", "--subset", "valA", "--metric", "coco_map"]
+    )
+    assert r.exit_code == 0, r.output
+    rows_before = ReadingsLedger(paths.measure_dir / "readings.jsonl").rows
+    anchored = next(row for row in rows_before if row.subset == "valA")
+    before = len(rows_before)
+
+    sub = ds.subset("valA", plan)
+    src = tmp_path / "m1-valA-drifted.jsonl"
+    write_predictions(src, noisy_predictions(sub, ds.card))
+    replace_args = [
+        "eval",
+        "ingest",
+        "--run",
+        "m1",
+        "--dataset",
+        ds.card.name,
+        "--plan",
+        plan.plan_id,
+        "--subset",
+        "valA",
+        "--format",
+        "jsonl",
+        "--src",
+        str(src),
+        "--trained-on",
+        "train",
+        "--replace",
+    ]
+    assert runner.invoke(app, replace_args).exit_code == 0
+
+    r = runner.invoke(app, ["eval", "measure", "--run", "m1", "--subsets", "valA"])
+    assert r.exit_code == 2, r.output
+    v = _last_verdict(r.output)
+    assert "GuardrailError" in v and anchored.reading_id in v
+    assert len(ReadingsLedger(paths.measure_dir / "readings.jsonl").rows) == before
 
 
 def test_load_plugins_returns_loaded_names_and_raises_on_bad_module():

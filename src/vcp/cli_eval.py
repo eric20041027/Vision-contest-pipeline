@@ -419,6 +419,10 @@ def judge_cmd(
     resamples: Annotated[int, typer.Option("--resamples")] = 200,
     seed: Annotated[int, typer.Option("--seed")] = 0,
     strict: Annotated[bool, typer.Option("--strict", help="exit 1 unless PASS")] = False,
+    unseal: Annotated[
+        bool, typer.Option("--unseal", help="open a sealed subset (recorded)")
+    ] = False,
+    reason: Annotated[str | None, typer.Option("--reason")] = None,
     plugin: PluginOpt = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
@@ -434,6 +438,8 @@ def judge_cmd(
                 prereg_id=prereg_id,
                 resamples=resamples,
                 seed=seed,
+                unseal=unseal,
+                reason=reason,
                 data_root=data_root,
                 configs_root=configs_root,
             )

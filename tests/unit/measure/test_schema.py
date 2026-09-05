@@ -83,3 +83,28 @@ def test_anchor_tolerance_must_be_finite_and_nonnegative():
     for bad in (float("nan"), float("inf"), float("-inf"), -1.0):
         with pytest.raises(ValidationError):
             _anchor(tolerance=bad)
+
+
+def test_prereg_threshold_must_be_finite():
+    """I1-class defect (mirrors Anchor.tolerance): a nan/inf t_min or sigma_ratio silently
+    un-binds the bar it names (`t >= nan` is False for every subset, so nothing ever counts as
+    a base, and `mean_delta < nan` is False too, i.e. a vacuous PASS with the sigma_p bar
+    silently switched off)."""
+    base = dict(
+        prereg_id="p001",
+        claim="x",
+        component="c",
+        component_class="model",
+        baseline_run="a",
+        candidate_run="b",
+        metric="coco_map",
+        subsets=["valA", "valB"],
+        created_at="2026-09-04T00:00:00.000Z",
+    )
+    # finite, even an unusual value like a negative ratio, stays legal -- a weak bar is a
+    # reviewable choice, not a silently-vanished one (I1 only guards against nan/inf).
+    assert PreRegistration(**{**base, "sigma_ratio": -5.0}).sigma_ratio == -5.0
+    for field in ("t_min", "sigma_ratio"):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValidationError):
+                PreRegistration(**{**base, field: bad})

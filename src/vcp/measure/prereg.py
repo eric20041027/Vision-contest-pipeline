@@ -101,6 +101,13 @@ def create_prereg(paths: DatasetPaths, pr: PreRegistration, readings: ReadingsLe
         raise ValidationFailed(f"pre-registration {pr.prereg_id!r} already exists: {path}")
     if not pr.subsets:
         raise ValidationFailed(f"pre-registration {pr.prereg_id!r} names no subsets to judge on")
+    if len(set(pr.subsets)) != len(pr.subsets):
+        # Minor 1: an unnoticed duplicate (e.g. a copy-pasted --subsets valA,valA) would count
+        # the same subset toward bases_positive as if it were two independent ones, producing a
+        # permanent, confusingly-worded FAIL every time the claim is judged.
+        raise ValidationFailed(
+            f"pre-registration {pr.prereg_id!r} names duplicate subsets: {pr.subsets}"
+        )
     metric = get_metric(pr.metric)
     task = _dataset_task(paths)
     if task not in metric.tasks:

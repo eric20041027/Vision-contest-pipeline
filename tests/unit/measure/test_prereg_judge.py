@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 import yaml
@@ -12,18 +13,19 @@ from helpers import (
     regression_samples,
     write_images,
 )
-from vcp.core.errors import PlanMismatchError, RegistryError, ValidationFailed
+from vcp.core.errors import PlanMismatchError, RegistryError, SealedSubsetError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
-from vcp.measure.judge import T_CAP, JudgeSpec, _t, judge_prereg
+from vcp.measure.judge import T_CAP, JudgeSpec, _append_judgement, _t, judge_prereg
 from vcp.measure.ledger import ReadingsLedger, read_rows
 from vcp.measure.measure import MeasureSpec, measure_run
+from vcp.measure.metrics import METRICS, register_metric
 from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg, list_preregs, load_prereg, prereg_time
-from vcp.measure.schema import Judgement, PreRegistration
+from vcp.measure.schema import Judgement, MetricResult, PreRegistration, SubsetJudgement
 from vcp.measure.sigma import SigmaSpec, estimate_sigma
 
 COCO_PARAMS = {"iou": "50:95", "max_dets": "100"}
@@ -178,6 +180,11 @@ def test_create_prereg_failures(roots, tmp_path):
     _, _, paths = det_with_runs(roots, tmp_path, n=40)
     with pytest.raises(ValidationFailed, match="no subsets"):
         create_prereg(paths, _pr(prereg_id="empty", subsets=[]), _ledger(paths))
+    # Minor 1: a duplicate subset would otherwise produce a permanent, confusingly-worded FAIL
+    # ("bases_positive 1 < 2") every time the claim is judged, instead of being caught at write
+    # time.
+    with pytest.raises(ValidationFailed, match="duplicate subsets"):
+        create_prereg(paths, _pr(prereg_id="dup", subsets=["valA", "valA"]), _ledger(paths))
     with pytest.raises(ValidationFailed, match="not applicable"):
         create_prereg(paths, _pr(prereg_id="wrong-task", metric="accuracy"), _ledger(paths))
     with pytest.raises(RegistryError):
@@ -445,3 +452,143 @@ def test_prereg_log_with_a_mangled_line_is_a_located_failure(roots, tmp_path):
         f.write("{not json\n")
     with pytest.raises(ValidationFailed, match="prereg.log.jsonl:2"):
         prereg_time(paths, "nobody")
+
+
+class _NanOnResample:
+    """A metric whose value depends only on whether its input list has duplicate sample_ids:
+    the full ordered subset never does, but a bootstrap resample (drawn with replacement)
+    almost always does once a subset has more than a couple of samples. Registered and popped
+    per test (Task 12 ruling 2's leak-proof pattern) so it never lingers in process-global
+    METRICS for the rest of the session."""
+
+    name = "nan_on_resample"
+    version = "1"
+    tasks = frozenset({"det"})
+    defaults: dict[str, str] = {}
+    higher_is_better = True
+
+    def compute(self, samples, predictions, card, params):
+        ids = [s.sample_id for s in samples]
+        value = 1.0 if len(set(ids)) == len(ids) else float("nan")
+        return MetricResult(value=value, per_class=None, n=len(samples))
+
+
+def test_judge_refuses_a_non_finite_bootstrap_se(roots, tmp_path):
+    """I1: a plugin metric that returns nan on a bootstrap resample must not fall through
+    `_t`'s `se > 0` check to +-T_CAP ("infinite certainty") -- that would let a subset with no
+    real answer count as a positive base and could flip a FAIL to a PASS. Nothing may reach
+    judgements.jsonl when this happens."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    register_metric(_NanOnResample())
+    try:
+        create_prereg(paths, _pr(metric="nan_on_resample"), _ledger(paths))
+        _measure(roots, "perfect", metrics=["nan_on_resample"])
+        _measure(roots, "noisy", metrics=["nan_on_resample"])
+        before = len(read_rows(paths.measure_dir / "judgements.jsonl", Judgement))
+        with pytest.raises(ValidationFailed, match="not finite"):
+            _judge(roots)
+        after = len(read_rows(paths.measure_dir / "judgements.jsonl", Judgement))
+        assert after == before == 0
+    finally:
+        METRICS.pop("nan_on_resample", None)
+
+
+def test_append_judgement_refuses_a_non_finite_field(tmp_path):
+    """I1: judgements.jsonl gets the same discipline ReadingsLedger.append gives readings.jsonl
+    -- a hand-built row with a non-finite se (bypassing `_t` entirely) is still refused, with
+    the ledger's own "refusing to append it" wording."""
+    bad = Judgement(
+        prereg_id="x",
+        ts=stamp(),
+        baseline_run="a",
+        candidate_run="b",
+        metric="coco_map",
+        params={},
+        higher_is_better=True,
+        per_subset={
+            "valA": SubsetJudgement(
+                baseline=1.0, candidate=1.0, delta=0.0, se=float("nan"), t=0.0, n=1
+            )
+        },
+        bases_positive=0,
+        sigma_p=None,
+        verdict="FAIL",
+        reasons=[],
+        reading_ids=[],
+        bootstrap={"resamples": 30, "seed": 0},
+    )
+    path = tmp_path / "judgements.jsonl"
+    with pytest.raises(ValidationFailed, match="refusing to append it"):
+        _append_judgement(path, bad)
+    assert not path.exists()
+
+
+def test_judge_needs_unseal_and_reason_for_a_sealed_subset(roots, tmp_path):
+    """Task 12 ruling 0c: judge gains --unseal/--reason exactly like measure, so a claim that
+    was legitimately measured with --unseal --reason is not permanently unjudgeable."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    create_prereg(
+        paths,
+        _pr(
+            prereg_id="sealed-claim",
+            subsets=["holdout"],
+            min_bases=1,
+            baseline_run="perfect",
+            candidate_run="perfect",
+        ),
+        _ledger(paths),
+    )
+    _measure(roots, "perfect", subsets=["holdout"], unseal=True, reason="fixture")
+    with pytest.raises(SealedSubsetError):
+        _judge(roots, "sealed-claim")
+    unseal_log = paths.unseal_jsonl("fixed-v1")
+    before = unseal_log.read_text(encoding="utf-8").splitlines()
+    j = _judge(roots, "sealed-claim", unseal=True, reason="final read")
+    assert j.per_subset  # decided at all -- the sealed subset was readable through the judge
+    after = unseal_log.read_text(encoding="utf-8").splitlines()
+    assert len(after) == len(before) + 1 and '"caller": "vcp eval judge"' in after[-1]
+
+
+def test_judge_refuses_a_stale_reading_then_uses_the_newer_one_after_replace(roots, tmp_path):
+    """Minor 2 + Minor 3: after `ingest --replace`, a stored reading's prediction_sha no longer
+    matches the run card, so judging on it would silently mix a stale baseline/candidate value
+    with a fresh bootstrap over the NEW file -- that must be a located refusal. Once the
+    candidate is re-measured, `_latest`'s max-by-ts must pick the fresh reading (whose sha DOES
+    match the card again), not the stale one.
+    """
+    ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    create_prereg(paths, _pr(), _ledger(paths))
+    _measure(roots, "perfect")
+    _measure(roots, "noisy")
+    stale = next(r for r in _ledger(paths).rows if r.run_id == "noisy" and r.subset == "valA")
+    sub = ds.subset("valA", plan, paths=paths)
+    src = tmp_path / "noisy-valA-2.jsonl"
+    write_predictions(src, perfect_predictions(sub, ds.card))  # deliberately different content
+    ingest(
+        IngestSpec(
+            run_id="noisy",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            subset="valA",
+            format="jsonl",
+            src=src,
+            trained_on=["train"],
+            replace=True,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    with pytest.raises(ValidationFailed, match="re-measure"):
+        _judge(roots)
+    # A deliberate delay: the fix must pick the reading with the LATER ts, and this test must
+    # not depend on ingest()'s own wall-clock cost alone to guarantee that ordering.
+    time.sleep(0.01)
+    _measure(roots, "noisy", subsets=["valA"])
+    fresh = next(
+        r
+        for r in _ledger(paths).rows
+        if r.run_id == "noisy" and r.subset == "valA" and r.reading_id != stale.reading_id
+    )
+    assert fresh.value != stale.value and fresh.ts > stale.ts
+    j = _judge(roots)
+    assert j.per_subset["valA"].candidate == fresh.value

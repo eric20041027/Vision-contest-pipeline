@@ -253,6 +253,72 @@ def test_eval_ingest_export_manifest_wrong_directory_fails(roots, tmp_path):
     assert "status=FAIL" in v and "manifest.json not found" in v
 
 
+def test_eval_ingest_plugin_registers_a_contest_converter(roots, tmp_path, monkeypatch):
+    """F2: --plugin is the only route by which a projects/<contest>/ converter reaches
+    vcp eval ingest, so the wiring is pinned at the CLI level: a throwaway module registers a
+    converter under a unique name and the command must find it through the registry."""
+    import sys
+
+    from vcp.measure.converters import CONVERTERS
+
+    ds, plan, paths = seed_det(roots)
+    module = "vcp_test_plug_ingest"
+    (tmp_path / f"{module}.py").write_text(
+        "\n".join(
+            [
+                "from vcp.measure.converters import get_converter, register_converter",
+                "",
+                "",
+                "class PlugJsonl:",
+                "    name = 'plug_jsonl'",
+                "    version = '1'",
+                "",
+                "    def convert(self, src, ctx):",
+                "        return get_converter('jsonl').convert(src, ctx)",
+                "",
+                "",
+                "register_converter(PlugJsonl())",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        preds = perfect_predictions(ds.subset("valA", plan), ds.card)
+        src = tmp_path / "plug-valA.jsonl"
+        write_predictions(src, preds)
+        args = [
+            "eval",
+            "ingest",
+            "--run",
+            "plug",
+            "--dataset",
+            ds.card.name,
+            "--plan",
+            plan.plan_id,
+            "--subset",
+            "valA",
+            "--format",
+            "plug_jsonl",
+            "--src",
+            str(src),
+            "--trained-on",
+            "train",
+            "--plugin",
+            module,
+        ]
+        r = runner.invoke(app, args)
+        assert r.exit_code == 0, r.output
+        assert "VERDICT cmd=eval.ingest status=OK" in _last_verdict(r.output)
+        card = (paths.data_root / "runs" / "plug" / "run.yaml").read_text(encoding="utf-8")
+        assert "format_in: plug_jsonl" in card
+    finally:
+        CONVERTERS.pop("plug_jsonl", None)
+        sys.modules.pop(module, None)
+
+
 def test_load_plugins_returns_loaded_names_and_raises_on_bad_module():
     """Ruling Task5#1: load_plugins returns the loaded module names (final signature)."""
     assert load_plugins(None) == []

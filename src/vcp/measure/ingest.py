@@ -64,6 +64,23 @@ class IngestResult(BaseModel):
     created_run: bool
 
 
+def _export_sha(export_dir: Path | None) -> str | None:
+    """sha256 of a vcp export directory's manifest.json, or None when no directory was given.
+
+    Reached from a CLI option (``--export-manifest``), so a directory that turns out not to be a
+    vcp export is a located ``ValidationFailed`` here, never a silently-null recorded sha (F1a).
+    """
+    if export_dir is None:
+        return None
+    manifest = export_dir / "manifest.json"
+    if not manifest.is_file():
+        raise ValidationFailed(
+            f"--export-manifest {export_dir}: manifest.json not found "
+            "(the directory must be a vcp export)"
+        )
+    return sha256_file(manifest)
+
+
 def _run_card(
     spec: IngestSpec, data_root: Path, dataset: Dataset, plan_subsets: set[str]
 ) -> tuple[RunCard, bool]:
@@ -80,15 +97,34 @@ def _run_card(
                 f"run {spec.run_id!r} already declares trained_on={card.trained_on}; "
                 f"got {spec.trained_on}"
             )
+        # F1b: a differing --export-manifest / --framework / --notes on a later ingest into the
+        # same run must not be silently dropped -- treat each exactly like the trained_on
+        # conflict above (a located ValidationFailed), not a value the loaded, unchanged card
+        # keeps hiding.
+        export_sha = _export_sha(spec.export_dir)
+        if spec.export_dir is not None and export_sha != card.source.export_manifest_sha:
+            raise ValidationFailed(
+                f"run {spec.run_id!r} already declares "
+                f"export_manifest_sha={card.source.export_manifest_sha!r}; got {export_sha!r} "
+                f"from --export-manifest {spec.export_dir}; pass --replace or omit "
+                "--export-manifest"
+            )
+        if spec.framework and spec.framework != card.source.framework:
+            raise ValidationFailed(
+                f"run {spec.run_id!r} already declares framework={card.source.framework!r}; "
+                f"got {spec.framework!r}; pass --replace or omit --framework"
+            )
+        if spec.notes and spec.notes != card.source.notes:
+            raise ValidationFailed(
+                f"run {spec.run_id!r} already declares notes={card.source.notes!r}; "
+                f"got {spec.notes!r}; pass --replace or omit --notes"
+            )
         return card, False
     unknown = sorted(set(spec.trained_on) - plan_subsets)
     if unknown:
         raise ValidationFailed(
             f"trained_on names unknown subsets {unknown}; plan has {sorted(plan_subsets)}"
         )
-    export_sha = None
-    if spec.export_dir is not None and (spec.export_dir / "manifest.json").is_file():
-        export_sha = sha256_file(spec.export_dir / "manifest.json")
     card = RunCard(
         run_id=spec.run_id,
         dataset=spec.dataset,
@@ -96,7 +132,9 @@ def _run_card(
         plan_id=spec.plan_id,
         trained_on=list(spec.trained_on),
         source=RunSource(
-            framework=spec.framework, notes=spec.notes, export_manifest_sha=export_sha
+            framework=spec.framework,
+            notes=spec.notes,
+            export_manifest_sha=_export_sha(spec.export_dir),
         ),
         created_at=stamp(),
     )
@@ -149,7 +187,9 @@ def ingest(spec: IngestSpec) -> IngestResult:
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(spec.src, dest / spec.src.name)
     entry = PredictionFile(
-        path=f"predictions/{spec.subset}.jsonl",
+        # runs.prediction_path is the one owner of the run-relative layout (F4); derive the
+        # recorded path from it instead of re-spelling "predictions/<subset>.jsonl" here.
+        path=path.relative_to(run_dir(paths.data_root, spec.run_id)).as_posix(),
         sha256=sha,
         samples=stats.predicted,
         empty=stats.empty,

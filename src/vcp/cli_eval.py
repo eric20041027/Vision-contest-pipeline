@@ -68,7 +68,8 @@ def ingest_cmd(
         bool, typer.Option("--replace", help="overwrite existing predictions")
     ] = False,
     opt: Annotated[
-        list[str] | None, typer.Option("--opt", help="converter option key=value")
+        list[str] | None,
+        typer.Option("--opt", help="converter or ingest option key=value, e.g. allow_unknown=true"),
     ] = None,
     plugin: PluginOpt = None,
     json_mode: JsonOpt = False,

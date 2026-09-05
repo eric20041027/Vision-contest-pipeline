@@ -51,6 +51,9 @@ def test_ingest_jsonl_creates_run_and_records_sha(roots, tmp_path):
     # PredictionFile.samples means rows actually written (ruling Task2#8), not the subset size:
     # pin that meaning here so it is not confused with IngestResult.samples (== len(val) above).
     assert run.predictions["valA"].samples == len(val) - 1 == res.predicted
+    # F4: runs.prediction_path is the one owner of the run-relative layout; ingest() must derive
+    # PredictionFile.path from it rather than re-spelling "predictions/<subset>.jsonl" itself.
+    assert run.predictions["valA"].path == "predictions/valA.jsonl"
     assert res.path == roots.data / "runs" / "m1" / "predictions" / "valA.jsonl"
     assert len(read_predictions(res.path)) == len(val) - 1
 
@@ -135,3 +138,56 @@ def test_ingest_keep_input_copies_source_and_replaces_wholesale(roots, tmp_path)
     ingest(_spec(roots, src=src2, replace=True, keep_input=True))
     assert not (kept_dir / "valA.jsonl").exists()
     assert (kept_dir / "valA_v2.jsonl").is_file()
+
+
+def test_ingest_export_manifest_missing_manifest_json_fails_for_any_format(roots, tmp_path):
+    """F1(a): --export-manifest pointing at a directory without manifest.json must fail even for
+    a converter (jsonl) that never itself reads export_dir -- the check belongs to ingest(), not
+    to whichever converter happens to be selected."""
+    ds, plan, _ = _det(roots)
+    write_predictions(
+        tmp_path / "valA.jsonl", perfect_predictions(ds.subset("valA", plan), ds.card)
+    )
+    wrong_export = tmp_path / "not_an_export_dir"
+    wrong_export.mkdir()
+    with pytest.raises(ValidationFailed, match="manifest.json not found"):
+        ingest(_spec(roots, src=tmp_path / "valA.jsonl", export_dir=wrong_export))
+
+
+def test_ingest_second_subset_source_metadata_conflicts_and_match(roots, tmp_path):
+    """F1(b): a second-subset ingest into an existing run must not silently drop a differing
+    --export-manifest / --framework / --notes (they used to vanish into the unchanged loaded
+    card); the same values on a second subset must still be accepted, not rejected."""
+    ds, plan, _ = _det(roots)
+    for subset in ("valA", "valB"):
+        write_predictions(
+            tmp_path / f"{subset}.jsonl", perfect_predictions(ds.subset(subset, plan), ds.card)
+        )
+    export1 = tmp_path / "export1"
+    export1.mkdir()
+    (export1 / "manifest.json").write_text("{}", encoding="utf-8", newline="\n")
+    ingest(
+        _spec(roots, src=tmp_path / "valA.jsonl", export_dir=export1, framework="fw1", notes="n1")
+    )
+    # same export dir / framework / notes on a second subset: accepted, not silently dropped
+    res = ingest(
+        _spec(
+            roots,
+            subset="valB",
+            src=tmp_path / "valB.jsonl",
+            export_dir=export1,
+            framework="fw1",
+            notes="n1",
+        )
+    )
+    assert not res.created_run and set(res.run.predictions) == {"valA", "valB"}
+
+    export2 = tmp_path / "export2"
+    export2.mkdir()
+    (export2 / "manifest.json").write_text('{"x": 1}', encoding="utf-8", newline="\n")
+    with pytest.raises(ValidationFailed, match="export_manifest_sha"):
+        ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", export_dir=export2))
+    with pytest.raises(ValidationFailed, match="framework"):
+        ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", framework="fw2"))
+    with pytest.raises(ValidationFailed, match="notes"):
+        ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", notes="n2"))

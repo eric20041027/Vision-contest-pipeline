@@ -9,9 +9,10 @@ from vcp.measure.metrics.base import (
     params_key,
     register_metric,
 )
+from vcp.measure.metrics.coco_map import CocoMap
 from vcp.measure.metrics.tabular import Accuracy, LogLoss, MacroAuc, MacroF1, Mae, Rmse
 
-for _metric in (Accuracy(), MacroF1(), LogLoss(), MacroAuc(), Rmse(), Mae()):
+for _metric in (CocoMap(), Accuracy(), MacroF1(), LogLoss(), MacroAuc(), Rmse(), Mae()):
     register_metric(_metric)
 
 __all__ = [

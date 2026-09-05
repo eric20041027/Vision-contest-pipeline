@@ -144,6 +144,9 @@ def test_eval_flow(roots, tmp_path):
                 ],
             )
             assert r.exit_code == 0, r.output
+            # Each eval subset holds 8 samples; `in_subset=` is that size, and `predicted=` /
+            # `empty=` split it (a det run may legitimately find nothing in an image).
+            assert "in_subset=8" in _verdicts(r.output)[-1], r.output
 
     r = runner.invoke(app, ["eval", "measure", "--run", "base"])
     assert r.exit_code == 0, r.output

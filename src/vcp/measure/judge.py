@@ -168,6 +168,29 @@ def _assert_one_plan(pr: PreRegistration, pairs: dict[str, tuple[Reading, Readin
         )
 
 
+def _metric_version(
+    pr: PreRegistration, pairs: dict[str, tuple[Reading, Reading]], metric: Metric
+) -> str:
+    """The metric implementation every reading in this judgement was taken with.
+
+    Two of them is not a version to record but a comparison that should not be made: spec 7
+    says a changed implementation bumps the version, so a baseline read by version 1 and a
+    candidate by version 2 were scored by different code, and the delta between them is not a
+    difference between the runs. ``metric_version`` is part of ``reading_id``, so both readings
+    genuinely coexist in the ledger and ``_latest`` will happily pick one of each.
+
+    With no readings at all (the missing_readings FAIL) nothing was measured, so the row
+    records the version that WOULD have been used: the one the registry holds now.
+    """
+    versions = sorted({r.metric_version for pair in pairs.values() for r in pair})
+    if len(versions) > 1:
+        raise ValidationFailed(
+            f"pre-registration {pr.prereg_id!r} compares readings taken with different "
+            f"{pr.metric} versions {versions}; re-measure both runs before judging"
+        )
+    return versions[0] if versions else metric.version
+
+
 def _assert_reading_matches_card(run_id: str, subset: str, reading: Reading, card: RunCard) -> None:
     """Minor 2: a reading is only as good as the predictions it was computed from.
 
@@ -320,6 +343,7 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
     for reason in missing:  # step 1: no readings, nothing to decide
         reasons.block(reason)
     _assert_one_plan(pr, pairs)
+    metric_version = _metric_version(pr, pairs, metric)
 
     verdict = "FAIL"
     per_subset: dict[str, SubsetJudgement] = {}
@@ -350,6 +374,7 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
         baseline_run=pr.baseline_run,
         candidate_run=pr.candidate_run,
         metric=pr.metric,
+        metric_version=metric_version,
         params=params,
         higher_is_better=metric.higher_is_better,
         per_subset=per_subset,

@@ -136,7 +136,11 @@ def ingest_cmd(
             "run": run,
             "subset": subset,
             "format": fmt,
-            "samples": res.samples,
+            # The size of the subset, not a count of anything written. `samples` is already
+            # spent: run.yaml's PredictionFile.samples is the number of prediction rows
+            # WRITTEN, and one name may not mean two quantities across the machine-readable
+            # interface (the same rule that made `report`'s field `rows=`).
+            "in_subset": res.samples,
             "predicted": res.predicted,
             "empty": res.empty,
             "sha": res.sha256[:12],

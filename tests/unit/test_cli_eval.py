@@ -71,6 +71,10 @@ def test_eval_ingest_cli(roots, tmp_path):
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert v.startswith("VERDICT cmd=eval.ingest status=OK") and "run=m1" in v and "empty=1" in v
+    # M1: the subset's size is `in_subset=`, never `samples=`. run.yaml's PredictionFile.samples
+    # is the number of rows WRITTEN, and one name may not mean two quantities across the
+    # machine-readable interface (the same rule that made report's field `rows=`).
+    assert "in_subset=" in v and "samples=" not in v
     r = ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA")
     assert r.exit_code == 1 and "replace" in _last_verdict(r.output)
     r = ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA", extra=["--replace", "--json"])

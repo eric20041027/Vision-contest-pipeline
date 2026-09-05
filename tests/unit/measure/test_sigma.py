@@ -1,7 +1,9 @@
+from typing import Any
+
 import pytest
 
 from helpers import det_with_runs
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.core.time import stamp
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.anchors import anchor_key, set_anchor
@@ -11,11 +13,13 @@ from vcp.measure.metrics import params_key
 from vcp.measure.schema import Anchor, Reading, SigmaEstimate
 from vcp.measure.sigma import (
     SIGMA_ESTIMATORS,
-    SIGMA_METHODS,
+    Estimator,
+    SigmaContext,
     SigmaSpec,
     estimate_sigma,
     estimate_sigma_result,
     latest_sigma,
+    register_sigma_method,
 )
 
 PARAMS = {"iou": "50:95", "max_dets": "100"}
@@ -64,7 +68,42 @@ def _sigma_rows(paths):
 def test_sigma_methods_are_the_estimator_registry_keys():
     """Dispatch is by name through one mapping, so a fourth method is one entry -- not a
     tuple, a chain of elifs and a message to keep in step."""
-    assert SIGMA_METHODS == ("splithalf", "bootstrap", "prior") == tuple(SIGMA_ESTIMATORS)
+    assert tuple(SIGMA_ESTIMATORS) == ("splithalf", "bootstrap", "prior")
+
+
+def test_register_sigma_method_extends_the_axis_and_refuses_a_duplicate(roots, tmp_path):
+    """spec 2.1 makes the sigma_p method an extension axis, so a fourth one is registered the
+    same way a metric or a converter is: one public call, the same duplicate guard, and a
+    public context type to write the estimator against."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    seen: list[SigmaContext] = []
+
+    def constant_quarter(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
+        seen.append(ctx)
+        return 0.25, {"note": "a throwaway estimator"}
+
+    estimator: Estimator = constant_quarter
+    register_sigma_method("constant_quarter", estimator)
+    try:
+        for taken in ("constant_quarter", "prior"):  # a plugin may shadow neither
+            with pytest.raises(RegistryError, match="already registered"):
+                register_sigma_method(taken, estimator)
+        est = estimate_sigma(_spec(roots, method="constant_quarter"))
+        assert est.value == 0.25 and est.method == "constant_quarter"
+        assert est.inputs == {"note": "a throwaway estimator"}
+        assert latest_sigma(paths, "fixed-v1", "coco_map", PK, "constant_quarter") is not None
+        # The estimator is handed the RESOLVED context, not the raw spec: the paths, the plan
+        # and the metric's effective params (with their key) are already worked out for it.
+        (ctx,) = seen
+        assert ctx.spec.method == "constant_quarter" and ctx.paths.name == "tiny"
+        assert ctx.plan.plan_id == "fixed-v1" and ctx.params == PARAMS and ctx.pk == PK
+        # The unknown-method message reads the live registry, so a plugin's method is offered
+        # while it is registered -- an import-time snapshot could never mention it.
+        with pytest.raises(ValidationFailed, match="constant_quarter"):
+            estimate_sigma(_spec(roots, method="magic"))
+    finally:
+        SIGMA_ESTIMATORS.pop("constant_quarter", None)
+    assert tuple(SIGMA_ESTIMATORS) == ("splithalf", "bootstrap", "prior")
 
 
 def test_splithalf_needs_three_runs_then_estimates(roots, tmp_path):

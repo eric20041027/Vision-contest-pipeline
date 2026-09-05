@@ -684,6 +684,50 @@ def test_eval_sigma_cli(roots):
     assert rows_after == rows_before  # nothing appended
 
 
+def test_eval_sigma_plugin_registers_a_contest_sigma_method(roots, tmp_path, monkeypatch):
+    """spec 2.1 lists the sigma_p method as an extension axis, so a contest's own estimator must
+    reach `vcp eval sigma` exactly the way a contest metric reaches `vcp eval measure`: through
+    --plugin and a public registration call, with no edit inside src/vcp."""
+    import sys
+
+    from vcp.measure.sigma import SIGMA_ESTIMATORS
+
+    seed_det(roots)
+    module = "myplug_sigma_cli"
+    (tmp_path / f"{module}.py").write_text(
+        "\n".join(
+            [
+                "from vcp.measure.sigma import SigmaContext, register_sigma_method",
+                "",
+                "",
+                "def constant_quarter(ctx: SigmaContext):",
+                "    return 0.25, {'note': 'plugin', 'plan': ctx.plan.plan_id}",
+                "",
+                "",
+                "register_sigma_method('constant_quarter', constant_quarter)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        r = runner.invoke(app, [*SIGMA_BASE, "--method", "constant_quarter", "--plugin", module])
+        assert r.exit_code == 0, r.output
+        v = _last_verdict(r.output)
+        assert "status=OK" in v and "method=constant_quarter" in v and "value=0.25" in v
+        # ... and the unknown-method message offers it while it is registered: the list comes
+        # from the live registry, which an import-time snapshot of the built-ins never could.
+        r = runner.invoke(app, [*SIGMA_BASE, "--method", "magic", "--plugin", module])
+        assert r.exit_code == 1
+        assert "constant_quarter" in _last_verdict(r.output)
+    finally:
+        SIGMA_ESTIMATORS.pop("constant_quarter", None)
+        sys.modules.pop(module, None)
+    assert tuple(SIGMA_ESTIMATORS) == ("splithalf", "bootstrap", "prior")
+
+
 def test_eval_sigma_failures_cli(roots):
     """Each way a user can get `eval sigma` wrong maps to its own status and exit code."""
     seed_det(roots)

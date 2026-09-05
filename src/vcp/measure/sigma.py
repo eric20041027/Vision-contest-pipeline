@@ -10,7 +10,11 @@ lower-is-better metric as for a higher-is-better one, and nothing here consults
 ``Metric.higher_is_better``. Turning a signed delta into "better" or "worse" is the judge's
 job; this module only says how big a move is unremarkable.
 
-The three methods are dispatched by name through ``SIGMA_ESTIMATORS``: a fourth is one entry.
+The three methods are dispatched by name through ``SIGMA_ESTIMATORS``, and that mapping is an
+extension axis like every other one in this framework (spec 2.1): a contest with its own idea
+of how far a score moves between two equivalent eval sets registers a fourth estimator with
+``register_sigma_method``, writes it against the public ``SigmaContext``, and reaches it with
+``vcp eval sigma --method <name> --plugin <module>``. Nothing in ``src/vcp`` changes.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.core.hashing import sha256_json
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -73,8 +77,13 @@ class SigmaResult(BaseModel):
 
 
 @dataclass(frozen=True)
-class _Inputs:
-    """What every estimator is handed: the spec, and what it resolves to."""
+class SigmaContext:
+    """What every estimator is handed: the spec, and what it resolves to.
+
+    Public, because a registered estimator is written against it: ``params`` are the metric's
+    effective params (defaults merged with the user's) and ``pk`` their ``params_key``, both
+    worked out once here so no estimator has to normalise them again.
+    """
 
     spec: SigmaSpec
     paths: DatasetPaths
@@ -83,7 +92,7 @@ class _Inputs:
     pk: str
 
 
-Estimator = Callable[[_Inputs], tuple[float, dict[str, Any]]]
+Estimator = Callable[[SigmaContext], tuple[float, dict[str, Any]]]
 
 
 def estimate_id(row: SigmaEstimate) -> str:
@@ -144,7 +153,7 @@ def _latest_per_run(rows: list[Reading], subset: str) -> dict[str, Reading]:
     return out
 
 
-def _splithalf(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
+def _splithalf(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
     """spec 6.3: over every run with a reading on both halves, d_r = value(A) - value(B), and
     sigma_p = std(d_r, ddof=1) / sqrt(2) -- the spread of ONE half, since d is the difference
     of two of them. This is the honest answer to "how far apart do two equivalent eval sets put
@@ -190,7 +199,7 @@ def _check_eval_role(plan: SplitPlan, subset: str) -> None:
         raise ValidationFailed(f"bootstrap needs an eval subset, but {subset!r} has role {role!r}")
 
 
-def _bootstrap(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
+def _bootstrap(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
     """spec 6.3: resample one run's subset and take the standard deviation of the metric --
     the sampling-noise floor under a reading, and a lower bound on sigma_p rather than a
     substitute for it (it says nothing about how two different eval sets differ).
@@ -240,7 +249,7 @@ def _bootstrap(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
     return value, inputs
 
 
-def _prior(ctx: _Inputs) -> tuple[float, dict[str, Any]]:
+def _prior(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
     """spec 6.3: a number carried in from outside this dataset -- say the public-to-private
     shift of past contests on the same platform. Where it came from is the only thing that
     makes it auditable, so ``--note`` is not optional."""
@@ -255,7 +264,19 @@ SIGMA_ESTIMATORS: dict[str, Estimator] = {
     "bootstrap": _bootstrap,
     "prior": _prior,
 }
-SIGMA_METHODS: tuple[str, ...] = tuple(SIGMA_ESTIMATORS)
+
+
+def register_sigma_method(name: str, fn: Estimator) -> None:
+    """Add a sigma_p estimator to the axis, refusing to shadow one that is already there.
+
+    The same shape as ``register_metric`` and ``register_converter``, for the same reason: two
+    estimators answering to one name would file two different numbers under one ``method`` in
+    an append-only ledger, and every judgement that read the wrong one would be unexplainable
+    afterwards.
+    """
+    if name in SIGMA_ESTIMATORS:
+        raise RegistryError(f"sigma method {name!r} already registered")
+    SIGMA_ESTIMATORS[name] = fn
 
 
 def _check_magnitude(value: float, method: str) -> None:
@@ -278,7 +299,12 @@ def estimate_sigma_result(spec: SigmaSpec) -> SigmaResult:
     """
     estimator = SIGMA_ESTIMATORS.get(spec.method)
     if estimator is None:
-        raise ValidationFailed(f"--method must be one of {SIGMA_METHODS}, got {spec.method!r}")
+        # The live registry, not an import-time snapshot: a method a --plugin registered a
+        # moment ago is one of the answers, and a message that could not name it would send
+        # the user looking for a typo in a spelling that is genuinely available.
+        raise ValidationFailed(
+            f"--method must be one of {sorted(SIGMA_ESTIMATORS)}, got {spec.method!r}"
+        )
     paths = DatasetPaths.resolve(
         spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
@@ -286,7 +312,7 @@ def estimate_sigma_result(spec: SigmaSpec) -> SigmaResult:
     metric = get_metric(spec.metric)
     params = effective_params(metric, spec.params)
     value, inputs = estimator(
-        _Inputs(spec=spec, paths=paths, plan=plan, params=params, pk=params_key(params))
+        SigmaContext(spec=spec, paths=paths, plan=plan, params=params, pk=params_key(params))
     )
     _check_magnitude(value, spec.method)
     draft = SigmaEstimate(

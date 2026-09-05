@@ -29,7 +29,7 @@ class ExportRef(_Strict):
 class ConfigRef(_Strict):
     path: str
     sha256: str
-    copy: str
+    copied_to: str
 
 
 class Attempt(_Strict):

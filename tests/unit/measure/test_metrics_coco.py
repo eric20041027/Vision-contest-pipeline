@@ -1,4 +1,5 @@
 import builtins
+import random
 
 import pytest
 
@@ -20,6 +21,7 @@ def test_registered_for_det():
     m = get_metric("coco_map")
     assert m.defaults == {"iou": "50:95", "max_dets": "100"}
     assert m.higher_is_better is True
+    assert m.version == "1"  # written into Reading.metric_version
 
 
 def test_perfect_shifted_and_empty():
@@ -144,6 +146,107 @@ def test_unsupported_iou_value_is_validation_failed():
         _run(samples, card, perfect, {"iou": "90"})
 
 
+# --- fix round 1, F1: Box.meta["iscrowd"] -- set by the framework's own COCO importer and
+# round-tripped by its exporter -- must reach pycocotools, not the hardcoded 0 that scores every
+# crowd region as a required positive.
+
+
+@pytest.mark.parametrize("crowd_value", [1, True, "1"])
+def test_iscrowd_ground_truth_is_not_scored_as_a_required_positive(crowd_value):
+    """One normal box plus one crowd region; the model finds the normal box and ignores the
+    crowd. pycocotools excludes crowd ground truth from AP (a category whose only instance is
+    crowd contributes nothing, not a missed detection), so the value must be 1.0, not the ~0.5
+    a hardcoded iscrowd=0 produces by counting the ignored crowd region as a false negative.
+    ``crowd_value`` covers the plain int the framework's own COCO importer writes plus the
+    bool/string forms the fix must also tolerate."""
+    card = make_card("det")  # cat(0), dog(1), bird(2)
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[View(path="s0000.jpg", width=8, height=8)],
+            labels=Labels(
+                boxes=[
+                    Box(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0),
+                    Box(x=4.0, y=4.0, w=2.0, h=2.0, category_id=1, meta={"iscrowd": crowd_value}),
+                ]
+            ),
+            label_source="gold",
+        )
+    ]
+    preds = [
+        Prediction(
+            sample_id="s0000",
+            boxes=[PredBox(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0, score=1.0)],
+        )
+    ]
+    res = _run(samples, card, preds)
+    assert res.value == pytest.approx(1.0)
+    assert res.per_class["cat"] == pytest.approx(1.0)
+    assert res.per_class["dog"] is None
+    assert res.per_class["bird"] is None
+
+
+def test_iscrowd_with_an_uncoercible_value_is_validation_failed():
+    card = make_card("det")
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[View(path="s0000.jpg", width=8, height=8)],
+            labels=Labels(
+                boxes=[Box(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0, meta={"iscrowd": "yes"})]
+            ),
+            label_source="gold",
+        )
+    ]
+    with pytest.raises(ValidationFailed, match="iscrowd"):
+        _run(samples, card, [Prediction(sample_id="s0000", boxes=[])])
+
+
+# --- fix round 1, F2: a box on a view other than 0 must not be silently folded into view 0's
+# image (mirrors Task 8 ruling 3, which raises the same way on the mask side). Per-view image
+# ids are the fuller fix and are a recorded follow-up, not implemented here.
+
+
+def test_gold_box_on_a_view_other_than_zero_is_validation_failed():
+    card = make_card("det")
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[
+                View(path="s0000_v0.jpg", width=8, height=8),
+                View(path="s0000_v1.jpg", width=8, height=8),
+            ],
+            labels=Labels(boxes=[Box(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0, view=1)]),
+            label_source="gold",
+        )
+    ]
+    with pytest.raises(ValidationFailed, match="view"):
+        _run(samples, card, [Prediction(sample_id="s0000", boxes=[])])
+
+
+def test_prediction_box_on_a_view_other_than_zero_is_validation_failed():
+    card = make_card("det")
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[
+                View(path="s0000_v0.jpg", width=8, height=8),
+                View(path="s0000_v1.jpg", width=8, height=8),
+            ],
+            labels=Labels(boxes=[Box(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0)]),
+            label_source="gold",
+        )
+    ]
+    preds = [
+        Prediction(
+            sample_id="s0000",
+            boxes=[PredBox(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0, score=1.0, view=1)],
+        )
+    ]
+    with pytest.raises(ValidationFailed, match="view"):
+        _run(samples, card, preds)
+
+
 # --- failure modes beyond the brief's own tests: an empty subset, an undefined per-class
 # category, an all-empty prediction set, and a stray category id must never surface -1/nan.
 
@@ -175,12 +278,15 @@ def test_category_with_no_gold_instances_reports_none_not_negative_one():
     assert res.per_class["bird"] is None
 
 
-def test_all_predictions_empty_reports_zero_for_every_category_including_one_without_gold():
-    """Documents a deliberate simplification: with zero detections the metric short-circuits
-    before calling pycocotools at all (loadRes crashes on an empty results list), so every
-    category reports 0.0 -- even "bird", which has no ground-truth instances in this subset and
-    would read as None (undefined) via the full pycocotools path exercised just above. Never
-    -1, never nan, either way."""
+def test_all_predictions_empty_reports_none_for_category_without_gold():
+    """With zero detections the metric short-circuits before calling pycocotools at all
+    (loadRes crashes on an empty results list), but it must still tell apart a category that
+    has gold instances in this subset (0.0 -- every instance is an unrecalled false negative)
+    from one that has none at all ("bird": None, undefined -- matching what the full
+    pycocotools path reports for a no-gold category; see
+    test_category_with_no_gold_instances_reports_none_not_negative_one). The gold -- already in
+    gt.dataset["annotations"] -- is what tells the two cases apart, not the (absent)
+    detections."""
     card = make_card("det")
     samples = [
         Sample(
@@ -194,7 +300,26 @@ def test_all_predictions_empty_reports_zero_for_every_category_including_one_wit
     empty = [Prediction(sample_id=s.sample_id, boxes=[]) for s in samples]
     res = _run(samples, card, empty)
     assert res.value == 0.0
-    assert res.per_class == {"cat": 0.0, "dog": 0.0, "bird": 0.0}
+    assert res.per_class == {"cat": 0.0, "dog": 0.0, "bird": None}
+    assert list(res.per_class) == ["cat", "dog", "bird"]  # order matches the normal path
+
+
+def test_all_predictions_empty_and_no_gold_anywhere_is_validation_failed():
+    """Zero GT boxes in the whole subset makes AP undefined regardless of predictions -- caught
+    by _gt_dataset's own check, before the all-predictions-empty short-circuit above is ever
+    reached."""
+    card = make_card("det")
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[View(path="s0000.jpg", width=8, height=8)],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        )
+    ]
+    empty = [Prediction(sample_id="s0000", boxes=[])]
+    with pytest.raises(ValidationFailed, match="ground-truth"):
+        _run(samples, card, empty)
 
 
 def test_unknown_category_id_in_prediction_does_not_crash():
@@ -219,14 +344,53 @@ def test_unknown_category_id_in_prediction_does_not_crash():
     assert _run(samples, card, tampered).value == pytest.approx(1.0)
 
 
-def test_perfect_is_deterministic_across_two_runs():
-    samples = det_samples(30, seed=4)
+def test_tied_scores_are_order_invariant_across_samples():
+    """The old version of this test called _run twice on the *same* list objects with perfect
+    predictions -- no mutation of compute() could make two identical calls disagree, so it could
+    never fail. coco_map.py's ``sorted(samples, key=...)`` is genuinely load-bearing: pycocotools
+    breaks ties between equal-score detections by their position in the per-category
+    concatenation across images (a stable sort on -score), and that position follows the numeric
+    image id assigned by ``enumerate(samples, start=1)`` -- so without a canonical sort, which of
+    two tied detections outranks the other depends on whatever order the caller happened to pass
+    ``samples`` in. Confirmed by mutation (see fix-round-1 report for the failing value pair):
+    deleting the ``sorted()`` call makes this fail."""
     card = make_card("det")
-    perfect = perfect_predictions(samples, card)
-    first = _run(samples, card, perfect)
-    second = _run(samples, card, perfect)
-    assert first.value == second.value
-    assert first.per_class == second.per_class
+    samples = [
+        Sample(
+            sample_id="s0000",
+            views=[View(path="s0000.jpg", width=8, height=8)],
+            labels=Labels(boxes=[Box(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0)]),
+            label_source="gold",
+        ),
+        Sample(
+            sample_id="s0001",
+            views=[View(path="s0001.jpg", width=8, height=8)],
+            labels=Labels(boxes=[]),
+            label_source="gold",
+        ),
+    ]
+    preds = [
+        # A true positive, tied in score with the false positive below.
+        Prediction(
+            sample_id="s0000",
+            boxes=[PredBox(x=0.0, y=0.0, w=2.0, h=2.0, category_id=0, score=0.5)],
+        ),
+        # A false positive in an image with no gold at all -- tied in score with the TP above.
+        Prediction(
+            sample_id="s0001",
+            boxes=[PredBox(x=4.0, y=4.0, w=2.0, h=2.0, category_id=0, score=0.5)],
+        ),
+    ]
+    baseline = _run(samples, card, preds)
+
+    shuffled_samples = list(samples)
+    shuffled_preds = list(preds)
+    random.Random(1).shuffle(shuffled_samples)
+    random.Random(1).shuffle(shuffled_preds)
+    shuffled = _run(shuffled_samples, card, shuffled_preds)
+
+    assert shuffled.value == baseline.value
+    assert shuffled.per_class == baseline.per_class
 
 
 def test_pycocotools_output_is_silenced(capsys):

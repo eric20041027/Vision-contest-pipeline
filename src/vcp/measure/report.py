@@ -61,7 +61,7 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
     current = parse_stamp(now) if now else utc_now()
     judged_ids = {j.prereg_id for j in read_rows(paths.measure_dir / JUDGEMENTS_LEDGER, Judgement)}
     preregs = list_preregs(paths)
-    orphans = []
+    orphans: list[str] = []
     for pid in preregs:
         ts = prereg_time(paths, pid)
         if (
@@ -119,7 +119,7 @@ def last_vs_last(paths: DatasetPaths) -> list[dict]:
     """One row per judged subset: what the candidate did to the baseline it was registered
     against. ``delta`` is already signed so that positive means better, whichever way the
     metric runs (the judge applies the metric's direction once, when it judges)."""
-    out = []
+    out: list[dict] = []
     for j in read_rows(paths.measure_dir / JUDGEMENTS_LEDGER, Judgement):
         for subset, s in j.per_subset.items():
             out.append(

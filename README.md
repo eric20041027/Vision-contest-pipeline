@@ -35,7 +35,7 @@ uv run pytest --cov=vcp
 | `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p | `--dataset`、`--max-age-hours` |
 | `vcp eval report` | 全部 run × subset 讀數（全精度）+ 每個判決的 last-vs-last | `--dataset`、`--metric`、`--plan` |
 
-共用選項：`--json`、`--data-root`、`--configs-root`、`--plugin <module>`（可重複）。狀態與 exit code：未知 sample_id、缺讀數、選項不合法 → FAIL(1)；沒有錨點、σ_p 為 0、有孤兒預登記 → WARN(0)；護欄對不上 → ABORT(2) 且一列讀數都不寫，VERDICT 帶 `guardrail=FAIL anchor=<reading_id> got=<值>`。判決本身不是工具錯誤：`status=OK verdict=PASS|FAIL|INVALID`，要讓 FAIL 擋 CI 就加 `--strict`。
+共用選項：`--json`、`--data-root`、`--configs-root`；前六個命令另有 `--plugin <module>`（可重複，import 該模組讓它登記指標或轉換器），`status` / `report` 不碰登記表所以沒有。狀態與 exit code：未知 sample_id、缺讀數、選項不合法 → FAIL(1)；沒有錨點、σ_p 為 0、有孤兒預登記 → WARN(0)；護欄對不上 → ABORT(2) 且一列讀數都不寫，VERDICT 帶 `guardrail=FAIL anchor=<reading_id> got=<值>`。判決本身不是工具錯誤：`status=OK verdict=PASS|FAIL|INVALID`，要讓 FAIL 擋 CI 就加 `--strict`。
 
 ### 標準預測格式
 

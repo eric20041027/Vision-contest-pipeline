@@ -281,3 +281,16 @@ class Converter(Protocol):
 ## 14. 不在範圍
 
 WBF 與其他融合技術、TTA、per-class 門檻調整工具、上傳配額與榜面回讀、備份審計、可視化、SQLite 索引、多 view 樣本的逐 view 指標（先以 sample 為單位）。
+
+## 15. v2 補充決定（Plan 3 實作與審查的定案，2026-09-05）
+
+以下為實作期間由計畫或審查裁決、原 spec 未明說或已被推翻的規則，與前文衝突時以本節為準。
+
+1. **CLI 拼字**：bootstrap 次數的選項一律是 `--resamples`（`judge` 與 `sigma` 同名），§6 表寫的 `--bootstrap` 作廢；`measure` 根本沒有 bootstrap 選項（它只算讀數）。`judge` 另加 `--unseal --reason`，與 `measure` 同樣走 `Dataset.subset` 的留痕：預登記在 sealed 子集上的主張，不給理由就判不了。`sigma --method bootstrap` 沒給 `--run` 時取該 (plan, 指標, 參數) 錨點的 run（§6.3 已如此規定，§6 表的選項列漏了）。
+2. **指標宣告方向**：`Metric` 多一個 `higher_is_better`（`log_loss` / `rmse` / `mae` 為 False，其餘 True，插件必須明寫，否則 `register_metric` 拒收）。judge 以 `sign = ±1` 在算 delta 時套一次，之後 `delta > 0`、`t`、σ_p 條件都維持「正的就是變好」，判決列記下 `higher_is_better`，讀 `judgements.jsonl` 的人不必回頭查登記表。§7 未提方向。
+3. **VERDICT 欄位的語意**：`measure` 的 `readings=` 是這次新寫入的列數（另有 `cached=`），`guardrail=` 為 `OK|partial|none|cached`（`cached` 只表示沒有新列，不表示沒驗）；`report` 的同類欄位叫 `rows=`，一個名字不得指兩個量。護欄中止的 VERDICT 除了 `reason=` 還帶 `guardrail=FAIL anchor=<reading_id> got=<值>`（`VcpError.fields`，spec 9 要的機器可讀）。
+4. **數值與台帳的硬規則**：`--tolerance` 須有限且 ≥ 0（0 = 要求完全重現，合法；nan/inf 會讓護欄形同虛設）；讀數、判決、σ_p 的非有限值一律拒寫（pydantic 會把 nan 寫成 JSON null，只增不改的台帳事後救不回來）；`t` 在 se = 0 時以 ±1e9 代替 §6.2 寫的 inf；快取命中的 cell 仍重驗錨點；judge 缺讀數是 `verdict=FAIL reason=missing_readings`（不是例外）；σ_p 估到 0 時 `sigma` WARN、判決列記 `sigma_zero`（條件仍然成立，但要說出來）。
+5. **status / report 唯讀**：兩個命令不寫任何檔案，連 measure 目錄都不會建；沒有任何量測時 `report` 答 `rows=0` 而不是報錯。孤兒預登記的年紀以 `prereg.log.jsonl` 的時戳算（不是 yaml 裡呼叫者填的 `created_at`），沒有 log 列的 yaml 不算孤兒；`status` 的 run 數只算 card 指向本資料集的 run；`report` 每個 (run, subset, metric, params) 取最新那筆讀數，數值不四捨五入。
+6. **預測來源**：`export_manifest_sha` 記在每個子集的 `PredictionFile` 上——`vcp data export` 一次只匯出一個子集，涵蓋兩個 eval 子集的 run 本來就有兩份 manifest；`RunSource.export_manifest_sha` 是建立該 run 的那一次匯出。`--framework` / `--notes` 是 run 層級的事實，第二次 ingest 給了不同值即 FAIL。
+7. **登記表推導**：任務適用性一律從登記表推（`TaskSpec.pred_payload` → `payload_field(task)`），轉換器與指標都不得寫死任務名。det 指標與 `yolo_txt` 目前只認 view 0（YOLO 匯出 manifest 沒記匯出的是哪個 view），遇到 view ≠ 0 即定位的 FAIL；seg 的 polygon 與壓縮 RLE 都走 pycocotools 光柵化，兩者才對得起來。
+8. **錯誤一律定位**：空子集、缺 gold、缺預測、壞台帳列、壞 `anchors.json` 都是帶位置的 `ValidationFailed`；bootstrap 內某次重抽讓指標拒答時，連同重抽序號與 seed 一起拋出，絕不靜默跳過那次重抽（跳過會讓 σ_p 偏小）。

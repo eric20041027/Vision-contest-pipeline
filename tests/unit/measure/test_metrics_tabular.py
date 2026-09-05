@@ -71,6 +71,41 @@ def test_cls_metrics_perfect_and_noisy():
     assert res.n == 40
 
 
+def test_macro_f1_excludes_a_class_with_no_gold_in_the_subset():
+    """A class with no gold instance in THIS subset is undefined here, not zero.
+
+    macro_auc, dice, miou and coco_map all report ``None`` for such a class and leave it out of
+    the mean. macro_f1 folded it in as 0.0, so a perfect prediction on a 3-class card scored
+    0.667 on any subset that happens not to contain one of the classes -- and every bootstrap
+    resample is such a subset, which is exactly where sigma_p and the judge's t come from.
+    """
+    card = make_card("cls")  # cat / dog / bird
+    samples = [s for s in cls_samples(30, seed=1) if s.labels.cls != 2]  # no 'bird' in gold
+    assert {s.labels.cls for s in samples} == {0, 1}
+    perfect = perfect_predictions(samples, card)
+    res = _run("macro_f1", samples, card, perfect)
+    assert res.value == 1.0  # "perfect -> 1.0" must hold on ANY subset
+    assert res.per_class == {"cat": 1.0, "dog": 1.0, "bird": None}
+    # accuracy has no per-class breakdown, so an absent class cannot pull it either way
+    assert _run("accuracy", samples, card, perfect).value == 1.0
+    # A class that IS in gold but never predicted stays defined and zero: it was there to be
+    # found and was missed, which is what an F1 of 0.0 means.
+    only_cat = [
+        Prediction(sample_id=s.sample_id, scores={"cat": 1.0, "dog": 0.0, "bird": 0.0})
+        for s in samples
+    ]
+    per = _run("macro_f1", samples, card, only_cat).per_class
+    assert per["dog"] == 0.0 and per["bird"] is None
+    # The guard the mean relies on: nothing reaches np.mean([]). A non-empty subset with gold
+    # labels has at least one class in it, and both ways of not having one are refused before
+    # any array is built.
+    with pytest.raises(ValidationFailed, match="no samples"):
+        _run("macro_f1", [], card, [])
+    unlabeled = cls_samples(5, seed=0, gold_frac=0.0)
+    with pytest.raises(ValidationFailed, match="gold labels"):
+        _run("macro_f1", unlabeled, card, perfect_predictions(unlabeled, card))
+
+
 def test_multilabel_auc_perfect_and_undefined_class():
     samples = multilabel_samples(60, seed=2, probs=(0.5, 0.3, 0.0))  # third class never positive
     card = make_card("multilabel", categories=ML_CATS)

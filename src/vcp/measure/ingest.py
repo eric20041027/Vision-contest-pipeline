@@ -106,18 +106,18 @@ def _run_card(
             raise ValidationFailed(
                 f"run {spec.run_id!r} already declares "
                 f"export_manifest_sha={card.source.export_manifest_sha!r}; got {export_sha!r} "
-                f"from --export-manifest {spec.export_dir}; pass --replace or omit "
+                f"from --export-manifest {spec.export_dir}; omit "
                 "--export-manifest"
             )
         if spec.framework and spec.framework != card.source.framework:
             raise ValidationFailed(
                 f"run {spec.run_id!r} already declares framework={card.source.framework!r}; "
-                f"got {spec.framework!r}; pass --replace or omit --framework"
+                f"got {spec.framework!r}; omit --framework"
             )
         if spec.notes and spec.notes != card.source.notes:
             raise ValidationFailed(
                 f"run {spec.run_id!r} already declares notes={card.source.notes!r}; "
-                f"got {spec.notes!r}; pass --replace or omit --notes"
+                f"got {spec.notes!r}; omit --notes"
             )
         return card, False
     unknown = sorted(set(spec.trained_on) - plan_subsets)

@@ -9,7 +9,9 @@ from typing import Annotated
 import typer
 
 from vcp.backup.evidence import build_manifest
+from vcp.backup.pull import pull
 from vcp.backup.push import push
+from vcp.backup.status import status as status_view
 from vcp.backup.verify import verify
 from vcp.cli_common import CmdResult, ConfigsRootOpt, DataRootOpt, JsonOpt, run_command
 from vcp.core.log import FieldValue, Status
@@ -139,15 +141,23 @@ def verify_cmd(
     dest: Annotated[
         str | None, typer.Option("--dest", help="also check the copies at this destination")
     ] = None,
+    tier: Annotated[
+        int, typer.Option("--tier", help="copies layer: check tiers 1..N (default 3 = all)")
+    ] = 3,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
 ) -> None:
-    """Audit copies (with --dest), local consistency and timestamps."""
+    """Audit copies (with --dest, tiers 1..--tier), local consistency and timestamps."""
 
     def fn() -> CmdResult:
         res = verify(
-            dataset, manifest_id, dest=dest, data_root=data_root, configs_root=configs_root
+            dataset,
+            manifest_id,
+            dest=dest,
+            tier=tier,
+            data_root=data_root,
+            configs_root=configs_root,
         )
         fields: dict[str, FieldValue] = {}
         if res.reason is not None:
@@ -155,6 +165,7 @@ def verify_cmd(
         fields.update({"dataset": dataset, "manifest": manifest_id})
         if dest is not None:
             fields["dest"] = dest
+            fields["tier"] = tier
         if res.copies is not None:
             fields.update(
                 {
@@ -183,3 +194,101 @@ def verify_cmd(
         return status, fields, payload, human
 
     run_command("backup.verify", json_mode, data_root, fn)
+
+
+@backup_app.command("pull")
+def pull_cmd(
+    dataset: DatasetOpt,
+    manifest_id: ManifestOpt,
+    dest: Annotated[str, typer.Option("--dest", help="rclone remote:path or a local directory")],
+    tier: Annotated[int, typer.Option("--tier", help="pull tiers 1..N")] = 3,
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="replace differing local files (old kept as .bak)")
+    ] = False,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Bring the manifest's files back from a destination, verifying each one."""
+
+    def fn() -> CmdResult:
+        res = pull(
+            dataset,
+            manifest_id,
+            dest,
+            tier=tier,
+            overwrite=overwrite,
+            data_root=data_root,
+            configs_root=configs_root,
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "manifest": manifest_id,
+            "dest": dest,
+            "tier": tier,
+            "pulled": res.pulled,
+            "skipped": res.skipped,
+            "conflicts": len(res.conflicts),
+        }
+        human = [f"pulled {res.pulled}, skipped {res.skipped} <- {dest}"]
+        payload = {"pulled": res.pulled, "skipped": res.skipped, "conflicts": res.conflicts}
+        return "OK", fields, payload, human
+
+    run_command("backup.pull", json_mode, data_root, fn)
+
+
+@backup_app.command("status")
+def status_cmd(
+    dataset: DatasetOpt,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Every manifest's last push / verify, unpushed tiers, and whether rclone still has a
+    config."""
+
+    def fn() -> CmdResult:
+        view = status_view(dataset, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "manifests": len(view.manifests),
+            "unverified": len(view.unverified),
+            "rclone_conf": view.rclone_conf,
+        }
+        notes: list[str] = []
+        if not view.manifests:
+            notes.append("no manifests yet: run `vcp backup manifest`")
+        if view.unverified:
+            notes.append(f"never verified: {', '.join(view.unverified)}")
+        if view.rclone_conf == "present":
+            notes.append("an rclone config file is still on this machine (push --forget-remote)")
+        status: Status = "WARN" if notes else "OK"
+        human = [
+            f"{m.manifest_id}  {m.conclusion}  files={m.files}  "
+            f"pushed_tiers={','.join(map(str, m.pushed_tiers)) or '-'}  "
+            f"last_push={m.last_push.ts if m.last_push else '-'}  "
+            f"last_verify={m.last_verify.ts if m.last_verify else '-'}  verified={m.verified}"
+            for m in view.manifests
+        ] + notes
+        payload = {
+            "manifests": [
+                {
+                    "manifest_id": m.manifest_id,
+                    "conclusion": m.conclusion,
+                    "files": m.files,
+                    "created": m.created,
+                    "pushed_tiers": m.pushed_tiers,
+                    "unpushed_tiers": m.unpushed_tiers,
+                    "last_push": m.last_push.model_dump(exclude_none=True) if m.last_push else None,
+                    "last_verify": (
+                        m.last_verify.model_dump(exclude_none=True) if m.last_verify else None
+                    ),
+                    "verified": m.verified,
+                }
+                for m in view.manifests
+            ],
+            "rclone_conf": view.rclone_conf,
+        }
+        return status, fields, payload, human
+
+    run_command("backup.status", json_mode, data_root, fn)

@@ -34,6 +34,7 @@
 8. **sync 配對規則 0**：平台列的 `platform_ref` 等於某 `uploaded` 列的 `platform_ref`（`record --platform-ref` 填的）→ 直接配給它；其後才是 description 含 id、檔名 + 時間。
 9. **report 的 foreign 列**：以 `foreign:<platform_ref>` 為 id 出現在 last-vs-last 序列裡（它們在榜上真的存在）。
 10. **台帳列以 `exclude_none` 寫出**：一列只帶自己事件的欄位；讀回時缺的欄位就是 `None`。
+11. **執行期修正（後記 `2026-09-06-vcp-plan6-followups.md`，本文的程式碼未回頭改）**：`QuotaState` 自帶 `tz_name`、`fields()` 無參數（R0）；T3 的 CLI 片段 `= None,`（R1）；`scores_csv` 無類別即 FAIL（R2）；`_image_id` 只轉標準十進位（R3）；T7 / T11 的 stale 測試用 `noisy_predictions(flip=1.0)`（R4）；`parse_score` / `parse_date` 訊息 redact（R5）；`_mentions` 保持純字界、測試改 `"S10 only"`（R6）；sync 依 `at` 升冪（R7）；`FinalEntry` 可空欄位預設 None（R8）；e2e 身分失敗案例用 `--eval-run bad`（R9）；`_scan` 計數（R10）；最終修正輪（`--slots ≥ 1` 函式層檢查、sync 略過缺 stage.json 的 id、非有限分數 FAIL、`Staged(...)` 入守衛、`_failed` 串流以 `.strip()` 判空、writer 測試斷言無 `\r`）；typer `--slots` 不用 `min=`（R12）。
 
 ## 檔案結構
 

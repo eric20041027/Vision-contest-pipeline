@@ -227,9 +227,9 @@ class FinalEntry(_Strict):
     submission_id: str
     eligible: bool
     why: str
-    sealed_value: float | None
-    sealed_reading_id: str | None
-    public: float | None
+    sealed_value: float | None = None
+    sealed_reading_id: str | None = None
+    public: float | None = None
     staged_at: str
 
     @model_validator(mode="after")

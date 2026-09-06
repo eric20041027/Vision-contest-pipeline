@@ -21,7 +21,10 @@ from vcp.core.time import stamp
 from vcp.measure.metrics import effective_params, get_metric
 from vcp.measure.plugins import load_plugins
 from vcp.submit.actions import record, score, upload
+from vcp.submit.final import final, lock, unlock
 from vcp.submit.profile import init_profile
+from vcp.submit.report import report
+from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
@@ -349,3 +352,154 @@ def sync_cmd(
         return status, fields, payload, human
 
     run_command("submit.sync", json_mode, data_root, fn)
+
+
+@submit_app.command("final")
+def final_cmd(
+    dataset: DatasetOpt,
+    slots: Annotated[int | None, typer.Option("--slots", help="override final_slots")] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="print the table, write nothing")
+    ] = False,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Pick the final submission(s) by the sealed holdout and lock the ledger."""
+
+    def fn() -> CmdResult:
+        res = final(
+            dataset, slots=slots, dry_run=dry_run, data_root=data_root, configs_root=configs_root
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "chosen": ",".join(res.chosen),
+            "ranked": sum(1 for e in (res.row.table or []) if e.eligible),
+            "unranked": len(res.unranked),
+            "holdout_unseals": res.row.holdout_unseals or 0,
+            "dry_run": dry_run,
+        }
+        if res.needs_reupload:
+            fields["needs_reupload"] = res.needs_reupload
+        human = [
+            f"{e.submission_id:>12}  eligible={e.eligible!s:5} sealed={e.sealed_value!r} "
+            f"public={e.public!r} {e.why}"
+            for e in (res.row.table or [])
+        ]
+        human += [f"warning: {w}" for w in res.warnings]
+        warn = bool(res.unranked or res.needs_reupload or res.warnings)
+        status: Status = "WARN" if warn else "OK"
+        return status, fields, res.row.model_dump(mode="json", exclude_none=True), human
+
+    run_command("submit.final", json_mode, data_root, fn)
+
+
+@submit_app.command("lock")
+def lock_cmd(
+    dataset: DatasetOpt,
+    reason: Annotated[str, typer.Option("--reason")],
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Stop all staging and uploading (the R0 protocol)."""
+
+    def fn() -> CmdResult:
+        row = lock(dataset, reason, data_root=data_root, configs_root=configs_root)
+        return (
+            "OK",
+            {"dataset": dataset, "locked": True},
+            row.model_dump(mode="json", exclude_none=True),
+            [],
+        )
+
+    run_command("submit.lock", json_mode, data_root, fn)
+
+
+@submit_app.command("unlock")
+def unlock_cmd(
+    dataset: DatasetOpt,
+    reason: Annotated[str, typer.Option("--reason")],
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Lift a lock (recorded with its reason)."""
+
+    def fn() -> CmdResult:
+        row = unlock(dataset, reason, data_root=data_root, configs_root=configs_root)
+        return (
+            "OK",
+            {"dataset": dataset, "locked": False},
+            row.model_dump(mode="json", exclude_none=True),
+            [],
+        )
+
+    run_command("submit.unlock", json_mode, data_root, fn)
+
+
+@submit_app.command("status")
+def status_cmd(
+    dataset: DatasetOpt,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Quota, deadline, lock, what is on the board, what is unscored. Reads, never writes."""
+
+    def fn() -> CmdResult:
+        st = status_view(dataset, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "staged": st.staged,
+            "uploaded": st.uploaded,
+            "foreign": st.foreign,
+        }
+        warn = False
+        if st.quota is None:
+            fields["quota"] = "none"
+            warn = True
+        else:
+            fields.update(st.quota.fields())
+            warn = warn or st.quota.remaining == 0
+        if st.deadline_in_hours is not None:
+            fields["deadline_in"] = round(st.deadline_in_hours, 1)
+            warn = warn or st.deadline_in_hours < 24
+        fields["locked"] = st.locked is not None
+        fields["current"] = st.current or "none"
+        fields["unscored"] = len(st.unscored)
+        warn = warn or st.locked is not None or bool(st.unscored)
+        human = [f"unscored: {sid}" for sid in st.unscored]
+        payload = {
+            "quota": None if st.quota is None else st.quota.fields(),
+            "current": st.current,
+            "unscored": st.unscored,
+            "locked": None
+            if st.locked is None
+            else st.locked.model_dump(mode="json", exclude_none=True),
+        }
+        return ("WARN" if warn else "OK"), fields, payload, human
+
+    run_command("submit.status", json_mode, data_root, fn)
+
+
+@submit_app.command("report")
+def report_cmd(
+    dataset: DatasetOpt,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Every upload in order with its last-vs-last delta, sealed reading and private score."""
+
+    def fn() -> CmdResult:
+        rows = report(dataset, data_root=data_root, configs_root=configs_root)
+        human = [
+            f"{r.at}  {r.submission_id:>16}  {r.kind:>9}  public={r.public!r} delta={r.delta!r} "
+            f"sealed={r.sealed_value!r} private={r.private!r} shift={r.shift!r}"
+            for r in rows
+        ]
+        payload = {"rows": [r.__dict__ for r in rows]}
+        return "OK", {"dataset": dataset, "rows": len(rows)}, payload, human
+
+    run_command("submit.report", json_mode, data_root, fn)

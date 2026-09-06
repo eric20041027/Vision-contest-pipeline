@@ -163,3 +163,59 @@ def test_record_score_cli(pair):
     assert r.exit_code == 1 and "manual_platform" in _verdict(r.output)
     r = runner.invoke(app, ["submit", "sync", "--dataset", "beach-test"])
     assert r.exit_code == 1 and "manual_platform" in _verdict(r.output)
+
+
+def test_final_status_report_cli(pair):
+    from vcp.core.time import utc_now
+
+    _ready(pair)
+    assert _stage("S1", "good", "good.test").exit_code == 0
+    assert (
+        _stage("S2", "bad", "bad.test", "--kind", "baseline", "--reason", "anchor").exit_code == 0
+    )
+    at = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+    for sid in ("S1", "S2"):
+        r = runner.invoke(
+            app,
+            ["submit", "record", "--dataset", "beach-test", "--id", sid, "--tz", "utc", "--at", at],
+        )
+        assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["submit", "status", "--dataset", "beach-test"])
+    assert (
+        r.exit_code == 0
+        and "current=S2" in _verdict(r.output)
+        and "unscored=2" in _verdict(r.output)
+    )
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
+    assert r.exit_code == 1 and "no_sealed_readings" in _verdict(r.output)
+    for run in ("good", "bad"):
+        r = runner.invoke(
+            app,
+            [
+                "eval",
+                "measure",
+                "--run",
+                run,
+                "--metrics",
+                "accuracy",
+                "--subsets",
+                "holdout",
+                "--unseal",
+                "--reason",
+                "final pick",
+            ],
+        )
+        assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--dry-run"])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "chosen=S1" in v and "needs_reupload=S1" in v and "dry_run=true" in v
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--json"])
+    assert r.exit_code == 0, r.output
+    assert _json(r)["result"]["chosen"] == ["S1"]
+    r = runner.invoke(app, ["submit", "report", "--dataset", "beach-test"])
+    assert r.exit_code == 0 and "rows=2" in _verdict(r.output)
+    r = runner.invoke(app, ["submit", "lock", "--dataset", "beach-test", "--reason", "x"])
+    assert r.exit_code == 1 and "locked" in _verdict(r.output)
+    r = runner.invoke(app, ["submit", "unlock", "--dataset", "beach-test", "--reason", "extended"])
+    assert r.exit_code == 0 and "locked=false" in _verdict(r.output)

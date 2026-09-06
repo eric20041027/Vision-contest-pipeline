@@ -219,3 +219,11 @@ def test_final_status_report_cli(pair):
     assert r.exit_code == 1 and "locked" in _verdict(r.output)
     r = runner.invoke(app, ["submit", "unlock", "--dataset", "beach-test", "--reason", "extended"])
     assert r.exit_code == 0 and "locked=false" in _verdict(r.output)
+
+
+def test_final_slots_below_one_is_a_verdict_fail(pair):
+    _ready(pair)
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--slots", "0"])
+    assert r.exit_code == 1, r.output
+    v = _verdict(r.output)
+    assert "status=FAIL" in v and "slots" in v

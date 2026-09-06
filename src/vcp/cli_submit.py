@@ -1,0 +1,116 @@
+"""``vcp submit``: submission governance commands. Every command ends with a VERDICT line."""
+
+from __future__ import annotations
+
+from typing import Annotated
+
+import typer
+from pydantic import ValidationError
+
+from vcp.cli_common import (
+    CmdResult,
+    ConfigsRootOpt,
+    DataRootOpt,
+    JsonOpt,
+    parse_opts,
+    run_command,
+)
+from vcp.core.errors import ValidationFailed
+from vcp.core.log import FieldValue
+from vcp.core.time import stamp
+from vcp.measure.metrics import effective_params, get_metric
+from vcp.submit.profile import init_profile
+from vcp.submit.schema import PlatformProfile, Quota
+
+submit_app = typer.Typer(no_args_is_help=True, help="submission governance commands")
+
+DatasetOpt = Annotated[str, typer.Option("--dataset", help="test dataset name")]
+IdOpt = Annotated[str, typer.Option("--id", help="submission id (path-safe, under 32 chars)")]
+PluginOpt = Annotated[
+    list[str] | None, typer.Option("--plugin", help="python module to import (registers writers)")
+]
+
+
+@submit_app.command("init")
+def init_cmd(
+    dataset: DatasetOpt,
+    eval_dataset: Annotated[str, typer.Option("--eval-dataset", help="eval-side dataset")],
+    plan: Annotated[str, typer.Option("--plan", help="eval-side plan id (has the sealed subset)")],
+    sealed: Annotated[str, typer.Option("--sealed", help="sealed subset `final` ranks on")],
+    platform: Annotated[str, typer.Option("--platform", help="manual | kaggle")],
+    metric: Annotated[str, typer.Option("--metric", help="metric of the sealed reading")],
+    competition: Annotated[str | None, typer.Option("--competition")] = None,
+    kind: Annotated[str, typer.Option("--kind", help="file | kernel")] = "file",
+    board_rule: Annotated[
+        str | None, typer.Option("--board-rule", help="last | best (default by platform)")
+    ] = None,
+    slots: Annotated[int, typer.Option("--slots", help="final picks (Kaggle allows 2)")] = 1,
+    quota: Annotated[int | None, typer.Option("--quota", help="uploads per platform day")] = None,
+    day_tz: Annotated[str, typer.Option("--day-tz", help="zone of the platform day")] = "UTC",
+    day_start: Annotated[str, typer.Option("--day-start", help="HH:MM wall time")] = "00:00",
+    display_tz: Annotated[
+        str | None, typer.Option("--display-tz", help="zone `record --at` is read in")
+    ] = None,
+    deadline: Annotated[
+        str | None, typer.Option("--deadline", help="UTC stamp, e.g. 2026-10-22T23:59:00Z")
+    ] = None,
+    params: Annotated[
+        list[str] | None, typer.Option("--params", help="metric param key=value (repeatable)")
+    ] = None,
+    writer: Annotated[str | None, typer.Option("--writer", help="registered writer")] = None,
+    writer_opt: Annotated[
+        list[str] | None, typer.Option("--writer-opt", help="writer option key=value")
+    ] = None,
+    kaggle_command: Annotated[
+        str, typer.Option("--kaggle-command", help="how to run the kaggle CLI")
+    ] = "kaggle",
+    test_plan: Annotated[str, typer.Option("--test-plan")] = "all-v1",
+    test_subset: Annotated[str, typer.Option("--test-subset")] = "test",
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Write submit.yaml and the test dataset's single-subset plan."""
+
+    def fn() -> CmdResult:
+        metric_params = effective_params(get_metric(metric), parse_opts(params, "--params"))
+        rule = board_rule or ("best" if platform == "kaggle" else "last")
+        try:
+            profile = PlatformProfile(
+                dataset=dataset,
+                eval_dataset=eval_dataset,
+                plan_id=plan,
+                sealed_subset=sealed,
+                test_plan=test_plan,
+                test_subset=test_subset,
+                platform=platform,  # type: ignore[arg-type]
+                competition=competition,
+                submission_kind=kind,  # type: ignore[arg-type]
+                board_rule=rule,  # type: ignore[arg-type]
+                final_slots=slots,
+                quota=None
+                if quota is None
+                else Quota(per_day=quota, day_tz=day_tz, day_start=day_start),
+                display_tz=display_tz,
+                deadline=deadline,
+                metric=metric,
+                metric_params=metric_params,
+                writer=writer,
+                writer_opts=parse_opts(writer_opt, "--writer-opt"),
+                kaggle_command=kaggle_command.split(),
+                created_at=stamp(),
+            )
+        except ValidationError as e:
+            raise ValidationFailed(str(e), location="vcp submit init") from e
+        res = init_profile(profile, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "platform": platform,
+            "profile": str(res.path),
+            "plan": test_plan,
+            "plan_created": res.plan_created,
+        }
+        payload = {"profile": profile.model_dump(mode="json"), "path": str(res.path)}
+        return "OK", fields, payload, [f"profile written to {res.path}"]
+
+    run_command("submit.init", json_mode, data_root, fn)

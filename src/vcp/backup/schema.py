@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -107,6 +107,12 @@ def check_relative_path(path: str) -> None:
         raise ValueError(f"path must have no empty, '.' or '..' segment, got {path!r}")
 
 
+def _absolute(source: str) -> bool:
+    """Absolute in either flavour: manifests travel between machines, so a Windows drive path
+    must still read as absolute on Linux and vice versa."""
+    return PureWindowsPath(source).is_absolute() or PurePosixPath(source).is_absolute()
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -147,7 +153,7 @@ class FileEntry(_Strict):
             raise ValueError("kind=remote_copy needs remote, and only then")
         if (self.root == "external") != (self.source is not None):
             raise ValueError("root=external needs source, and only then")
-        if self.source is not None and not Path(self.source).is_absolute():
+        if self.source is not None and not _absolute(self.source):
             raise ValueError(f"root=external needs an absolute source, got {self.source!r}")
         if not self.for_:
             raise ValueError("an entry must serve at least one conclusion")

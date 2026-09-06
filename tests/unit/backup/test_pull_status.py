@@ -10,7 +10,7 @@ from vcp.backup.pull import pull
 from vcp.backup.push import push
 from vcp.backup.status import passed, status
 from vcp.backup.verify import verify
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.measure.runs import load_run, run_dir
 from vcp.train.checkpoints import register
@@ -96,6 +96,29 @@ def test_pull_rejects_corrupt_copies_without_keeping_them(world):
     with pytest.raises(IntegrityError, match="mismatch") as ei:
         pull(TEST, "m1", "fake:vault", tier=2, runner=liar, **_kw(world))
     assert not pred.exists() and ei.value.fields["mismatch"] == 1
+
+
+def test_overwrite_never_leaves_only_the_backup(world):
+    build_manifest(TEST, "submission:S1", manifest_id="m1", **_kw(world))
+    honest = FakeRemote()
+    push(TEST, "m1", "fake:vault", tier=2, runner=honest, **_kw(world))
+    pred = _pred(world)
+    pred.write_bytes(b"edited locally\n")
+    liar = FakeRemote(deliver=b"garbage")  # honest hashsum, dishonest copyto
+    liar.store = honest.store
+    with pytest.raises(IntegrityError, match="mismatch") as ei:
+        pull(TEST, "m1", "fake:vault", tier=2, overwrite=True, runner=liar, **_kw(world))
+    assert ei.value.fields["mismatch"] == 1 and ei.value.fields["pulled"] == 0
+    assert pred.read_bytes() == b"edited locally\n"
+    assert list(pred.parent.glob("*.bak-*")) == []
+    row = BackupLedger(_paths(world).backup_log).latest("pull", "m1")
+    assert row.pulled == 0
+    broken = FakeRemote(fail="copyto")
+    broken.store = honest.store
+    with pytest.raises(PlatformError, match="copyto failed") as ei:
+        pull(TEST, "m1", "fake:vault", tier=2, overwrite=True, runner=broken, **_kw(world))
+    assert ei.value.fields["pulled"] == 0 and pred.read_bytes() == b"edited locally\n"
+    assert list(pred.parent.glob("*.bak-*")) == []
 
 
 def test_pull_external_only_into_an_existing_directory(world, tmp_path):

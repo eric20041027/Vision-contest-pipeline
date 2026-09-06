@@ -174,6 +174,8 @@ def verify_cmd(
                     "mismatch": res.copies["mismatch"],
                 }
             )
+            if res.copies["absent"]:  # listed as gone when the manifest was written
+                fields["absent"] = res.copies["absent"]
         fields["drift"] = len(res.drift)
         fields["bad_stamps"] = len(res.bad_stamps)
         if res.first_bad is not None:

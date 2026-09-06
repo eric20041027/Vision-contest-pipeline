@@ -90,26 +90,30 @@ def _check_copies(
     manifest: Manifest, dest: str, tier: int, runner: Runner | None
 ) -> tuple[dict[str, int], list[str]]:
     """Only entries with ``tier <= tier``: a destination that holds tiers 1..N is complete for
-    them even though the weights were never pushed."""
-    counts = {"ok": 0, "missing": 0, "mismatch": 0}
+    them even though the weights were never pushed. An entry the manifest already recorded as
+    gone (``present=false``) is ``absent`` at a destination that never got it -- a fact, not a
+    failure; a copy of it that is there still has to match."""
+    counts = {"ok": 0, "missing": 0, "mismatch": 0, "absent": 0}
     problems: list[str] = []
     dests: dict[str, Destination] = {dest: open_dest(dest, runner)}
-    groups: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    groups: dict[tuple[str, str], list[tuple[str, str, str, bool]]] = {}
     for e in manifest.files:
         if e.tier > tier:
             continue
         if e.remote is None:
-            groups.setdefault((dest, e.root), []).append((e.path, e.sha256, e.key))
+            groups.setdefault((dest, e.root), []).append((e.path, e.sha256, e.key, e.present))
         else:
             dests.setdefault(e.remote.dest, open_dest(e.remote.dest, runner))
             groups.setdefault((e.remote.dest, e.remote.run), []).append(
-                (e.remote.name, e.sha256, e.key)
+                (e.remote.name, e.sha256, e.key, e.present)
             )
     for (d, sub), items in groups.items():
-        have = dests[d].hashes(sub, [rel for rel, _, _ in items])
-        for rel, sha, key in items:
+        have = dests[d].hashes(sub, [rel for rel, _, _, _ in items])
+        for rel, sha, key, present in items:
             got = have.get(rel)
-            if got is None:
+            if got is None and not present:
+                counts["absent"] += 1
+            elif got is None:
                 counts["missing"] += 1
                 problems.append(f"missing:{key}")
             elif got != sha:

@@ -198,7 +198,7 @@ def test_push_rclone_failure_mid_way_still_writes_the_row(world):
 
 
 def test_forget_remote_only_after_everything_verified(world):
-    _manifest(world)
+    res = _manifest(world)
     with pytest.raises(ValidationFailed, match="forget_refused"):
         _push(world, str(world.tmp / "vault"), tier=1, forget_remote=True)
     assert not (world.tmp / "vault").exists() and _ledger(world).of("push") == []
@@ -207,8 +207,35 @@ def test_forget_remote_only_after_everything_verified(world):
         _push(world, "fake:vault", tier=1, forget_remote=True, runner=remote)
     assert remote.deleted == []
     good = FakeRemote()
-    out = _push(world, "fake:vault", tier=1, forget_remote=True, runner=good)
+    with pytest.raises(ValidationFailed, match="forget_refused") as ei:
+        _push(world, "fake:vault", tier=1, forget_remote=True, runner=good)
+    above = sum(1 for f in res.manifest.files if f.kind == "file" and f.tier > 1)
+    assert ei.value.fields["unverified"] == above and good.deleted == []
+    assert _ledger(world).latest("push", "m1").tier == 1  # the push itself is recorded
+    assert _ledger(world).of("remote_forgotten") == []
+    out = _push(world, "fake:vault", tier=3, forget_remote=True, runner=good)
     assert out.forgotten == "fake" and good.deleted == ["fake"]
     rows = _ledger(world).rows
     assert [r.event for r in rows[-2:]] == ["push", "remote_forgotten"]
     assert rows[-1].remote == "fake"
+    (world.weights / "last.pt").unlink()  # listed, but already gone when the manifest is written
+    build_manifest(TEST, "submission:S1", manifest_id="m2", **_kw(world))
+    fresh = FakeRemote()
+    with pytest.raises(ValidationFailed, match="forget_refused") as ei:
+        push(TEST, "m2", "fake:vault", tier=3, forget_remote=True, runner=fresh, **_kw(world))
+    assert ei.value.fields["unverified"] == 1 and fresh.deleted == []
+
+
+def test_hashsum_failures_and_unsupported_hashes_are_errors(tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_bytes(b"hello")
+    with pytest.raises(PlatformError, match="hashsum failed") as ei:
+        RcloneDest("fake:vault", FakeRemote(fail="hashsum")).hashes("data", ["x/a.txt"])
+    assert SECRET not in str(ei.value) and ei.value.fields == {"exit_code": 1}
+    remote = FakeRemote(unsupported=True)
+    d = RcloneDest("fake:vault", remote)
+    assert d.hashes("data", ["x/a.txt"]) == {}  # nothing there yet: exit 3, not an error
+    d.put(src, "data", "x/a.txt")
+    with pytest.raises(PlatformError, match="sha256") as ei:
+        d.hashes("data", ["x/a.txt"])
+    assert ei.value.fields == {"dest": "fake:vault"} and SECRET not in str(ei.value)

@@ -5,6 +5,7 @@ an injectable runner and every byte it prints is redacted before it can reach a 
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -13,12 +14,15 @@ from typing import Any, Literal
 
 from vcp.core.errors import PlatformError, VcpError
 from vcp.core.hashing import sha256_file
-from vcp.core.proc import Runner, default_runner, last_line
+from vcp.core.proc import Runner, default_runner, last_line, redact
 from vcp.train.upload import dest_kind
 
 # The rclone command prefix; the end-to-end test points it at a stand-in script.
 RCLONE: list[str] = ["rclone"]
 ConfState = Literal["present", "absent", "unknown"]
+# rclone's exit codes for "directory not found" and "file not found": nothing there yet.
+NOT_THERE = (3, 4)
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _failed(what: str, proc: Any) -> PlatformError:
@@ -75,16 +79,28 @@ class RcloneDest:
         return self.runner([*RCLONE, *args])
 
     def hashes(self, sub: str, rels: Iterable[str]) -> dict[str, str]:
-        """``rclone hashsum sha256 <dest>/<sub>`` as {relative path: sha}, limited to ``rels``;
-        an unlistable base (nothing there yet) is simply empty."""
+        """``rclone hashsum sha256 <dest>/<sub>`` as {relative path: sha}, limited to ``rels``.
+        A base that is not there yet is empty; any other failure, and any token that is not a
+        sha256 (a backend that cannot hash reports ``UNSUPPORTED``), is an error -- treating it
+        as "the destination holds nothing" would push everything again and verify nothing."""
         proc = self._run("hashsum", "sha256", self._path(sub))
-        if proc.returncode != 0:
+        if proc.returncode in NOT_THERE:
             return {}
+        if proc.returncode != 0:
+            raise _failed("hashsum", proc)
         wanted = set(rels)
         out: dict[str, str] = {}
         for line in proc.stdout.splitlines():
             parts = line.strip().split(None, 1)
-            if len(parts) == 2 and parts[1].strip() in wanted:
+            if len(parts) != 2:
+                continue
+            if not _SHA256.fullmatch(parts[0]):
+                raise PlatformError(
+                    f"rclone hashsum: {self._path(sub)} does not report sha256 "
+                    f"({redact(line)[:80]})",
+                    fields={"dest": self.dest},
+                )
+            if parts[1].strip() in wanted:
                 out[parts[1].strip()] = parts[0]
         return out
 

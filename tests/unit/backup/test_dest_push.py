@@ -6,7 +6,7 @@ import pytest
 from backup_fixtures import SECRET, FakeRemote
 from submit_fixtures import EVAL, TEST
 from vcp.backup import dest as destmod
-from vcp.backup.dest import LocalDest, RcloneDest, open_dest, rclone_conf_state
+from vcp.backup.dest import LocalDest, RcloneDest, dest_kind, open_dest, rclone_conf_state
 from vcp.backup.evidence import build_manifest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
@@ -80,6 +80,13 @@ def test_rclone_dest_commands_and_redaction(tmp_path):
     assert ei.value.fields == {"exit_code": 1}
     with pytest.raises(PlatformError, match="config delete failed"):
         RcloneDest("fake:vault", FakeRemote(fail="config")).forget()
+
+
+def test_dest_kind_is_importable_from_dest():
+    """`dest_kind` lives with the destinations now, not with the training layer: push / pull /
+    verify import it from here, and `vcp.train.upload` merely re-exports it."""
+    assert dest_kind("gdrive:x") == "rclone"
+    assert dest_kind("C:/x") == "local"
 
 
 def test_open_dest_and_conf_state(monkeypatch, tmp_path):

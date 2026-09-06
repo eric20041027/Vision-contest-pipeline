@@ -71,21 +71,30 @@ def _error_fields(e: BaseException) -> dict[str, FieldValue]:
 
 
 def run_command(
-    cmd: str, json_mode: bool, data_root: Path | None, fn: Callable[[], CmdResult]
+    cmd: str,
+    json_mode: bool,
+    data_root: Path | None,
+    fn: Callable[[], CmdResult],
+    *,
+    context: dict[str, FieldValue] | None = None,
 ) -> None:
+    """``context`` is the command's own identifying fields (``dataset=``, ``manifest=``, ...):
+    merged under a success's own fields (which win) and after ``reason=`` on a failure, so a
+    VERDICT the command never got to build itself still says what it was about."""
     logger = _logger(data_root)
     payload: Any = None
     human: list[str] = []
     try:
         status, fields, payload, human = fn()
+        fields = {**(context or {}), **fields}
     except VcpError as e:
         # `reason` first: it is what a human reads. The error's own fields follow it.
         status = e.status  # type: ignore[assignment]
-        fields = {"reason": f"{type(e).__name__}: {e}", **_error_fields(e)}
+        fields = {"reason": f"{type(e).__name__}: {e}", **(context or {}), **_error_fields(e)}
         logger.error("command failed", exc_info=True, extra={"vcp": {"cmd": cmd}})
     except Exception as e:
         status = "ABORT"
-        fields = {"reason": f"{type(e).__name__}: {e}", **_error_fields(e)}
+        fields = {"reason": f"{type(e).__name__}: {e}", **(context or {}), **_error_fields(e)}
         logger.error("command aborted", exc_info=True, extra={"vcp": {"cmd": cmd}})
     verdict = Verdict(cmd=cmd, status=status, fields=fields)
     logger.info(verdict.line(), extra={"vcp": {"cmd": cmd, "status": status}})

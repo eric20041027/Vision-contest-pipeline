@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,6 @@ from typing import Any, Literal
 from vcp.core.errors import PlatformError, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.proc import Runner, default_runner, last_line, redact
-from vcp.train.upload import dest_kind
 
 # The rclone command prefix; the end-to-end test points it at a stand-in script.
 RCLONE: list[str] = ["rclone"]
@@ -23,6 +23,21 @@ ConfState = Literal["present", "absent", "unknown"]
 # rclone's exit codes for "directory not found" and "file not found": nothing there yet.
 NOT_THERE = (3, 4)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_REMOTE = re.compile(r"^[A-Za-z0-9_-]+:")
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+_DRIVE_LETTER = re.compile(r"^[A-Za-z]:")
+
+
+def dest_kind(dest: str) -> Literal["rclone", "local"]:
+    """``remote:path`` is rclone unless it names a Windows drive. ``C:/`` or ``C:\\`` reads as a
+    local drive on every platform; on Windows itself, a bare single letter followed by ``:`` is
+    *always* a drive -- even drive-relative, with no slash, like ``C:backup`` -- because that is
+    how rclone itself reads a destination string when it is the one running on Windows."""
+    if _DRIVE.match(dest):
+        return "local"
+    if sys.platform == "win32" and _DRIVE_LETTER.match(dest):
+        return "local"
+    return "rclone" if _REMOTE.match(dest) else "local"
 
 
 def _failed(what: str, proc: Any) -> PlatformError:

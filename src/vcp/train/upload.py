@@ -7,12 +7,11 @@ shelled out through an injectable runner so the whole path is testable without a
 
 from __future__ import annotations
 
-import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
+from vcp.backup.dest import dest_kind
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_stored_path
@@ -22,20 +21,12 @@ from vcp.train.schema import CheckpointRecord, TrainRecord, UploadRecord
 
 NAME_COLLISION = "name_collision"
 
-_REMOTE = re.compile(r"^[A-Za-z0-9_-]+:")
-_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
-
 
 @dataclass(frozen=True)
 class UploadOutcome:
     records: list[UploadRecord]
     uploaded: int
     skipped: int
-
-
-def dest_kind(dest: str) -> Literal["rclone", "local"]:
-    """``remote:path`` is rclone unless it is a Windows drive like ``C:/``."""
-    return "rclone" if _REMOTE.match(dest) and not _DRIVE.match(dest) else "local"
 
 
 def _targets(checkpoints: list[CheckpointRecord]) -> dict[str, CheckpointRecord]:

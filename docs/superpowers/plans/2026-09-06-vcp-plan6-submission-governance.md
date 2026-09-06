@@ -1092,10 +1092,10 @@ def _with_identity(card: RunCard, weights_sha: str | None, config_sha: str | Non
 weights: Annotated[
     Path | None,
     typer.Option("--weights", help="weights file the predictions came from (sha256 -> run)"),
-] = (None,)
+] = None,
 config: Annotated[
     Path | None, typer.Option("--config", help="model config file (sha256 -> run)")
-] = (None,)
+] = None,
 ```
 
 `IngestSpec(...)` 呼叫加 `weights=weights, config=config,`。

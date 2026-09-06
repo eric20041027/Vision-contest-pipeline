@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -18,11 +16,11 @@ from typing import Literal
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_stored_path
+from vcp.core.proc import Runner, default_runner, last_line
 from vcp.core.time import stamp
 from vcp.train.schema import CheckpointRecord, TrainRecord, UploadRecord
 
 NAME_COLLISION = "name_collision"
-Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
 _REMOTE = re.compile(r"^[A-Za-z0-9_-]+:")
 _DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -38,10 +36,6 @@ class UploadOutcome:
 def dest_kind(dest: str) -> Literal["rclone", "local"]:
     """``remote:path`` is rclone unless it is a Windows drive like ``C:/``."""
     return "rclone" if _REMOTE.match(dest) and not _DRIVE.match(dest) else "local"
-
-
-def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def _targets(checkpoints: list[CheckpointRecord]) -> dict[str, CheckpointRecord]:
@@ -138,7 +132,7 @@ def _upload_rclone(
         if proc.returncode != 0:
             raise VcpError(
                 f"rclone copyto failed (exit {proc.returncode}) for {name}: "
-                f"{proc.stderr.strip()[-300:]}"
+                f"{last_line(proc.stderr or proc.stdout)}"
             )
         uploaded += 1
     after = _hashsum(runner, base)

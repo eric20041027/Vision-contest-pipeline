@@ -67,6 +67,6 @@ class GuardrailError(VcpError):
 
 
 class PlatformError(VcpError):
-    """A submission platform's CLI ran and failed. The message is already redacted."""
+    """An external tool's CLI (kaggle, rclone) ran and failed. The message is already redacted."""
 
     status = "FAIL"

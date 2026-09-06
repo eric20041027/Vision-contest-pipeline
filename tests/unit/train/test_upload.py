@@ -186,3 +186,17 @@ def test_merge_uploads_replaces_same_identity(roots, tmp_path):
         merged2, upload(rec, str(tmp_path / "v2"), data_root=roots.data).records
     )
     assert len(merged3.uploads) == 4
+
+
+def test_rclone_failure_message_is_redacted(roots):
+    rec, _ = _registered(roots)
+    secret = "fakesecretfakesecretfakesecret1234"
+
+    def runner(args):
+        if args[1] == "hashsum":
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr=f"copy failed key={secret}")
+
+    with pytest.raises(VcpError, match="copyto failed") as ei:
+        upload(rec, "gdrive:w", data_root=roots.data, runner=runner)
+    assert secret not in str(ei.value) and "<redacted>" in str(ei.value)

@@ -45,14 +45,21 @@ def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _targets(checkpoints: list[CheckpointRecord]) -> dict[str, CheckpointRecord]:
-    """Checkpoints by destination file name; two different files with one name cannot coexist."""
+    """Checkpoints by destination file name: the newest record of a path wins.
+
+    ``checkpoints`` is chronological (registration appends), so a later record of the SAME path
+    with different bytes is a ``--resume`` that changed the weights -- history, not a collision --
+    and simply replaces the earlier entry. Two DIFFERENT paths sharing a name with different
+    bytes is a genuine collision.
+    """
     by_name: dict[str, CheckpointRecord] = {}
     for c in checkpoints:
         name = Path(c.path).name
-        if name in by_name and by_name[name].sha256 != c.sha256:
+        existing = by_name.get(name)
+        if existing is not None and existing.path != c.path and existing.sha256 != c.sha256:
             raise ValidationFailed(
                 f"{NAME_COLLISION}: two checkpoints named {name!r} "
-                f"({by_name[name].path} and {c.path}); rename one before uploading",
+                f"({existing.path} and {c.path}); rename one before uploading",
                 fields={"checkpoint": name},
             )
         by_name[name] = c

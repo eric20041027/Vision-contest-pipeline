@@ -25,7 +25,7 @@ from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp, utc_now
 from vcp.data.dataset import Dataset
 from vcp.data.split import SplitPlan, assert_plan_matches, load_plan
-from vcp.measure.runs import assert_run_matches, load_run, run_dir, save_run
+from vcp.measure.runs import append_history, assert_run_matches, load_run, run_dir, save_run
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train.checkpoints import expand, register, resolve_final
 from vcp.train.env import snapshot, venv_python
@@ -354,6 +354,20 @@ def _finish_checkpoints(
     elif spec.final:
         warnings.append("final=skipped (command failed)")
     if final is not None:
+        old_hash = card.source.weights_hash
+        if old_hash is not None and old_hash != final.sha256:
+            # run directory rule ("換寫留痕"): a --resume that changes the weights rewrites
+            # weights_hash, so the old sha must survive somewhere before it is overwritten.
+            append_history(
+                data_root,
+                spec.run_id,
+                {
+                    "event": "replace",
+                    "field": "weights_hash",
+                    "old_sha256": old_hash,
+                    "via": "train.run",
+                },
+            )
         source = card.source.model_copy(update={"weights_hash": final.sha256})
         card = card.model_copy(update={"source": source})
         save_run(data_root, card)
@@ -465,7 +479,10 @@ def train_run(spec: RunSpec) -> RunResult:
             "status": status,
         }
     )
-    record = _replace_attempt(record, attempt)
+    # spec 8.2: only Session writes train.yaml while the command runs (registering checkpoints,
+    # marking the final one) -- the in-memory snapshot from before execute() missed all of that,
+    # so re-read from disk before layering the attempt update on top.
+    record = _replace_attempt(load_record(data_root, spec.run_id), attempt)
     save_record(data_root, record)
     append_event(
         data_root,

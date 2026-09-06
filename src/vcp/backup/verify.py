@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from vcp.backup.dest import Destination, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
+from vcp.backup.push import check_tier
 from vcp.backup.schema import CARD_ROLES, LEDGER_ROLES, BackupRow, Manifest
 from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed
@@ -103,13 +104,17 @@ def _load_json_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:
 
 
 def _check_copies(
-    manifest: Manifest, dest: str, runner: Runner | None
+    manifest: Manifest, dest: str, tier: int, runner: Runner | None
 ) -> tuple[dict[str, int], list[str]]:
+    """Only entries with ``tier <= tier``: a destination that holds tiers 1..N is complete for
+    them even though the weights were never pushed."""
     counts = {"ok": 0, "missing": 0, "mismatch": 0}
     problems: list[str] = []
     dests: dict[str, Destination] = {dest: open_dest(dest, runner)}
     groups: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
     for e in manifest.files:
+        if e.tier > tier:
+            continue
         if e.remote is None:
             groups.setdefault((dest, e.root), []).append((e.path, e.sha256, e.key))
         else:
@@ -304,18 +309,21 @@ def verify(
     manifest_id: str,
     *,
     dest: str | None = None,
+    tier: int = 3,
     runner: Runner | None = None,
     data_root: Path | None = None,
     configs_root: Path | None = None,
 ) -> VerifyResult:
     """All three layers; the result is returned, not raised, so a VERDICT can carry every count
-    and ``--json`` every detail. The ledger row is written before returning."""
+    and ``--json`` every detail. ``tier`` bounds the copies layer only. The ledger row is
+    written before returning."""
+    check_tier(tier)
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     manifest = load_manifest(paths, manifest_id)
     copies: dict[str, int] | None = None
     problems: list[str] = []
     if dest is not None:
-        copies, problems = _check_copies(manifest, dest, runner)
+        copies, problems = _check_copies(manifest, dest, tier, runner)
     drift = _check_consistency(manifest, paths)
     bad = _check_stamps(manifest, paths)
     res = VerifyResult(manifest_id, dest, copies, problems, drift, bad)
@@ -325,6 +333,7 @@ def verify(
             ts=stamp(),
             manifest_id=manifest_id,
             dest=dest,
+            tier=tier if dest is not None else None,
             copies=copies,
             drift=len(drift),
             bad_stamps=len(bad),

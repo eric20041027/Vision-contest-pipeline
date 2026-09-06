@@ -64,3 +64,9 @@ class InvariantError(VcpError):
 
 class GuardrailError(VcpError):
     """The anchor reading could not be reproduced: the measurement environment is suspect."""
+
+
+class PlatformError(VcpError):
+    """A submission platform's CLI ran and failed. The message is already redacted."""
+
+    status = "FAIL"

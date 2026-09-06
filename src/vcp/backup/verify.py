@@ -21,7 +21,7 @@ from vcp.backup.manifest import load_manifest, local_path
 from vcp.backup.push import check_tier
 from vcp.backup.schema import CARD_ROLES, LEDGER_ROLES, BackupRow, Manifest
 from vcp.core.config import load_yaml_model
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import PlatformError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import DatasetPaths, resolve_stored_path
 from vcp.core.proc import Runner
@@ -283,9 +283,9 @@ def _check_stamps(manifest: Manifest, paths: DatasetPaths) -> list[str]:
         if not local.is_file():
             continue
         if e.role in LEDGER_ROLES:
-            _ledger_stamps(local, e.path, bad)
+            _ledger_stamps(local, e.key, bad)
         elif e.role in CARD_ROLES:
-            _walk_stamps(_load_doc(local), e.path, bad)
+            _walk_stamps(_load_doc(local), e.key, bad)
     if paths.backup_log.is_file():  # the audit's own ledger, never listed in a manifest
         _ledger_stamps(paths.backup_log, paths.backup_log.name, bad)
     return bad
@@ -309,8 +309,15 @@ def verify(
     manifest = load_manifest(paths, manifest_id)
     copies: dict[str, int] | None = None
     problems: list[str] = []
+    copies_error: PlatformError | None = None
     if dest is not None:
-        copies, problems = _check_copies(manifest, dest, tier, runner)
+        try:
+            copies, problems = _check_copies(manifest, dest, tier, runner)
+        except PlatformError as exc:
+            # the copies layer dying (rclone flaked) must not swallow what the other two layers
+            # found: they still run, and the row still lands -- with `copies=None` and `error=`
+            # standing in for what a `--dest` run could not tell us this time.
+            copies_error = exc
     drift = _check_consistency(manifest, paths)
     bad = _check_stamps(manifest, paths)
     res = VerifyResult(manifest_id, dest, copies, problems, drift, bad)
@@ -325,6 +332,9 @@ def verify(
             drift=len(drift),
             bad_stamps=len(bad),
             first_bad=res.first_bad,
+            error=str(copies_error) if copies_error is not None else None,
         )
     )
+    if copies_error is not None:
+        raise copies_error
     return res

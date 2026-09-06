@@ -9,6 +9,8 @@ from backup_fixtures import make_world
 from vcp.backup import dest as destmod
 from vcp.cli import app
 from vcp.measure.runs import load_run, run_dir
+from vcp.train.checkpoints import register
+from vcp.train.records import load_record, save_record
 
 runner = CliRunner()
 
@@ -111,6 +113,26 @@ def test_verify_cli(world):
     assert doc["result"]["drift"] == [] and doc["result"]["bad_stamps"] == []
     r = _run("verify", "--dataset", "beach-test", "--manifest", "nope")
     assert r.exit_code == 1 and "not_found" in _verdict(r.output)
+
+
+def test_pull_external_skipped_cli(world, tmp_path):
+    outside = tmp_path / "elsewhere" / "extra.pt"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"extra")
+    rec = load_record(world.roots.data, "good")
+    rec, _ = register(rec, [outside], data_root=world.roots.data, attempt=2)
+    save_record(world.roots.data, rec)
+    r = _run("manifest", "--dataset", "beach", "--conclusion", "run:good", "--id", "mg")
+    assert r.exit_code == 0, r.output
+    vault = world.tmp / "vault-ext"
+    r = _run("push", "--dataset", "beach", "--manifest", "mg", "--dest", str(vault), "--tier", "3")
+    assert r.exit_code == 0, r.output
+    outside.unlink()
+    outside.parent.rmdir()
+    r = _run("pull", "--dataset", "beach", "--manifest", "mg", "--dest", str(vault), "--tier", "3")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "external_skipped=1" in v
+    assert "external/" in r.output
 
 
 def test_pull_and_status_cli(world, monkeypatch):

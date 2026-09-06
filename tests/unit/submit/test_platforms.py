@@ -190,3 +190,12 @@ def test_kaggle_list_pages_to_the_end():
     with pytest.raises(PlatformError) as ei:
         p.list_submissions(_profile(), runner)
     assert SECRET not in str(ei.value)
+
+
+def test_parse_errors_redact_the_raw_value():
+    with pytest.raises(ValidationFailed, match="unparsable score") as ei:
+        parse_score(f"key={SECRET}", "publicScore")
+    assert SECRET not in str(ei.value)
+    with pytest.raises(ValidationFailed, match="unparsable date") as ei:
+        parse_date(f"token: {SECRET}")
+    assert SECRET not in str(ei.value)

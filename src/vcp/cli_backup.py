@@ -3,12 +3,14 @@ VERDICT line."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated
 
 import typer
 
 from vcp.backup.evidence import build_manifest
 from vcp.backup.push import push
+from vcp.backup.verify import verify
 from vcp.cli_common import CmdResult, ConfigsRootOpt, DataRootOpt, JsonOpt, run_command
 from vcp.core.log import FieldValue, Status
 
@@ -128,3 +130,56 @@ def push_cmd(
         return "OK", fields, payload, human
 
     run_command("backup.push", json_mode, data_root, fn)
+
+
+@backup_app.command("verify")
+def verify_cmd(
+    dataset: DatasetOpt,
+    manifest_id: ManifestOpt,
+    dest: Annotated[
+        str | None, typer.Option("--dest", help="also check the copies at this destination")
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Audit copies (with --dest), local consistency and timestamps."""
+
+    def fn() -> CmdResult:
+        res = verify(
+            dataset, manifest_id, dest=dest, data_root=data_root, configs_root=configs_root
+        )
+        fields: dict[str, FieldValue] = {}
+        if res.reason is not None:
+            fields["reason"] = res.reason
+        fields.update({"dataset": dataset, "manifest": manifest_id})
+        if dest is not None:
+            fields["dest"] = dest
+        if res.copies is not None:
+            fields.update(
+                {
+                    "ok": res.copies["ok"],
+                    "missing": res.copies["missing"],
+                    "mismatch": res.copies["mismatch"],
+                }
+            )
+        fields["drift"] = len(res.drift)
+        fields["bad_stamps"] = len(res.bad_stamps)
+        if res.first_bad is not None:
+            fields["first_bad"] = res.first_bad
+        status: Status = "OK" if res.ok else "FAIL"
+        human = [f"copies: {res.copies}" if res.copies else "copies: not checked (no --dest)"]
+        human += res.copy_problems
+        human += [
+            f"drift: {d.what} expected {d.expected[:12]} actual {d.actual[:12]}" for d in res.drift
+        ]
+        human += [f"bad stamp: {b}" for b in res.bad_stamps]
+        payload = {
+            "copies": res.copies,
+            "copy_problems": res.copy_problems,
+            "drift": [asdict(d) for d in res.drift],
+            "bad_stamps": res.bad_stamps,
+        }
+        return status, fields, payload, human
+
+    run_command("backup.verify", json_mode, data_root, fn)

@@ -92,6 +92,13 @@ def ingest_cmd(
     ] = None,
     framework: Annotated[str, typer.Option("--framework")] = "",
     notes: Annotated[str, typer.Option("--notes")] = "",
+    weights: Annotated[
+        Path | None,
+        typer.Option("--weights", help="weights file the predictions came from (sha256 -> run)"),
+    ] = None,
+    config: Annotated[
+        Path | None, typer.Option("--config", help="model config file (sha256 -> run)")
+    ] = None,
     keep_input: Annotated[
         bool, typer.Option("--keep-input", help="copy the source into the run")
     ] = False,
@@ -122,6 +129,8 @@ def ingest_cmd(
             trained_on=parse_csv(trained_on),
             framework=framework,
             notes=notes,
+            weights=weights,
+            config=config,
             keep_input=keep_input,
             replace=replace,
             options=parse_opts(opt),

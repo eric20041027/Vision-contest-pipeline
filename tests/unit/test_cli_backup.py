@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from backup_fixtures import make_world
+from vcp.backup import dest as destmod
 from vcp.cli import app
 
 runner = CliRunner()
@@ -57,3 +58,26 @@ def test_manifest_cli(world):
         and "status=WARN" in _verdict(r.output)
         and "missing=1" in _verdict(r.output)
     )
+
+
+def test_push_cli(world, monkeypatch):
+    r = _run("manifest", "--dataset", "beach-test", "--conclusion", "submission:S1", "--id", "m1")
+    assert r.exit_code == 0, r.output
+    vault = world.tmp / "vault"
+    common = ["push", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault)]
+    r = _run(*common, "--tier", "2", "--json")
+    assert r.exit_code == 0, r.output
+    doc = _json(r)
+    assert doc["status"] == "OK" and doc["fields"]["failed"] == 0 and doc["fields"]["pushed"] > 0
+    assert doc["fields"]["tier"] == 2 and "forgotten" not in doc["fields"]
+    assert doc["result"]["failed"] == [] and doc["result"]["forgotten"] is None
+    r = _run(*common, "--tier", "2")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "pushed=0" in v and f"skipped={doc['fields']['pushed']}" in v
+    r = _run(*common, "--tier", "9")
+    assert r.exit_code == 1 and "tier" in _verdict(r.output)
+    r = _run(*common, "--forget-remote")
+    assert r.exit_code == 1 and "forget_refused" in _verdict(r.output)
+    monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)
+    r = _run("push", "--dataset", "beach-test", "--manifest", "m1", "--dest", "gdrive:x")
+    assert r.exit_code == 2 and "rclone_not_found" in _verdict(r.output)

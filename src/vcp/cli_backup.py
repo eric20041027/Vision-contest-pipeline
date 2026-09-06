@@ -91,7 +91,8 @@ def push_cmd(
     forget_remote: Annotated[
         bool,
         typer.Option(
-            "--forget-remote", help="after every copy verified: rclone config delete <remote>"
+            "--forget-remote",
+            help="when the whole manifest is verified at dest: rclone config delete <remote>",
         ),
     ] = False,
     json_mode: JsonOpt = False,

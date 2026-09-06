@@ -77,7 +77,13 @@ def manifest_cmd(
         }
         return status, fields, payload, human
 
-    run_command("backup.manifest", json_mode, data_root, fn)
+    run_command(
+        "backup.manifest",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "conclusion": conclusion},
+    )
 
 
 @backup_app.command("push")
@@ -136,7 +142,13 @@ def push_cmd(
         }
         return "OK", fields, payload, human
 
-    run_command("backup.push", json_mode, data_root, fn)
+    run_command(
+        "backup.push",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "manifest": manifest_id, "dest": dest},
+    )
 
 
 @backup_app.command("verify")
@@ -200,7 +212,10 @@ def verify_cmd(
         }
         return status, fields, payload, human
 
-    run_command("backup.verify", json_mode, data_root, fn)
+    context: dict[str, FieldValue] = {"dataset": dataset, "manifest": manifest_id}
+    if dest is not None:
+        context["dest"] = dest
+    run_command("backup.verify", json_mode, data_root, fn, context=context)
 
 
 @backup_app.command("pull")
@@ -254,7 +269,13 @@ def pull_cmd(
         }
         return status, fields, payload, human
 
-    run_command("backup.pull", json_mode, data_root, fn)
+    run_command(
+        "backup.pull",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "manifest": manifest_id, "dest": dest},
+    )
 
 
 @backup_app.command("status")
@@ -316,4 +337,4 @@ def status_cmd(
         }
         return status, fields, payload, human
 
-    run_command("backup.status", json_mode, data_root, fn)
+    run_command("backup.status", json_mode, data_root, fn, context={"dataset": dataset})

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,16 @@ def _registered(roots):
 )
 def test_dest_kind(dest, kind):
     assert dest_kind(dest) == kind
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="a bare drive letter is only ever local on Windows itself"
+)
+def test_dest_kind_drive_relative_path_is_local_on_windows():
+    """rclone itself reads a single letter + ':' as a drive on Windows, whatever follows -- so
+    ``C:backup`` (drive-relative, no slash) is local there even though ``_DRIVE`` alone would
+    not catch it, and even though the same string is a remote named ``C`` on every other OS."""
+    assert dest_kind("C:backup") == "local"
 
 
 def test_local_upload_copies_verifies_and_is_idempotent(roots, tmp_path):

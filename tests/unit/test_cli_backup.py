@@ -135,6 +135,22 @@ def test_pull_external_skipped_cli(world, tmp_path):
     assert "external/" in r.output
 
 
+def test_pull_failure_keeps_the_commands_identifying_fields(world):
+    """A failed VERDICT must still say which dataset / manifest / dest the command was about --
+    not just why it failed -- so a caller does not have to re-parse the argv to know."""
+    vault = world.tmp / "vault"
+    r = _run("pull", "--dataset", "beach-test", "--manifest", "nope", "--dest", str(vault))
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "reason=" in v
+    assert "dataset=beach-test" in v and "manifest=nope" in v
+    r = _run(
+        "pull", "--dataset", "beach-test", "--manifest", "nope", "--dest", str(vault), "--json"
+    )
+    doc = _json(r)
+    assert doc["fields"]["dataset"] == "beach-test" and doc["fields"]["manifest"] == "nope"
+    assert doc["fields"]["dest"] == str(vault)
+
+
 def test_pull_and_status_cli(world, monkeypatch):
     monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)  # no rclone here
     r = _run("status", "--dataset", "beach-test")

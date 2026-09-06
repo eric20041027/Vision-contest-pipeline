@@ -1,12 +1,14 @@
 import json
 
 import pytest
+import typer
 import yaml
 from PIL import Image
 from typer.testing import CliRunner
 
 from helpers import CATS, det_samples, write_dicom_study, write_exif_image, write_images
 from vcp.cli import app, parse_opts, render_table
+from vcp.cli_common import CmdResult, run_command
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
 from vcp.data.exporters import EXPORTERS, ExportOutput, register_exporter
@@ -259,6 +261,30 @@ def test_run_command_wraps_non_vcp_error_as_abort(roots, tmp_path):
     assert r.exit_code == 2
     v = _last_verdict(r.output)
     assert "status=ABORT" in v and "RuntimeError" in v and "kaboom" in v
+
+
+def test_run_command_merges_context_into_verdict_fields(capsys):
+    """`context` carries a command's identifying fields (dataset=, manifest=, ...) into the
+    VERDICT on every path: `reason=` still leads a failure, but the command's own fields win
+    over `context` on success (F6-style precedence, just for the caller-supplied dict)."""
+
+    def fails() -> CmdResult:
+        raise ValidationFailed("boom")
+
+    with pytest.raises(typer.Exit) as ei:
+        run_command("t.fails", False, None, fails, context={"dataset": "d"})
+    assert ei.value.exit_code == 1
+    v = _last_verdict(capsys.readouterr().out)
+    assert v.index("reason=") < v.index("dataset=d")
+
+    def ok() -> CmdResult:
+        return "OK", {"dataset": "x"}, None, []
+
+    with pytest.raises(typer.Exit) as ei:
+        run_command("t.ok", False, None, ok, context={"dataset": "d"})
+    assert ei.value.exit_code == 0
+    v = _last_verdict(capsys.readouterr().out)
+    assert v.count("dataset=") == 1 and "dataset=x" in v
 
 
 def test_parse_opts_and_render_table():

@@ -166,3 +166,32 @@ def test_sync_processes_platform_rows_in_time_order(staged):
     led = SubmissionLedger(staged.test_paths.submissions_log)
     assert [r.public for r in led.of("scored", "S1")] == [0.9, 0.7]
     assert led.latest_score("S1").public == 0.7
+
+
+def test_sync_survives_a_missing_stage_json(staged):
+    (staged.test_paths.submission_dir("S4") / "stage.json").unlink()
+    rows = [
+        {
+            "ref": 5,
+            "fileName": "x.csv",
+            "date": stamp(utc_now()),
+            "description": "S1 ok",
+            "publicScore": "0.5",
+        }
+    ]
+    res = sync(TEST, runner=FakeRunner(rows), **_kw(staged))
+    assert res.scored == 1 and "S4" in res.unconfirmed
+
+
+def test_sync_refuses_a_non_finite_score(staged):
+    rows = [
+        {
+            "ref": 6,
+            "fileName": "x.csv",
+            "date": stamp(utc_now()),
+            "description": "S1",
+            "publicScore": "Infinity",
+        }
+    ]
+    with pytest.raises(ValidationFailed, match="platform_response"):
+        sync(TEST, runner=FakeRunner(rows), **_kw(staged))

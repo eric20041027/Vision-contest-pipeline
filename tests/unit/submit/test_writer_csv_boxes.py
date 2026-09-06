@@ -29,6 +29,7 @@ def test_default_columns_and_formats(tmp_path):
     res = w.write(preds, WriteContext(ds, list(ds.samples), {}, out))
     assert res.rows == 1 and res.samples == 1
     assert _lines(out) == ["image_filename,label_id,x,y,w,h,score", "s0000,1,1.0,2.0,4.0,2.0,0.9"]
+    assert b"\r" not in out.read_bytes()
     w.write(preds, WriteContext(ds, list(ds.samples), {"box_format": "xyxy"}, out))
     assert _lines(out)[1] == "s0000,1,1.0,2.0,5.0,4.0,0.9"
     w.write(preds, WriteContext(ds, list(ds.samples), {"box_format": "cxcywh"}, out))

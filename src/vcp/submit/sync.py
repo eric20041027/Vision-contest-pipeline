@@ -7,6 +7,9 @@ import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
 
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
@@ -15,9 +18,18 @@ from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.platforms import PlatformSubmission, Runner, get_platform
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
-from vcp.submit.stage import load_staged
+from vcp.submit.stage import load_staged, stage_json
 
 MATCH_WINDOW = timedelta(minutes=10)
+
+
+def _row(**fields: Any) -> LedgerRow:
+    """A ledger row from platform data, or a located FAIL when the platform's values are
+    unusable."""
+    try:
+        return LedgerRow(**fields)
+    except ValidationError as e:
+        raise ValidationFailed(f"platform_response: {e}", fields={"key": "score"}) from e
 
 
 @dataclass(frozen=True)
@@ -74,6 +86,8 @@ def sync(
     subs = get_platform(profile.platform).list_submissions(profile, runner)
     file_names: dict[str, str] = {}
     for sid in ledger.ids():
+        if not stage_json(paths, sid).is_file():
+            continue  # snapshot lives in the data root; the ref and description rules still work
         st = load_staged(paths, sid)
         file_names[sid] = str(
             st.artifact.path if st.artifact.kind == "file" else st.artifact.output
@@ -89,7 +103,7 @@ def sync(
             if p.platform_ref in known_foreign:
                 continue
             ledger.append(
-                LedgerRow(
+                _row(
                     event="foreign",
                     ts=stamp(),
                     platform_ref=p.platform_ref,
@@ -110,7 +124,7 @@ def sync(
         latest = ledger.latest_score(sid)
         if latest is None or latest.public != p.public or latest.private != p.private:
             ledger.append(
-                LedgerRow(
+                _row(
                     event="scored",
                     ts=stamp(),
                     submission_id=sid,

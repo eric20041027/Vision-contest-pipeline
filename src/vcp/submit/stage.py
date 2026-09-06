@@ -230,20 +230,20 @@ def stage(spec: StageSpec) -> StageResult:
             weights=weights,
         )
         final_dir.mkdir(parents=True)
-    staged = Staged(
-        submission_id=spec.submission_id,
-        dataset=spec.dataset,
-        kind=spec.kind,
-        eval_run=spec.eval_run,
-        test_run=spec.test_run if test_card is not None else None,
-        pairing=pairing,
-        artifact=artifact,
-        gate=gate,
-        profile_sha256=profile_sha,
-        staged_at=stamp(),
-        vcp_version=__version__,
-    )
     try:
+        staged = Staged(
+            submission_id=spec.submission_id,
+            dataset=spec.dataset,
+            kind=spec.kind,
+            eval_run=spec.eval_run,
+            test_run=spec.test_run if test_card is not None else None,
+            pairing=pairing,
+            artifact=artifact,
+            gate=gate,
+            profile_sha256=profile_sha,
+            staged_at=stamp(),
+            vcp_version=__version__,
+        )
         text = json.dumps(staged.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
         (final_dir / STAGE_FILE).write_text(text, encoding="utf-8", newline="\n")
         ledger.append(

@@ -357,7 +357,9 @@ def sync_cmd(
 @submit_app.command("final")
 def final_cmd(
     dataset: DatasetOpt,
-    slots: Annotated[int | None, typer.Option("--slots", help="override final_slots")] = None,
+    slots: Annotated[
+        int | None, typer.Option("--slots", min=1, help="override final_slots")
+    ] = None,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="print the table, write nothing")
     ] = False,

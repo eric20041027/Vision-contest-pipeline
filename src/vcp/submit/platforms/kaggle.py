@@ -59,7 +59,8 @@ def parse_score(value: Any, key: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         raise ValidationFailed(
-            f"platform_response: unparsable score {value!r}", fields={"key": key}
+            f"platform_response: unparsable score {redact(str(value))!r}",
+            fields={"key": key},
         ) from None
 
 
@@ -68,7 +69,8 @@ def parse_date(value: Any) -> str:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         raise ValidationFailed(
-            f"platform_response: unparsable date {value!r}", fields={"key": "date"}
+            f"platform_response: unparsable date {redact(str(value))!r}",
+            fields={"key": "date"},
         ) from None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)

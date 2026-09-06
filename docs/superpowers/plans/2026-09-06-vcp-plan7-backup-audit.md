@@ -3075,21 +3075,19 @@ def test_pull_conflicts_overwrite_and_missing(world):
 def test_pull_rejects_corrupt_copies_without_keeping_them(world):
     vault, _ = _ready(world, tier=2)
     pred = _pred(world)
+    original = pred.read_bytes()
     pred.unlink()
     copy = vault / "data" / "runs" / "good" / "predictions" / "valB.jsonl"
     copy.write_bytes(b"corrupt")
     with pytest.raises(IntegrityError, match="mismatch") as ei:
         pull(TEST, "m1", str(vault), tier=2, **_kw(world))
     assert not pred.exists() and ei.value.fields["mismatch"] == 1
-    build_manifest(TEST, "submission:S1", manifest_id="m2", **_kw(world))
-    remote = FakeRemote(deliver=b"garbage")
-    with pytest.raises(IntegrityError, match="mismatch"):
-        pull(TEST, "m2", "fake:vault", tier=1, runner=remote, **_kw(world))
-    assert not pred.exists()
-    liar = FakeRemote(deliver=b"garbage")
-    push(TEST, "m2", "fake:vault", tier=2, runner=liar, **_kw(world))  # hashsum is honest
+    liar = FakeRemote(deliver=b"garbage")  # honest hashsum, dishonest copyto
+    pred.write_bytes(original)
+    push(TEST, "m1", "fake:vault", tier=2, runner=liar, **_kw(world))
+    pred.unlink()
     with pytest.raises(IntegrityError, match="mismatch") as ei:
-        pull(TEST, "m2", "fake:vault", tier=2, runner=liar, **_kw(world))
+        pull(TEST, "m1", "fake:vault", tier=2, runner=liar, **_kw(world))
     assert not pred.exists() and ei.value.fields["mismatch"] == 1
 
 

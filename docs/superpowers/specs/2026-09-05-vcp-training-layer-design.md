@@ -232,3 +232,18 @@ s.note("val_auc", 0.912)                            # note 事件
 ## 13. 不在範圍
 
 框架適配器與 config 產生、超參搜尋 / 排程 / 佇列、分散式與多機訓練、Kaggle / Colab notebook 產生器、跨機器搬 run 目錄的工具、備份完整性稽核（子專案 6）、rclone 設定與憑證管理、推論與預測轉檔（`vcp eval ingest`）、torch `Dataset` 包裝、資料增強、訓練指標的即時視覺化。以上皆為已預留的擴充點，不是設計缺口。
+
+## 14. v2 補充決定（Plan 5 實作與審查的定案，2026-09-05）
+
+以下為實作期間由計畫或審查裁決、原 spec 未明說或已被推翻的規則，與前文衝突時以本節為準。
+
+1. **`ConfigRef` 的欄位名是 `copied_to`**（§4.2 的 yaml 鍵 `copy:` 作廢）：`copy` 會遮蔽 pydantic `BaseModel.copy` 並在 import 時發警告。
+2. **`--` 無法偵測**：Typer / Click 把 `--` 之後的參數原封放進命令並拿掉 `--` 本身，所以「沒有 `--` 就 FAIL」改為「命令非空且第一個 token 不以 `-` 開頭，否則 FAIL」；`--` 仍是文件上的分隔符（訓練命令的選項名與 vcp 的撞名時必要）。
+3. **包裝器在命令結束後重讀 `train.yaml`**：§8.2「命令執行期間只有 Session 會寫，所以沒有並行寫入」是真的，但不夠——包裝器在命令後的寫入是整檔重寫，必須先從磁碟重讀（否則 Session 登記的 checkpoint 與 final 會被蓋掉）。§6.1 第 7 步的「結束記 exit code」隱含這條。
+4. **checkpoint 的「現在」是每個檔名最新的一筆**：同一路徑可能有多筆 `(path, sha256)` 紀錄（`--resume` 換了權重）。上傳 / 備份的標的是每個檔名最後登記的一筆；舊紀錄是歷史，不是撞名。撞名只指「不同路徑、同檔名、不同 sha」。`train status` 的 backed / unbacked 以 sha256 判斷、涵蓋全部紀錄——舊 bytes 沒有副本就列為 unbacked（誠實）。
+5. **`--resume` 換寫 `weights_hash` 要留痕**：既有 `weights_hash` 非空且與新 final 不同時，先在 `history.jsonl` 記 `{"event": "replace", "field": "weights_hash", "old_sha256", "via": "train.run"}` 再寫 `run.yaml`；有 predictions 的 run 一樣允許 resume（讀數綁的是 `prediction_sha`，不是權重）。
+6. **`uploaded` 事件只記新出現的副本**：`(dest, name, sha256)` 已在 `uploads[]` 裡的重驗證只更新 `train.yaml`（`uploaded_at`），不追加事件；已在目的地且 sha 相同的檔一樣回 `verified=True` 的紀錄（手動放上去的副本也算）。
+7. **命令可執行性預檢對 `--cwd` 解析**：`command_found(token, cwd, PATH)` = PATH 上找得到、或 `cwd / token` 是檔案（絕對路徑自然成立）。
+8. **殘留的 `running` attempt 只揭露不調和**：vcp 自己崩潰留下的 `running`，`train status` WARN `running=`，`--resume` 照常編號 +1；調和方式留待辦。
+9. **環境探針**：探針程式的 cuDNN 行以 `if` 守衛寫法（等價於 §7 的條件式）；`gpus()` 以每列的第二欄為 driver，缺欄位的列略過。
+10. **`assert_plan_matches(plan, card)` 新增於 `vcp/data/split.py`**：本層唯一的資料層改動；既有三份同義檢查留待後續統一。

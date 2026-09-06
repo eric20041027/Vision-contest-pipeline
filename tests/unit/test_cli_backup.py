@@ -81,3 +81,32 @@ def test_push_cli(world, monkeypatch):
     monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)
     r = _run("push", "--dataset", "beach-test", "--manifest", "m1", "--dest", "gdrive:x")
     assert r.exit_code == 2 and "rclone_not_found" in _verdict(r.output)
+
+
+def test_verify_cli(world):
+    r = _run("manifest", "--dataset", "beach-test", "--conclusion", "submission:S1", "--id", "m1")
+    assert r.exit_code == 0, r.output
+    vault = world.tmp / "vault"
+    r = _run(
+        "push", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault), "--tier", "3"
+    )
+    assert r.exit_code == 0, r.output
+    common = ["verify", "--dataset", "beach-test", "--manifest", "m1"]
+    r = _run(*common, "--dest", str(vault))
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v
+    assert "missing=0" in v and "mismatch=0" in v and "drift=0" in v and "bad_stamps=0" in v
+    r = _run(*common)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "ok=" not in v and "drift=0" in v
+    (vault / "data" / "runs" / "good" / "run.yaml").unlink()
+    r = _run(*common, "--dest", str(vault), "--json")
+    assert r.exit_code == 1
+    doc = _json(r)
+    assert doc["status"] == "FAIL" and doc["fields"]["reason"] == "missing"
+    assert doc["fields"]["missing"] == 1 and doc["result"]["copy_problems"] == [
+        "missing:data/runs/good/run.yaml"
+    ]
+    assert doc["result"]["drift"] == [] and doc["result"]["bad_stamps"] == []
+    r = _run("verify", "--dataset", "beach-test", "--manifest", "nope")
+    assert r.exit_code == 1 and "not_found" in _verdict(r.output)

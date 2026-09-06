@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -11,6 +12,7 @@ from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
 from vcp.backup.pull import pull
 from vcp.backup.push import PushResult, push
+from vcp.backup.status import status
 from vcp.backup.verify import verify
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
@@ -195,6 +197,34 @@ def test_push_rclone_failure_mid_way_still_writes_the_row(world):
     assert ei.value.fields["exit_code"] == 1 and SECRET not in str(ei.value)
     row = _ledger(world).latest("push", "m1")
     assert row.pushed == 0 and row.verified == 0 and len(row.failed) == n
+
+
+def test_push_read_back_failure_verifies_nothing(world):
+    """The copies landed but the hash read-back died: the row must not claim any copy verified,
+    or `status` would count the tier as covered for ever."""
+    res = _manifest(world)
+    remote = FakeRemote()
+    seen = {"hashsum": 0}
+
+    def flaky(args):
+        if args[1] == "hashsum":
+            seen["hashsum"] += 1
+            if seen["hashsum"] > 2:  # the two `before` listings passed; the read-back fails
+                err = f"token expired token={SECRET}"
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr=err)
+        return remote(args)
+
+    with pytest.raises(PlatformError, match="hashsum failed") as ei:
+        _push(world, "fake:vault", tier=1, runner=flaky)
+    n = len(_files(res, 1))
+    assert ei.value.fields["pushed"] == n and ei.value.fields["verified"] == 0
+    assert ei.value.fields["failed"] == n and SECRET not in str(ei.value)
+    row = _ledger(world).latest("push", "m1")
+    assert row.pushed == n and row.verified == 0 and len(row.failed) == n
+    view = status(TEST, runner=FakeRemote(conf=world.tmp / "rclone.conf"), **_kw(world))
+    assert view.manifests[0].pushed_tiers == []
+    again = _push(world, "fake:vault", tier=1, runner=remote)  # the copies did land
+    assert again.pushed == 0 and again.skipped == n and again.verified == n
 
 
 def test_forget_remote_only_after_everything_verified(world):

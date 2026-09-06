@@ -105,7 +105,6 @@ def _send(target: Destination, chosen: list[FileEntry], sources: dict[str, Path]
     rels = {root: [e.path for e in chosen if e.root == root] for root in roots}
     before = {root: target.hashes(root, rels[root]) for root in roots}
     pushed = skipped = sent = 0
-    done: list[str] = []
     failed: list[str] = []
     failure: PlatformError | None = None
     try:
@@ -116,13 +115,15 @@ def _send(target: Destination, chosen: list[FileEntry], sources: dict[str, Path]
                 target.put(sources[e.key], e.root, e.path)
                 pushed += 1
                 sent += e.bytes
-            done.append(e.key)
         after = {root: target.hashes(root, rels[root]) for root in roots}
         failed = [e.key for e in chosen if after[e.root].get(e.path) != e.sha256]
     except PlatformError as exc:
+        # A copy or the read-back died: nothing was read back, so nothing counts as verified
+        # (a copy that did land is found as `skipped` by the next push).
         failure = exc
-        failed = [e.key for e in chosen if e.key not in done]
-    return _Transfer(pushed, skipped, len(chosen) - len(failed), sent, failed, failure)
+        failed = [e.key for e in chosen]
+    verified = 0 if failure is not None else len(chosen) - len(failed)
+    return _Transfer(pushed, skipped, verified, sent, failed, failure)
 
 
 def _unverified(manifest: Manifest, chosen: list[FileEntry], target: Destination) -> list[str]:

@@ -22,19 +22,17 @@ class StatusResult:
     running: int
 
 
-def _backed_paths(record: TrainRecord) -> set[str]:
-    """Checkpoints that have at least one verified upload of exactly their bytes."""
-    verified = {u.sha256 for u in record.uploads if u.verified}
-    return {c.path for c in record.checkpoints if c.sha256 in verified}
-
-
 def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResult:
     record = load_record(data_root, run_id)
-    backed = _backed_paths(record)
+    # Backed-ness is keyed by bytes (sha256), not path: a --resume that changes a checkpoint's
+    # bytes adds a second CheckpointRecord for the same path, and a verified upload of the OLD
+    # bytes must not mark the NEW record backed. A path can appear twice in ``unbacked`` if two
+    # records of it (e.g. the old and the new) are both unbacked.
+    verified = {u.sha256 for u in record.uploads if u.verified}
     return StatusResult(
         record=record,
-        backed=len(backed),
-        unbacked=[c.path for c in record.checkpoints if c.path not in backed],
+        backed=sum(1 for c in record.checkpoints if c.sha256 in verified),
+        unbacked=[c.path for c in record.checkpoints if c.sha256 not in verified],
         missing=_missing(record, data_root),
         drift=_drift(record, data_root) if verify else [],
         running=sum(1 for a in record.attempts if a.status == "running"),

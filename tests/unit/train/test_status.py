@@ -4,7 +4,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.records import read_events, save_record
-from vcp.train.schema import Attempt, TrainRecord
+from vcp.train.schema import Attempt, TrainRecord, UploadRecord
 from vcp.train.status import status, upload_run
 
 STAMP = "2026-09-05T00:00:00.000Z"
@@ -60,6 +60,51 @@ def test_status_counts_backed_and_running(roots, tmp_path):
     assert status(roots.data, "r1").running == 1
     with pytest.raises(ValidationFailed, match="not found"):
         status(roots.data, "ghost")
+
+
+def test_status_keys_backed_by_bytes_not_path(roots):
+    """C2 regression: a --resume that changes a checkpoint's bytes adds a second
+    CheckpointRecord for the same path. A verified upload of the OLD bytes must not mark the
+    NEW record backed -- backed-ness has to be keyed by sha256, not by path."""
+    w = roots.data / "work" / "weights"
+    w.mkdir(parents=True)
+    (w / "best.pt").write_bytes(b"best-old")
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd="work",
+        command=["python"],
+        attempts=[
+            Attempt(
+                n=1, started_at=STAMP, console="train/console.1.log", status="finished", exit_code=0
+            )
+        ],
+    )
+    rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=1)
+    old_sha = sha256_file(w / "best.pt")
+    (w / "best.pt").write_bytes(b"best-new")
+    rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=1)
+    new_sha = sha256_file(w / "best.pt")
+    assert old_sha != new_sha
+    rec = mark_final(rec, "work/weights/best.pt", new_sha)
+    old_upload = UploadRecord(
+        dest="vault", kind="local", name="best.pt", sha256=old_sha, verified=True, uploaded_at=STAMP
+    )
+    rec = rec.model_copy(update={"uploads": [old_upload]})
+    save_record(roots.data, rec)
+
+    st = status(roots.data, "r1")
+    assert st.backed == 1 and st.unbacked == ["work/weights/best.pt"]
+
+    rec = rec.model_copy(
+        update={"uploads": [old_upload, old_upload.model_copy(update={"sha256": new_sha})]}
+    )
+    save_record(roots.data, rec)
+    st = status(roots.data, "r1")
+    assert st.unbacked == [] and st.backed == 2
 
 
 def test_upload_run_records_and_is_idempotent(roots, tmp_path):

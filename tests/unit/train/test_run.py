@@ -23,6 +23,8 @@ from vcp.train.run import (
     execute,
     train_run,
 )
+from vcp.train.status import status as status_view
+from vcp.train.status import upload_run
 
 FAKE = """
 import os, sys, time
@@ -38,6 +40,33 @@ if len(sys.argv) > 2 and sys.argv[2] == "sleep":
         print("tick", i, flush=True)
         time.sleep(0.1)
 sys.exit(code)
+"""
+
+# C1 regression: a hand-written loop registers a checkpoint and a note via Session WHILE
+# train_run's child is still running -- train.yaml must keep what Session wrote.
+SESSION_FAKE = """
+from pathlib import Path
+from vcp.train import Session
+
+Path("weights").mkdir(exist_ok=True)
+Path("weights/epoch.pt").write_bytes(b"epoch-weights")
+s = Session.current()
+s.register_checkpoint("weights/epoch.pt", final=True)
+s.note("val_auc", 0.9)
+"""
+
+# C2/I1/I3 + resume regression: the command is byte-identical across attempts, but a counter
+# file (persisted in cwd, which --resume shares) makes best.pt's bytes differ between attempts,
+# the way a real trainer's weights differ after more epochs. last.pt never changes.
+RESUME_FAKE = """
+from pathlib import Path
+
+state = Path("state.txt")
+counter = int(state.read_text()) if state.is_file() else 0
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best-" + str(counter).encode())
+Path("weights/last.pt").write_bytes(b"last")
+state.write_text(str(counter + 1))
 """
 
 
@@ -310,3 +339,80 @@ def test_train_run_venv_python_must_exist(roots, work, tmp_path):
     with pytest.raises(Exception, match="no python"):
         train_run(_spec(roots, work, venv=tmp_path / "venv"))
     assert not run_dir(roots.data, "r1").exists()
+
+
+def test_train_run_keeps_session_writes_made_during_the_command(roots, work, tmp_path):
+    """C1: Session.register_checkpoint / note write train.yaml WHILE the child is still running.
+    The wrapper must re-read the record after execute() returns instead of layering the
+    finished attempt onto the stale in-memory snapshot it held before the child started --
+    otherwise the session's checkpoint (and its final=True mark) are lost."""
+    _seed(roots)
+    (work / "session_train.py").write_text(SESSION_FAKE, encoding="utf-8")
+    res = train_run(
+        _spec(
+            roots,
+            work,
+            command=[sys.executable, "session_train.py"],
+            checkpoints=["weights/*.pt"],
+            final=None,
+        )
+    )
+    ckpt = next(c for c in res.record.checkpoints if c.path.endswith("epoch.pt"))
+    assert ckpt.source == "session" and ckpt.final is True
+    assert res.final is not None and res.final.path.endswith("epoch.pt")
+    card = load_run(roots.data, "r1")
+    assert card.source.weights_hash == sha256_file(work / "weights" / "epoch.pt")
+    events = read_events(roots.data, "r1")
+    note = next(e for e in events if e["event"] == "note")
+    assert note["key"] == "val_auc"
+    assert any(e["event"] == "checkpoint" and e.get("source") == "session" for e in events)
+
+
+def test_train_run_resume_with_changed_weights(roots, work, tmp_path):
+    """C2/I1/I3: a --resume whose command is identical but whose weights differ (a real
+    trainer writing more epochs). Covers three findings at once: the resumed record must not
+    raise name_collision (I1), the old weights_hash must be preserved in history.jsonl before
+    being overwritten (I3), and `status` must key backed-ness by bytes, not path, so the new
+    (not yet uploaded) best.pt is correctly reported unbacked even though the old bytes at the
+    same path were verified (C2)."""
+    _seed(roots)
+    (work / "resume_train.py").write_text(RESUME_FAKE, encoding="utf-8")
+    vault = tmp_path / "vault"
+    kwargs = dict(command=[sys.executable, "resume_train.py"])
+    train_run(_spec(roots, work, uploads=[str(vault)], **kwargs))
+    second = train_run(_spec(roots, work, resume=True, **kwargs))
+
+    # two records for best.pt with different shas; only the newest carries final=True
+    best = [c for c in second.record.checkpoints if c.path.endswith("best.pt")]
+    assert len(best) == 2
+    assert best[0].sha256 != best[1].sha256
+    assert [c.final for c in best] == [False, True]
+
+    # the old weights_hash survives in history.jsonl before being overwritten
+    history_path = run_dir(roots.data, "r1") / "history.jsonl"
+    history = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()]
+    replaced = [h for h in history if h.get("field") == "weights_hash"]
+    assert len(replaced) == 1
+    assert replaced[0]["event"] == "replace"
+    assert replaced[0]["old_sha256"] == best[0].sha256
+    assert replaced[0]["via"] == "train.run"
+
+    # the run card now points at the new bytes
+    card = load_run(roots.data, "r1")
+    assert card.source.weights_hash == best[1].sha256
+
+    # status: the old best.pt bytes are still backed (verified in the first run's upload), the
+    # new ones are not -- keyed by sha256, not by the shared path
+    best_path = best[0].path
+    assert best_path == best[1].path
+    st = status_view(roots.data, "r1")
+    assert st.unbacked == [best_path]
+    assert st.backed == 2  # the old best.pt record and last.pt (unchanged) are both verified
+
+    # uploading now: only the new best.pt is new content; last.pt is unchanged (skipped); no
+    # name_collision despite two checkpoints named "best.pt"
+    _, out = upload_run(roots.data, "r1", str(vault))
+    assert out.uploaded == 1 and out.skipped == 1
+    assert {r.name for r in out.records} == {"best.pt", "last.pt"}
+
+    assert status_view(roots.data, "r1").unbacked == []

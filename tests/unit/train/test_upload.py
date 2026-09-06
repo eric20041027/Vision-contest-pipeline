@@ -86,6 +86,36 @@ def test_name_collision(roots, tmp_path):
     assert ei.value.fields == {"checkpoint": "best.pt"}
 
 
+def test_resume_same_path_different_sha_uploads_newest_not_a_collision(roots, tmp_path):
+    """I1: a --resume that changes a checkpoint's bytes registers a SECOND CheckpointRecord for
+    the SAME path (old sha, then new sha) -- that is history, not a name collision, and only
+    the newest bytes should be uploaded."""
+    rec = _record()
+    w = roots.data / "work" / "weights"
+    w.mkdir(parents=True)
+    (w / "best.pt").write_bytes(b"best v1")
+    rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=1)
+    old_sha = sha256_file(w / "best.pt")
+    (w / "best.pt").write_bytes(b"best v2")
+    rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=2)
+    new_sha = sha256_file(w / "best.pt")
+    rec = mark_final(rec, "work/weights/best.pt", new_sha)
+    assert [c.sha256 for c in rec.checkpoints] == [old_sha, new_sha]
+
+    dest = tmp_path / "vault"
+    out = upload(rec, str(dest), data_root=roots.data)
+    assert out.uploaded == 1 and out.skipped == 0
+    assert [r.sha256 for r in out.records] == [new_sha]
+    assert sha256_file(dest / "r1" / "best.pt") == new_sha
+
+    # last.pt also present (a normal run's checkpoints): still no collision, one more upload
+    (w / "last.pt").write_bytes(b"last")
+    rec, _ = register(rec, [w / "last.pt"], data_root=roots.data, attempt=2)
+    out2 = upload(rec, str(tmp_path / "vault2"), data_root=roots.data)
+    assert out2.uploaded == 2 and out2.skipped == 0
+    assert sorted(r.name for r in out2.records) == ["best.pt", "last.pt"]
+
+
 class FakeRclone:
     """A remote that remembers what was copied; ``hashsum`` reports what it holds."""
 

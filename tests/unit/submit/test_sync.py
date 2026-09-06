@@ -135,8 +135,34 @@ def test_match_prefers_ref_then_id_then_file_and_time(staged):
 
     assert match_submission(p("k33", "S1 in text"), led, names) == "S3"
     assert match_submission(p("9", "resend of S1"), led, names) == "S1"
-    assert match_submission(p("9", "S10 is not S1"), led, names) is None
+    assert match_submission(p("9", "S10 only"), led, names) is None
+    assert match_submission(p("9", "S10 is not S1"), led, names) == "S1"
     assert match_submission(p("9", "", "submission.csv"), led, names) == "S1"
     assert match_submission(p("9", "", "submission.csv"), led, names, taken={"S1"}) == "S2"
     late = stamp(utc_now() + timedelta(minutes=11))
     assert match_submission(p("9", "", "submission.csv", late), led, names) is None
+
+
+def test_sync_processes_platform_rows_in_time_order(staged):
+    now = utc_now()
+    rows = [
+        {
+            "ref": 2,
+            "fileName": "x.csv",
+            "date": stamp(now),
+            "description": "S1 resend",
+            "publicScore": "0.7",
+        },
+        {
+            "ref": 1,
+            "fileName": "x.csv",
+            "date": stamp(now - timedelta(hours=2)),
+            "description": "S1 first",
+            "publicScore": "0.9",
+        },
+    ]
+    res = sync(TEST, runner=FakeRunner(rows), **_kw(staged))
+    assert res.scored == 2 and res.foreign == 0
+    led = SubmissionLedger(staged.test_paths.submissions_log)
+    assert [r.public for r in led.of("scored", "S1")] == [0.9, 0.7]
+    assert led.latest_score("S1").public == 0.7

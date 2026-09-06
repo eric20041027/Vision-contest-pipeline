@@ -30,10 +30,7 @@ class SyncResult:
 
 
 def _mentions(description: str, submission_id: str) -> bool:
-    escaped = re.escape(submission_id)
-    if re.search(rf"(?<![A-Za-z0-9._-]){escaped}[A-Za-z0-9._-]", description):
-        return False  # a longer look-alike token sits right beside it -- too ambiguous to trust
-    pattern = rf"(?<![A-Za-z0-9._-]){escaped}(?![A-Za-z0-9._-])"
+    pattern = rf"(?<![A-Za-z0-9._-]){re.escape(submission_id)}(?![A-Za-z0-9._-])"
     return re.search(pattern, description) is not None
 
 
@@ -84,7 +81,9 @@ def sync(
     known_foreign = ledger.foreign_refs()
     matched: dict[str, str] = {}
     scored = foreign = 0
-    for p in subs:
+    # Oldest first (stamps sort as strings), so a resubmitted id's scored rows land in time
+    # order and its newest platform score is the ledger's latest (ruling R7).
+    for p in sorted(subs, key=lambda s: s.at):
         sid = match_submission(p, ledger, file_names, taken=set(matched.values()))
         if sid is None:
             if p.platform_ref in known_foreign:

@@ -10,7 +10,7 @@ from vcp.backup.pull import pull
 from vcp.backup.push import push
 from vcp.backup.status import local_ok, passed, status
 from vcp.backup.verify import verify
-from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
+from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.measure.runs import load_run, run_dir
 from vcp.train.checkpoints import register
@@ -56,6 +56,31 @@ def test_pull_restores_missing_files_and_verifies(world):
         pull(TEST, "m1", str(vault), tier=0, **_kw(world))
     with pytest.raises(ValidationFailed, match="not_found"):
         pull(TEST, "m9", str(vault), **_kw(world))
+
+
+def test_pull_local_copy_error_restores_and_records(world, monkeypatch):
+    """An `OSError` from the local-dest copy (disk full, permissions, ...) is not an rclone
+    problem: `_fetch` must still restore the `.bak` it made before trying, and the pull row
+    still gets written with what happened before the failure."""
+    vault, _ = _ready(world, tier=2)
+    pred = _pred(world)
+    pred.write_bytes(b"edited locally\n")
+
+    def boom(self, sub, rel, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(destmod.LocalDest, "get", boom)
+    with pytest.raises(VcpError, match="copy_failed") as ei:
+        pull(TEST, "m1", str(vault), tier=2, overwrite=True, **_kw(world))
+    assert ei.value.fields["pulled"] == 0
+    assert pred.read_bytes() == b"edited locally\n"
+    assert list(pred.parent.glob("valB.jsonl.bak-*")) == []
+    row = BackupLedger(_paths(world).backup_log).latest("pull", "m1")
+    assert row.pulled == 0
+    pred.unlink()  # the no-prior-file case: nothing to restore, but still no crash
+    with pytest.raises(VcpError, match="copy_failed"):
+        pull(TEST, "m1", str(vault), tier=2, overwrite=True, **_kw(world))
+    assert not pred.exists()
 
 
 def test_pull_conflicts_overwrite_and_missing(world):

@@ -116,7 +116,8 @@ class FakeRemote:
         self.fail = fail  # this subcommand exits 1
         self.conf = conf  # what `config file` prints
         self.deliver = deliver  # remote->local copyto writes these bytes instead
-        self.unsupported = unsupported  # hashsum reports UNSUPPORTED, as a backend without sha256
+        self.unsupported = unsupported  # hashsum reports UNSUPPORTED-<secret>, one token so a
+        # backend without sha256 still exercises redaction the way every other line does
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(args))
@@ -134,7 +135,7 @@ class FakeRemote:
                     bad = self.corrupt is not None and path.endswith(self.corrupt)
                     digest = "0" * 64 if bad else hashlib.sha256(data).hexdigest()
                     if self.unsupported:
-                        digest = "UNSUPPORTED"
+                        digest = f"UNSUPPORTED-{SECRET}"
                     lines.append(f"{digest}  {path[len(base) :]}")
             if not lines:
                 return subprocess.CompletedProcess(

@@ -17,7 +17,7 @@ from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
 from vcp.backup.push import check_tier
 from vcp.backup.schema import LEDGER_ROLES, BackupRow, FileEntry
-from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
+from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import DatasetPaths
 from vcp.core.proc import Runner
@@ -80,7 +80,7 @@ def _fetch(
     an ``--overwrite`` that failed leaves the old file in place, not only its ``.bak``."""
     try:
         source.get(sub, rel, local)
-    except PlatformError:
+    except (PlatformError, OSError):
         _restore(local, backup)
         raise
     if sha256_file(local) != e.sha256:
@@ -123,7 +123,7 @@ def pull(
     missing: list[str] = []
     mismatch: list[str] = []
     external_skipped: list[str] = []
-    failure: PlatformError | None = None
+    failure: VcpError | None = None
     try:
         for e in chosen:
             d, sub, rel = sources[e.key]
@@ -149,11 +149,17 @@ def pull(
                     continue
                 backup = _backup_name(local)
                 local.replace(backup)
-            if _fetch(dests[d], sub, rel, local, e, backup):
+            try:
+                fetched = _fetch(dests[d], sub, rel, local, e, backup)
+            except OSError as exc:
+                # the local disk, not the platform: a `PlatformError` here would misreport an
+                # rclone-side problem when the failure is this machine's own copy2/replace.
+                raise VcpError(f"copy_failed: {e.key}: {exc}", fields={"file": e.key}) from exc
+            if fetched:
                 pulled += 1
             else:
                 mismatch.append(e.key)
-    except PlatformError as exc:
+    except VcpError as exc:
         failure = exc
     ledger.append(
         BackupRow(

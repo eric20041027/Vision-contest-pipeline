@@ -202,7 +202,7 @@ def test_local_vault_story(world, monkeypatch):
     assert (
         r.exit_code == 1
         and "bad_stamps=1" in v
-        and f"first_bad=measure/beach/{READINGS_LEDGER}:{len(lines)}" in v
+        and f"first_bad=data/measure/beach/{READINGS_LEDGER}:{len(lines)}" in v
     )
     assert "drift=1" in v  # the edited row sits inside the bytes the manifest hashed
     r = _backup("status", "--dataset", "beach-test")

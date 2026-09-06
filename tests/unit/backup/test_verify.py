@@ -9,7 +9,7 @@ from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
 from vcp.backup.push import push
 from vcp.backup.verify import Drift, sha256_prefix, verify
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import PlatformError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.measure.report import READINGS_LEDGER
@@ -63,6 +63,19 @@ def test_verify_clean_world(world, pushed):
     assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").dest is None
     with pytest.raises(ValidationFailed, match="not_found"):
         verify(TEST, "nope", **_kw(world))
+
+
+def test_verify_records_a_row_when_the_copies_layer_fails(world):
+    """The copies layer dying (rclone flaked) must not lose the consistency / timestamp results
+    that already ran -- the row still lands, with `copies=None` and the failure's own message."""
+    build_manifest(TEST, "submission:S1", manifest_id="m1", **_kw(world))
+    with pytest.raises(PlatformError, match="hashsum failed"):
+        verify(TEST, "m1", dest="fake:vault", runner=FakeRemote(fail="hashsum"), **_kw(world))
+    row = BackupLedger(_paths(world).backup_log).latest("verify", "m1")
+    assert row.error is not None and row.error.startswith("rclone hashsum failed")
+    assert row.copies is None and row.tier == 3
+    assert row.drift == 0 and row.bad_stamps == 0
+    assert SECRET not in row.error
 
 
 def test_verify_tier_bounds_the_copies_layer(world):
@@ -159,7 +172,7 @@ def test_verify_stamps(world, pushed):
     )
     res = verify(TEST, "m1", **_kw(world))
     n = len(lines)
-    label = f"measure/{EVAL}/{READINGS_LEDGER}"
+    label = f"data/measure/{EVAL}/{READINGS_LEDGER}"
     assert res.drift == [] and res.bad_stamps == [f"{label}:{n + 2}", f"{label}:{n + 3}"]
     assert res.first_bad == f"{label}:{n + 2}" and res.reason == "bad_stamps" and not res.ok
     profile = _paths(world).submit_yaml
@@ -169,7 +182,7 @@ def test_verify_stamps(world, pushed):
         newline="\n",
     )
     res = verify(TEST, "m1", **_kw(world))
-    assert f"datasets/{TEST}/submit.yaml:created_at" in res.bad_stamps
+    assert f"configs/datasets/{TEST}/submit.yaml:created_at" in res.bad_stamps
     assert any(d.what == f"configs/datasets/{TEST}/submit.yaml" for d in res.drift)
     row = BackupLedger(_paths(world).backup_log).latest("verify", "m1")
     assert row.bad_stamps == len(res.bad_stamps) and row.first_bad == res.first_bad

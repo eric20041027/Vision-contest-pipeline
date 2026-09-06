@@ -211,6 +211,7 @@ class BackupRow(_Strict):
     drift: int | None = None
     bad_stamps: int | None = None
     first_bad: str | None = None
+    error: str | None = None
     pulled: int | None = None
     conflicts: list[str] | None = None
     dest_missing: int | None = None

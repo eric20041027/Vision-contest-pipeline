@@ -268,4 +268,5 @@ def test_hashsum_failures_and_unsupported_hashes_are_errors(tmp_path):
     d.put(src, "data", "x/a.txt")
     with pytest.raises(PlatformError, match="sha256") as ei:
         d.hashes("data", ["x/a.txt"])
-    assert ei.value.fields == {"dest": "fake:vault"} and SECRET not in str(ei.value)
+    assert ei.value.fields == {"dest": "fake:vault"}
+    assert SECRET not in str(ei.value) and "<redacted>" in str(ei.value)

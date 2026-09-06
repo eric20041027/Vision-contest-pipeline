@@ -230,6 +230,12 @@ def execute(
     return code, status
 
 
+def command_found(token: str, cwd: Path, path: str | None) -> bool:
+    """Whether the child's first token can run: on the child's PATH, or a file under ``cwd``
+    (a join with an absolute token yields the token itself, so absolute paths work too)."""
+    return shutil.which(token, path=path) is not None or (cwd / token).is_file()
+
+
 def _existing(
     spec: RunSpec, data_root: Path, dataset: Dataset, trained_on: list[str], chash: str
 ) -> tuple[RunCard | None, TrainRecord | None]:
@@ -397,10 +403,7 @@ def train_run(spec: RunSpec) -> RunResult:
     chash = config_hash(spec.config, spec.command)
     python = venv_python(spec.venv) if spec.venv is not None else None
     env = child_env(spec, data_root=data_root, configs_root=configs_root, python=python)
-    if (
-        shutil.which(spec.command[0], path=env.get("PATH")) is None
-        and not Path(spec.command[0]).is_file()
-    ):
+    if not command_found(spec.command[0], cwd, env.get("PATH")):
         raise ValidationFailed(f"command not found: {spec.command[0]!r}")
     card, record = _existing(spec, data_root, dataset, trained_on, chash)
     created = card is None

@@ -16,11 +16,13 @@ from vcp.cli_common import (
     run_command,
 )
 from vcp.core.errors import ValidationFailed
-from vcp.core.log import FieldValue
+from vcp.core.log import FieldValue, Status
 from vcp.core.time import stamp
 from vcp.measure.metrics import effective_params, get_metric
+from vcp.measure.plugins import load_plugins
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import PlatformProfile, Quota
+from vcp.submit.stage import StageSpec, stage, verify
 
 submit_app = typer.Typer(no_args_is_help=True, help="submission governance commands")
 
@@ -114,3 +116,106 @@ def init_cmd(
         return "OK", fields, payload, [f"profile written to {res.path}"]
 
     run_command("submit.init", json_mode, data_root, fn)
+
+
+@submit_app.command("stage")
+def stage_cmd(
+    dataset: DatasetOpt,
+    submission_id: IdOpt,
+    eval_run: Annotated[str, typer.Option("--eval-run", help="eval-side run (judged)")],
+    test_run: Annotated[
+        str | None, typer.Option("--test-run", help="test-side run the file is rendered from")
+    ] = None,
+    kind: Annotated[str, typer.Option("--kind", help="candidate | baseline | probe")] = "candidate",
+    reason: Annotated[
+        str | None, typer.Option("--reason", help="required for baseline / probe")
+    ] = None,
+    kernel: Annotated[
+        str | None, typer.Option("--kernel", help="kernel submissions: user/notebook")
+    ] = None,
+    version: Annotated[int | None, typer.Option("--version", help="kernel version")] = None,
+    output: Annotated[
+        str, typer.Option("--output", help="kernel output file name")
+    ] = "submission.csv",
+    weights: Annotated[
+        list[str] | None,
+        typer.Option("--weights", help="RUN[:sha] the kernel loads (repeatable)"),
+    ] = None,
+    writer_opt: Annotated[
+        list[str] | None, typer.Option("--writer-opt", help="writer option key=value")
+    ] = None,
+    plugin: PluginOpt = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Pair, gate, render and record a candidate -- every check before any write."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        try:
+            spec = StageSpec(
+                dataset=dataset,
+                submission_id=submission_id,
+                eval_run=eval_run,
+                test_run=test_run,
+                kind=kind,  # type: ignore[arg-type]
+                reason=reason,
+                kernel=kernel,
+                version=version,
+                output=output,
+                weights=list(weights or []),
+                writer_opts=parse_opts(writer_opt, "--writer-opt"),
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        except ValidationError as e:
+            raise ValidationFailed(str(e), location="vcp submit stage") from e
+        res = stage(spec)
+        st = res.staged
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "id": submission_id,
+            "kind": st.kind,
+            "eval_run": st.eval_run,
+            "pairing": st.pairing.mode,
+            "admission": st.gate.admission,
+        }
+        if st.test_run:
+            fields["test_run"] = st.test_run
+        if st.artifact.sha256:
+            fields["sha256"] = st.artifact.sha256[:12]
+        if st.artifact.writer:
+            fields["writer"] = st.artifact.writer
+            fields["rows"] = st.artifact.rows or 0
+        human = [f"staged {submission_id} -> {res.path}"]
+        human += [f"check: {c}" for c in st.pairing.checks]
+        human += [f"warning: {w}" for w in res.warnings]
+        status: Status = "WARN" if res.warnings else "OK"
+        return status, fields, st.model_dump(mode="json"), human
+
+    run_command("submit.stage", json_mode, data_root, fn)
+
+
+@submit_app.command("verify")
+def verify_cmd(
+    dataset: DatasetOpt,
+    submission_id: IdOpt,
+    plugin: PluginOpt = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Re-hash the artifact and re-render it from the test-side run (bit-level reproduction)."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        checks = verify(dataset, submission_id, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "id": submission_id,
+            "checks": len(checks),
+        }
+        return "OK", fields, {"checks": checks}, [f"ok: {c}" for c in checks]
+
+    run_command("submit.verify", json_mode, data_root, fn)

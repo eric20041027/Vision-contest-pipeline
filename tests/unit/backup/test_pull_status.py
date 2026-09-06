@@ -1,7 +1,7 @@
 import pytest
 
 from backup_fixtures import FakeRemote
-from submit_fixtures import TEST
+from submit_fixtures import EVAL, TEST
 from vcp.backup import dest as destmod
 from vcp.backup.evidence import build_manifest
 from vcp.backup.ledger import BackupLedger
@@ -13,6 +13,8 @@ from vcp.backup.verify import verify
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.measure.runs import load_run, run_dir
+from vcp.train.checkpoints import register
+from vcp.train.records import load_record, save_record
 
 
 def _kw(world):
@@ -94,6 +96,33 @@ def test_pull_rejects_corrupt_copies_without_keeping_them(world):
     with pytest.raises(IntegrityError, match="mismatch") as ei:
         pull(TEST, "m1", "fake:vault", tier=2, runner=liar, **_kw(world))
     assert not pred.exists() and ei.value.fields["mismatch"] == 1
+
+
+def test_pull_external_only_into_an_existing_directory(world, tmp_path):
+    outside = tmp_path / "elsewhere" / "extra.pt"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"extra")
+    rec = load_record(world.roots.data, "good")
+    rec, _ = register(rec, [outside], data_root=world.roots.data, attempt=2)
+    save_record(world.roots.data, rec)
+    build_manifest(EVAL, "run:good", manifest_id="mg", **_kw(world))
+    key = next(
+        f.key
+        for f in load_manifest(DatasetPaths.resolve(EVAL, **_kw(world)), "mg").files
+        if f.root == "external"
+    )
+    vault = world.tmp / "vault-ext"
+    push(EVAL, "mg", str(vault), tier=3, **_kw(world))
+    assert (vault / "external" / key.split("/", 1)[1]).read_bytes() == b"extra"
+    outside.unlink()
+    outside.parent.rmdir()
+    res = pull(EVAL, "mg", str(vault), **_kw(world))
+    assert res.external_skipped == [key] and res.pulled == 0 and not outside.parent.exists()
+    row = BackupLedger(DatasetPaths.resolve(EVAL, **_kw(world)).backup_log).latest("pull", "mg")
+    assert row.external_skipped == 1
+    outside.parent.mkdir()
+    res = pull(EVAL, "mg", str(vault), **_kw(world))
+    assert res.pulled == 1 and res.external_skipped == [] and outside.read_bytes() == b"extra"
 
 
 def test_status_view(world, monkeypatch):

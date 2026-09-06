@@ -74,6 +74,17 @@ def test_entry_rejects(bad):
         _entry(**bad)
 
 
+@pytest.mark.parametrize("path", ["../x", "a/../b", "/abs", "C:/x", "a\\b", "", "./a", "a//b"])
+def test_entry_rejects_paths_that_can_leave_the_root(path):
+    with pytest.raises(ValidationError):
+        _entry(path=path)
+
+
+def test_external_entry_needs_an_absolute_source():
+    with pytest.raises(ValidationError):
+        _entry(root="external", source="rel/x")
+
+
 def test_remote_copy_and_external_entries():
     r = _entry(
         role="checkpoint",

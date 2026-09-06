@@ -231,8 +231,21 @@ def pull_cmd(
             "conflicts": len(res.conflicts),
         }
         human = [f"pulled {res.pulled}, skipped {res.skipped} <- {dest}"]
-        payload = {"pulled": res.pulled, "skipped": res.skipped, "conflicts": res.conflicts}
-        return "OK", fields, payload, human
+        status: Status = "OK"
+        if res.external_skipped:
+            fields["external_skipped"] = len(res.external_skipped)
+            status = "WARN"
+            human += [
+                f"skipped (its directory is gone; vcp creates none outside the roots): {k}"
+                for k in res.external_skipped
+            ]
+        payload = {
+            "pulled": res.pulled,
+            "skipped": res.skipped,
+            "conflicts": res.conflicts,
+            "external_skipped": res.external_skipped,
+        }
+        return status, fields, payload, human
 
     run_command("backup.pull", json_mode, data_root, fn)
 

@@ -6,7 +6,6 @@ every card's ``*_at`` / ``ts`` parses (``downloaded_at`` is a human date and is 
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,7 +22,7 @@ from vcp.backup.push import check_tier
 from vcp.backup.schema import CARD_ROLES, LEDGER_ROLES, BackupRow, Manifest
 from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed
-from vcp.core.hashing import sha256_file
+from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import DatasetPaths, resolve_stored_path
 from vcp.core.proc import Runner
 from vcp.core.time import parse_stamp, stamp
@@ -37,7 +36,6 @@ from vcp.train.schema import TrainRecord
 
 SKIP_KEYS = frozenset({"downloaded_at"})
 REASONS = ("mismatch", "missing", "drift", "bad_stamps")
-_CHUNK = 1 << 20
 Adder = Callable[[str, str, str], None]
 
 
@@ -76,21 +74,6 @@ class VerifyResult:
     @property
     def ok(self) -> bool:
         return not self.problems
-
-
-def sha256_prefix(path: Path, n: int) -> str:
-    """sha256 of the first ``n`` bytes: an append-only ledger that only grew still matches the
-    manifest that hashed it shorter."""
-    h = hashlib.sha256()
-    left = n
-    with path.open("rb") as f:
-        while left > 0:
-            chunk = f.read(min(_CHUNK, left))
-            if not chunk:
-                break
-            h.update(chunk)
-            left -= len(chunk)
-    return h.hexdigest()
 
 
 def _load_json_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:

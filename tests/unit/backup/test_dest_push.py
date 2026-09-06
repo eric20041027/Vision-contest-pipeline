@@ -1,15 +1,21 @@
+import json
+
 import pytest
 
 from backup_fixtures import SECRET, FakeRemote
-from submit_fixtures import TEST
+from submit_fixtures import EVAL, TEST
 from vcp.backup import dest as destmod
 from vcp.backup.dest import LocalDest, RcloneDest, open_dest, rclone_conf_state
 from vcp.backup.evidence import build_manifest
 from vcp.backup.ledger import BackupLedger
+from vcp.backup.manifest import load_manifest
+from vcp.backup.pull import pull
 from vcp.backup.push import PushResult, push
+from vcp.backup.verify import verify
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
+from vcp.measure.report import READINGS_LEDGER
 
 
 def _kw(world):
@@ -130,6 +136,39 @@ def test_push_refuses_a_stale_manifest_before_moving_anything(world):
     assert ei.value.fields == {"tier": 4}
     with pytest.raises(ValidationFailed, match="not_found"):
         push(TEST, "m9", str(vault), **_kw(world))
+
+
+def _grow_readings(world) -> None:
+    """One more valid row on the eval readings ledger: what any command that measures does
+    between a manifest and the push that follows it."""
+    readings = DatasetPaths.resolve(EVAL, **_kw(world)).measure_dir / READINGS_LEDGER
+    lines = readings.read_text(encoding="utf-8").splitlines()
+    grown = {**json.loads(lines[-1]), "reading_id": "f" * 64, "ts": "2999-01-01T00:00:00.000Z"}
+    readings.write_text(
+        "\n".join([*lines, json.dumps(grown)]) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def test_push_sends_the_snapshot_of_a_grown_ledger(world):
+    _manifest(world)
+    readings = DatasetPaths.resolve(EVAL, **_kw(world)).measure_dir / READINGS_LEDGER
+    _grow_readings(world)
+    vault = world.tmp / "vault"
+    out = _push(world, str(vault), tier=1)
+    assert out.failed == [] and out.pushed > 0
+    manifest = load_manifest(DatasetPaths.resolve(TEST, **_kw(world)), "m1")
+    entry = next(f for f in manifest.files if f.key == f"data/measure/{EVAL}/{READINGS_LEDGER}")
+    copy = vault / "data" / entry.path
+    assert sha256_file(copy) == entry.sha256 and copy.stat().st_size == entry.bytes
+    assert readings.stat().st_size > entry.bytes  # the local ledger kept its newer row
+    assert verify(TEST, "m1", dest=str(vault), tier=1, **_kw(world)).ok
+    res = pull(TEST, "m1", str(vault), tier=1, **_kw(world))
+    assert entry.key not in res.conflicts and res.pulled == 0 and res.skipped > 0
+    assert readings.stat().st_size > entry.bytes
+    readings.write_bytes(readings.read_bytes()[: entry.bytes // 2])  # truncated, not grown
+    with pytest.raises(IntegrityError, match="drift") as ei:
+        _push(world, str(vault), tier=1)
+    assert ei.value.fields == {"file": entry.key}
 
 
 def test_push_rclone_reports_mismatch_and_records_before_raising(world):

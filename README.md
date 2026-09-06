@@ -26,7 +26,7 @@ uv run pytest --cov=vcp
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--keep-input`、`--replace`、`--opt allow_unknown=true` |
+| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true` |
 | `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數 | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
 | `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
 | `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method splithalf\|bootstrap\|prior`、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
@@ -135,6 +135,33 @@ class Knee(torch.utils.data.Dataset):
 s = Session.current()  # 在 vcp train run 底下才有
 s.register_checkpoint("ckpt/best.pt", final=True)
 s.note("val_auc", 0.91)
+```
+
+## 提交治理命令 `vcp submit`
+
+| 命令 | 作用 | 主要選項 |
+|---|---|---|
+| `vcp submit init` | 寫 `configs/datasets/<test>/submit.yaml`（平台、配額與時區、截止、決選指標、輸出格式），並替 test dataset 建單子集 plan `all-v1` | `--dataset`（test dataset）、`--eval-dataset`、`--plan`、`--sealed`、`--platform manual\|kaggle`、`--competition`、`--kind file\|kernel`、`--board-rule last\|best`、`--quota N --day-tz TZ`、`--display-tz`、`--deadline`、`--metric`、`--writer`、`--writer-opt k=v`、`--kaggle-command` |
+| `vcp submit stage` | 四道門（封槍 / 截止、eval-test 配對核對、準入判決、產檔）全過才寫 `submit/<test>/<id>/` 與台帳 `staged` 列 | `--id`、`--eval-run`、`--test-run`、`--kind candidate\|baseline\|probe`、`--reason`、kernel 類 `--kernel --version --weights RUN[:sha]`、`--writer-opt`、`--plugin` |
+| `vcp submit upload` | Kaggle：再驗 sha → 配額 → `kaggle competitions submit` → `uploaded` 列 | `--id`、`--message` |
+| `vcp submit record` | 手動平台：你在網頁上傳後回填，平台顯示時間換成 UTC | `--id`、`--at "YYYY-MM-DD HH:MM"`、`--tz platform\|utc`、`--platform-ref` |
+| `vcp submit score` / `sync` | 回填 public / private；Kaggle 以 `competitions submissions` 回讀、配對、把別人的發記成 `foreign`（照數配額） | `--public`、`--private` |
+| `vcp submit final` | 已準入且已上傳的候選依 sealed 讀數（同分看 public、再看 staged 時間）選出 `final_slots` 個，寫決選表並封槍 | `--slots`、`--dry-run` |
+| `vcp submit lock` / `unlock` | 封槍 / 解封（留理由） | `--reason` |
+| `vcp submit status` / `report` | 配額剩餘與重置時間、截止倒數、榜面現任、未回填；每發 last-vs-last、sealed 讀數、public→private 位移（唯讀） | |
+| `vcp submit verify` | 三驗第三驗：重讀檔 sha、從 test run 重產比對（位元級重現） | `--id` |
+
+候選 = (eval 側 run, test 側 run) 一對：單模比 `weights_hash`（用 `vcp eval ingest --weights PATH` 給 run 身分），融合比 method / params / 成員權重並逐成員遞迴。`candidate` 需要 `vcp eval judge` 的 PASS 判決（融合 run 每個成員各一份）；`baseline` / `probe` 要 `--reason`，probe 永不進決選。沒有 `--override`。vcp 不碰 Kaggle 憑證：只呼叫 kaggle CLI，輸出經 redact 才落地。
+
+### 一次提交
+
+```bash
+uv run vcp eval ingest --run good.test --dataset D-test --plan all-v1 --subset test --format scores_csv --src preds.csv --weights runs-ultra/good/weights/best.pt
+uv run vcp submit stage --dataset D-test --id SUB34 --eval-run good --test-run good.test
+uv run vcp submit upload --dataset D-test --id SUB34            # 手動平台改 record --at "2026-08-31 21:28"
+uv run vcp submit sync --dataset D-test                          # 手動平台改 score --public 0.7916
+uv run vcp eval measure --run good --subsets holdout --unseal --reason "final pick"
+uv run vcp submit final --dataset D-test                        # 自動封槍；board_rule=last 時照 needs_reupload 重傳
 ```
 
 ## 匯入器與 `rows_read` 的語意

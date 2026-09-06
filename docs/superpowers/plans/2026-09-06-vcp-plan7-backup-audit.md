@@ -44,6 +44,7 @@
 18. **rclone 命令前綴是模組常數 `vcp.backup.dest.RCLONE`**：端到端測試把它指到假 rclone 腳本；訓練層的 `upload.py` 不動。
 19. **pull 也「先記列再拋錯」**，優先序 `mismatch` > `missing` > `conflict`；`.bak-<UTC 時戳含微秒>`；目的地的 sha 先比對，不符就不拉、拉回不符就刪。
 20. **status 的定義**：「已推 tier」= 成功（`failed` 空）push 的最大 `--tier` 以下全部；「verify 通過」= 任一 verify 列三層皆無問題；rclone 不在 → `rclone_conf=unknown`。
+21. **verify 的副本層有 `--tier N`（預設 3 = 全部）**：只推了前兩層就 verify 不該因權重層而 FAIL；一致性與時戳層不受 tier 影響；verify 列在有 `--dest` 時記 `tier`。（執行期 R4：Task 7 測試與 Task 8 端到端在 `push --tier 2` 後 verify 同一目的地，`last.pt` 是 tier 3 的 `file` 條目，沒有 `--tier` 就是 `missing=1`。）
 
 ## 檔案結構
 
@@ -2370,7 +2371,7 @@ git commit -m "feat(backup): 目的地抽象（本機 / rclone）、逐檔驗證
 
 **Interfaces:**
 - Consumes: Task 5 `open_dest` / `Destination`、`push`（測試）；Task 2 `load_manifest` / `local_path` / `BackupLedger` / `BackupRow` / `LEDGER_ROLES` / `CARD_ROLES` / `Manifest` / `FileEntry`；`vcp.core.time.parse_stamp` / `stamp`；`vcp.core.config.load_yaml_model`；`vcp.measure.schema.RunCard`、`vcp.measure.runs.prediction_path`；`vcp.train.schema.TrainRecord`、`vcp.core.paths.resolve_stored_path`；`vcp.fuse.build.load_record`；`vcp.submit.schema.Staged`、`vcp.submit.ledger.SubmissionLedger`；`vcp.data.schema.DatasetCard`。
-- Produces: `vcp.backup.verify`：`Drift(what, expected, actual)`、`VerifyResult(manifest_id, dest, copies, copy_problems, drift, bad_stamps)` 與屬性 `first_bad`、`problems`、`reason`（`mismatch` > `missing` > `drift` > `bad_stamps`，無問題 `None`）、`ok`；`verify(dataset, manifest_id, *, dest=None, runner=None, data_root=None, configs_root=None) -> VerifyResult`；`sha256_prefix(path, n)`。
+- Produces: `vcp.backup.verify`：`Drift(what, expected, actual)`、`VerifyResult(manifest_id, dest, copies, copy_problems, drift, bad_stamps)` 與屬性 `first_bad`、`problems`、`reason`（`mismatch` > `missing` > `drift` > `bad_stamps`，無問題 `None`）、`ok`；`verify(dataset, manifest_id, *, dest=None, tier=3, runner=None, data_root=None, configs_root=None) -> VerifyResult`（`tier` 只限定副本層；有 `dest` 時 verify 列記 `tier`）；`sha256_prefix(path, n)`。
 
 - [ ] **Step 1: 寫失敗的測試** `tests/unit/backup/test_verify.py`
 
@@ -2439,6 +2440,25 @@ def test_verify_clean_world(world, pushed):
     assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").dest is None
     with pytest.raises(ValidationFailed, match="not_found"):
         verify(TEST, "nope", **_kw(world))
+
+
+def test_verify_tier_bounds_the_copies_layer(world):
+    build_manifest(TEST, "submission:S1", manifest_id="m1", **_kw(world))
+    vault = world.tmp / "vault"
+    push(TEST, "m1", str(vault), tier=2, **_kw(world))
+    m = load_manifest(_paths(world), "m1")
+    res = verify(TEST, "m1", dest=str(vault), tier=2, **_kw(world))
+    within = sum(1 for f in m.files if f.tier <= 2)
+    assert res.ok and res.copies == {"ok": within, "missing": 0, "mismatch": 0}
+    assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 2
+    res = verify(TEST, "m1", dest=str(vault), **_kw(world))  # default tier 3: everything
+    assert res.copies["missing"] == 1 and res.reason == "missing"
+    assert res.copy_problems == ["missing:data/work/good/weights/last.pt"]
+    assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 3
+    assert verify(TEST, "m1", **_kw(world)).copies is None
+    assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier is None
+    with pytest.raises(ValidationFailed, match="tier"):
+        verify(TEST, "m1", dest=str(vault), tier=0, **_kw(world))
 
 
 def test_verify_copies_missing_and_mismatch(world, pushed):
@@ -2588,6 +2608,7 @@ from vcp.train.schema import TrainRecord
 from vcp.backup.dest import Destination, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
+from vcp.backup.push import check_tier
 from vcp.backup.schema import CARD_ROLES, LEDGER_ROLES, BackupRow, Manifest
 
 SKIP_KEYS = frozenset({"downloaded_at"})
@@ -2659,13 +2680,17 @@ def _load_json_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:
 
 
 def _check_copies(
-    manifest: Manifest, dest: str, runner: Runner | None
+    manifest: Manifest, dest: str, tier: int, runner: Runner | None
 ) -> tuple[dict[str, int], list[str]]:
+    """Only entries with ``tier <= tier``: a destination that holds tiers 1..N is complete for
+    them even though the weights were never pushed."""
     counts = {"ok": 0, "missing": 0, "mismatch": 0}
     problems: list[str] = []
     dests: dict[str, Destination] = {dest: open_dest(dest, runner)}
     groups: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
     for e in manifest.files:
+        if e.tier > tier:
+            continue
         if e.remote is None:
             groups.setdefault((dest, e.root), []).append((e.path, e.sha256, e.key))
         else:
@@ -2846,18 +2871,21 @@ def verify(
     manifest_id: str,
     *,
     dest: str | None = None,
+    tier: int = 3,
     runner: Runner | None = None,
     data_root: Path | None = None,
     configs_root: Path | None = None,
 ) -> VerifyResult:
     """All three layers; the result is returned, not raised, so a VERDICT can carry every count
-    and ``--json`` every detail. The ledger row is written before returning."""
+    and ``--json`` every detail. ``tier`` bounds the copies layer only. The ledger row is
+    written before returning."""
+    check_tier(tier)
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     manifest = load_manifest(paths, manifest_id)
     copies: dict[str, int] | None = None
     problems: list[str] = []
     if dest is not None:
-        copies, problems = _check_copies(manifest, dest, runner)
+        copies, problems = _check_copies(manifest, dest, tier, runner)
     drift = _check_consistency(manifest, paths)
     bad = _check_stamps(manifest, paths)
     res = VerifyResult(manifest_id, dest, copies, problems, drift, bad)
@@ -2867,6 +2895,7 @@ def verify(
             ts=stamp(),
             manifest_id=manifest_id,
             dest=dest,
+            tier=tier if dest is not None else None,
             copies=copies,
             drift=len(drift),
             bad_stamps=len(bad),
@@ -2923,15 +2952,23 @@ def verify_cmd(
     dest: Annotated[
         str | None, typer.Option("--dest", help="also check the copies at this destination")
     ] = None,
+    tier: Annotated[
+        int, typer.Option("--tier", help="copies layer: check tiers 1..N (default 3 = all)")
+    ] = 3,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
 ) -> None:
-    """Audit copies (with --dest), local consistency and timestamps."""
+    """Audit copies (with --dest, tiers 1..--tier), local consistency and timestamps."""
 
     def fn() -> CmdResult:
         res = verify(
-            dataset, manifest_id, dest=dest, data_root=data_root, configs_root=configs_root
+            dataset,
+            manifest_id,
+            dest=dest,
+            tier=tier,
+            data_root=data_root,
+            configs_root=configs_root,
         )
         fields: dict[str, FieldValue] = {}
         if res.reason is not None:
@@ -2939,6 +2976,7 @@ def verify_cmd(
         fields.update({"dataset": dataset, "manifest": manifest_id})
         if dest is not None:
             fields["dest"] = dest
+            fields["tier"] = tier
         if res.copies is not None:
             fields.update(
                 {
@@ -3104,7 +3142,7 @@ def test_status_view(world, monkeypatch):
     assert m.last_push is None and m.last_verify is None and view.unverified == ["m1"]
     vault = world.tmp / "vault"
     push(TEST, "m1", str(vault), tier=2, **_kw(world))
-    verify(TEST, "m1", dest=str(vault), **_kw(world))
+    verify(TEST, "m1", dest=str(vault), tier=2, **_kw(world))
     conf.write_text("[gdrive]\n", encoding="utf-8")
     view = status(TEST, runner=FakeRemote(conf=conf), **_kw(world))
     m = view.manifests[0]
@@ -3379,7 +3417,7 @@ def test_pull_and_status_cli(world, monkeypatch):
     assert doc["status"] == "WARN" and doc["fields"]["unverified"] == 1
     assert doc["result"]["manifests"][0]["unpushed_tiers"] == [3]
     assert doc["result"]["manifests"][0]["last_push"]["tier"] == 2
-    r = _run("verify", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault))
+    r = _run("verify", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault), "--tier", "2")
     assert r.exit_code == 0, r.output
     r = _run("status", "--dataset", "beach-test")
     v = _verdict(r.output)
@@ -3663,9 +3701,10 @@ def test_local_vault_story(world):
     assert r.exit_code == 0 and "pushed=0" in v and "failed=0" in v
     ledger = BackupLedger(_paths(world, "beach-test").backup_log)
     assert [row.event for row in ledger.rows] == ["manifest", "push", "push", "push"]
-    r = _backup("verify", *common)
+    r = _backup("verify", *common, "--tier", "2")
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=OK" in v and "missing=0" in v and "mismatch=0" in v
+    assert "tier=2" in v
     assert "drift=0" in v and "bad_stamps=0" in v
     card = load_run(world.roots.data, "good")
     pred = run_dir(world.roots.data, "good") / card.predictions["valB"].path
@@ -3675,7 +3714,7 @@ def test_local_vault_story(world):
     v = _verdict(r.output)
     assert r.exit_code == 0 and "pulled=1" in v and pred.read_bytes() == original
     (vault / "data" / "runs" / "good" / "predictions" / "valA.jsonl").unlink()
-    r = _backup("verify", *common)
+    r = _backup("verify", *common, "--tier", "2")
     v = _verdict(r.output)
     assert r.exit_code == 1 and "reason=missing" in v and "missing=1" in v
     readings = _paths(world, "beach").measure_dir / READINGS_LEDGER
@@ -3805,7 +3844,7 @@ Expected: PASS（真資料在 `C:/vcp-data` 時）或 1 skipped
 |---|---|---|
 | `vcp backup manifest` | 從結論反向走證據圖，寫 `configs/datasets/<name>/backup/<id>.json`（進 git、寫一次不改）：每個檔的角色、tier、sha、大小、服務的結論 | `--dataset`、`--conclusion submission:<id>\|judgement:<prereg>\|run:<id>\|all`、`--id` |
 | `vcp backup push` | 先小後大推到 rclone 遠端或本機目錄（`<dest>/data\|configs\|external/…`），只推目的地沒有或不同的檔，推完逐檔比對 sha；`train upload` 驗過的權重副本（`remote_copy`）不重推 | `--manifest`、`--dest`、`--tier 1\|2\|3`（累積到 N；預設 1）、`--forget-remote`（全數驗證通過後 `rclone config delete <remote>`） |
-| `vcp backup verify` | 三層稽核：副本（給 `--dest` 才做）、本機一致性（卡 ↔ 預測檔、`train.yaml` ↔ checkpoint、`fuse.json` ↔ 成員、`stage.json` ↔ 候選檔、台帳 ↔ `stage.json`、清單 ↔ 現在的檔）、時戳（台帳逐列 `ts` 可解析且單調、卡的 `*_at` 可解析） | `--manifest`、`--dest` |
+| `vcp backup verify` | 三層稽核：副本（給 `--dest` 才做）、本機一致性（卡 ↔ 預測檔、`train.yaml` ↔ checkpoint、`fuse.json` ↔ 成員、`stage.json` ↔ 候選檔、台帳 ↔ `stage.json`、清單 ↔ 現在的檔）、時戳（台帳逐列 `ts` 可解析且單調、卡的 `*_at` 可解析） | `--manifest`、`--dest`、`--tier`（副本層只查 tier 1..N，預設 3 = 全部） |
 | `vcp backup pull` | 從目的地把清單裡的檔拉回原相對路徑、讀回驗 sha；本機已有且不同 → `conflict`，`--overwrite` 才蓋（舊檔留 `.bak-<時戳>`） | `--manifest`、`--dest`、`--tier`（預設 3）、`--overwrite` |
 | `vcp backup status` | 每份清單最新的 push / verify、從未推過的 tier、`rclone_conf=present\|absent\|unknown`（唯讀） | |
 
@@ -3827,7 +3866,7 @@ uv run vcp backup status --dataset D-test                                       
 ```bash
 git pull                                                                # 清單與台帳跟著 configs/ 回來
 uv run vcp backup pull --dataset D-test --manifest sub34 --dest gdrive:vcp/backup --tier 2
-uv run vcp backup verify --dataset D-test --manifest sub34 --dest gdrive:vcp/backup
+uv run vcp backup verify --dataset D-test --manifest sub34 --dest gdrive:vcp/backup --tier 2
 uv run vcp submit verify --dataset D-test --id SUB34                    # 位元級重現候選檔
 ```
 ````
@@ -3839,7 +3878,7 @@ uv run vcp submit verify --dataset D-test --id SUB34                    # 位元
 ```
 
 ```markdown
-- `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST]`（副本 / 一致性 / 時戳三層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
+- `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
 ```
 
 - [ ] **Step 6: 全套測試、覆蓋率、ruff、commit**

@@ -141,3 +141,25 @@ def test_stage_and_verify_cli(pair):
     r = runner.invoke(app, ["submit", "verify", "--dataset", "beach-test", "--id", "S1", "--json"])
     assert r.exit_code == 0, r.output
     assert _json(r)["result"]["checks"][1] == "rebuild=ok"
+
+
+def test_record_score_cli(pair):
+    from vcp.core.time import utc_now
+
+    _ready(pair)
+    assert _stage("S1", "good", "good.test").exit_code == 0
+    at = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+    base = ["submit", "record", "--dataset", "beach-test", "--id", "S1", "--tz", "utc"]
+    r = runner.invoke(app, [*base, "--at", at])
+    assert r.exit_code == 0, r.output
+    assert "quota=1/3" in _verdict(r.output) and "resets_at=" in _verdict(r.output)
+    r = runner.invoke(app, [*base, "--at", "2020-01-01 00:00"])
+    assert r.exit_code == 1 and "before the submission" in _verdict(r.output)
+    r = runner.invoke(
+        app, ["submit", "score", "--dataset", "beach-test", "--id", "S1", "--public", "0.8"]
+    )
+    assert r.exit_code == 0 and "public=0.8" in _verdict(r.output)
+    r = runner.invoke(app, ["submit", "upload", "--dataset", "beach-test", "--id", "S1"])
+    assert r.exit_code == 1 and "manual_platform" in _verdict(r.output)
+    r = runner.invoke(app, ["submit", "sync", "--dataset", "beach-test"])
+    assert r.exit_code == 1 and "manual_platform" in _verdict(r.output)

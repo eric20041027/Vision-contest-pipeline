@@ -33,6 +33,7 @@
 5. **環境探針在測試裡用當前直譯器**（`python=None` → `sys.executable`）；`--venv` 只測 python 路徑解析。
 6. **`upload()` 對已在目的地且 sha 相同的檔也回一筆 `verified=True` 的紀錄**（計入 `skipped=`），`merge_uploads` 以 `(dest, name, sha256)` 去重——否則手動放到目的地的檔永遠算 `unbacked`。
 7. **命令可執行性預檢**：`shutil.which(command[0], path=子程序的 PATH)` 為 `None` → `ValidationFailed`（FAIL）在寫任何檔之前；否則 `Popen` 的 `FileNotFoundError` 會留下 `running` 的 attempt。
+8. **執行期修正（後記 `2026-09-05-vcp-plan5-followups.md`，本文的程式碼未回頭改）**：`ConfigRef.copy` → `copied_to`（Task 1、5）；Task 5 的 CLI 測試第三次呼叫改用新 run id（改命令 = 新 config hash）；預檢改 `command_found(token, cwd, PATH)`；`train_run` 在命令後重讀 `train.yaml`；`status` 以 sha 判斷 backed；`upload._targets` 每檔名取最新一筆；`weights_hash` 換寫留痕；`uploaded` 事件只記新副本；`execute()` 用 `with Popen`。
 
 ---
 

@@ -361,3 +361,23 @@ class Platform(Protocol):
 ## 16. 不在範圍
 
 無 API 平台的自動上傳與瀏覽器自動化；非 Kaggle 的榜面抓取；隊友通知與回執（人做，台帳有 `lock` 列可 grep）；public→private 位移自動回寫 σ_p 台帳（`report` 給位移，人用 `vcp eval sigma --method prior` 記）；AWS 重現包與 README（子專案 6 / `projects/`）；Kaggle dataset（權重）上傳與 notebook 產生；輸出檔壓縮；多個決選規則的登記表（v1 只有 `best_sealed`）；同一個 test dataset 對多個平台。以上皆為已預留的擴充點，不是設計缺口。
+
+## 17. v2 補充決定（Plan 6 實作與審查的定案，2026-09-06）
+
+以下為實作期間由計畫或審查裁決、原 spec 未明說或已被推翻的規則，與前文衝突時以本節為準。
+
+1. **量測層改一處**（§13「零改動」作廢）：`vcp eval ingest --weights PATH [--config PATH]` 把檔案 sha256 寫進 `run.yaml` 的 `source.weights_hash` / `config_hash`；既有 run 的空值可補、非空值不同即 FAIL；缺檔在任何寫入前 FAIL。沒有這條，只經 ingest 建立的 test 側 run 沒有權重身分，§7 的配對無從做起。
+2. **`scores_csv` 要求 card 有類別**（§9.3「card 無類別時取 targets 鍵聯集」作廢）：沒有類別即 FAIL `fields={"dataset"}`——聯集寫出的欄位量測層轉換器會當 `extra` 拒收，同節的往返承諾優先。
+3. **`coco_results` 只把標準十進位 id 轉成 int**（`value.isdigit() and str(int(value)) == value`）；"07" 保持字串，不會與 7 撞號。
+4. **`local=` 的時區**（§6.5 修正）：配額 VERDICT 的 `local=` 以 `display_tz` → `quota.day_tz` → UTC 的順序取（`PlatformProfile.effective_display_tz()`），`QuotaState` 自帶該時區；`resets_at` 仍是 UTC。
+5. **probe 跳過身分核對**：`kind=probe` 的 file 類候選記 `pairing.checks=["identity=skipped"]`（mode 依 test 側有無 `fuse.json`）；kernel 類一律核對宣告的權重 sha。probe 永不進決選。
+6. **封槍後的最終發**：lock 後 `stage` 一律 FAIL；`upload` / `record` 只放行最新 `final` 列 `chosen` 裡的 id（`board_rule=last` 時選中者要重傳成最後一發）；`score` / `sync` / `status` / `report` 不受 lock 影響。
+7. **`record --at` 的容差**：不得早於 `staged_at` 截到秒、不得晚於 `utc_now() + 60 s`；配額用 `--at` 所在視窗，已滿只 WARN `quota_overflow`（動作已發生）。
+8. **平台錯誤**：CLI 非 0 是 `PlatformError`（`VcpError` 子類，status FAIL），訊息為 redact 後的最後一行非空白（stderr 以 `.strip()` 判空才退到 stdout）；`kaggle_not_found` 仍是 `VcpError`（ABORT），且只在沒有注入 runner 時檢查執行檔。`parse_score` / `parse_date` 的錯誤訊息也經 redact；非有限的平台分數在 `sync` 是 `platform_response` FAIL，不是 ABORT。
+9. **test plan 帶一個空的 `train` 子集**：`SplitPlan` 要求恰一個 role=train，`init` 建的 `all-v1` 是 `train:train:0.0` + `<test_subset>:eval:1.0`、`params.eval_gold_only=false`，直接組 `SplitPlan` 不經產生器。
+10. **sync 的配對與順序**：規則 0 = 平台列的 `platform_ref` 等於某 `uploaded` 列的 `platform_ref`（`record --platform-ref`）；規則 1 = description 含 id（字界比對，長 id 優先，不受本次已配對的 id 限制——同一 id 重傳本來就會提及兩次）；規則 2 = 檔名相同且與某 `uploaded` 的 `at` 相差 ≤ 10 分（跳過本次已配走的 id）。平台列依 `at` 升冪處理，`scored` 列因此依時間追加、最新分數是 latest。缺 `stage.json` 的 id 只是少了規則 2，不讓整個 sync 失敗。
+11. **台帳列以 `exclude_none` 寫出**：一列只帶自己事件的欄位；因此持久化模型的可空欄位一律預設 `None`（`FinalEntry` 補上）；`stage.json` 整份 dump（含 null）。
+12. **`final --slots`**：在函式層檢查 `slots ≥ 1`（FAIL），不用 Click 的 `min=`——每個命令都要以 VERDICT 收尾（鐵則 2）。`--slots 0` 不再等於預設。
+13. **決選次序鍵**：sealed 讀數依指標 `higher_is_better` 取向；public 恆為降冪（§6.4 原意）；再以 `staged_at` 升冪。
+14. **`submission_id` 至多 31 字元**：redact 會把 ≥ 32 字元的英數串遮掉，sync 靠 description 裡的 id 配對。
+15. **報告輸出的私密性**：`upload` 的 `detail`、`sync` 的 `description` 經 redact；`fileName` / `status` / `submittedBy` 目前照原文進台帳（§10.2 與 §11.4 的矛盾留待辦，補 redact 為宜）。

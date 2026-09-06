@@ -117,16 +117,24 @@ uv run vcp eval measure --run y12x_r2
 
 ```python
 from vcp.train import MaterializedReader, Session
+
 reader = MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="train")
+
+
 class Knee(torch.utils.data.Dataset):
-    def __len__(self): return len(reader)
+    def __len__(self):
+        return len(reader)
+
     def __getitem__(self, i):
-        rec = reader[reader.ids[i]]                       # rec.arrays: {"0": HxW(xC)} 或 {seq_id: SxHxW}
+        rec = reader[reader.ids[i]]  # rec.arrays: {"0": HxW(xC)} 或 {seq_id: SxHxW}
         x = torch.from_numpy(next(iter(rec.arrays.values())))
         y = torch.tensor([rec.labels.targets[n] for n in NAMES])
         return x, y
-s = Session.current()                                     # 在 vcp train run 底下才有
-s.register_checkpoint("ckpt/best.pt", final=True); s.note("val_auc", 0.91)
+
+
+s = Session.current()  # 在 vcp train run 底下才有
+s.register_checkpoint("ckpt/best.pt", final=True)
+s.note("val_auc", 0.91)
 ```
 
 ## 匯入器與 `rows_read` 的語意

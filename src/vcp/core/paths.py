@@ -179,6 +179,18 @@ class DatasetPaths:
         validate_name(submission_id)
         return self.submit_dir / submission_id
 
+    @property
+    def backup_dir(self) -> Path:
+        return self.config_dir / "backup"
+
+    @property
+    def backup_log(self) -> Path:
+        return self.config_dir / "backup.log.jsonl"
+
+    def backup_manifest(self, manifest_id: str) -> Path:
+        validate_name(manifest_id)
+        return self.backup_dir / f"{manifest_id}.json"
+
     def resolve_image_root(self, card: DatasetCard) -> Path:
         """Absolute image root for this dataset on this machine (see ``store_path``)."""
         return resolve_stored_path(card.image_root, self.data_root)

@@ -2472,7 +2472,7 @@ def test_verify_consistency_drift(world, pushed):
     stage = _paths(world).submission_dir("S1") / "stage.json"
     doc = json.loads(stage.read_text(encoding="utf-8"))
     doc["artifact"]["sha256"] = "f" * 64
-    stage.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    stage.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8", newline="\n")
     res = verify(TEST, "m1", **_kw(world))
     whats = {d.what for d in res.drift}
     assert f"submit/{TEST}/S1/stage.json:artifact" in whats
@@ -2485,13 +2485,14 @@ def test_verify_stamps(world, pushed):
     lines = readings.read_text(encoding="utf-8").splitlines()
     last = json.loads(lines[-1])
     grown = {**last, "reading_id": "f" * 64, "ts": "2999-01-01T00:00:00.000Z"}
-    readings.write_text("\n".join([*lines, json.dumps(grown)]) + "\n", encoding="utf-8")
+    readings.write_text("\n".join([*lines, json.dumps(grown)]) + "\n", encoding="utf-8", newline="\n")
     res = verify(TEST, "m1", **_kw(world))
     assert res.ok  # an append-only ledger that only grew is not drift
     stale = {**grown, "ts": "2000-01-01T00:00:00.000Z"}
     readings.write_text(
         "\n".join([*lines, json.dumps(grown), json.dumps(stale), "not json"]) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     res = verify(TEST, "m1", **_kw(world))
     n = len(lines)
@@ -2499,7 +2500,7 @@ def test_verify_stamps(world, pushed):
     assert res.drift == [] and res.bad_stamps == [f"{label}:{n + 2}", f"{label}:{n + 3}"]
     assert res.first_bad == f"{label}:{n + 2}" and res.reason == "bad_stamps" and not res.ok
     profile = _paths(world).submit_yaml
-    profile.write_text(profile.read_text(encoding="utf-8").replace(STAMP, "yesterday"), encoding="utf-8")
+    profile.write_text(profile.read_text(encoding="utf-8").replace(STAMP, "yesterday"), encoding="utf-8", newline="\n")
     res = verify(TEST, "m1", **_kw(world))
     assert f"datasets/{TEST}/submit.yaml:created_at" in res.bad_stamps
     assert any(d.what == f"configs/datasets/{TEST}/submit.yaml" for d in res.drift)
@@ -2510,7 +2511,7 @@ def test_verify_stamps(world, pushed):
     rows = log.read_text(encoding="utf-8").splitlines()
     bad = json.loads(rows[-1])
     bad["ts"] = "2000-01-01T00:00:00.000Z"
-    log.write_text("\n".join([*rows[:-1], json.dumps(bad)]) + "\n", encoding="utf-8")
+    log.write_text("\n".join([*rows[:-1], json.dumps(bad)]) + "\n", encoding="utf-8", newline="\n")
     res = verify(TEST, "m1", **_kw(world))
     assert f"backup.log.jsonl:{len(rows)}" in res.bad_stamps
 
@@ -3681,7 +3682,7 @@ def test_local_vault_story(world):
     lines = readings.read_text(encoding="utf-8").splitlines()
     last = json.loads(lines[-1])
     lines[-1] = json.dumps({**last, "ts": "2000-01-01T00:00:00.000Z"})
-    readings.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    readings.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     r = _backup("verify", "--dataset", "beach-test", "--manifest", "m1")
     v = _verdict(r.output)
     assert r.exit_code == 1 and "bad_stamps=1" in v and f"first_bad=measure/beach/{READINGS_LEDGER}:{len(lines)}" in v

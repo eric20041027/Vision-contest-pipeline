@@ -4,6 +4,9 @@ checkpoint already uploaded and verified, and a hand-built fusion run."""
 
 from __future__ import annotations
 
+import hashlib
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 from submit_fixtures import (
@@ -86,6 +89,70 @@ def make_world(roots, tmp_path) -> SimpleNamespace:
     tdir.mkdir(parents=True, exist_ok=True)
     (tdir / "console.1.log").write_text("epoch 1 done\n", encoding="utf-8")
     return SimpleNamespace(pair=pair, roots=roots, tmp=tmp_path, vault=vault, weights=weights)
+
+
+SECRET = "fakesecretfakesecretfakesecret1234"
+
+
+class FakeRemote:
+    """An rclone stand-in for unit tests: a dict of remote path -> bytes. ``hashsum`` lists what
+    it holds under a prefix, ``copyto`` moves bytes in either direction, ``config delete``
+    records the remote name, ``config file`` prints ``conf``. Every call leaks a secret on
+    stderr, the way a chatty CLI might, so redaction is exercised everywhere."""
+
+    def __init__(
+        self,
+        *,
+        corrupt: str | None = None,
+        fail: str | None = None,
+        conf: Path | None = None,
+        deliver: bytes | None = None,
+    ):
+        self.store: dict[str, bytes] = {}
+        self.calls: list[list[str]] = []
+        self.deleted: list[str] = []
+        self.corrupt = corrupt  # hashsum misreports paths ending with this
+        self.fail = fail  # this subcommand exits 1
+        self.conf = conf  # what `config file` prints
+        self.deliver = deliver  # remote->local copyto writes these bytes instead
+
+    def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        self.calls.append(list(args))
+        sub = args[1]
+        err = f"RCLONE_CONFIG_PASS={SECRET}\n"
+        if sub == self.fail:
+            return subprocess.CompletedProcess(
+                args, 1, stdout="", stderr=err + f"{sub} failed token={SECRET}"
+            )
+        if sub == "hashsum":
+            base = args[3].rstrip("/") + "/"
+            lines = []
+            for path, data in sorted(self.store.items()):
+                if path.startswith(base):
+                    bad = self.corrupt is not None and path.endswith(self.corrupt)
+                    digest = "0" * 64 if bad else hashlib.sha256(data).hexdigest()
+                    lines.append(f"{digest}  {path[len(base) :]}")
+            if not lines:
+                return subprocess.CompletedProcess(
+                    args, 3, stdout="", stderr=err + "directory not found"
+                )
+            return subprocess.CompletedProcess(args, 0, stdout="\n".join(lines) + "\n", stderr=err)
+        if sub == "copyto":
+            src, dst = args[2], args[3]
+            if src in self.store:
+                data = self.deliver if self.deliver is not None else self.store[src]
+                Path(dst).parent.mkdir(parents=True, exist_ok=True)
+                Path(dst).write_bytes(data)
+            else:
+                self.store[dst] = Path(src).read_bytes()
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr=err)
+        if sub == "config" and args[2] == "delete":
+            self.deleted.append(args[3])
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr=err)
+        if sub == "config" and args[2] == "file":
+            out = f"Configuration file is stored at:\n{self.conf}\n"
+            return subprocess.CompletedProcess(args, 0, stdout=out, stderr=err)
+        raise AssertionError(f"unexpected rclone call {args}")
 
 
 def make_fusion(world, run_id: str = "fx") -> str:

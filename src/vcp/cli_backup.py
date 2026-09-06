@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from vcp.backup.evidence import build_manifest
+from vcp.backup.push import push
 from vcp.cli_common import CmdResult, ConfigsRootOpt, DataRootOpt, JsonOpt, run_command
 from vcp.core.log import FieldValue, Status
 
@@ -69,3 +70,61 @@ def manifest_cmd(
         return status, fields, payload, human
 
     run_command("backup.manifest", json_mode, data_root, fn)
+
+
+@backup_app.command("push")
+def push_cmd(
+    dataset: DatasetOpt,
+    manifest_id: ManifestOpt,
+    dest: Annotated[str, typer.Option("--dest", help="rclone remote:path or a local directory")],
+    tier: Annotated[
+        int, typer.Option("--tier", help="push tiers 1..N (1 decision, 2 reproduction, 3 weights)")
+    ] = 1,
+    forget_remote: Annotated[
+        bool,
+        typer.Option(
+            "--forget-remote", help="after every copy verified: rclone config delete <remote>"
+        ),
+    ] = False,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Copy the manifest's files to a destination and verify every copy."""
+
+    def fn() -> CmdResult:
+        res = push(
+            dataset,
+            manifest_id,
+            dest,
+            tier=tier,
+            forget_remote=forget_remote,
+            data_root=data_root,
+            configs_root=configs_root,
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "manifest": manifest_id,
+            "dest": dest,
+            "tier": tier,
+            "pushed": res.pushed,
+            "skipped": res.skipped,
+            "verified": res.verified,
+            "failed": len(res.failed),
+            "bytes": res.bytes,
+        }
+        human = [f"pushed {res.pushed}, skipped {res.skipped}, verified {res.verified} -> {dest}"]
+        if res.forgotten:
+            fields["forgotten"] = res.forgotten
+            human.append(f"rclone remote {res.forgotten!r} forgotten")
+        payload = {
+            "pushed": res.pushed,
+            "skipped": res.skipped,
+            "verified": res.verified,
+            "failed": res.failed,
+            "bytes": res.bytes,
+            "forgotten": res.forgotten,
+        }
+        return "OK", fields, payload, human
+
+    run_command("backup.push", json_mode, data_root, fn)

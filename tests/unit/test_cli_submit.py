@@ -94,3 +94,50 @@ def test_init_failures(pair):
     assert r.exit_code == 2 and "status=ABORT" in _verdict(r.output)
     r = runner.invoke(app, _init_args(**{"--platform": "kaggle"}))
     assert r.exit_code == 1 and "competition" in _verdict(r.output)
+
+
+def _ready(pair):
+    from submit_fixtures import seed_eval_runs, seed_judgements, seed_test_runs
+
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    r = runner.invoke(app, _init_args(**{"--writer-opt": "id_field=view_stem"}))
+    assert r.exit_code == 0, r.output
+    seed_test_runs(pair)
+
+
+def _stage(sid, eval_run, test_run, *extra):
+    return runner.invoke(
+        app,
+        [
+            "submit",
+            "stage",
+            "--dataset",
+            "beach-test",
+            "--id",
+            sid,
+            "--eval-run",
+            eval_run,
+            "--test-run",
+            test_run,
+            *extra,
+        ],
+    )
+
+
+def test_stage_and_verify_cli(pair):
+    _ready(pair)
+    r = _stage("S1", "good", "good.test")
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "status=WARN" in v and "admission=PASS" in v and "pairing=single" in v
+    assert "rows=50" in v and "writer=scores_csv" in v
+    r = _stage("S2", "bad", "bad.test")
+    assert r.exit_code == 1 and "not_admitted" in _verdict(r.output)
+    r = _stage("S2", "bad", "bad.test", "--kind", "probe", "--reason", "look")
+    assert r.exit_code == 0 and "admission=waived" in _verdict(r.output)
+    r = _stage("S3", "bad", "bad.test", "--kind", "royal")
+    assert r.exit_code == 1 and "status=FAIL" in _verdict(r.output)
+    r = runner.invoke(app, ["submit", "verify", "--dataset", "beach-test", "--id", "S1", "--json"])
+    assert r.exit_code == 0, r.output
+    assert _json(r)["result"]["checks"][1] == "rebuild=ok"

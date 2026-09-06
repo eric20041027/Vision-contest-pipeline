@@ -18,7 +18,10 @@ from vcp.cli_common import (
 )
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
+from vcp.core.paths import resolve_data_root
 from vcp.train.run import RunSpec, train_run
+from vcp.train.status import status as status_view
+from vcp.train.status import upload_run
 
 train_app = typer.Typer(no_args_is_help=True, help="training commands")
 
@@ -121,3 +124,70 @@ def run_cmd(
         return status, fields, res.record.model_dump(mode="json"), human
 
     run_command("train.run", json_mode, data_root, fn)
+
+
+@train_app.command("upload")
+def upload_cmd(
+    run: RunOpt,
+    dest: Annotated[str, typer.Option("--dest", help="remote:path (rclone) or a directory")],
+    only: Annotated[
+        str | None, typer.Option("--only", help="'final' to upload only the final checkpoint")
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Upload a run's registered checkpoints and verify them (idempotent)."""
+
+    def fn() -> CmdResult:
+        if only not in (None, "final"):
+            raise ValidationFailed(f"--only accepts 'final', got {only!r}")
+        root = resolve_data_root(data_root)
+        record, out = upload_run(root, run, dest, only_final=only == "final")
+        verified = sum(1 for r in out.records if r.verified)
+        fields: dict[str, FieldValue] = {
+            "run": run,
+            "dest": dest,
+            "uploaded": out.uploaded,
+            "verified": verified,
+            "skipped": out.skipped,
+        }
+        status: Status = "FAIL" if verified < len(out.records) else "OK"
+        human = [f"{r.name}: {'verified' if r.verified else 'NOT verified'}" for r in out.records]
+        return status, fields, record.model_dump(mode="json"), human
+
+    run_command("train.upload", json_mode, data_root, fn)
+
+
+@train_app.command("status")
+def status_cmd(
+    run: RunOpt,
+    verify: Annotated[bool, typer.Option("--verify", help="re-hash every checkpoint")] = False,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Attempts, checkpoints and their backups. Reads, never writes."""
+
+    def fn() -> CmdResult:
+        st = status_view(resolve_data_root(data_root), run, verify=verify)
+        fields: dict[str, FieldValue] = {
+            "run": run,
+            "attempts": len(st.record.attempts),
+            "checkpoints": len(st.record.checkpoints),
+            "backed": st.backed,
+            "unbacked": len(st.unbacked),
+            "running": st.running,
+        }
+        if verify:
+            fields["drift"] = len(st.drift)
+        if st.missing:
+            fields["missing"] = len(st.missing)
+        human = [f"unbacked: {p}" for p in st.unbacked]
+        human += [f"missing: {p}" for p in st.missing]
+        human += [f"drift: {p}" for p in st.drift]
+        warn = bool(st.unbacked or st.missing or st.drift or st.running)
+        payload = {**st.record.model_dump(mode="json"), "drift": st.drift, "missing": st.missing}
+        return ("WARN" if warn else "OK"), fields, payload, human
+
+    run_command("train.status", json_mode, data_root, fn)

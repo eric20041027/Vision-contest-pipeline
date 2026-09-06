@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from vcp.core.errors import ValidationFailed, VcpError
+from vcp.backup import dest as destmod
+from vcp.core.errors import PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
-from vcp.train import upload as upmod
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.schema import TrainRecord
 from vcp.train.upload import NAME_COLLISION, dest_kind, merge_uploads, upload
@@ -176,8 +176,8 @@ def test_rclone_upload_reports_unverified_and_failures(roots):
 
 def test_default_runner_requires_rclone(roots, monkeypatch):
     rec, _ = _registered(roots)
-    monkeypatch.setattr(upmod.shutil, "which", lambda name, *a, **k: None)
-    with pytest.raises(VcpError, match="rclone not found"):
+    monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)
+    with pytest.raises(VcpError, match="rclone_not_found"):
         upload(rec, "gdrive:w", data_root=roots.data)
 
 
@@ -209,5 +209,21 @@ def test_rclone_failure_message_is_redacted(roots):
         return subprocess.CompletedProcess(args, 1, stdout="", stderr=f"copy failed key={secret}")
 
     with pytest.raises(VcpError, match="copyto failed") as ei:
+        upload(rec, "gdrive:w", data_root=roots.data, runner=runner)
+    assert secret not in str(ei.value) and "<redacted>" in str(ei.value)
+
+
+def test_rclone_upload_hashsum_failure_is_a_platform_error(roots):
+    """Going through `backup/dest.py`'s `RcloneDest` means a `hashsum` that runs and fails is no
+    longer silently "nothing there" (the old `_hashsum` treated any non-zero exit that way): it
+    is now a `PlatformError`, redacted, and raised before a single byte is copied."""
+    rec, _ = _registered(roots)
+    secret = "fakesecretfakesecretfakesecret1234"
+
+    def runner(args):
+        assert args[1] != "copyto"  # the before-hashsum must fail first: nothing to copy yet
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr=f"token={secret}")
+
+    with pytest.raises(PlatformError, match="hashsum failed") as ei:
         upload(rec, "gdrive:w", data_root=roots.data, runner=runner)
     assert secret not in str(ei.value) and "<redacted>" in str(ei.value)

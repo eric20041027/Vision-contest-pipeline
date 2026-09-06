@@ -194,7 +194,7 @@
 
 - **單元**：schema（`extra="forbid"`、role / tier / kind 字彙、`present=false` 需有 sha）；四種結論的證據圖（以 `tests/submit_fixtures.py` 建 eval / test dataset、`good` / `bad` run、融合 run 與成員、預登記與判決、staged submission）：每種結論的檔集合、去重與 `for` 合併、排序、`present=false`、`remote_copy` 判定（有 verified upload 紀錄 vs 沒有）、`external` root；清單寫讀；push 本機 dest（複製、讀回、冪等、不符 FAIL、tier 過濾）；假 rclone runner（`hashsum` 前後兩次、`copyto` 只對不同的檔、失敗訊息 redact、`config delete` 只在全 verified 後、本機 dest 配 `--forget-remote` 拒絕）；verify 三層各一陽一陰（dest 少檔 → missing、改預測檔 → drift、改台帳 ts 順序 → bad_stamps、卡的 `created_at` 壞 → bad_stamps）；pull（缺檔拉回並驗、衝突、`--overwrite` 留 `.bak`）；status（無清單、從未 verify、rclone 設定檔存在）；`proc.py` 搬家後 submit 與 train 既有測試不變。
 - **CLI**：每個命令的 VERDICT 欄位與 exit code；`--json`。
-- **端到端** `tests/unit/test_e2e_backup.py`：延伸 Plan 6 的手動平台劇本到 final → `manifest submission:S1` → `push` 本機目錄 `--tier 2` → 第二次 push 全 skipped → `verify --dest` OK → 刪本機一個預測檔 → `pull` 拉回 → 改 `readings.jsonl` 一個 `ts` 順序 → `verify` FAIL `bad_stamps=1`；假 rclone runner 版本：`push --tier 1 --forget-remote` → `config delete` 被呼叫、`remote_forgotten` 列、隱私掃描零命中。
+- **端到端** `tests/unit/test_e2e_backup.py`：延伸 Plan 6 的手動平台劇本到 final → `manifest submission:S1` → `push` 本機目錄 `--tier 2` → 第二次 push 全 skipped → `verify --dest --tier 2` OK（實作後加的 `--tier`，見 §14）→ 刪本機一個預測檔 → `pull` 拉回 → 改 `readings.jsonl` 一個 `ts` 順序 → `verify` FAIL `bad_stamps=1`；假 rclone runner 版本：`push --tier 1 --forget-remote` → `config delete` 被呼叫、`remote_forgotten` 列、隱私掃描零命中。
 - **真資料**：RSNA `manifest --conclusion all` 只列不推（無資料即 skip）。
 
 ## 12. 驗收條件

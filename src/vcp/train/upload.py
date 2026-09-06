@@ -1,8 +1,14 @@
 """Upload registered checkpoints to an rclone remote or a local directory, and verify (spec 6.3).
 
 A copy is not a backup until its bytes are known to match: rclone destinations are checked with
-``rclone hashsum sha256``, local ones by reading the copy back. rclone is not a dependency; it is
-shelled out through an injectable runner so the whole path is testable without a remote.
+``rclone hashsum sha256``, local ones by reading the copy back. The rclone side goes through
+``vcp.backup.dest`` (the same ``RcloneDest`` push / verify / pull use, command prefix
+``vcp.backup.dest.RCLONE``), so its failure modes are theirs now, not this module's own: rclone
+missing (and no runner injected) is still ``VcpError("rclone_not_found: ...")`` (ABORT), but an
+rclone command that runs and fails is a ``PlatformError`` (FAIL, its last line redacted) rather
+than the ``VcpError`` this module used to raise directly; ``hashsum`` exit 3 / 4 means "nothing
+there yet", any other non-zero exit -- or a hash column that is not a sha256 -- is an error where
+it used to be silently treated as an empty listing.
 """
 
 from __future__ import annotations
@@ -11,11 +17,14 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from vcp.backup.dest import dest_kind
-from vcp.core.errors import ValidationFailed, VcpError
+# `dest_kind` moved to `backup/dest.py` (spec 14); re-exported so `vcp.train.upload.dest_kind`
+# keeps working for anything that still imports it from here.
+from vcp.backup.dest import LocalDest, RcloneDest, open_dest
+from vcp.backup.dest import dest_kind as dest_kind
+from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_stored_path
-from vcp.core.proc import Runner, default_runner, last_line
+from vcp.core.proc import Runner
 from vcp.core.time import stamp
 from vcp.train.schema import CheckpointRecord, TrainRecord, UploadRecord
 
@@ -91,42 +100,23 @@ def _upload_local(
     return UploadOutcome(records, uploaded, skipped)
 
 
-def _hashsum(runner: Runner, base: str) -> dict[str, str]:
-    """``rclone hashsum sha256 <base>`` as {name: sha}; an unlistable base is simply empty."""
-    proc = runner(["rclone", "hashsum", "sha256", base])
-    if proc.returncode != 0:
-        return {}
-    out: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) == 2:
-            out[parts[1].strip()] = parts[0]
-    return out
-
-
 def _upload_rclone(
     record: TrainRecord,
     dest: str,
     targets: dict[str, CheckpointRecord],
     data_root: Path,
-    runner: Runner,
+    target: RcloneDest,
 ) -> UploadOutcome:
-    sources = {name: _source(c, data_root) for name, c in targets.items()}
-    base = f"{dest.rstrip('/')}/{record.run_id}"
-    before = _hashsum(runner, base)
+    sources = {name: _source(c, data_root) for name, c in targets.items()}  # all checks first
+    before = target.hashes(record.run_id, list(targets))
     uploaded = skipped = 0
     for name, c in targets.items():
         if before.get(name) == c.sha256:
             skipped += 1
             continue
-        proc = runner(["rclone", "copyto", str(sources[name]), f"{base}/{name}", "--checksum"])
-        if proc.returncode != 0:
-            raise VcpError(
-                f"rclone copyto failed (exit {proc.returncode}) for {name}: "
-                f"{last_line(proc.stderr or proc.stdout)}"
-            )
+        target.put(sources[name], record.run_id, name)
         uploaded += 1
-    after = _hashsum(runner, base)
+    after = target.hashes(record.run_id, list(targets))
     records = [
         _record(dest, "rclone", name, c.sha256, after.get(name) == c.sha256)
         for name, c in targets.items()
@@ -145,13 +135,10 @@ def upload(
     """Copy the run's registered checkpoints to ``dest/<run_id>/`` and verify every one."""
     chosen = [c for c in record.checkpoints if c.final] if only_final else list(record.checkpoints)
     targets = _targets(chosen)
-    if dest_kind(dest) == "local":
+    target = open_dest(dest, runner)
+    if isinstance(target, LocalDest):
         return _upload_local(record, dest, targets, data_root)
-    if runner is None:
-        if shutil.which("rclone") is None:
-            raise VcpError("rclone not found on PATH; install it or use a local --upload directory")
-        runner = default_runner
-    return _upload_rclone(record, dest, targets, data_root, runner)
+    return _upload_rclone(record, dest, targets, data_root, target)
 
 
 def merge_uploads(record: TrainRecord, new: list[UploadRecord]) -> TrainRecord:

@@ -199,3 +199,13 @@ def test_parse_errors_redact_the_raw_value():
     with pytest.raises(ValidationFailed, match="unparsable date") as ei:
         parse_date(f"token: {SECRET}")
     assert SECRET not in str(ei.value)
+
+
+def test_failure_message_falls_back_to_stdout(tmp_path):
+    p = get_platform("kaggle")
+    art = tmp_path / "submission.csv"
+    art.write_text("id\n", encoding="utf-8")
+    runner = FakeRunner([(1, f"denied on stdout key={SECRET}", " \n")])
+    with pytest.raises(PlatformError, match="denied on stdout") as ei:
+        p.upload(_staged(), art, "S1", _profile(), runner)
+    assert SECRET not in str(ei.value)

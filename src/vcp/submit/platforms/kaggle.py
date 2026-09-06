@@ -46,8 +46,9 @@ def _last_line(text: str) -> str:
 
 
 def _failed(proc: Any) -> PlatformError:
+    text = (proc.stderr or "").strip() or (proc.stdout or "")
     return PlatformError(
-        f"kaggle CLI failed (exit {proc.returncode}): {_last_line(proc.stderr or proc.stdout)}",
+        f"kaggle CLI failed (exit {proc.returncode}): {_last_line(text)}",
         fields={"exit_code": proc.returncode},
     )
 

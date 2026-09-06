@@ -101,6 +101,8 @@ def final(
 ) -> FinalResult:
     paths, profile, profile_sha, ledger = _open(dataset, data_root, configs_root)
     assert_unlocked(ledger)
+    if slots is not None and slots < 1:
+        raise ValidationFailed(f"slots: must be >= 1, got {slots}", fields={"slots": slots})
     now = utc_now()
     warnings: list[str] = []
     if profile.deadline is not None and now >= parse_stamp(profile.deadline):
@@ -153,7 +155,7 @@ def final(
             "no_sealed_readings: no uploaded candidate or baseline has a usable sealed reading; "
             "run `vcp eval measure --run R --subsets <sealed> --unseal --reason ...` first"
         )
-    n = slots or profile.final_slots
+    n = slots if slots is not None else profile.final_slots
     chosen = [e.submission_id for e in ranked[:n]]
     unranked = [e.submission_id for e in entries if not e.eligible and e.why not in NOT_RANKED]
     needs_reupload: str | None = None

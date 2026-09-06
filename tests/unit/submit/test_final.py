@@ -154,3 +154,11 @@ def test_lock_and_unlock(uploaded):
     assert unlock(TEST, "deadline extended", **_kw(uploaded)).event == "unlock"
     with pytest.raises(ValidationFailed, match="not_locked"):
         unlock(TEST, "again", **_kw(uploaded))
+
+
+def test_final_rejects_slots_below_one(uploaded):
+    with pytest.raises(ValidationFailed, match="slots: must be >= 1"):
+        final(TEST, slots=0, dry_run=True, **_kw(uploaded))
+    with pytest.raises(ValidationFailed, match="slots: must be >= 1"):
+        final(TEST, slots=-1, dry_run=True, **_kw(uploaded))
+    assert SubmissionLedger(uploaded.test_paths.submissions_log).of("final") == []

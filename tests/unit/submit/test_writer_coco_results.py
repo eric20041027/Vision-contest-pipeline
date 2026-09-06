@@ -37,6 +37,7 @@ def test_entries_are_sorted_compact_and_deterministic(tmp_path):
     res = w.write(list(reversed(preds)), WriteContext(ds, list(ds.samples), {}, out))
     assert res.rows == 3 and res.samples == 2 and res.missing == []
     text = out.read_bytes()
+    assert b"\r" not in text
     assert text.endswith(b"\n") and b" " not in text.split(b"\n")[0]
     entries = json.loads(text)
     assert entries[0] == {

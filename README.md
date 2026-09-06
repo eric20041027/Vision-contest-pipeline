@@ -98,7 +98,7 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 | `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等 | `--run`、`--dest`、`--only final` |
 | `vcp train status` | attempts / checkpoints / 副本（唯讀） | `--run`、`--verify`（重算 sha） |
 
-共用選項：`--json`、`--data-root`、`--configs-root`。`--upload` 的目的地：`remote:path` 走 rclone（`copyto --checksum` + `hashsum sha256` 逐檔比對；rclone 要自己裝），其餘是本機 / 掛載目錄（複製後讀回驗 sha）。訓練命令 exit ≠ 0 → `status=FAIL exit_code=N`，checkpoint 仍登記但不上傳；沒給 `--seed`、`--venv`、`--final` 各 WARN 一項。`run.yaml` 就是量測層的 run：之後 `vcp eval ingest --run R ...` 直接接上，不必再給 `--trained-on` / `--framework`。
+共用選項：`--json`、`--data-root`、`--configs-root`。`--upload` 的目的地：`remote:path` 走 rclone，經 `vcp.backup.dest.RcloneDest`（`copyto --checksum` + `hashsum sha256` 逐檔比對，指令前綴 `vcp.backup.dest.RCLONE`；rclone 不在 PATH 又沒注入 runner 是 `VcpError("rclone_not_found: ...")` ABORT，指令有跑但失敗是 `PlatformError`〔FAIL，最後一行已去敏〕；`hashsum` exit 3/4 才算「還沒東西」，其餘非 0 或雜湊欄不是 sha256 都是錯誤），其餘是本機 / 掛載目錄（複製後讀回驗 sha）。訓練命令 exit ≠ 0 → `status=FAIL exit_code=N`，checkpoint 仍登記但不上傳；沒給 `--seed`、`--venv`、`--final` 各 WARN 一項。`run.yaml` 就是量測層的 run：之後 `vcp eval ingest --run R ...` 直接接上，不必再給 `--trained-on` / `--framework`。
 
 ### 一次訓練到量測
 

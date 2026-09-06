@@ -10,14 +10,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from vcp.backup.schema import ROLES, TIER_OF, FileEntry, RemoteCopy
+from vcp import __version__
+from vcp.backup.ledger import BackupLedger
+from vcp.backup.manifest import default_manifest_id, write_manifest
+from vcp.backup.schema import ROLES, TIER_OF, BackupRow, FileEntry, Manifest, RemoteCopy
+from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
-from vcp.core.paths import DatasetPaths, resolve_stored_path, validate_name
+from vcp.core.paths import DatasetPaths, logs_dir, resolve_stored_path, validate_name
+from vcp.core.time import stamp
 from vcp.fuse.build import load_record, record_path
 from vcp.fuse.recipes import recipe_path
+from vcp.measure.prereg import list_preregs, load_prereg, prereg_path
 from vcp.measure.report import JUDGEMENTS_LEDGER, READINGS_LEDGER, SIGMA_LEDGER
 from vcp.measure.runs import load_run, run_dir
+from vcp.measure.schema import RunCard
+from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.profile import load_profile
+from vcp.submit.stage import load_staged, stage_json
 from vcp.train.records import events_path, has_record, train_dir, train_yaml
 from vcp.train.records import load_record as load_train_record
 from vcp.train.schema import CheckpointRecord, TrainRecord
@@ -98,7 +108,8 @@ class Collector:
             sha256 = sha256_file(path)
             size = path.stat().st_size
         elif sha256 is None:
-            self.unlisted.append(key)
+            if key not in self.unlisted:
+                self.unlisted.append(key)
             return
         else:
             self.missing.append(key)
@@ -197,3 +208,145 @@ class Collector:
                 size=c.bytes,
                 remote=remote,
             )
+
+    def walk_judgement(self, dpaths: DatasetPaths, prereg_id: str, conclusion: str) -> None:
+        path = prereg_path(dpaths, prereg_id)
+        if not path.is_file():
+            raise ValidationFailed(
+                f"not_found: pre-registration {prereg_id!r} ({path})", fields={"prereg": prereg_id}
+            )
+        pr = load_prereg(dpaths, prereg_id)
+        self.add(path, "prereg", conclusion)
+        if dpaths.prereg_log.is_file():
+            self.add(dpaths.prereg_log, "prereg_log", conclusion)
+        self.measure_ledgers(dpaths, conclusion)
+        self.walk_run(pr.baseline_run, conclusion)
+        self.walk_run(pr.candidate_run, conclusion)
+
+    def walk_submission(self, tpaths: DatasetPaths, submission_id: str, conclusion: str) -> None:
+        profile, _ = load_profile(tpaths)
+        if not stage_json(tpaths, submission_id).is_file():
+            raise ValidationFailed(
+                f"not_found: submission {submission_id!r} has no stage.json under "
+                f"{tpaths.submission_dir(submission_id)}",
+                fields={"id": submission_id},
+            )
+        staged = load_staged(tpaths, submission_id)
+        self.add(tpaths.submit_yaml, "submit_profile", conclusion)
+        if tpaths.submissions_log.is_file():
+            self.add(tpaths.submissions_log, "submissions_log", conclusion)
+        self.add(stage_json(tpaths, submission_id), "stage", conclusion)
+        if staged.artifact.kind == "file":
+            self.add(
+                tpaths.submission_dir(submission_id) / str(staged.artifact.path),
+                "artifact",
+                conclusion,
+                sha256=staged.artifact.sha256,
+                size=staged.artifact.bytes,
+            )
+        self.walk_run(staged.eval_run, conclusion)
+        if staged.test_run:
+            self.walk_run(staged.test_run, conclusion)
+        for w in staged.artifact.weights:
+            self.walk_run(w.run, conclusion)
+        epaths = self._dataset_paths(profile.eval_dataset)
+        for pid in staged.gate.judgements:
+            self.walk_judgement(epaths, pid, conclusion)
+        self.dataset_basics(tpaths, profile.test_plan, conclusion)
+
+    def walk_all(self, dpaths: DatasetPaths) -> None:
+        conclusion = "all"
+        if dpaths.runs_dir.is_dir():
+            for p in sorted(dpaths.runs_dir.glob("*/run.yaml")):
+                try:
+                    card = load_yaml_model(p, RunCard)
+                except (ValidationFailed, OSError, UnicodeDecodeError):
+                    continue  # another project's or a half-written card is not this dataset's
+                if card.dataset == dpaths.name:
+                    self.walk_run(card.run_id, conclusion)
+        for pid in list_preregs(dpaths):
+            self.walk_judgement(dpaths, pid, conclusion)
+        if dpaths.submit_yaml.is_file():
+            for sid in SubmissionLedger(dpaths.submissions_log).ids():
+                if stage_json(dpaths, sid).is_file():
+                    self.walk_submission(dpaths, sid, conclusion)
+        self.dataset_basics(dpaths, None, conclusion)
+        if dpaths.splits_dir.is_dir():
+            for p in sorted(dpaths.splits_dir.glob("*.json")):
+                self.add(p, "plan", conclusion)
+            for p in sorted(dpaths.splits_dir.glob("*.unseal.jsonl")):
+                self.add(p, "unseal_log", conclusion)
+        self.measure_ledgers(dpaths, conclusion)
+        if dpaths.samples_jsonl.is_file():
+            self.add(dpaths.samples_jsonl, "samples", conclusion)
+        if dpaths.raw_manifest.is_file():
+            self.add(dpaths.raw_manifest, "raw_manifest", conclusion)
+        for p in sorted(logs_dir(self.data_root).glob("vcp-*.jsonl")):
+            self.add(p, "logs", conclusion)
+
+
+@dataclass(frozen=True)
+class ManifestResult:
+    manifest: Manifest
+    path: Path
+    missing: list[str]
+    unlisted: list[str]
+
+
+def build_manifest(
+    dataset: str,
+    conclusion: str,
+    *,
+    manifest_id: str | None = None,
+    data_root: Path | None = None,
+    configs_root: Path | None = None,
+) -> ManifestResult:
+    """Walk the conclusion, write the manifest (once) and its ledger row."""
+    paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+    kind, ident = parse_conclusion(conclusion)
+    if not paths.card_yaml.is_file():
+        raise ValidationFailed(f"not_found: dataset {dataset!r} ({paths.card_yaml})")
+    mid = manifest_id or default_manifest_id(conclusion)
+    validate_name(mid)
+    if paths.backup_manifest(mid).exists():
+        raise ValidationFailed(f"exists: manifest {mid!r}", fields={"manifest": mid})
+    col = Collector(paths.data_root, paths.configs_root)
+    if kind == "run":
+        if not (run_dir(paths.data_root, ident) / "run.yaml").is_file():
+            raise ValidationFailed(f"not_found: run {ident!r}", fields={"run": ident})
+        if load_run(paths.data_root, ident).dataset != dataset:
+            raise ValidationFailed(
+                f"run {ident!r} belongs to dataset {load_run(paths.data_root, ident).dataset!r}, "
+                f"not {dataset!r}",
+                fields={"run": ident},
+            )
+        col.walk_run(ident, conclusion)
+    elif kind == "judgement":
+        col.walk_judgement(paths, ident, conclusion)
+    elif kind == "submission":
+        col.walk_submission(paths, ident, conclusion)
+    else:
+        col.walk_all(paths)
+    manifest = Manifest(
+        manifest_id=mid,
+        dataset=dataset,
+        conclusion=conclusion,
+        created_at=stamp(),
+        vcp_version=__version__,
+        data_root=paths.data_root.as_posix(),
+        files=col.files_of(),
+    )
+    path = write_manifest(paths, manifest)
+    BackupLedger(paths.backup_log).append(
+        BackupRow(
+            event="manifest",
+            ts=stamp(),
+            manifest_id=mid,
+            conclusion=conclusion,
+            files=len(manifest.files),
+            bytes_by_tier=manifest.bytes_by_tier(),
+            missing=len(col.missing),
+            remote_copies=sum(1 for f in manifest.files if f.kind == "remote_copy"),
+        )
+    )
+    return ManifestResult(manifest, path, col.missing, col.unlisted)

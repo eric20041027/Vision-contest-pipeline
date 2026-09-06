@@ -16,7 +16,7 @@
 - `measure/<name>/` 只增不改：`readings.jsonl`、`judgements.jsonl`、`sigma.jsonl` 是 append-only 台帳，錨點 `anchors.json` 整份換寫但每次都先寫 `anchors.log.jsonl`。`runs/<run_id>/`（`run.yaml`、`predictions/<subset>.jsonl`）不是只增不改，而是「換寫留痕」：`ingest --replace` 會重寫 `run.yaml` 與該子集的預測檔，舊 sha 進 `history.jsonl`（`history.jsonl` 本身只增不改）。預登記 `configs/datasets/<name>/prereg/<id>.yaml` 與 `prereg.log.jsonl` 進 git，寫下就不改，要改就換 id。融合配方 `configs/datasets/<name>/fuse/<id>.yaml` 進 git、寫了不改；融合 run 是普通 run，另有 `runs/<id>/fuse.json`（每次 build 整份換寫，記每個成員預測檔的 sha 與輸出 sha）。
 - `runs/<id>/train.yaml` 是訓練紀錄的快照（每次事件整份重寫）、`train.log.jsonl` 只增；`train/` 放 console、config 副本、環境快照。checkpoint 不搬動，只記路徑與 sha；`--upload` 的副本另記 sha 與驗證結果。`vcp train run` 開始就寫 `run.yaml`，之後 `eval ingest` 直接接上。
 - 提交治理：`configs/datasets/<test>/submit.yaml`（平台設定，改就改 git）與 `submissions.jsonl`（只 append 的台帳：staged / uploaded / scored / foreign / final / lock / unlock）進 git；輸出檔與 `stage.json` 在 `submit/<test>/<id>/`（寫一次不改）。候選 = (eval run, test run) 配對，身分靠 `weights_hash`；`final` 只看 sealed 讀數。vcp 不碰平台憑證。
-- `configs/datasets/<name>/backup/<manifest_id>.json` 是證據清單（從結論反向生成，寫一次不改，進 git），`backup.log.jsonl` 只增（manifest / push / verify / pull / remote_forgotten）。目的地佈局 `<dest>/data|configs|external/<相對路徑>`；`train upload` 驗過的權重副本記成 `remote_copy`，verify 到原地驗、不重推。`cache/`、`raw/` 永不進清單。
+- `configs/datasets/<name>/backup/<manifest_id>.json` 是證據清單（從結論反向生成，寫一次不改，進 git），`backup.log.jsonl` 只增（manifest / push / verify / pull / remote_forgotten）。目的地佈局 `<dest>/data|configs|external/<相對路徑>`；`train upload` 驗過的權重副本記成 `remote_copy`，verify 到原地驗、不重推。`cache/`、`raw/` 永不進清單；push 推台帳的快照，`--forget-remote` 要整份清單驗證通過。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`

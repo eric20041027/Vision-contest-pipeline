@@ -8,7 +8,7 @@ from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
 from vcp.backup.pull import pull
 from vcp.backup.push import push
-from vcp.backup.status import passed, status
+from vcp.backup.status import local_ok, passed, status
 from vcp.backup.verify import verify
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
 from vcp.core.paths import DatasetPaths
@@ -76,7 +76,8 @@ def test_pull_conflicts_overwrite_and_missing(world):
     with pytest.raises(IntegrityError, match="missing") as ei:
         pull(TEST, "m1", str(vault), tier=3, **_kw(world))
     assert ei.value.fields["missing"] == 1 and not (world.weights / "last.pt").exists()
-    assert BackupLedger(_paths(world).backup_log).latest("pull", "m1").missing == 1
+    row = BackupLedger(_paths(world).backup_log).latest("pull", "m1")
+    assert row.dest_missing == 1 and row.mismatch == [] and row.missing is None
 
 
 def test_pull_rejects_corrupt_copies_without_keeping_them(world):
@@ -112,7 +113,7 @@ def test_overwrite_never_leaves_only_the_backup(world):
     assert pred.read_bytes() == b"edited locally\n"
     assert list(pred.parent.glob("*.bak-*")) == []
     row = BackupLedger(_paths(world).backup_log).latest("pull", "m1")
-    assert row.pulled == 0
+    assert row.pulled == 0 and row.mismatch == ["data/runs/good/predictions/valB.jsonl"]
     broken = FakeRemote(fail="copyto")
     broken.store = honest.store
     with pytest.raises(PlatformError, match="copyto failed") as ei:
@@ -164,12 +165,21 @@ def test_status_view(world, monkeypatch):
     conf.write_text("[gdrive]\n", encoding="utf-8")
     view = status(TEST, runner=FakeRemote(conf=conf), **_kw(world))
     m = view.manifests[0]
-    assert m.pushed_tiers == [1, 2] and m.unpushed_tiers == [3] and m.verified
-    assert m.last_push.tier == 2 and m.last_verify.drift == 0 and view.unverified == []
+    assert m.pushed_tiers == [1, 2] and m.unpushed_tiers == [3]
+    assert not m.verified and m.local_ok  # tier 2 says nothing about the weights' copies
+    assert m.last_push.tier == 2 and m.last_verify.drift == 0 and view.unverified == ["m1"]
     assert view.rclone_conf == "present"
+    push(TEST, "m1", str(vault), tier=3, **_kw(world))
+    verify(TEST, "m1", dest=str(vault), **_kw(world))
+    view = status(TEST, runner=FakeRemote(conf=conf), **_kw(world))
+    m = view.manifests[0]
+    assert m.pushed_tiers == [1, 2, 3] and m.verified and m.local_ok and view.unverified == []
     monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)
     assert status(TEST, **_kw(world)).rclone_conf == "unknown"
     rows = BackupLedger(_paths(world).backup_log).of("verify", "m1")
-    assert passed(rows[-1])
+    assert passed(rows[-1]) and local_ok(rows[-1])
     bad = rows[-1].model_copy(update={"copies": {"ok": 1, "missing": 1, "mismatch": 0}})
     assert not passed(bad) and not passed(rows[-1].model_copy(update={"bad_stamps": 1}))
+    verify(TEST, "m1", **_kw(world))  # no --dest: the copies layer never ran
+    offline = BackupLedger(_paths(world).backup_log).of("verify", "m1")[-1]
+    assert not passed(offline) and local_ok(offline) and offline.copies is None

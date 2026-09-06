@@ -136,8 +136,9 @@ def test_pull_and_status_cli(world, monkeypatch):
     )
     assert r.exit_code == 0, r.output
     r = _run("status", "--dataset", "beach-test")
-    v = _verdict(r.output)
-    assert r.exit_code == 0 and "status=OK" in v and "unverified=0" in v and "m1" in r.output
+    v = _verdict(r.output)  # tier 2 verified: the weights' copies were never checked
+    assert r.exit_code == 0 and "status=WARN" in v and "unverified=1" in v and "m1" in r.output
+    assert "local_ok=True" in r.output
     card = load_run(world.roots.data, "good")
     pred = run_dir(world.roots.data, "good") / card.predictions["valB"].path
     pred.unlink()

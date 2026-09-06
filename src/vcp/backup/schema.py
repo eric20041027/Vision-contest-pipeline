@@ -207,6 +207,8 @@ class BackupRow(_Strict):
     first_bad: str | None = None
     pulled: int | None = None
     conflicts: list[str] | None = None
+    dest_missing: int | None = None
+    mismatch: list[str] | None = None
     external_skipped: int | None = None
     remote: str | None = None
 

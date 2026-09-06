@@ -1,10 +1,14 @@
+import shutil
+
 import pytest
+from typer.testing import CliRunner
 
 from backup_fixtures import make_fusion
 from submit_fixtures import EVAL, TEST
 from vcp.backup.evidence import Collector, build_manifest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
+from vcp.cli import app
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths, logs_dir
 
@@ -84,6 +88,25 @@ def test_walk_all_on_eval_and_test_datasets(world):
         "runs/good.test/run.yaml" in roles2["run_card"]
         and "runs/good/run.yaml" in roles2["run_card"]
     )
+
+
+def test_walk_all_steps_over_a_dangling_reference(world):
+    shutil.rmtree(world.roots.data / "runs" / "bad")  # both judgements name it
+    col = Collector(world.roots.data, world.roots.configs)
+    col.walk_all(_paths(world, EVAL))
+    assert _roles(col.files_of())["run_card"] == ["runs/good/run.yaml"]
+    assert sorted(s.split(": ", 1)[0] for s in col.skipped) == [
+        "judgement:p-bad",
+        "judgement:p-good",
+    ]
+    assert all("not_found" in s for s in col.skipped)
+    res = build_manifest(
+        EVAL, "all", manifest_id="a1", data_root=world.roots.data, configs_root=world.roots.configs
+    )
+    assert len(res.skipped) == 2 and res.missing == []
+    r = CliRunner().invoke(app, ["backup", "manifest", "--dataset", EVAL, "--conclusion", "all"])
+    v = next(line for line in r.output.splitlines() if line.startswith("VERDICT "))
+    assert r.exit_code == 0 and "status=WARN" in v and "skipped=2" in v
 
 
 def test_build_manifest_writes_file_and_ledger_row(world):

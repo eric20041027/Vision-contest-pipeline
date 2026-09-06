@@ -3929,3 +3929,15 @@ git commit -m "test(backup): 端到端（本機 vault 與假 rclone、--forget-r
 - `verify()` 回傳 `VerifyResult`（`copies` / `copy_problems` / `drift` / `bad_stamps` / `first_bad` / `reason` / `ok`）：T6 定義，T7 `status` 只讀台帳列（`passed(row)`），T8 讀 VERDICT 欄位。
 - `BackupRow` 的 `pull` 列用 `missing: int` 與 `failed: list[str]` 記缺檔數與不符清單（欄位已在 T2 存在，`_REQUIRED["pull"]` 不含它們，可選）。
 - CLI 欄位名：`manifest`、`dest`、`tier`、`pushed`、`skipped`、`verified`、`failed`、`bytes`、`forgotten`、`ok`、`missing`、`mismatch`、`drift`、`bad_stamps`、`first_bad`、`pulled`、`conflicts`、`manifests`、`unverified`、`rclone_conf`——與 spec §8 共用欄位一致。
+
+## 執行期修正（以程式碼為準；細節見 `2026-09-06-vcp-plan7-followups.md`）
+
+本計畫的程式碼區塊是執行當時的版本；下列裁決與修正波之後，`src/vcp/backup/` 的實際程式碼優先：
+
+- R0 / R5：Task 7 的兩個 pull 測試（空 store 是 `missing` 不是 `mismatch`；`--tier 3` 前先刪本機 `last.pt`）。
+- R1 / R2：`Collector.add` 的 `unlisted` 去重與其測試。
+- R3：測試重寫台帳 / 卡一律 `newline="\n"`。
+- R4：verify 加 `--tier`（副本層），Task 7 測試與 Task 8 端到端配 `--tier 2`；決定 21。
+- R6：external `source` 兩種絕對路徑都認。
+- 最終審查修正波（F1–F9、F12、F13）：台帳快照 push、清單路徑安全與 external 只還原到既有目錄、`--forget-remote` 要整份清單驗證通過、`absent` 桶、`.bak` 還原、`hashsum` 失敗語意、`status` 的 `verified` / `local_ok`、`all` 走法容忍失聯引用、pull 列專屬欄位、台帳先開、測試不碰真 rclone。
+- R7：push 失敗一律 `verified=0`、全部 `failed`。

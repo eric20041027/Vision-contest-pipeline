@@ -14,6 +14,7 @@
 - 整合測試讀 `VCP_REALDATA_ROOT` / `VCP_REALDATA_CONFIGS`，資料缺席即 skip；`raw/<name>/` 永不修改。
 - `datasets/<name>/cache/materialize/<mode>[-r<長邊>]/` 是可搬移的解碼快取，`manifest.jsonl` 為權威對照。
 - `measure/<name>/` 只增不改：`readings.jsonl`、`judgements.jsonl`、`sigma.jsonl` 是 append-only 台帳，錨點 `anchors.json` 整份換寫但每次都先寫 `anchors.log.jsonl`。`runs/<run_id>/`（`run.yaml`、`predictions/<subset>.jsonl`）不是只增不改，而是「換寫留痕」：`ingest --replace` 會重寫 `run.yaml` 與該子集的預測檔，舊 sha 進 `history.jsonl`（`history.jsonl` 本身只增不改）。預登記 `configs/datasets/<name>/prereg/<id>.yaml` 與 `prereg.log.jsonl` 進 git，寫下就不改，要改就換 id。融合配方 `configs/datasets/<name>/fuse/<id>.yaml` 進 git、寫了不改；融合 run 是普通 run，另有 `runs/<id>/fuse.json`（每次 build 整份換寫，記每個成員預測檔的 sha 與輸出 sha）。
+- `runs/<id>/train.yaml` 是訓練紀錄的快照（每次事件整份重寫）、`train.log.jsonl` 只增；`train/` 放 console、config 副本、環境快照。checkpoint 不搬動，只記路徑與 sha；`--upload` 的副本另記 sha 與驗證結果。`vcp train run` 開始就寫 `run.yaml`，之後 `eval ingest` 直接接上。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`
@@ -22,6 +23,7 @@
 - `uv run vcp eval measure --run R`（護欄 → 讀數；`--unseal --reason` 才動 sealed 子集）/ `uv run vcp eval judge --dataset D --prereg ID [--strict]`
 - `uv run vcp eval status --dataset D` / `uv run vcp eval report --dataset D`（兩者唯讀）；比賽自己的指標或格式以 `--plugin projects.<contest>.metrics` 登記
 - `uv run vcp fuse recipe --dataset D --id R --plan P --method wbf|mean|rank_mean --member RUN[:W]…` / `uv run vcp fuse ablate --dataset D --recipe R --preregister --metric M`（每位成員一份準入預登記，交給 `vcp eval judge`；先 ablate 再 measure）
+- `uv run vcp train run --run R --dataset D --plan P --export DIR --venv ENV --seed N --checkpoints "…" --final "…" [--upload DEST] -- <訓練命令>` / `uv run vcp train status --run R`（唯讀）/ `uv run vcp train upload --run R --dest DEST`（冪等）
 
 ## 文件
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`

@@ -163,6 +163,22 @@ class DatasetPaths:
     def prereg_log(self) -> Path:
         return self.config_dir / "prereg.log.jsonl"
 
+    @property
+    def submit_yaml(self) -> Path:
+        return self.config_dir / "submit.yaml"
+
+    @property
+    def submissions_log(self) -> Path:
+        return self.config_dir / "submissions.jsonl"
+
+    @property
+    def submit_dir(self) -> Path:
+        return self.data_root / "submit" / self.name
+
+    def submission_dir(self, submission_id: str) -> Path:
+        validate_name(submission_id)
+        return self.submit_dir / submission_id
+
     def resolve_image_root(self, card: DatasetCard) -> Path:
         """Absolute image root for this dataset on this machine (see ``store_path``)."""
         return resolve_stored_path(card.image_root, self.data_root)

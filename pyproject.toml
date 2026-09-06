@@ -12,6 +12,7 @@ dependencies = [
   "pillow>=10.0",
   "scikit-learn>=1.4",
   "iterative-stratification>=0.1.9",
+  "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

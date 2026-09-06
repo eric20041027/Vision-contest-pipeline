@@ -197,7 +197,7 @@ def execute(
     console.parent.mkdir(parents=True, exist_ok=True)
     status: AttemptStatus = "finished"
     with console.open("w", encoding="utf-8", newline="\n") as log:
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             command,
             cwd=str(cwd),
             env=env,
@@ -207,24 +207,24 @@ def execute(
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-        )
-        assert proc.stdout is not None
-        try:
-            for line in proc.stdout:
-                log.write(line)
-                log.flush()
-                if on_line is not None:
-                    on_line(line)
-            code = proc.wait()
-        except KeyboardInterrupt:
-            proc.terminate()
+        ) as proc:
+            assert proc.stdout is not None
             try:
-                code = proc.wait(timeout=TERMINATE_TIMEOUT_S)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+                for line in proc.stdout:
+                    log.write(line)
+                    log.flush()
+                    if on_line is not None:
+                        on_line(line)
                 code = proc.wait()
-            status = "interrupted"
-            log.write("\n[vcp] interrupted\n")
+            except KeyboardInterrupt:
+                proc.terminate()
+                try:
+                    code = proc.wait(timeout=TERMINATE_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    code = proc.wait()
+                status = "interrupted"
+                log.write("\n[vcp] interrupted\n")
     if status == "finished" and code != 0:
         status = "failed"
     return code, status

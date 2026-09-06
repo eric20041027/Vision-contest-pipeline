@@ -42,6 +42,10 @@ class IngestSpec(BaseModel):
     trained_on: list[str] = Field(default_factory=list)
     framework: str = ""
     notes: str = ""
+    # Plan 6 decision 1: the files these predictions came from. Their sha256 becomes the run's
+    # weights_hash / config_hash -- a test-side run has no other way to acquire an identity.
+    weights: Path | None = None
+    config: Path | None = None
     keep_input: bool = False
     replace: bool = False
     options: dict[str, str] = Field(default_factory=dict)
@@ -81,6 +85,31 @@ def _export_sha(export_dir: Path | None) -> str | None:
     return sha256_file(manifest)
 
 
+def _file_sha(path: Path | None, what: str) -> str | None:
+    if path is None:
+        return None
+    if not path.is_file():
+        raise ValidationFailed(f"{what} file not found: {path}")
+    return sha256_file(path)
+
+
+def _with_identity(card: RunCard, weights_sha: str | None, config_sha: str | None) -> RunCard:
+    """Fill run.yaml's weights_hash / config_hash from files given at ingest. An empty field may
+    be filled later; a filled one must agree, exactly like --framework / --notes."""
+    source = card.source
+    for name, sha in (("weights_hash", weights_sha), ("config_hash", config_sha)):
+        if sha is None:
+            continue
+        current = getattr(source, name)
+        if current is not None and current != sha:
+            raise ValidationFailed(
+                f"run {card.run_id!r} already declares {name}={current[:12]}; "
+                f"the given file hashes to {sha[:12]}"
+            )
+        source = source.model_copy(update={name: sha})
+    return card.model_copy(update={"source": source})
+
+
 def _run_card(
     spec: IngestSpec,
     data_root: Path,
@@ -89,6 +118,8 @@ def _run_card(
     export_sha: str | None,
 ) -> tuple[RunCard, bool]:
     """Existing run (checked against dataset / plan) or a fresh card."""
+    weights_sha = _file_sha(spec.weights, "weights")
+    config_sha = _file_sha(spec.config, "config")
     if (run_dir(data_root, spec.run_id) / "run.yaml").is_file():
         card = load_run(data_root, spec.run_id)
         assert_run_matches(card, dataset)
@@ -117,7 +148,7 @@ def _run_card(
                 f"run {spec.run_id!r} already declares notes={card.source.notes!r}; "
                 f"got {spec.notes!r}; omit --notes"
             )
-        return card, False
+        return _with_identity(card, weights_sha, config_sha), False
     unknown = sorted(set(spec.trained_on) - plan_subsets)
     if unknown:
         raise ValidationFailed(
@@ -133,6 +164,8 @@ def _run_card(
             framework=spec.framework,
             notes=spec.notes,
             export_manifest_sha=export_sha,
+            weights_hash=weights_sha,
+            config_hash=config_sha,
         ),
         created_at=stamp(),
     )

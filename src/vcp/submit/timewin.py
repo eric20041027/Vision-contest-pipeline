@@ -44,7 +44,7 @@ def parse_at(text: str, tz_name: str) -> datetime:
     """``YYYY-MM-DD HH:MM[:SS]`` read as wall time in ``tz_name`` -> UTC aware datetime."""
     for fmt in AT_FORMATS:
         try:
-            naive = datetime.strptime(text.strip(), fmt)  # noqa: DTZ007 - zone attached below
+            naive = datetime.strptime(text.strip(), fmt)
         except ValueError:
             continue
         return naive.replace(tzinfo=ZoneInfo(tz_name)).astimezone(UTC)

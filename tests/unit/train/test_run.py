@@ -17,6 +17,7 @@ from vcp.train.run import (
     RUN_EXISTS,
     TRAINED_ON_MISMATCH,
     RunSpec,
+    command_found,
     config_hash,
     derive_trained_on,
     execute,
@@ -160,6 +161,19 @@ def test_execute_interrupt_terminates_child(work, tmp_path):
     )
     assert status == "interrupted" and code != 0
     assert "[vcp] interrupted" in (tmp_path / "c.log").read_text(encoding="utf-8")
+
+
+def test_command_found_resolves_relative_to_cwd(tmp_path, monkeypatch):
+    work = tmp_path / "proj"
+    work.mkdir()
+    (work / "train.sh").write_text("echo hi\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # the process cwd is NOT the training cwd
+    assert command_found("train.sh", work, None)
+    assert command_found("./train.sh", work, None)
+    assert command_found(str(work / "train.sh"), tmp_path, None)
+    assert command_found(sys.executable, work, None)
+    assert not command_found("no-such-binary-xyz", work, None)
+    assert not command_found("train.sh", tmp_path, None)
 
 
 def test_train_run_happy_path_writes_run_and_record(roots, work, tmp_path):

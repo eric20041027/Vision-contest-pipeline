@@ -19,7 +19,9 @@ from vcp.submit.writers.base import (
 
 
 def _image_id(value: str) -> int | str:
-    return int(value) if value.isdigit() else value
+    """A canonical decimal id becomes an int (COCO image ids are ints); "07" stays a string,
+    so a zero-padded id can never alias another sample's int id."""
+    return int(value) if value.isdigit() and str(int(value)) == value else value
 
 
 def _segmentation(mask: PredMask, sample: Sample) -> Any:

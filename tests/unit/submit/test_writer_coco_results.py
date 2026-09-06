@@ -84,3 +84,22 @@ def test_masks_polygon_and_rle(tmp_path):
     bad = [Prediction(sample_id="m1", masks=[PredMask(category_id=0, score=0.5, rle="abc")])]
     with pytest.raises(ValidationFailed, match="width/height"):
         w.write(bad, WriteContext(ds, samples, {}, out))
+
+
+def test_zero_padded_ids_stay_strings(tmp_path):
+    from vcp.submit.writers.coco_results import _image_id
+
+    assert _image_id("7") == 7 and _image_id("07") == "07" and _image_id("s7") == "s7"
+    samples = [
+        Sample(sample_id="a", views=[View(path="a.png")], label_source="none", meta={"k": "07"}),
+        Sample(sample_id="b", views=[View(path="b.png")], label_source="none", meta={"k": "7"}),
+    ]
+    ds = Dataset.from_parts(make_card("det", name="z"), samples)
+    preds = [
+        Prediction(sample_id=sid, boxes=[PredBox(x=0, y=0, w=1, h=1, category_id=0, score=0.5)])
+        for sid in ("a", "b")
+    ]
+    out = tmp_path / "results.json"
+    get_writer("coco_results").write(preds, WriteContext(ds, samples, {"id_field": "meta.k"}, out))
+    ids = [e["image_id"] for e in json.loads(out.read_text(encoding="utf-8"))]
+    assert ids == ["07", 7]

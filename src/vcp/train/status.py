@@ -51,19 +51,21 @@ def upload_run(
 ) -> tuple[TrainRecord, UploadOutcome]:
     """Upload a recorded run's checkpoints now; the record and the event log both learn of it."""
     record = load_record(data_root, run_id)
+    before = {(u.dest, u.name, u.sha256) for u in record.uploads}
     outcome = upload(record, dest, data_root=data_root, only_final=only_final, runner=runner)
     record = merge_uploads(record, outcome.records)
     save_record(data_root, record)
     attempt = record.attempts[-1].n if record.attempts else 0
     for r in outcome.records:
-        append_event(
-            data_root,
-            run_id,
-            "uploaded",
-            attempt,
-            dest=dest,
-            name=r.name,
-            sha256=r.sha256,
-            verified=r.verified,
-        )
+        if (r.dest, r.name, r.sha256) not in before:
+            append_event(
+                data_root,
+                run_id,
+                "uploaded",
+                attempt,
+                dest=dest,
+                name=r.name,
+                sha256=r.sha256,
+                verified=r.verified,
+            )
     return record, outcome

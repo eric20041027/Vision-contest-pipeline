@@ -366,20 +366,22 @@ def _upload_all(
 ) -> tuple[TrainRecord, int, int, int]:
     uploaded = verified = skipped = 0
     for dest in spec.uploads:
+        before = {(u.dest, u.name, u.sha256) for u in record.uploads}
         outcome = upload(record, dest, data_root=data_root, runner=spec.rclone_runner)
         record = merge_uploads(record, outcome.records)
         save_record(data_root, record)
         for r in outcome.records:
-            append_event(
-                data_root,
-                spec.run_id,
-                "uploaded",
-                n,
-                dest=dest,
-                name=r.name,
-                sha256=r.sha256,
-                verified=r.verified,
-            )
+            if (r.dest, r.name, r.sha256) not in before:
+                append_event(
+                    data_root,
+                    spec.run_id,
+                    "uploaded",
+                    n,
+                    dest=dest,
+                    name=r.name,
+                    sha256=r.sha256,
+                    verified=r.verified,
+                )
         uploaded += outcome.uploaded
         skipped += outcome.skipped
         verified += sum(1 for r in outcome.records if r.verified)

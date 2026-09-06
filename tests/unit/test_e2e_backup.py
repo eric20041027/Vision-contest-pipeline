@@ -244,26 +244,30 @@ def test_fake_rclone_story(world, tmp_path, monkeypatch):
     r = _backup("push", *common, "--tier", "1", "--forget-remote")
     outputs.append(r.output)
     v = _verdict(r.output)
-    assert r.exit_code == 0 and "failed=0" in v and "forgotten=fake" in v
-    assert (store / "deleted-fake").is_file()
+    manifest = load_manifest(_paths(world, "beach-test"), "r1")
+    rest = sum(1 for f in manifest.files if f.tier > 1 and f.kind == "file")
+    assert r.exit_code == 1 and "forget_refused" in v and f"unverified={rest}" in v
+    assert not (store / "deleted-fake").exists()  # tiers 2 and 3 are not at the destination yet
     assert (
         store / "fake" / "vault" / "configs" / "datasets" / "beach-test" / "submit.yaml"
     ).is_file()
     assert not (store / "fake" / "vault" / "data" / "runs" / "good" / "predictions").exists()
+    r = _backup("push", *common, "--tier", "3", "--forget-remote")
+    outputs.append(r.output)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "failed=0" in v and "forgotten=fake" in v
+    assert (store / "deleted-fake").is_file()
     ledger = BackupLedger(_paths(world, "beach-test").backup_log)
-    assert [row.event for row in ledger.rows[-3:]] == ["push", "push", "remote_forgotten"]
-    assert ledger.rows[-1].remote == "fake" and ledger.rows[-3].failed == [
+    assert [row.event for row in ledger.rows[-4:]] == ["push", "push", "push", "remote_forgotten"]
+    assert ledger.rows[-1].remote == "fake" and ledger.rows[-4].failed == [
         "configs/datasets/beach-test/submit.yaml"
     ]
     r = _backup("verify", *common)
     outputs.append(r.output)
     v = _verdict(r.output)
-    manifest = load_manifest(_paths(world, "beach-test"), "r1")
-    tier1 = sum(1 for f in manifest.files if f.tier == 1 and f.kind == "file")
-    rest = sum(1 for f in manifest.files if f.tier > 1 and f.kind == "file")
-    assert (
-        r.exit_code == 1 and f"ok={tier1 + 1}" in v and f"missing={rest}" in v
-    )  # +1: the remote_copy, verified in place
+    files = sum(1 for f in manifest.files if f.kind == "file")
+    assert r.exit_code == 0 and f"ok={files + 1}" in v and "missing=0" in v
+    # +1: the remote_copy, verified in place at the destination `train upload` used
     profile = _paths(world, "beach-test").submit_yaml
     original = profile.read_bytes()
     profile.unlink()

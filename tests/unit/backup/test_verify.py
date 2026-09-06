@@ -53,7 +53,8 @@ def test_verify_clean_world(world, pushed):
     assert res.ok and res.drift == [] and res.bad_stamps == [] and res.first_bad is None
     assert res.reason is None and res.problems == []
     n = len(load_manifest(_paths(world), "m1").files)
-    assert res.copies == {"ok": n, "missing": 0, "mismatch": 0}  # the remote_copy verified in place
+    # the remote_copy verified in place
+    assert res.copies == {"ok": n, "missing": 0, "mismatch": 0, "absent": 0}
     row = BackupLedger(_paths(world).backup_log).latest("verify", "m1")
     assert row.copies == res.copies and row.drift == 0 and row.bad_stamps == 0
     assert row.dest == str(pushed) and row.first_bad is None
@@ -71,7 +72,7 @@ def test_verify_tier_bounds_the_copies_layer(world):
     m = load_manifest(_paths(world), "m1")
     res = verify(TEST, "m1", dest=str(vault), tier=2, **_kw(world))
     within = sum(1 for f in m.files if f.tier <= 2)
-    assert res.ok and res.copies == {"ok": within, "missing": 0, "mismatch": 0}
+    assert res.ok and res.copies == {"ok": within, "missing": 0, "mismatch": 0, "absent": 0}
     assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 2
     res = verify(TEST, "m1", dest=str(vault), **_kw(world))  # default tier 3: everything
     assert res.copies["missing"] == 1 and res.reason == "missing"
@@ -98,7 +99,23 @@ def test_verify_copies_missing_and_mismatch(world, pushed):
     ]
     assert res.reason == "mismatch" and res.drift == [] and res.bad_stamps == []
     row = BackupLedger(_paths(world).backup_log).latest("verify", "m1")
-    assert row.copies == {"ok": res.copies["ok"], "missing": 1, "mismatch": 2}
+    assert row.copies == {"ok": res.copies["ok"], "missing": 1, "mismatch": 2, "absent": 0}
+
+
+def test_verify_absent_files_do_not_fail(world):
+    (world.weights / "last.pt").unlink()  # listed with the sha the train record vouches for
+    res = build_manifest(TEST, "submission:S1", manifest_id="m1", **_kw(world))
+    assert res.missing == ["data/work/good/weights/last.pt"]
+    vault = world.tmp / "vault"
+    push(TEST, "m1", str(vault), tier=3, **_kw(world))
+    n = len(res.manifest.files)
+    out = verify(TEST, "m1", dest=str(vault), **_kw(world))
+    assert out.ok and out.copies == {"ok": n - 1, "missing": 0, "mismatch": 0, "absent": 1}
+    stray = vault / "data" / "work" / "good" / "weights" / "last.pt"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_bytes(b"not last")
+    out = verify(TEST, "m1", dest=str(vault), **_kw(world))
+    assert out.copies["mismatch"] == 1 and out.copies["absent"] == 0 and not out.ok
 
 
 def test_verify_consistency_drift(world, pushed):
@@ -190,7 +207,7 @@ def test_verify_remote_copy_on_rclone(world):
     remote = FakeRemote()
     remote.store["fake:w/good/best.pt"] = (world.weights / "best.pt").read_bytes()
     res = verify(EVAL, "mg", dest="fake:vault", runner=remote, **_kw(world))
-    assert res.copies == {"ok": 1, "missing": len(m.files) - 1, "mismatch": 0}
+    assert res.copies == {"ok": 1, "missing": len(m.files) - 1, "mismatch": 0, "absent": 0}
     assert ["rclone", "hashsum", "sha256", "fake:w/good"] in remote.calls
     assert res.reason == "missing"
     assert SECRET not in json.dumps(res.copy_problems)

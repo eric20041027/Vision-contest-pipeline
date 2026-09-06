@@ -16,7 +16,7 @@ from pathlib import Path
 from vcp.backup.dest import Destination, RcloneDest, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
-from vcp.backup.schema import LEDGER_ROLES, BackupRow, FileEntry
+from vcp.backup.schema import LEDGER_ROLES, BackupRow, FileEntry, Manifest
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import DatasetPaths
@@ -124,6 +124,17 @@ def _send(target: Destination, chosen: list[FileEntry], sources: dict[str, Path]
     return _Transfer(pushed, skipped, len(chosen) - len(failed), sent, failed, failure)
 
 
+def _unverified(manifest: Manifest, chosen: list[FileEntry], target: Destination) -> list[str]:
+    """Every ``kind=file`` entry this push did not send -- a higher tier, or one the manifest
+    already recorded as gone -- whose copy at the destination is absent or different. Forgetting
+    the credential is the last act before the machine goes: the whole manifest must be there."""
+    sent = {e.key for e in chosen}
+    rest = [f for f in manifest.files if f.kind == "file" and f.key not in sent]
+    roots = sorted({e.root for e in rest})
+    have = {root: target.hashes(root, [e.path for e in rest if e.root == root]) for root in roots}
+    return [e.key for e in rest if have[e.root].get(e.path) != e.sha256]
+
+
 def push(
     dataset: str,
     manifest_id: str,
@@ -180,6 +191,14 @@ def push(
         )
     forgotten: str | None = None
     if forget_remote and isinstance(target, RcloneDest):
+        left = _unverified(manifest, chosen, target)
+        listed = sum(1 for f in manifest.files if f.kind == "file")
+        if left or sent.verified == 0 or listed == 0:
+            raise ValidationFailed(
+                f"forget_refused: {len(left)} file(s) of the manifest are not verified at "
+                f"{dest}; push every tier first",
+                fields={**counts, "unverified": len(left)},
+            )
         forgotten = target.forget()
         ledger.append(
             BackupRow(

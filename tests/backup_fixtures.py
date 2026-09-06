@@ -107,6 +107,7 @@ class FakeRemote:
         fail: str | None = None,
         conf: Path | None = None,
         deliver: bytes | None = None,
+        unsupported: bool = False,
     ):
         self.store: dict[str, bytes] = {}
         self.calls: list[list[str]] = []
@@ -115,6 +116,7 @@ class FakeRemote:
         self.fail = fail  # this subcommand exits 1
         self.conf = conf  # what `config file` prints
         self.deliver = deliver  # remote->local copyto writes these bytes instead
+        self.unsupported = unsupported  # hashsum reports UNSUPPORTED, as a backend without sha256
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(args))
@@ -131,6 +133,8 @@ class FakeRemote:
                 if path.startswith(base):
                     bad = self.corrupt is not None and path.endswith(self.corrupt)
                     digest = "0" * 64 if bad else hashlib.sha256(data).hexdigest()
+                    if self.unsupported:
+                        digest = "UNSUPPORTED"
                     lines.append(f"{digest}  {path[len(base) :]}")
             if not lines:
                 return subprocess.CompletedProcess(

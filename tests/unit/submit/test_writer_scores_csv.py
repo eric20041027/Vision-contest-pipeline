@@ -72,3 +72,14 @@ def test_regression_targets(tmp_path):
     get_writer("scores_csv").write(preds, _ctx(ds, tmp_path))
     lines = (tmp_path / "submission.csv").read_text(encoding="utf-8").splitlines()
     assert lines[0] == "id,age" and lines[1] == "s0000,30.5"
+
+
+def test_scores_csv_needs_card_categories(tmp_path):
+    samples = [
+        s.model_copy(update={"labels": None, "label_source": "none"}) for s in regression_samples(2)
+    ]
+    ds = Dataset.from_parts(make_card("regression", name="r0", categories=[]), samples)
+    preds = [Prediction(sample_id=s.sample_id, targets={"age": 30.5}) for s in ds.samples]
+    with pytest.raises(ValidationFailed, match="needs the dataset card's categories") as ei:
+        get_writer("scores_csv").write(preds, _ctx(ds, tmp_path))
+    assert ei.value.fields == {"dataset": "r0"}

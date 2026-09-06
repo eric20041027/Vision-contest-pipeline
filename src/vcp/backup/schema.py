@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -91,6 +93,20 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
 }
 
 
+_DRIVE = re.compile(r"^[A-Za-z]:")
+_BAD_SEGMENTS = frozenset({"", ".", ".."})
+
+
+def check_relative_path(path: str) -> None:
+    """A manifest entry's ``path`` is a relative posix path under one of the roots. Nothing else
+    is accepted: ``pull`` writes to it, so a path that can climb out of the root is a way to make
+    a restore write anywhere on the machine."""
+    if not path or "\\" in path or path.startswith("/") or _DRIVE.match(path):
+        raise ValueError(f"path must be a relative posix path, got {path!r}")
+    if any(segment in _BAD_SEGMENTS for segment in path.split("/")):
+        raise ValueError(f"path must have no empty, '.' or '..' segment, got {path!r}")
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -126,10 +142,13 @@ class FileEntry(_Strict):
             raise ValueError(f"unknown role {self.role!r}")
         if self.tier != TIER_OF[self.role]:
             raise ValueError(f"role {self.role!r} is tier {TIER_OF[self.role]}, got {self.tier}")
+        check_relative_path(self.path)
         if (self.kind == "remote_copy") != (self.remote is not None):
             raise ValueError("kind=remote_copy needs remote, and only then")
         if (self.root == "external") != (self.source is not None):
             raise ValueError("root=external needs source, and only then")
+        if self.source is not None and not Path(self.source).is_absolute():
+            raise ValueError(f"root=external needs an absolute source, got {self.source!r}")
         if not self.for_:
             raise ValueError("an entry must serve at least one conclusion")
         return self
@@ -188,6 +207,7 @@ class BackupRow(_Strict):
     first_bad: str | None = None
     pulled: int | None = None
     conflicts: list[str] | None = None
+    external_skipped: int | None = None
     remote: str | None = None
 
     @model_validator(mode="after")

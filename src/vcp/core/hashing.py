@@ -22,6 +22,21 @@ def sha256_file(path: Path) -> str:
     return _digest_file(path, "sha256")
 
 
+def sha256_prefix(path: Path, n: int) -> str:
+    """sha256 of the first ``n`` bytes: an append-only ledger that only grew still matches the
+    manifest that hashed it shorter, and the first ``n`` bytes are what the manifest describes."""
+    h = hashlib.sha256()
+    left = n
+    with path.open("rb") as f:
+        while left > 0:
+            chunk = f.read(min(_CHUNK, left))
+            if not chunk:
+                break
+            h.update(chunk)
+            left -= len(chunk)
+    return h.hexdigest()
+
+
 def md5_file(path: Path) -> str:
     return _digest_file(path, "md5")
 

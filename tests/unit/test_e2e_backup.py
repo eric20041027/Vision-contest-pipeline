@@ -147,6 +147,17 @@ def test_local_vault_story(world):
         "unseal_log",
     } <= set(files)
     assert sum(f.bytes for f in manifest.files if f.tier == 1) < 16 << 20
+    # the `all` manifest lists logs/vcp-<date>.jsonl, which this very command grew after hashing
+    # it: push sends the snapshot the manifest describes, so the evacuation recipe still works.
+    r = _backup("manifest", "--dataset", "beach", "--conclusion", "all", "--id", "all1")
+    assert r.exit_code == 0 and "status=OK" in _verdict(r.output), r.output
+    vault_all = world.tmp / "vault-all"
+    every = ["--dataset", "beach", "--manifest", "all1", "--dest", str(vault_all), "--tier", "2"]
+    r = _backup("push", *every)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "failed=0" in v and "pushed=0" not in v, r.output
+    r = _backup("verify", *every)
+    assert r.exit_code == 0 and "status=OK" in _verdict(r.output), r.output
     vault = world.tmp / "vault"
     common = ["--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault)]
     r = _backup("push", *common, "--tier", "1")

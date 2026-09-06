@@ -35,7 +35,11 @@ class ScoresCsvWriter:
         by_id = predictions_by_id(preds)
         names = [c.name for c in ctx.dataset.card.categories]
         if not names:
-            names = sorted({k for p in preds for k in (getattr(p, payload) or {})})
+            raise ValidationFailed(
+                "scores_csv needs the dataset card's categories to name its columns; "
+                f"dataset {ctx.dataset.card.name!r} declares none",
+                fields={"dataset": ctx.dataset.card.name},
+            )
         missing = [s.sample_id for s in sorted_samples(ctx.samples) if s.sample_id not in by_id]
         if missing and not is_true(ctx.options, "allow_missing"):
             raise ValidationFailed(

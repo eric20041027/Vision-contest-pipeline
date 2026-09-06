@@ -211,3 +211,15 @@
 ## 13. 不在範圍
 
 排程與自動每日備份；`raw/` 搬運（`raw_manifest.txt` 可重下）；加密；清單與台帳自身的備份（靠 git 遠端）；AWS 重現包與 README 產生（`projects/`）；rclone 設定的建立與 OAuth；非 rclone 的雲端 SDK；`train upload` 的錯誤類別變更；跨 dataset 的單一清單（每個 dataset 各自一份，`all` 已覆蓋）。以上皆為已預留的擴充點，不是設計缺口。
+
+## 14. 補充決定（實作期，2026-09-06；以程式碼為準）
+
+計畫層決定 1–21 與執行期裁決 R0–R7、最終審查修正波的結果（細節見 `docs/superpowers/plans/2026-09-06-vcp-plan7-followups.md`）：
+
+- **資料模型**：`FileEntry` 多 `source`（external 的絕對路徑，Windows / posix 兩種絕對形式都認）；`RemoteCopy` 記 `{dest, run, name}`；tier 3 分 `checkpoint_final`（排前）與 `checkpoint`；`for` 以 `for_` 別名存；清單 JSON `indent=1`、LF；`path` 只收根下的相對 posix 路徑（無 `..`、`.`、空段、磁碟、`/` 開頭、反斜線）；`Manifest.data_root` 只是人讀的來源標記，程式不讀；台帳 pull 列有專屬欄位 `dest_missing`、`mismatch`、`external_skipped`。
+- **證據圖**：`logs` 只在 `all`；`run:<id>` 必須屬於 `--dataset`；`unlisted` 去重；`all` 走法容忍失聯的引用（run 被刪的判決 / 提交），記在 `skipped` 並 WARN `skipped=`；單一結論的走法遇到失聯仍 FAIL `not_found`。
+- **push**：任何位元組移動前逐檔預檢（不存在 → `not_found:`，sha 變 → `drift:`）；台帳角色的檔在清單之後只增長（前 N 位元組 sha 相同）→ 推清單那一刻的快照（前 N 位元組），不算 drift；`--forget-remote` 配本機 dest 在推送前就拒絕；push 列先寫再拋錯；複製或讀回失敗一律 `verified=0`、全部列入 `failed`；`--forget-remote` 要整份清單的每個 `kind=file` 條目（含更高 tier 與 `present=false`）都在目的地驗過且至少一個 verified，否則 `forget_refused` 帶 `unverified=`——所以帶 `present=false` 條目的清單不能 forget，先從別處 pull 回來或手動 `rclone config delete`。
+- **verify**：回傳結果不拋錯，CLI 依結果定 FAIL 並帶 `reason=`（`mismatch` > `missing` > `drift` > `bad_stamps`）；`--tier N` 只限定副本層（預設 3 = §6.2 的全查；§11 的「push --tier 2 → verify OK」要配 `--tier 2`），有 `--dest` 時 verify 列記 `tier`；一致性層對台帳角色用前綴 sha（只增長不算 drift，被改或截短才算）；順帶檢查 `backup.log.jsonl` 自己的時戳；時戳掃描跳過 `downloaded_at`；`present=false` 且目的地也沒有的條目進 `absent` 桶、不算失敗；副本層的 rclone 失敗是 `PlatformError`（不寫 verify 列）。
+- **pull**：目的地 sha 先比對（不符 → `mismatch`、不拉）；拉回不符就刪；本機已有且相同（台帳角色：長大也算）→ `skipped`；不同 → `conflict`，`--overwrite` 才蓋且舊檔留 `.bak-<UTC 時戳含微秒>`，新檔驗不過就把 `.bak` 還原；只寫到 data / configs 根內（`unsafe_path:`）；external 只還原到既有目錄，否則 `external_skipped=`（WARN）；先記列再拋錯，優先序 `mismatch` > `missing` > `conflict`。
+- **status**：`verified` = 某個 verify 列有 `--dest`、tier 3、副本層與本機兩層皆無問題；另報 `local_ok`（一致性與時戳過）；「已推 tier」= `failed` 空的 push 的最大 `--tier` 以下全部；rclone 不在 → `rclone_conf=unknown`。
+- **目的地**：rclone 命令前綴是 `vcp.backup.dest.RCLONE`（端到端測試指到假 rclone 腳本）；`hashsum` exit 3 / 4 才是空目錄，其餘非 0 是 `PlatformError`（redact 後的最後一行）；雜湊列不是 64 hex（後端不支援 sha256）也是 `PlatformError`；`hashsum` 解析 `<sha>  <相對路徑>` 沿用訓練層。

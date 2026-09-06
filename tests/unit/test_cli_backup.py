@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from backup_fixtures import make_world
 from vcp.backup import dest as destmod
 from vcp.cli import app
+from vcp.measure.runs import load_run, run_dir
 
 runner = CliRunner()
 
@@ -110,3 +111,49 @@ def test_verify_cli(world):
     assert doc["result"]["drift"] == [] and doc["result"]["bad_stamps"] == []
     r = _run("verify", "--dataset", "beach-test", "--manifest", "nope")
     assert r.exit_code == 1 and "not_found" in _verdict(r.output)
+
+
+def test_pull_and_status_cli(world, monkeypatch):
+    monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)  # no rclone here
+    r = _run("status", "--dataset", "beach-test")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "manifests=0" in v
+    assert "rclone_conf=unknown" in v
+    r = _run("manifest", "--dataset", "beach-test", "--conclusion", "submission:S1", "--id", "m1")
+    assert r.exit_code == 0, r.output
+    vault = world.tmp / "vault"
+    r = _run(
+        "push", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault), "--tier", "2"
+    )
+    assert r.exit_code == 0, r.output
+    r = _run("status", "--dataset", "beach-test", "--json")
+    doc = _json(r)
+    assert doc["status"] == "WARN" and doc["fields"]["unverified"] == 1
+    assert doc["result"]["manifests"][0]["unpushed_tiers"] == [3]
+    assert doc["result"]["manifests"][0]["last_push"]["tier"] == 2
+    r = _run(
+        "verify", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault), "--tier", "2"
+    )
+    assert r.exit_code == 0, r.output
+    r = _run("status", "--dataset", "beach-test")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "unverified=0" in v and "m1" in r.output
+    card = load_run(world.roots.data, "good")
+    pred = run_dir(world.roots.data, "good") / card.predictions["valB"].path
+    pred.unlink()
+    common = ["pull", "--dataset", "beach-test", "--manifest", "m1", "--dest", str(vault)]
+    r = _run(*common, "--tier", "2")
+    assert r.exit_code == 0 and "pulled=1" in _verdict(r.output) and pred.is_file()
+    pred.write_bytes(b"edited\n")
+    r = _run(*common, "--tier", "2")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "conflict" in v and "conflicts=1" in v
+    r = _run(*common, "--tier", "2", "--overwrite", "--json")
+    assert r.exit_code == 0
+    doc = _json(r)
+    assert doc["fields"]["pulled"] == 1 and doc["result"]["conflicts"] == []
+    (world.weights / "last.pt").unlink()  # gone locally, and tier 3 was never pushed
+    r = _run(*common, "--tier", "3")
+    assert (
+        r.exit_code == 1 and "missing" in _verdict(r.output) and "missing=1" in _verdict(r.output)
+    )

@@ -164,6 +164,38 @@ uv run vcp eval measure --run good --subsets holdout --unseal --reason "final pi
 uv run vcp submit final --dataset D-test                        # 自動封槍；board_rule=last 時照 needs_reupload 重傳
 ```
 
+## 備份審計命令 `vcp backup`
+
+| 命令 | 作用 | 主要選項 |
+|---|---|---|
+| `vcp backup manifest` | 從結論反向走證據圖，寫 `configs/datasets/<name>/backup/<id>.json`（進 git、寫一次不改）：每個檔的角色、tier、sha、大小、服務的結論 | `--dataset`、`--conclusion submission:<id>\|judgement:<prereg>\|run:<id>\|all`、`--id` |
+| `vcp backup push` | 先小後大推到 rclone 遠端或本機目錄（`<dest>/data\|configs\|external/…`），只推目的地沒有或不同的檔，推完逐檔比對 sha；`train upload` 驗過的權重副本（`remote_copy`）不重推 | `--manifest`、`--dest`、`--tier 1\|2\|3`（累積到 N；預設 1）、`--forget-remote`（全數驗證通過後 `rclone config delete <remote>`） |
+| `vcp backup verify` | 三層稽核：副本（給 `--dest` 才做）、本機一致性（卡 ↔ 預測檔、`train.yaml` ↔ checkpoint、`fuse.json` ↔ 成員、`stage.json` ↔ 候選檔、台帳 ↔ `stage.json`、清單 ↔ 現在的檔）、時戳（台帳逐列 `ts` 可解析且單調、卡的 `*_at` 可解析） | `--manifest`、`--dest`、`--tier`（副本層只查 tier 1..N，預設 3 = 全部） |
+| `vcp backup pull` | 從目的地把清單裡的檔拉回原相對路徑、讀回驗 sha；本機已有且不同 → `conflict`，`--overwrite` 才蓋（舊檔留 `.bak-<時戳>`） | `--manifest`、`--dest`、`--tier`（預設 3）、`--overwrite` |
+| `vcp backup status` | 每份清單最新的 push / verify、從未推過的 tier、`rclone_conf=present\|absent\|unknown`（唯讀） | |
+
+tier 1 決策層（台帳、卡、判決、預登記、配方、快照、候選檔；KB 級）、tier 2 重現層（預測檔、樣本、`train/`、logs；MB 級）、tier 3 權重層（GB 級，只在要求時）。`cache/`、`raw/` 永不進清單。清單只含路徑、sha、大小、時間與 dest 字串；vcp 不讀 rclone 設定檔內容，rclone 的輸出經 redact 才落地，台帳 `backup.log.jsonl` 只增。台帳在清單之後長大不算漂移；被改或截短才算。
+
+### 機器回收前的撤離順序
+
+```bash
+uv run vcp backup manifest --dataset D-test --conclusion submission:SUB34 --id sub34   # 最終發需要的一切
+uv run vcp backup push --dataset D-test --manifest sub34 --dest gdrive:vcp/backup --tier 1   # 先救決策層
+uv run vcp backup push --dataset D-test --manifest sub34 --dest gdrive:vcp/backup --tier 2   # 再救重現層
+uv run vcp backup manifest --dataset D --conclusion all --id all-final                        # 有空再救全部
+uv run vcp backup push --dataset D --manifest all-final --dest gdrive:vcp/backup --tier 3 --forget-remote
+uv run vcp backup status --dataset D-test                                                    # rclone_conf=absent 才走
+```
+
+### 賽後重建
+
+```bash
+git pull                                                                # 清單與台帳跟著 configs/ 回來
+uv run vcp backup pull --dataset D-test --manifest sub34 --dest gdrive:vcp/backup --tier 2
+uv run vcp backup verify --dataset D-test --manifest sub34 --dest gdrive:vcp/backup --tier 2
+uv run vcp submit verify --dataset D-test --id SUB34                    # 位元級重現候選檔
+```
+
 ## 匯入器與 `rows_read` 的語意
 
 | 匯入器 | 來源 | `rows_read` 數的是 |

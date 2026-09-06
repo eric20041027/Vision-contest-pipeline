@@ -16,6 +16,7 @@
 - `measure/<name>/` 只增不改：`readings.jsonl`、`judgements.jsonl`、`sigma.jsonl` 是 append-only 台帳，錨點 `anchors.json` 整份換寫但每次都先寫 `anchors.log.jsonl`。`runs/<run_id>/`（`run.yaml`、`predictions/<subset>.jsonl`）不是只增不改，而是「換寫留痕」：`ingest --replace` 會重寫 `run.yaml` 與該子集的預測檔，舊 sha 進 `history.jsonl`（`history.jsonl` 本身只增不改）。預登記 `configs/datasets/<name>/prereg/<id>.yaml` 與 `prereg.log.jsonl` 進 git，寫下就不改，要改就換 id。融合配方 `configs/datasets/<name>/fuse/<id>.yaml` 進 git、寫了不改；融合 run 是普通 run，另有 `runs/<id>/fuse.json`（每次 build 整份換寫，記每個成員預測檔的 sha 與輸出 sha）。
 - `runs/<id>/train.yaml` 是訓練紀錄的快照（每次事件整份重寫）、`train.log.jsonl` 只增；`train/` 放 console、config 副本、環境快照。checkpoint 不搬動，只記路徑與 sha；`--upload` 的副本另記 sha 與驗證結果。`vcp train run` 開始就寫 `run.yaml`，之後 `eval ingest` 直接接上。
 - 提交治理：`configs/datasets/<test>/submit.yaml`（平台設定，改就改 git）與 `submissions.jsonl`（只 append 的台帳：staged / uploaded / scored / foreign / final / lock / unlock）進 git；輸出檔與 `stage.json` 在 `submit/<test>/<id>/`（寫一次不改）。候選 = (eval run, test run) 配對，身分靠 `weights_hash`；`final` 只看 sealed 讀數。vcp 不碰平台憑證。
+- `configs/datasets/<name>/backup/<manifest_id>.json` 是證據清單（從結論反向生成，寫一次不改，進 git），`backup.log.jsonl` 只增（manifest / push / verify / pull / remote_forgotten）。目的地佈局 `<dest>/data|configs|external/<相對路徑>`；`train upload` 驗過的權重副本記成 `remote_copy`，verify 到原地驗、不重推。`cache/`、`raw/` 永不進清單。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`
@@ -26,6 +27,7 @@
 - `uv run vcp fuse recipe --dataset D --id R --plan P --method wbf|mean|rank_mean --member RUN[:W]…` / `uv run vcp fuse ablate --dataset D --recipe R --preregister --metric M`（每位成員一份準入預登記，交給 `vcp eval judge`；先 ablate 再 measure）
 - `uv run vcp train run --run R --dataset D --plan P --export DIR --venv ENV --seed N --checkpoints "…" --final "…" [--upload DEST] -- <訓練命令>` / `uv run vcp train status --run R`（唯讀）/ `uv run vcp train upload --run R --dest DEST`（冪等）
 - `uv run vcp submit stage --dataset T --id S --eval-run E --test-run R` / `uv run vcp submit upload --dataset T --id S`（Kaggle）或 `record --at "…"`（手動）/ `uv run vcp submit final --dataset T`（決選 + 封槍）/ `uv run vcp submit status --dataset T`（唯讀）
+- `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
 
 ## 文件
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`

@@ -136,3 +136,46 @@ def test_train_run_cli_failures(roots, tmp_path):
     assert r.exit_code == 2
     r = runner.invoke(app, ["train", "--help"])
     assert r.exit_code == 0 and "run" in r.output
+
+
+def test_train_upload_and_status_cli(roots, tmp_path):
+    seed_det(roots)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_text(FAKE, encoding="utf-8")
+    assert _run(work, "--seed", "1").exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert (
+        "status=WARN" in v
+        and "checkpoints=1" in v
+        and "unbacked=1" in v
+        and "backed=0" in v
+        and "running=0" in v
+    )
+    r = runner.invoke(app, ["train", "upload", "--run", "r1", "--dest", str(tmp_path / "vault")])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "status=OK" in v and "uploaded=1" in v and "verified=1" in v and "skipped=0" in v
+    r = runner.invoke(
+        app, ["train", "upload", "--run", "r1", "--dest", str(tmp_path / "vault"), "--json"]
+    )
+    assert r.exit_code == 0 and "skipped=1" in _verdict(r.output)
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert len(doc["result"]["uploads"]) == 1
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--verify"])
+    assert (
+        r.exit_code == 0
+        and "status=OK" in _verdict(r.output)
+        and "unbacked=0" in _verdict(r.output)
+    )
+    (work / "weights" / "best.pt").write_bytes(b"tampered")
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--verify"])
+    assert (
+        r.exit_code == 0 and "status=WARN" in _verdict(r.output) and "drift=1" in _verdict(r.output)
+    )
+    r = runner.invoke(app, ["train", "upload", "--run", "r1", "--dest", str(tmp_path / "v2")])
+    assert r.exit_code == 1 and "changed since" in _verdict(r.output)
+    r = runner.invoke(app, ["train", "status", "--run", "ghost"])
+    assert r.exit_code == 1 and "run=ghost" in _verdict(r.output)

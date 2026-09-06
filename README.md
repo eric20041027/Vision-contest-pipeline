@@ -90,6 +90,45 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 
 `wbf`（boxes）：`iou`、`skip`（輸入框門檻）、`min_score`（融合後門檻）、`max_per_image`、`conf_type=avg|max`，語意同 ensemble-boxes 的 `weighted_boxes_fusion(allows_overflow=False)` 但在像素座標運算、依 (view, category) 分群、有尺寸才裁邊。`mean`（scores / targets）加權平均；`rank_mean`（scores）以子集為母體的名次平均，AUC 型指標用、不是機率。
 
+## 訓練層命令 `vcp train`
+
+| 命令 | 作用 | 主要選項 |
+|---|---|---|
+| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證 | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
+| `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等 | `--run`、`--dest`、`--only final` |
+| `vcp train status` | attempts / checkpoints / 副本（唯讀） | `--run`、`--verify`（重算 sha） |
+
+共用選項：`--json`、`--data-root`、`--configs-root`。`--upload` 的目的地：`remote:path` 走 rclone（`copyto --checksum` + `hashsum sha256` 逐檔比對；rclone 要自己裝），其餘是本機 / 掛載目錄（複製後讀回驗 sha）。訓練命令 exit ≠ 0 → `status=FAIL exit_code=N`，checkpoint 仍登記但不上傳；沒給 `--seed`、`--venv`、`--final` 各 WARN 一項。`run.yaml` 就是量測層的 run：之後 `vcp eval ingest --run R ...` 直接接上，不必再給 `--trained-on` / `--framework`。
+
+### 一次訓練到量測
+
+```bash
+uv run vcp data export --name D --plan fixed-v1 --subset train --format yolo --out exports/D-train
+uv run vcp train run --run y12x_r2 --dataset D --plan fixed-v1 --export exports/D-train \
+  --venv C:/venvs/ultra --seed 42 --framework "ultralytics 8.3.0" --cwd projects/D \
+  --checkpoints "runs-ultra/y12x_r2/weights/*.pt" --final "runs-ultra/y12x_r2/weights/best.pt" \
+  --upload gdrive:vcp/weights -- yolo train model=yolo12x.pt data=exports/D-train/data.yaml epochs=60
+uv run vcp train status --run y12x_r2                    # unbacked=0 才算有副本
+uv run vcp eval ingest --run y12x_r2 --dataset D --plan fixed-v1 --subset valA --format yolo_txt --src ... --export-manifest exports/D-valA
+uv run vcp eval measure --run y12x_r2
+```
+
+自寫 PyTorch loop 只需要兩個名字：
+
+```python
+from vcp.train import MaterializedReader, Session
+reader = MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="train")
+class Knee(torch.utils.data.Dataset):
+    def __len__(self): return len(reader)
+    def __getitem__(self, i):
+        rec = reader[reader.ids[i]]                       # rec.arrays: {"0": HxW(xC)} 或 {seq_id: SxHxW}
+        x = torch.from_numpy(next(iter(rec.arrays.values())))
+        y = torch.tensor([rec.labels.targets[n] for n in NAMES])
+        return x, y
+s = Session.current()                                     # 在 vcp train run 底下才有
+s.register_checkpoint("ckpt/best.pt", final=True); s.note("val_auc", 0.91)
+```
+
 ## 匯入器與 `rows_read` 的語意
 
 | 匯入器 | 來源 | `rows_read` 數的是 |

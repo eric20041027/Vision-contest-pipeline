@@ -3436,8 +3436,9 @@ def test_pull_and_status_cli(world, monkeypatch):
     assert r.exit_code == 0
     doc = _json(r)
     assert doc["fields"]["pulled"] == 1 and doc["result"]["conflicts"] == []
+    (world.weights / "last.pt").unlink()  # gone locally, and tier 3 was never pushed
     r = _run(*common, "--tier", "3")
-    assert r.exit_code == 1 and "missing" in _verdict(r.output)  # tier 3 never pushed
+    assert r.exit_code == 1 and "missing" in _verdict(r.output) and "missing=1" in _verdict(r.output)
 ```
 
 - [ ] **Step 7: `src/vcp/cli_backup.py` 加 `pull` 與 `status`**

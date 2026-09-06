@@ -123,3 +123,12 @@ def test_external_checkpoint(world, tmp_path):
     assert ext[0].path == external_path(outside) and ext[0].role == "checkpoint"
     paths = DatasetPaths.resolve(EVAL, data_root=world.roots.data, configs_root=world.roots.configs)
     assert col.locate(paths.card_yaml)[0] == "configs"
+
+
+def test_unlisted_is_counted_once_across_walks(world):
+    paths = DatasetPaths.resolve(EVAL, data_root=world.roots.data, configs_root=world.roots.configs)
+    paths.plan_json("fixed-v1").unlink()
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    col.walk_run("bad", "run:bad")
+    assert col.unlisted == [f"configs/datasets/{EVAL}/splits/fixed-v1.json"]

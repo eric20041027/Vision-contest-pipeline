@@ -70,3 +70,4 @@ def test_upload_run_records_and_is_idempotent(roots, tmp_path):
     assert [e["event"] for e in events] == ["uploaded", "uploaded"] and events[0]["attempt"] == 1
     rec3, again = upload_run(roots.data, "r1", str(tmp_path / "vault"))
     assert again.uploaded == 0 and again.skipped == 2 and len(rec3.uploads) == 2
+    assert len(read_events(roots.data, "r1")) == 2  # a re-verification is not an event

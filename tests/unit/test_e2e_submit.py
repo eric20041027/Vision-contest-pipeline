@@ -185,10 +185,13 @@ def test_manual_platform_story(pair):
 
 
 def _scan(pair, outputs: list[str]) -> None:
+    scanned = 0
     for root in (pair.roots.data, pair.roots.configs):
         for p in root.rglob("*"):
             if p.is_file():
+                scanned += 1
                 assert SECRET.encode() not in p.read_bytes(), p
+    assert scanned > 0, "privacy scan found no files to inspect"
     for text in outputs:
         assert SECRET not in text
 

@@ -64,6 +64,25 @@ def test_verify_clean_world(world, pushed):
         verify(TEST, "nope", **_kw(world))
 
 
+def test_verify_tier_bounds_the_copies_layer(world):
+    build_manifest(TEST, "submission:S1", manifest_id="m1", **_kw(world))
+    vault = world.tmp / "vault"
+    push(TEST, "m1", str(vault), tier=2, **_kw(world))
+    m = load_manifest(_paths(world), "m1")
+    res = verify(TEST, "m1", dest=str(vault), tier=2, **_kw(world))
+    within = sum(1 for f in m.files if f.tier <= 2)
+    assert res.ok and res.copies == {"ok": within, "missing": 0, "mismatch": 0}
+    assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 2
+    res = verify(TEST, "m1", dest=str(vault), **_kw(world))  # default tier 3: everything
+    assert res.copies["missing"] == 1 and res.reason == "missing"
+    assert res.copy_problems == ["missing:data/work/good/weights/last.pt"]
+    assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 3
+    assert verify(TEST, "m1", **_kw(world)).copies is None
+    assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier is None
+    with pytest.raises(ValidationFailed, match="tier"):
+        verify(TEST, "m1", dest=str(vault), tier=0, **_kw(world))
+
+
 def test_verify_copies_missing_and_mismatch(world, pushed):
     (pushed / "data" / "runs" / "good" / "run.yaml").unlink()
     (pushed / "configs" / "datasets" / TEST / "submit.yaml").write_text(

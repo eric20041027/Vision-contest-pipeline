@@ -20,9 +20,11 @@ from vcp.core.log import FieldValue, Status
 from vcp.core.time import stamp
 from vcp.measure.metrics import effective_params, get_metric
 from vcp.measure.plugins import load_plugins
+from vcp.submit.actions import record, score, upload
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage, verify
+from vcp.submit.sync import sync
 
 submit_app = typer.Typer(no_args_is_help=True, help="submission governance commands")
 
@@ -219,3 +221,131 @@ def verify_cmd(
         return "OK", fields, {"checks": checks}, [f"ok: {c}" for c in checks]
 
     run_command("submit.verify", json_mode, data_root, fn)
+
+
+@submit_app.command("upload")
+def upload_cmd(
+    dataset: DatasetOpt,
+    submission_id: IdOpt,
+    message: Annotated[str | None, typer.Option("--message", help="appended to the id")] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Upload a staged submission through the platform's CLI and record it."""
+
+    def fn() -> CmdResult:
+        out = upload(
+            dataset, submission_id, message=message, data_root=data_root, configs_root=configs_root
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "id": submission_id,
+            "at": str(out.row.at),
+            "confirmed": bool(out.row.confirmed),
+        }
+        if out.quota is not None:
+            fields.update(out.quota.fields())
+        human = [out.result.detail] if out.result.detail else []
+        status: Status = "OK" if out.row.confirmed else "WARN"
+        return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
+
+    run_command("submit.upload", json_mode, data_root, fn)
+
+
+@submit_app.command("record")
+def record_cmd(
+    dataset: DatasetOpt,
+    submission_id: IdOpt,
+    at: Annotated[str, typer.Option("--at", help="platform time 'YYYY-MM-DD HH:MM[:SS]'")],
+    tz: Annotated[str, typer.Option("--tz", help="platform | utc")] = "platform",
+    platform_ref: Annotated[str | None, typer.Option("--platform-ref")] = None,
+    message: Annotated[str | None, typer.Option("--message")] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Record an upload you made by hand (the ledger row is the upload's receipt)."""
+
+    def fn() -> CmdResult:
+        out = record(
+            dataset,
+            submission_id,
+            at,
+            tz=tz,
+            platform_ref=platform_ref,
+            message=message,
+            data_root=data_root,
+            configs_root=configs_root,
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "id": submission_id,
+            "at": str(out.row.at),
+        }
+        if out.quota is not None:
+            fields.update(out.quota.fields())
+        if out.warnings:
+            fields["quota_overflow"] = True
+        status: Status = "WARN" if out.warnings else "OK"
+        human = [f"warning: {w}" for w in out.warnings]
+        return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
+
+    run_command("submit.record", json_mode, data_root, fn)
+
+
+@submit_app.command("score")
+def score_cmd(
+    dataset: DatasetOpt,
+    submission_id: IdOpt,
+    public: Annotated[float | None, typer.Option("--public")] = None,
+    private: Annotated[float | None, typer.Option("--private")] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Record a public / private score the platform showed."""
+
+    def fn() -> CmdResult:
+        row = score(
+            dataset,
+            submission_id,
+            public=public,
+            private=private,
+            data_root=data_root,
+            configs_root=configs_root,
+        )
+        fields: dict[str, FieldValue] = {"dataset": dataset, "id": submission_id}
+        if row.public is not None:
+            fields["public"] = row.public
+        if row.private is not None:
+            fields["private"] = row.private
+        return "OK", fields, row.model_dump(mode="json", exclude_none=True), []
+
+    run_command("submit.score", json_mode, data_root, fn)
+
+
+@submit_app.command("sync")
+def sync_cmd(
+    dataset: DatasetOpt,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Read the platform's submission list back into the ledger (scores, foreign uploads)."""
+
+    def fn() -> CmdResult:
+        res = sync(dataset, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "platform_rows": res.platform_rows,
+            "scored": res.scored,
+            "foreign": res.foreign,
+            "unconfirmed": len(res.unconfirmed),
+        }
+        human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
+        status: Status = "WARN" if res.foreign or res.unconfirmed else "OK"
+        payload = {"matched": res.matched, "unconfirmed": res.unconfirmed}
+        return status, fields, payload, human
+
+    run_command("submit.sync", json_mode, data_root, fn)

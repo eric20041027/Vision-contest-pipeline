@@ -124,7 +124,8 @@ def _scan(world, outputs: list[str]) -> None:
         assert SECRET not in text
 
 
-def test_local_vault_story(world):
+def test_local_vault_story(world, monkeypatch):
+    monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)  # never a real rclone
     _to_final(world)
     r = _backup(
         "manifest", "--dataset", "beach-test", "--conclusion", "submission:S1", "--id", "m1"
@@ -206,7 +207,8 @@ def test_local_vault_story(world):
     assert "drift=1" in v  # the edited row sits inside the bytes the manifest hashed
     r = _backup("status", "--dataset", "beach-test")
     v = _verdict(r.output)
-    assert r.exit_code == 0 and "manifests=1" in v and "unverified=0" in v  # one verify did pass
+    # the story ends on a tampered ledger, and no verify ever covered tier 3's copies
+    assert r.exit_code == 0 and "manifests=1" in v and "unverified=1" in v
 
 
 def test_fake_rclone_story(world, tmp_path, monkeypatch):

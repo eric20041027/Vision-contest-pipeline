@@ -165,9 +165,9 @@ def pull(
             pulled=pulled,
             skipped=skipped,
             conflicts=conflicts,
+            dest_missing=len(missing),  # not the manifest's `missing`, nor a push's `failed`
+            mismatch=mismatch,
             external_skipped=len(external_skipped),
-            missing=len(missing),
-            failed=mismatch,
         )
     )
     counts = {

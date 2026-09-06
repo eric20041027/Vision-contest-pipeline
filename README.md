@@ -169,12 +169,12 @@ uv run vcp submit final --dataset D-test                        # 自動封槍�
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
 | `vcp backup manifest` | 從結論反向走證據圖，寫 `configs/datasets/<name>/backup/<id>.json`（進 git、寫一次不改）：每個檔的角色、tier、sha、大小、服務的結論 | `--dataset`、`--conclusion submission:<id>\|judgement:<prereg>\|run:<id>\|all`、`--id` |
-| `vcp backup push` | 先小後大推到 rclone 遠端或本機目錄（`<dest>/data\|configs\|external/…`），只推目的地沒有或不同的檔，推完逐檔比對 sha；`train upload` 驗過的權重副本（`remote_copy`）不重推 | `--manifest`、`--dest`、`--tier 1\|2\|3`（累積到 N；預設 1）、`--forget-remote`（全數驗證通過後 `rclone config delete <remote>`） |
-| `vcp backup verify` | 三層稽核：副本（給 `--dest` 才做）、本機一致性（卡 ↔ 預測檔、`train.yaml` ↔ checkpoint、`fuse.json` ↔ 成員、`stage.json` ↔ 候選檔、台帳 ↔ `stage.json`、清單 ↔ 現在的檔）、時戳（台帳逐列 `ts` 可解析且單調、卡的 `*_at` 可解析） | `--manifest`、`--dest`、`--tier`（副本層只查 tier 1..N，預設 3 = 全部） |
-| `vcp backup pull` | 從目的地把清單裡的檔拉回原相對路徑、讀回驗 sha；本機已有且不同 → `conflict`，`--overwrite` 才蓋（舊檔留 `.bak-<時戳>`） | `--manifest`、`--dest`、`--tier`（預設 3）、`--overwrite` |
-| `vcp backup status` | 每份清單最新的 push / verify、從未推過的 tier、`rclone_conf=present\|absent\|unknown`（唯讀） | |
+| `vcp backup push` | 先小後大推到 rclone 遠端或本機目錄（`<dest>/data\|configs\|external/…`），只推目的地沒有或不同的檔，推完逐檔比對 sha；`train upload` 驗過的權重副本（`remote_copy`）不重推 | `--manifest`、`--dest`、`--tier 1\|2\|3`（累積到 N；預設 1）、`--forget-remote`（整份清單的每個檔都在目的地驗過（含更高 tier）才 `rclone config delete <remote>`） |
+| `vcp backup verify` | 三層稽核：副本（給 `--dest` 才做；`absent=` 是清單時已缺、目的地也沒有，不算失敗）、本機一致性（卡 ↔ 預測檔、`train.yaml` ↔ checkpoint、`fuse.json` ↔ 成員、`stage.json` ↔ 候選檔、台帳 ↔ `stage.json`、清單 ↔ 現在的檔）、時戳（台帳逐列 `ts` 可解析且單調、卡的 `*_at` 可解析） | `--manifest`、`--dest`、`--tier`（副本層只查 tier 1..N，預設 3 = 全部） |
+| `vcp backup pull` | 從目的地把清單裡的檔拉回原相對路徑、讀回驗 sha；本機已有且不同 → `conflict`，`--overwrite` 才蓋（舊檔留 `.bak-<時戳>`，新檔驗過才留）；`external_skipped=` 是清單外的絕對路徑，只在目錄已存在時還原 | `--manifest`、`--dest`、`--tier`（預設 3）、`--overwrite` |
+| `vcp backup status` | 每份清單最新的 push / verify、從未推過的 tier、`rclone_conf=present\|absent\|unknown`（唯讀）；`verified` 要有一次 verify 連 tier 3 副本層都過，只驗本機兩層記 `local_ok` | |
 
-tier 1 決策層（台帳、卡、判決、預登記、配方、快照、候選檔；KB 級）、tier 2 重現層（預測檔、樣本、`train/`、logs；MB 級）、tier 3 權重層（GB 級，只在要求時）。`cache/`、`raw/` 永不進清單。清單只含路徑、sha、大小、時間與 dest 字串；vcp 不讀 rclone 設定檔內容，rclone 的輸出經 redact 才落地，台帳 `backup.log.jsonl` 只增。台帳在清單之後長大不算漂移；被改或截短才算。
+tier 1 決策層（台帳、卡、判決、預登記、配方、快照、候選檔；KB 級）、tier 2 重現層（預測檔、樣本、`train/`、logs；MB 級）、tier 3 權重層（GB 級，只在要求時）。`cache/`、`raw/` 永不進清單。清單只含路徑、sha、大小、時間與 dest 字串；vcp 不讀 rclone 設定檔內容，rclone 的輸出經 redact 才落地，台帳 `backup.log.jsonl` 只增。台帳在清單之後長大：verify 不算漂移，push 推的是清單那一刻的快照（前 N 位元組），pull 視為已有；被改或截短才算漂移。
 
 ### 機器回收前的撤離順序
 

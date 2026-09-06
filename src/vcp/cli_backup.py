@@ -61,15 +61,19 @@ def manifest_cmd(
         }
         if res.unlisted:
             fields["unlisted"] = len(res.unlisted)
+        if res.skipped:
+            fields["skipped"] = len(res.skipped)
         human = [f"manifest written to {res.path}"]
         human += [f"missing: {k}" for k in res.missing]
         human += [f"unlisted (no sha on record): {k}" for k in res.unlisted]
-        status: Status = "WARN" if res.missing or res.unlisted else "OK"
+        human += [f"skipped (its evidence is incomplete): {k}" for k in res.skipped]
+        status: Status = "WARN" if res.missing or res.unlisted or res.skipped else "OK"
         payload = {
             "path": str(res.path),
             "files": len(m.files),
             "missing": res.missing,
             "unlisted": res.unlisted,
+            "skipped": res.skipped,
         }
         return status, fields, payload, human
 
@@ -274,7 +278,10 @@ def status_cmd(
         if not view.manifests:
             notes.append("no manifests yet: run `vcp backup manifest`")
         if view.unverified:
-            notes.append(f"never verified: {', '.join(view.unverified)}")
+            notes.append(
+                "no verify covered every tier's copies at a destination: "
+                f"{', '.join(view.unverified)}"
+            )
         if view.rclone_conf == "present":
             notes.append("an rclone config file is still on this machine (push --forget-remote)")
         status: Status = "WARN" if notes else "OK"
@@ -282,7 +289,8 @@ def status_cmd(
             f"{m.manifest_id}  {m.conclusion}  files={m.files}  "
             f"pushed_tiers={','.join(map(str, m.pushed_tiers)) or '-'}  "
             f"last_push={m.last_push.ts if m.last_push else '-'}  "
-            f"last_verify={m.last_verify.ts if m.last_verify else '-'}  verified={m.verified}"
+            f"last_verify={m.last_verify.ts if m.last_verify else '-'}  "
+            f"verified={m.verified}  local_ok={m.local_ok}"
             for m in view.manifests
         ] + notes
         payload = {
@@ -299,6 +307,7 @@ def status_cmd(
                         m.last_verify.model_dump(exclude_none=True) if m.last_verify else None
                     ),
                     "verified": m.verified,
+                    "local_ok": m.local_ok,
                 }
                 for m in view.manifests
             ],

@@ -24,6 +24,7 @@ class ManifestStatus:
     last_verify: BackupRow | None
     pushed_tiers: list[int]
     verified: bool
+    local_ok: bool
 
     @property
     def unpushed_tiers(self) -> list[int]:
@@ -41,14 +42,22 @@ class StatusView:
         return [m.manifest_id for m in self.manifests if not m.verified]
 
 
+def local_ok(row: BackupRow) -> bool:
+    """The two layers that need no destination: local consistency and timestamps."""
+    return not row.drift and not row.bad_stamps
+
+
 def passed(row: BackupRow) -> bool:
-    """A verify row with nothing wrong in any layer it ran."""
-    copies = row.copies or {}
+    """A verify row with nothing wrong in any layer -- copies included, over every tier. A row
+    that checked no destination, or only the lower tiers, says nothing about the copies: calling
+    that "verified" is exactly the claim a machine about to be wiped must not be given."""
+    copies = row.copies
     return (
-        copies.get("missing", 0) == 0
+        copies is not None
+        and row.tier == 3
+        and copies.get("missing", 0) == 0
         and copies.get("mismatch", 0) == 0
-        and not row.drift
-        and not row.bad_stamps
+        and local_ok(row)
     )
 
 
@@ -77,6 +86,7 @@ def status(
                 last_verify=verifies[-1] if verifies else None,
                 pushed_tiers=[t for t in TIERS if t <= covered],
                 verified=any(passed(v) for v in verifies),
+                local_ok=any(local_ok(v) for v in verifies),
             )
         )
     return StatusView(dataset, out, rclone_conf_state(runner))

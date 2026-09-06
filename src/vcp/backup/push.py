@@ -1,6 +1,7 @@
 """``vcp backup push`` (spec 6.1): the manifest's present files, tier by tier, only those the
 destination does not already hold; every copy verified against the manifest; the ledger row
-written whatever happened; and only when nothing failed, the credential wiped.
+written whatever happened; and only once the whole manifest -- every tier, not just this
+push's -- is verified at that destination, the credential wiped.
 
 The manifest is a snapshot: what travels is the bytes the manifest describes. An append-only
 ledger that gained rows between ``manifest`` and ``push`` therefore goes out truncated to its

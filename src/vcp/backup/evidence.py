@@ -7,8 +7,10 @@ so a tier) and with the conclusions it serves. Nothing here copies anything.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from vcp import __version__
 from vcp.backup.ledger import BackupLedger
@@ -72,6 +74,7 @@ class Collector:
     entries: dict[str, FileEntry] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
     unlisted: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
     _seen: set[tuple[str, str]] = field(default_factory=set)
 
     def locate(self, path: Path) -> tuple[str, str, str | None]:
@@ -154,12 +157,12 @@ class Collector:
     def walk_run(self, run_id: str, conclusion: str) -> None:
         if (run_id, conclusion) in self._seen:
             return
-        self._seen.add((run_id, conclusion))
         rdir = run_dir(self.data_root, run_id)
-        if not (rdir / "run.yaml").is_file():
-            raise ValidationFailed(
+        if not (rdir / "run.yaml").is_file():  # marked seen only once it is really there, so a
+            raise ValidationFailed(  # dangling run is reported for every conclusion that names it
                 f"not_found: run {run_id!r} has no run.yaml under {rdir}", fields={"run": run_id}
             )
+        self._seen.add((run_id, conclusion))
         card = load_run(self.data_root, run_id)
         self.add(rdir / "run.yaml", "run_card", conclusion)
         if (rdir / HISTORY).is_file():
@@ -254,6 +257,14 @@ class Collector:
             self.walk_judgement(epaths, pid, conclusion)
         self.dataset_basics(tpaths, profile.test_plan, conclusion)
 
+    def _try(self, label: str, walk: Callable[..., None], *args: Any) -> None:
+        """``all`` means "everything this dataset still has": one conclusion whose evidence has
+        gone missing is recorded and stepped over, never a reason to lose all the others."""
+        try:
+            walk(*args)
+        except ValidationFailed as e:
+            self.skipped.append(f"{label}: {e}")
+
     def walk_all(self, dpaths: DatasetPaths) -> None:
         conclusion = "all"
         if dpaths.runs_dir.is_dir():
@@ -263,13 +274,13 @@ class Collector:
                 except (ValidationFailed, OSError, UnicodeDecodeError):
                     continue  # another project's or a half-written card is not this dataset's
                 if card.dataset == dpaths.name:
-                    self.walk_run(card.run_id, conclusion)
+                    self._try(f"run:{card.run_id}", self.walk_run, card.run_id, conclusion)
         for pid in list_preregs(dpaths):
-            self.walk_judgement(dpaths, pid, conclusion)
+            self._try(f"judgement:{pid}", self.walk_judgement, dpaths, pid, conclusion)
         if dpaths.submit_yaml.is_file():
             for sid in SubmissionLedger(dpaths.submissions_log).ids():
                 if stage_json(dpaths, sid).is_file():
-                    self.walk_submission(dpaths, sid, conclusion)
+                    self._try(f"submission:{sid}", self.walk_submission, dpaths, sid, conclusion)
         self.dataset_basics(dpaths, None, conclusion)
         if dpaths.splits_dir.is_dir():
             for p in sorted(dpaths.splits_dir.glob("*.json")):
@@ -291,6 +302,7 @@ class ManifestResult:
     path: Path
     missing: list[str]
     unlisted: list[str]
+    skipped: list[str]
 
 
 def build_manifest(
@@ -349,4 +361,4 @@ def build_manifest(
             remote_copies=sum(1 for f in manifest.files if f.kind == "remote_copy"),
         )
     )
-    return ManifestResult(manifest, path, col.missing, col.unlisted)
+    return ManifestResult(manifest, path, col.missing, col.unlisted, col.skipped)

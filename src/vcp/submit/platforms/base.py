@@ -3,32 +3,25 @@ through before it can reach a ledger, a log or a VERDICT (spec 11)."""
 
 from __future__ import annotations
 
-import re
-import subprocess
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from vcp.core.errors import RegistryError
+from vcp.core.proc import Runner, default_runner, redact
 from vcp.submit.schema import PlatformProfile, Staged
 
-Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
-
-_KV = re.compile(r"(?im)(key|token|secret|password|authorization)\s*[=:]\s*.+$")
-_BEARER = re.compile(r"(?i)\bbearer\s+\S+")
-_LONG = re.compile(r"[A-Za-z0-9+/_-]{32,}")
-
-
-def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
-    """Inherits the environment (the CLI needs its credentials) and records none of it."""
-    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
-
-
-def redact(text: str) -> str:
-    text = _KV.sub(lambda m: f"{m.group(1)}=<redacted>", text)
-    text = _BEARER.sub("bearer <redacted>", text)
-    return _LONG.sub("<redacted>", text)
+__all__ = [
+    "PLATFORMS",
+    "Platform",
+    "PlatformSubmission",
+    "Runner",
+    "UploadResult",
+    "default_runner",
+    "get_platform",
+    "redact",
+    "register_platform",
+]
 
 
 @dataclass(frozen=True)

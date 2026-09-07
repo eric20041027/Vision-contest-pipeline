@@ -100,3 +100,16 @@
 1. **遺失 `fuse.json` 的重建只涵蓋這次重建的子集**（審查 F2，既有行為）：`build_run` 在 `run.yaml` 仍宣告某子集、該子集又快取命中時，重建出的紀錄不含它，`vcp backup` 會把這份不完整的紀錄當證據。應改成 FAIL（`not_found:` + 提示 `--replace`）或把所有子集都列入 `pending` 重建。測試 `test_build_rebuilds_a_missing_fuse_json` 已在 docstring 註明這是已知缺口。
 
 審查（opus）：SPEC ✅（五項偏離中四項接受、一項即上述 F2）；QUALITY APPROVED——1 MEDIUM（層次反轉，本批微修）、1 HIGH 既有（F2，記為待辦）、3 LOW（`superseded` 重複路徑、`--json` 缺 `unbacked`——本批微修；note 先於 yaml 的視窗——刻意，`--resume` 會調和）。
+
+## 9. 遺失融合紀錄的處置（2026-09-07）
+
+| 項 | 處置 |
+|---|---|
+| §8 新待辦 1 | 已修：遺失 fuse.json 且仍有快取或未請求的已宣告子集時，寫入前 FAIL not_found 並提示 --replace；恢復時強制重建全部宣告子集，完整保存成員與輸出 sha。 |
+| 測試 | 原已知缺口的 docstring 與期待改成恢復契約；補全快取／局部請求拒絕零寫入、局部請求仍全重建、省略子集的成員漂移零寫入；正常快取測試不變。 |
+
+裁決：缺失紀錄的 --replace 擴大到 run 卡全部子集 — 只重建 --subsets 仍會遺失未列子集的證據 — 代價是明確要求恢復時讀取與重寫更多子集，全部預檢成功才寫，不影響正常快取。
+
+自審：無新增 schema 欄位；歷史仍 append-only，預測與卡沿用換寫留痕；backup / submit 取得完整 fuse.json，未從舊卡猜測成員 sha。新測試先 5 failed / 15 passed。
+
+驗證：融合 gate 89 passed / 1 skipped；全套 929 passed / 4 skipped、覆蓋率 96.69%；真資料 8 passed / 3 skipped；ruff check / format --check 乾淨。

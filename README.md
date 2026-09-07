@@ -88,6 +88,8 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 
 準入 = 「有它 vs 沒它」：候選是完整配方、基準是少了該成員的變體，主張 class 固定為 model。完整配方量測過就不能再寫準入預登記（`candidate_measured`），所以先 ablate 再 measure。成員重新 ingest 後直接 `vcp fuse ablate --replace`：這面旗子透傳給完整配方與每個變體的 build，沒變的子集照樣是 cached，舊 sha 進各 run 的 `history.jsonl`。
 
+若 run 卡仍在但 `fuse.json` 遺失，快取命中或省略已宣告子集會 FAIL `not_found`；用 `vcp fuse build --replace` 恢復。此恢復會重建卡上全部子集（含 `--subsets` 未列者及位元相同者），先驗完所有成員才寫入，舊 sha 仍進 history。
+
 `wbf`（boxes）：`iou`、`skip`（輸入框門檻）、`min_score`（融合後門檻）、`max_per_image`、`conf_type=avg|max`，語意同 ensemble-boxes 的 `weighted_boxes_fusion(allows_overflow=False)` 但在像素座標運算、依 (view, category) 分群、有尺寸才裁邊。`mean`（scores / targets）加權平均；`rank_mean`（scores）以子集為母體的名次平均，AUC 型指標用、不是機率。
 
 ## 訓練層命令 `vcp train`

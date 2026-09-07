@@ -335,11 +335,8 @@ def test_build_refuses_a_member_whose_trained_on_drifted(roots, tmp_path):
 
 
 def test_build_rebuilds_a_missing_fuse_json(roots, tmp_path):
-    """4-5: the run card and fuse.json are two files; a run whose fuse.json was lost is still a
-    build of this recipe (framework + config_hash prove it), so the build goes on and writes a
-    fresh record. Pinned as it is: the recreated record only covers the subsets rebuilt in this
-    call (cached ones never re-enter it), so it under-reports provenance for the subsets the
-    card still declares -- a known gap (Plan 4 followups §8-1), not a promise."""
+    """Missing provenance requires --replace to rebuild every declared subset, including
+    unchanged predictions; otherwise the fresh record would silently omit cached subsets."""
     ds, plan, paths = det_with_runs(roots, tmp_path)
     _recipe(paths)
     first = _build(roots)
@@ -359,14 +356,65 @@ def test_build_rebuilds_a_missing_fuse_json(roots, tmp_path):
             configs_root=roots.configs,
         )
     )
+    with pytest.raises(ValidationFailed, match=r"not_found: fuse.json .*pass --replace"):
+        _build(roots)
     res = _build(roots, replace=True)
-    assert res.built == 1 and res.cached == 1 and not res.created_run
+    assert res.built == 2 and res.cached == 0 and not res.created_run
     rec = load_record(roots.data, "fuse-r1")
-    # only the subset this build wrote is in the fresh record: valB's provenance went with the
-    # deleted file and is not invented back
-    assert set(rec.subsets) == {"valA"}
+    assert set(rec.subsets) == {"valA", "valB"}
     assert rec.subsets["valA"].output_sha256 == res.subsets["valA"].sha256
     assert rec.subsets["valA"].output_sha256 != first.subsets["valA"].sha256
+    assert rec.subsets["valB"].output_sha256 == first.subsets["valB"].sha256
+    history = run_dir(roots.data, "fuse-r1") / "history.jsonl"
+    rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines()]
+    assert {row["subset"]: row["old_sha256"] for row in rows} == {
+        name: outcome.sha256 for name, outcome in first.subsets.items()
+    }
+
+
+@pytest.mark.parametrize("subsets", [[], ["valA"]])
+def test_missing_record_cache_refusal_is_read_only(roots, tmp_path, subsets):
+    _, _, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    _build(roots)
+    record_path(roots.data, "fuse-r1").unlink()
+    folder = run_dir(roots.data, "fuse-r1")
+    before = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+    with pytest.raises(
+        ValidationFailed, match=r"not_found: fuse.json .*pass --replace to rebuild every subset"
+    ) as ei:
+        _build(roots, subsets=subsets)
+    assert ei.value.fields == {"run": "fuse-r1"}
+    assert {
+        p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()
+    } == before
+
+
+def test_missing_record_replace_rebuilds_subsets_omitted_from_request(roots, tmp_path):
+    _, _, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    first = _build(roots)
+    record_path(roots.data, "fuse-r1").unlink()
+    res = _build(roots, subsets=["valA"], replace=True)
+    assert res.built == 2 and res.cached == 0
+    assert set(load_record(roots.data, "fuse-r1").subsets) == set(first.run.predictions)
+
+
+def test_missing_record_replace_checks_omitted_member_before_writes(roots, tmp_path):
+    _, _, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    _build(roots)
+    record_path(roots.data, "fuse-r1").unlink()
+    folder = run_dir(roots.data, "fuse-r1")
+    before = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+    member = run_dir(roots.data, "noisy") / "predictions" / "valB.jsonl"
+    member.write_bytes(member.read_bytes() + b"\n")
+    with pytest.raises(IntegrityError) as ei:
+        _build(roots, subsets=["valA"], replace=True)
+    assert ei.value.fields == {"member": "noisy", "subset": "valB"}
+    assert {
+        p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()
+    } == before
 
 
 def test_requested_subsets_are_deduplicated(roots, tmp_path):

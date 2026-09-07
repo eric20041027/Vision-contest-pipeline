@@ -316,3 +316,4 @@ def effective_params(fuser: Fuser, params: dict[str, str]) -> dict[str, str]   #
 6. **共用 helper**：`cli_common.parse_csv` 取代 `cli_eval` / `cli_fuse` 各自的 `_csv`；`measure/predictions.predictions_text` 是 `write_predictions` 與 `build.content_sha` 唯一的序列化來源（原計畫層決定 2 的「刻意重複」作廢）。
 7. **`ablate` 有 `--replace`**（2026-09-07 修訂，原「沒有 `--replace`，先逐 run `fuse build --replace` 再重跑」作廢）：這面旗子透傳給 `ablate` 觸發的每一次 `build_run`（完整配方與每個變體），語意就是那一層的 `--replace`——只有位元真的不同的子集會重寫，舊 sha 進該 run 的 `history.jsonl`，其餘照樣 cached。`ablate` 自己不因此多寫任何東西：變體配方仍是寫了不改，`--replace` 不會覆蓋既有配方或預登記。
 8. **WBF 的 oracle**：ensemble-boxes 不進任何依賴群組；等價性於 2026-09-05 對上游 `weighted_boxes_fusion(allows_overflow=False)` 人工逐行核對，紀錄在 `test_wbf.py` 的 oracle 測試上方。
+9. **遺失 `fuse.json` 的恢復**（2026-09-07）：既有 run 卡宣告的任何子集若會快取命中或未被本次請求涵蓋，必須在寫入前 FAIL `not_found: fuse.json … pass --replace to rebuild every subset`。此時 `--replace` 重建所有已宣告子集及本次要求的子集，位元相同也重建並記舊 sha；`--subsets` 不得縮小恢復範圍。先驗全部成員與輸出再寫入，缺失或漂移仍保持零寫入。正常紀錄存在時維持 §14-7 的快取語意。

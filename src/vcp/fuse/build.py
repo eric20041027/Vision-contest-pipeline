@@ -378,7 +378,12 @@ def build_run(spec: BuildSpec) -> BuildResult:
         trained_on=trained_on,
     )
     card = existing or _new_card(recipe, dataset, run_id, sha, trained_on)
-    if existing is not None and record_path(paths.data_root, run_id).is_file():
+    missing_record = existing is not None and not record_path(paths.data_root, run_id).is_file()
+    rebuild_all = missing_record and spec.replace
+    if rebuild_all:
+        # A fresh record must cover the whole card, even when --subsets names fewer subsets.
+        subsets = resolve_subsets([*subsets, *card.predictions], plan, cards)
+    if existing is not None and not missing_record:
         # Metadata (method_version, vcp_version, members[].trained_on) is rebuilt fresh every
         # time -- only the subsets already on disk carry forward (spec 4.2: the file is a
         # snapshot rewritten whole on each build, not extended in place).
@@ -402,11 +407,23 @@ def build_run(spec: BuildSpec) -> BuildResult:
         for subset in subsets
     }
     # Step 4: cache hits and conflicts, still before the first write.
+    if (
+        missing_record
+        and not spec.replace
+        and any(
+            name not in fused or prev.sha256 == fused[name].sha256
+            for name, prev in card.predictions.items()
+        )
+    ):
+        raise ValidationFailed(
+            f"not_found: fuse.json for run {run_id!r}; pass --replace to rebuild every subset",
+            fields={"run": run_id},
+        )
     outcomes: dict[str, SubsetOutcome] = {}
     pending: list[tuple[str, _Fused]] = []
     for subset, f in fused.items():
         prev = card.predictions.get(subset)
-        if prev is not None and prev.sha256 == f.sha256:
+        if prev is not None and prev.sha256 == f.sha256 and not rebuild_all:
             outcomes[subset] = SubsetOutcome(
                 sha256=f.sha256, samples=f.stats.predicted, empty=f.stats.empty, cached=True
             )

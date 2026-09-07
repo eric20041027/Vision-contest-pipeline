@@ -1,0 +1,783 @@
+{
+ "manifest_id": "knee-local-v1",
+ "dataset": "rsna-knee",
+ "conclusion": "all",
+ "created_at": "2026-09-07T08:05:13.606Z",
+ "vcp_version": "0.1.0",
+ "data_root": "C:/vcp-data",
+ "files": [
+  {
+   "root": "data",
+   "path": "measure/rsna-knee/judgements.jsonl",
+   "sha256": "e83045a0edc944d7899fd01710171c69ba8a8ba49ff9d4723974ecd2142e6da5",
+   "bytes": 2930,
+   "role": "judgements",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "measure/rsna-knee/readings.jsonl",
+   "sha256": "ba0f4c0f0d4bc6494a5f1a56faba402249d698cb23c24a5e5cd823a6e4264127",
+   "bytes": 8677,
+   "role": "readings",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "measure/rsna-knee/anchors.json",
+   "sha256": "5886e4ca883e67dbb65c602f98f5839dc74d6e463112d19b2c7410b17c566331",
+   "bytes": 488,
+   "role": "anchors",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "measure/rsna-knee/anchors.log.jsonl",
+   "sha256": "fd41866a413d28e89ec74720af972375411870d7c436a551d75fc8aa5ebb87c8",
+   "bytes": 571,
+   "role": "anchors_log",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/prereg/knee-mean-v1-admit-knee-cnn-s42-v1.yaml",
+   "sha256": "2e660f84ce9585e3949b818e71d1b3dfed5eeeaadf77b5d79dabd3dc6d28e73a",
+   "bytes": 445,
+   "role": "prereg",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/prereg/knee-mean-v1-admit-knee-cnn-s43-v1.yaml",
+   "sha256": "1d06ada83b5a0c0491afc8149b15addbbcffa5474104200a8e14db7dc4f52195",
+   "bytes": 445,
+   "role": "prereg",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/prereg/knee-s43-vs-s42-v1.yaml",
+   "sha256": "94e701b6ca532612863c303ba9ec59235f744397cae5618699f31728a0057843",
+   "bytes": 368,
+   "role": "prereg",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/prereg.log.jsonl",
+   "sha256": "3d0078019ecab12138c65d9a5d8ec5c406c0e9ca1b2aa095b15b2e0102429ecc",
+   "bytes": 461,
+   "role": "prereg_log",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/fuse/knee-mean-v1-minus-knee-cnn-s42-v1.yaml",
+   "sha256": "1afb11fd810789d3401c7a6c9258ad82f0350ad216132da3e48405046df65122",
+   "bytes": 202,
+   "role": "recipe",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/fuse/knee-mean-v1-minus-knee-cnn-s43-v1.yaml",
+   "sha256": "be66d6a32a88d4f4247aaaa0af0597304f5b9f8e5e114cf1f2f032726845e97c",
+   "bytes": 202,
+   "role": "recipe",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/fuse/knee-mean-v1.yaml",
+   "sha256": "09f6c0adfeea5477d76bd1ce207f6fcbe777028ff7e70dd67d97abec3c29434e",
+   "bytes": 217,
+   "role": "recipe",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s42-v1/run.yaml",
+   "sha256": "c81f979f14fc29f6105da2fe1d74f360a3ba3611534a0c7b1d39b3bccd07e0b1",
+   "bytes": 949,
+   "role": "run_card",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s43-v1/run.yaml",
+   "sha256": "169b680498e93f6a655105d9ef5d67e404730766debb94fa11d4286c2d07ed60",
+   "bytes": 949,
+   "role": "run_card",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1/run.yaml",
+   "sha256": "38a1f9741aab8df0b76b9320dbf6d8e7143d57daca04613956b850de675815ea",
+   "bytes": 927,
+   "role": "run_card",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/run.yaml",
+   "sha256": "0abf74a62b1f928d55097e2fdcb44bb5f3924df9b61092bc0a84f0bae728ee3f",
+   "bytes": 1049,
+   "role": "run_card",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/run.yaml",
+   "sha256": "0c5dbea2e424b05b2833ee2d23cd2af384a7fdc158ca5298f19a8dc232f881c3",
+   "bytes": 1049,
+   "role": "run_card",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s42-v1/fuse.json",
+   "sha256": "db41e1e89fe76ceae8c4d837982215c6f8d6f33a9529912c83106c3ba519959b",
+   "bytes": 1083,
+   "role": "fuse_record",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s43-v1/fuse.json",
+   "sha256": "6e1b4192a4b9c24571b996c7562dbe86fa3ad163bcdfb6615cda3ea1e0267ebc",
+   "bytes": 1083,
+   "role": "fuse_record",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1/fuse.json",
+   "sha256": "e1f36c53c995554cb5ecf5d9ade98ac1d799d4cca534071ca5bb07ea2ad3efdc",
+   "bytes": 1341,
+   "role": "fuse_record",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train.yaml",
+   "sha256": "d612e4061f5d6cdf024fb171f86cc9c0cd4db55d795dee57c981428d8fdf200b",
+   "bytes": 2493,
+   "role": "train_record",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/train.yaml",
+   "sha256": "549aead76072fdfc757112afaa46fb7812dfeea5695ac2270e70b0e52e54603e",
+   "bytes": 2099,
+   "role": "train_record",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train.log.jsonl",
+   "sha256": "5bfd5b90085201ce99582d011a1742213f1cd8650fb7bc44125e2de2a7ac0644",
+   "bytes": 5026,
+   "role": "train_log",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/train.log.jsonl",
+   "sha256": "f3b2f1dbae863e243c0165d4ac095333d5dd0998858ac315b976f3d32ddeb439",
+   "bytes": 4216,
+   "role": "train_log",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/dataset.yaml",
+   "sha256": "98fb7256bcc47c5e288bac4f9bcf695b11fed75fd57b2c7fbea946123fa73022",
+   "bytes": 1036,
+   "role": "dataset_card",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "configs",
+   "path": "datasets/rsna-knee/splits/fixed-v1.json",
+   "sha256": "7653b4f4a0e815b20e6e3264413eadbd525f20c00eb8a06a0056d73437b286b3",
+   "bytes": 16554,
+   "role": "plan",
+   "tier": 1,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s42-v1/predictions/valA.jsonl",
+   "sha256": "a8a3b301ecc9893cacf29e6d460ad9ceff6f591139441936bc75807f5f4c8674",
+   "bytes": 5520,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s42-v1/predictions/valB.jsonl",
+   "sha256": "8d0e5e4b0e5026781302060aa6fae104a314b43ee1f538470976abdfa7814c79",
+   "bytes": 5540,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s43-v1/predictions/valA.jsonl",
+   "sha256": "4eb8ff1b545591a0616875325fc2c38e25f92b487f22ebae458122753e461231",
+   "bytes": 5519,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1-minus-knee-cnn-s43-v1/predictions/valB.jsonl",
+   "sha256": "4e3e27edbbb76d889b15d2caed2765cdde21353fd252717ac32b8bf9ad4c2029",
+   "bytes": 5533,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1/predictions/valA.jsonl",
+   "sha256": "a34eec7dacb8ee5bad3daab22e213752abd12585bdc967baa99db6b8b8d9711b",
+   "bytes": 5527,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/fuse-knee-mean-v1/predictions/valB.jsonl",
+   "sha256": "6e5ccf4d5ea73d5656f86b586b9af6db62e629dbe060498dfafe5a65c946c2ab",
+   "bytes": 5534,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/predictions/valA.jsonl",
+   "sha256": "3545e4ce98164e0a62002b138c64fcfcd92d6828916334ca12a46eb29ee3231a",
+   "bytes": 5519,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/predictions/valB.jsonl",
+   "sha256": "9847dc88f68f0521d26ddbe7db36f52e80fbf355ac843686e906565982cb0885",
+   "bytes": 5533,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/predictions/valA.jsonl",
+   "sha256": "4a15d3bd480e9e8a4bc47b250aa8c893bf9d974e6fb5d928816df3519e1f8905",
+   "bytes": 5520,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/predictions/valB.jsonl",
+   "sha256": "0778b6d6f70f6fd3f5265fe1855d11f57550c8244410dd5eedc22cbf36601011",
+   "bytes": 5540,
+   "role": "prediction",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "datasets/rsna-knee/samples.jsonl",
+   "sha256": "df032ce932dd566f1d449fda85c4b666e87a60343053ded8f19e2c4b19a64644",
+   "bytes": 16095496,
+   "role": "samples",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "datasets/rsna-knee/raw_manifest.txt",
+   "sha256": "168aa3813c6bfbe786c26c380bdfc075599ad001f0489f40918cdd1015f89799",
+   "bytes": 8773335,
+   "role": "raw_manifest",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train/config.1.json",
+   "sha256": "5ca14db7404f390c4c1da9fa750274daeceb6b88d743e74b556005c83e325af5",
+   "bytes": 123,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train/config.2.json",
+   "sha256": "5ca14db7404f390c4c1da9fa750274daeceb6b88d743e74b556005c83e325af5",
+   "bytes": 123,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train/console.1.log",
+   "sha256": "106900aff667dc9ff6564066e2b8623d06bd45f48a5b069c56a9ae66febdbd90",
+   "bytes": 212,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train/console.2.log",
+   "sha256": "413cc1a11fe2a41f975ae5d1c09fdc431380b72e611d3ebd6356172e73d09750",
+   "bytes": 217,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train/env.1.json",
+   "sha256": "c8df310124f0dd4b66a3f8d643adfd0fccebee4be3d4f70ba470695a4dbf8ebf",
+   "bytes": 1737,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s42-v1/train/env.2.json",
+   "sha256": "a2e26ad3dca5028ffbed19479f93606532e342d278a4c9db1cbefcd587669afb",
+   "bytes": 1737,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/train/config.1.json",
+   "sha256": "4837e69d67b67c3f0bd40e77f194794f8261bf9cacbd5a626decbb4f0f52b538",
+   "bytes": 123,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/train/console.1.log",
+   "sha256": "2815b9ae22e5cb6bb2d7e83819e3e6a7a1a79f5ecf245c21b51ecb7071db74b4",
+   "bytes": 218,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "runs/knee-cnn-s43-v1/train/env.1.json",
+   "sha256": "3c32203e66f3087cd9ad429d3b2aa8d119e05d3f614d51f3bf15ccc8baca76c4",
+   "bytes": 1737,
+   "role": "train_dir",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "logs/vcp-2026-09-03.jsonl",
+   "sha256": "09e2dfca0cdd42d149a7eaab08b70db2dbd6683ceb28e2ca751509ebca316ba9",
+   "bytes": 1182,
+   "role": "logs",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "logs/vcp-2026-09-04.jsonl",
+   "sha256": "b147366fbd8d90c86df87d6861a15838126801c64899939857d2d5c1f6c09d9d",
+   "bytes": 316,
+   "role": "logs",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "logs/vcp-2026-09-07.jsonl",
+   "sha256": "398f267049db27e97bc22616a3a4ac3cf020e3168edc0a29a7a1765d0222af12",
+   "bytes": 11932,
+   "role": "logs",
+   "tier": 2,
+   "kind": "file",
+   "present": true,
+   "remote": null,
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "checkpoints/rsna-knee/knee-cnn-s42-v1/model.pt",
+   "sha256": "001256fb97d24c1ea6a6d87c83ba9417e5b7df866e2c414cf22ad3ef3281d82c",
+   "bytes": 227577,
+   "role": "checkpoint_final",
+   "tier": 3,
+   "kind": "remote_copy",
+   "present": true,
+   "remote": {
+    "dest": "C:/vcp-backup/rsna-knee/weights",
+    "run": "knee-cnn-s42-v1",
+    "name": "model.pt"
+   },
+   "source": null,
+   "for": [
+    "all"
+   ]
+  },
+  {
+   "root": "data",
+   "path": "checkpoints/rsna-knee/knee-cnn-s43-v1/model.pt",
+   "sha256": "3675435cfde249c19bcd771ac0a42f272b44539bfa9419a26ad5bef9695feb38",
+   "bytes": 227577,
+   "role": "checkpoint_final",
+   "tier": 3,
+   "kind": "remote_copy",
+   "present": true,
+   "remote": {
+    "dest": "C:/vcp-backup/rsna-knee/weights",
+    "run": "knee-cnn-s43-v1",
+    "name": "model.pt"
+   },
+   "source": null,
+   "for": [
+    "all"
+   ]
+  }
+ ]
+}

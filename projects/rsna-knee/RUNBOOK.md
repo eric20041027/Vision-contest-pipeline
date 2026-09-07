@@ -17,6 +17,7 @@
 | 封存 | holdout 未解封；只在最終候選確定且要 final 時讀取 |
 | 外部狀態 | Kaggle CLI 可讀帳號 `pongpong1027`；尚未建立本次 dataset / notebook 或提交 |
 | 憑證狀態 | 官方 rclone 1.75.1 可用時，`backup status` 實測 `rclone_conf=absent` |
+| 本機備份 | `knee-local-v1`：51 項證據全數驗過，`unverified=0`；兩份權重、notebook bundle、來源 Git bundle 已存 `C:/vcp-backup/rsna-knee`，仍是同機副本 |
 
 | Run | valA macro AUC | valB macro AUC | 處置 |
 |---|---:|---:|---|
@@ -215,6 +216,32 @@ uv run vcp submit final --dataset rsna-knee-test
 
 ## 9. 備份與撤離（遠端步驟尚未執行）
 
+本機基準程式已以 `8b1f77764defd823168dfe2c4b1e200c68372b10` 合併並 push。兩個 checkpoint 的 data.py / model.py SHA 重新驗過後，各在 `train.log.jsonl` 追加 `source_commit` 與 `checkpoint_code_sha_verified=true`；seed 42 另記 CPU / CUDA 排序一致。沒有改寫當初 `dirty=true` 的環境快照或失敗 attempt。
+
+**已完成的同機備份**（這批尚無提交，因此結論用 `all`）：
+
+```powershell
+uv run vcp train upload --run knee-cnn-s42-v1 --dest C:/vcp-backup/rsna-knee/weights
+uv run vcp train upload --run knee-cnn-s43-v1 --dest C:/vcp-backup/rsna-knee/weights
+uv run vcp backup manifest --dataset rsna-knee --conclusion all --id knee-local-v1
+uv run vcp backup push --dataset rsna-knee --manifest knee-local-v1 --dest C:/vcp-backup/rsna-knee/evidence --tier 1
+uv run vcp backup push --dataset rsna-knee --manifest knee-local-v1 --dest C:/vcp-backup/rsna-knee/evidence --tier 2
+uv run vcp backup push --dataset rsna-knee --manifest knee-local-v1 --dest C:/vcp-backup/rsna-knee/evidence --tier 3
+uv run vcp backup verify --dataset rsna-knee --manifest knee-local-v1 --dest C:/vcp-backup/rsna-knee/evidence
+```
+
+實際結果：兩次 train upload 均 `uploaded=1 verified=1`；manifest 51 項、`remote_copies=2 missing=0`。tier 1 推 25 項、tier 2 新推 24 項、tier 3 跳過既有 49 項，另在原副本位置驗兩份權重。verify `status=OK ok=51 missing=0 mismatch=0 drift=0 bad_stamps=0`；status `OK manifests=1 unverified=0 rclone_conf=absent`。清單內的 `remote_copy` 是框架欄位名，本次兩份實際都在同機的 `weights/<run>/model.pt`，不代表異機安全。
+
+vcp 證據圖以外的恢復材料也已複製並驗 SHA：
+
+- `C:/vcp-backup/rsna-knee/artifacts/kaggle-v1/`：bundle.zip、dataset metadata、notebook、kernel metadata、bundle SHA manifest 五個檔案。
+- `C:/vcp-backup/rsna-knee/knee-local-v1.json`：清單本身的副本。
+- `C:/vcp-backup/rsna-knee/backup.log.snapshot.jsonl`：完成三個 tier 與 verify 後的備份台帳快照。
+- `C:/vcp-backup/rsna-knee/source-8b1f777.bundle`：`git bundle create ... main` 產生，`git bundle verify` 通過、包含完整 main 歷史，可在無網路時恢復程式。
+
+bundle.zip SHA256：`f45e4ba0a5d50b7ca252b6e34ae45510960b242ad313e2a119c86effb33beab2`。
+Git bundle SHA256：`55e1057bd67f257a7903670ac1ba0d915108fdee469bd19e2030391c563160b5`。
+
 本機已安裝官方 rclone 1.75.1 的 portable binary：下載自 `https://downloads.rclone.org/v1.75.1/`，安裝前比對官方 `SHA256SUMS`；未建立任何 remote 或憑證。每個新 PowerShell session 使用：
 
 ```powershell
@@ -222,11 +249,12 @@ $env:PATH = 'C:/vcp-data/tools/rclone-v1.75.1/bin/rclone-v1.75.1-windows-amd64;'
 uv run vcp backup status --dataset rsna-knee
 ```
 
-已實測 `rclone_conf=absent`；沒有 rclone binary 時真實結果是 `unknown`，不能寫成 absent。尚未推送清單前 status 是 WARN。
+已實測 `rclone_conf=absent`；沒有 rclone binary 時真實結果是 `unknown`，不能寫成 absent。尚未推送清單前 status 是 WARN，目前本機清單已驗證為 OK。
 
 實際提交完成後，`$backupDest` 必須填使用者提供的本機路徑或 `remote:path`，不能把示意文字當目的地。rclone 的設定與認證在 rclone CLI 處理，vcp 不接收憑證：
 
 ```powershell
+uv run vcp train upload --run knee-cnn-s42-v1 --dest $backupDest
 uv run vcp backup manifest --dataset rsna-knee-test --conclusion submission:knee-baseline-v1 --id knee-submission-v1
 uv run vcp backup push --dataset rsna-knee-test --manifest knee-submission-v1 --dest $backupDest --tier 1
 uv run vcp backup push --dataset rsna-knee-test --manifest knee-submission-v1 --dest $backupDest --tier 2
@@ -234,7 +262,7 @@ uv run vcp backup push --dataset rsna-knee-test --manifest knee-submission-v1 --
 uv run vcp backup verify --dataset rsna-knee-test --manifest knee-submission-v1 --dest $backupDest
 ```
 
-manifest / push / verify 都應 OK；verify 的 copies `missing=0 mismatch=0`，本機漂移與壞時戳皆 0。run / checkpoint / 預測 / 台帳及 configs 依證據圖納入，raw / cache 不進清單。notebook bundle 位於 artifacts，**不自動成為 vcp 證據圖的一部分**；需另保存 bundle 及逐檔 SHA manifest，不能僅因 vcp verify OK 就宣稱 notebook 重建材料已全部備妥。
+manifest / push / verify 都應 OK；verify 的 copies `missing=0 mismatch=0`，本機漂移與壞時戳皆 0。先將權重 upload 到真正遠端、再產新清單，才能讓 `remote_copy` 指向遠端；不能拿仍指著 C 槽副本的 `knee-local-v1` 當異機撤離證據。run / checkpoint / 預測 / 台帳及 configs 依證據圖納入，raw / cache 不進清單。notebook bundle 位於 artifacts，**不自動成為 vcp 證據圖的一部分**；需另保存 bundle 及逐檔 SHA manifest，不能僅因 vcp verify OK 就宣稱 notebook 重建材料已全部備妥。
 
 只有真實 rclone remote、且**整份清單**（包括高 tier）都驗證成功，才執行：
 
@@ -272,6 +300,6 @@ uv run pytest tests/integration -o addopts='' -q -m realdata
 | 不做 Report 特徵、無 raw / metadata 上傳 | 推論只使用像素與序列方位 | bundle 與資料必須分開附掛 |
 | train role 負面測試比對 unseal ledger 前後 bytes | 既有 det fixture 自己已留下解封事件 | 改正「檔案應不存在」的錯誤期待，仍嚴格證明新操作未寫入 |
 | Kaggle 上傳等待明確目的地核准 | 自動核准審查拒絕這次外傳 | notebook / competition submission / scored / final 尚未完成 |
-| 遠端目的地未提供，不偽造備份或 forget | 只有真副本驗 SHA 才算完成 | 待指定 `$backupDest`，並另保存 notebook bundle |
+| 遠端目的地未提供，先完成同機副本與 SHA 驗證 | 保全已完成的模型、證據與程式 | 51 項證據已驗證；待指定 `$backupDest`，遠端重建新清單並另保存 notebook bundle |
 
 參考官方文件：[PyTorch 安裝版本](https://pytorch.org/get-started/previous-versions/)、[Kaggle kernel metadata](https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md)、[Kaggle dataset metadata](https://github.com/Kaggle/kaggle-cli/blob/main/docs/datasets_metadata.md)、[rclone 下載](https://rclone.org/downloads/)、[比賽頁](https://www.kaggle.com/competitions/rsna-knee-abnormality-detection)。

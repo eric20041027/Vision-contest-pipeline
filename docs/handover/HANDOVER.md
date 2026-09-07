@@ -73,6 +73,7 @@ configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、
 4. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）、Plan 5 checkpoint TOCTOU 仍延後；`Manifest.data_root` 刻意保留作人讀來源標記。
 5. **RSNA Knee 已實跑本機基準**：200 study 固定切分、PNG256、兩個種子訓練、預登記 / macro AUC / judge、平均融合消融、test profile、離線 bundle 已完成；讀數與命令見 `projects/rsna-knee/RUNBOOK.md`。seed 43 與融合均未準入，第一個 seed 42 是 baseline。**尚未完成外部里程碑**：指定私有 Kaggle dataset 上傳待核准，notebook 執行 / 提交 / scored / sealed final 未發生；備份目的地未提供。不要把手冊中待執行命令當成已完成，也不要先解封 holdout。
 6. **Windows 命令解析**：裸 `python` 可啟動到 venv 以外，即使 `--venv` 探針正確；專案已用絕對 interpreter 完成訓練，通用解析修復另列 Plan 5 §10，與效能回合分開。
+7. **本機證據已備份**：`knee-local-v1` 結論 `all`、51 項驗證成功；兩份權重、notebook bundle、Git source bundle 均已存 `C:/vcp-backup/rsna-knee`。這是同機副本；異機撤離仍待目的地，先將權重 upload 到該遠端後再產新清單，勿把指著 C 槽的 remote_copy 當異機證據。
 
 ## 7. 開發流程（這個 repo 一直這樣做）
 

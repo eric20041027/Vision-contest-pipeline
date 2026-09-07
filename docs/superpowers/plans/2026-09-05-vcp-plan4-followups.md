@@ -73,7 +73,7 @@
 7. **`check_existing_run` 的 `assert_run_matches` 錯誤不帶 `run=`**：與全庫慣例一致，但同函式其他分支都帶；若要一致就包一層 `setdefault`。
 8. **ensemble-boxes oracle 從未在 CI 跑**（spec 不允許進依賴）：目前靠測試檔上方的人工核對紀錄；日後若 numba 相容問題解決，可考慮進 dev 群組。
 9. **ablate 沒有 `--replace`**：成員重新 ingest 後要逐 run `fuse build --replace` 再重跑 ablate（README 已寫）；若常用可加旗標透傳。
-10. **Plan 2c 遺留**：`test_png_resize_then_skip_then_force` 在 `-W error::ResourceWarning` 下失敗（未關閉 PIL 檔案）。
+10. **Plan 2c 遺留**：`test_png_resize_then_skip_then_force` 在 `-W error::ResourceWarning` 下失敗（未關閉 PIL 檔案）。→ Hygiene A（2026-09-07）已修：漏在測試本身，改用 `with` 開圖。
 
 ## 7. 方法上的紀錄
 

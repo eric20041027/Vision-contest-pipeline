@@ -36,5 +36,6 @@
 
 ## 給 Codex / 其他代理
 - 先讀本檔與 `docs/handover/HANDOVER.md`，再讀要改的那一層的 spec 與後記；spec 的「補充決定」以程式碼為準。
+- 開始、接續、操作、交接或向使用者介紹完整比賽時，以 `vcp-running-contests` skill 為入口；它會再指向 Day 1、資料層與登記表的專用 skills。
 - 一件事一個分支一個 commit（`type(scope): 說明`），不用 `git add -A`；每個行為變更先寫失敗的測試；commit 前 `uv run ruff check . && uv run ruff format --check .`，合併前全套 `uv run pytest --cov=vcp`。
 - 裁決（spec 沒說的決定）與處置寫進該層後記的最後一節；不對 markdown 跑 `ruff format`；測試重寫台帳 / 卡一律 `newline="\n"`。

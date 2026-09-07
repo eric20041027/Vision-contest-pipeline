@@ -83,3 +83,20 @@
 - Windows：測試重寫台帳 / 卡一律 `newline="\n"`；`Path.is_absolute()` 對另一平台的絕對路徑回 False——跨機器的路徑用 `PureWindowsPath` / `PurePosixPath` 兩邊都問。
 - worktree 的 Bash 守衛拒絕 heredoc 與串接命令：改檔用 Write / Edit，git 一次一條、用 `--` 指定路徑。
 - 計畫的 markdown 不跑 `ruff format`（Plan 6 R1）；計畫修正用小 Python 腳本做精確替換，每個替換 `assert count == 1`。
+
+## 7. Plan 7c：§5 待辦的處置（2026-09-06，分支 `worktree-plan7c-hygiene`，3 個 commit）
+
+| §5 項 | 處置 |
+|---|---|
+| 1 | 做了：`pull._fetch` 對 `OSError` 也還原 `.bak`；`pull()` 把它包成 `VcpError("copy_failed: …")`（ABORT），列照寫、計數併入 fields。 |
+| 2 | 做了：`BackupRow.error`（可選）；verify 的副本層拋 `PlatformError` 時仍算本機兩層、寫列（`copies` 空、`error` 記訊息）再拋。 |
+| 3 | 做了：`vcp backup pull` 的 `external_skipped=` WARN 有 CLI 測試；`FakeRemote(unsupported=True)` 的雜湊列帶秘密，驗到 redact。 |
+| 4 | 做了：`run_command(..., context=)`——失敗時 `reason=` 之後保留命令層的識別欄位，成功時命令自己的欄位優先；五個 backup 命令都傳；其他層未動（可比照採用）。 |
+| 5 | 做了：`dest_kind` 與兩個正則搬到 `backup/dest.py`（`train/upload.py` 再匯出）；Windows 上 `^[A-Za-z]:` 一律是磁碟。 |
+| 6 | 不做：來源本來就要讀兩次（預檢 sha、複製），目的地讀回是驗證本體；tier 3 的成本可接受。 |
+| 7 | 做了：時戳標籤改 `e.key`（`data/measure/beach/readings.jsonl:12`）；`backup.log.jsonl` 仍用檔名。 |
+| 8 | 做了：spec §11 端到端句子配 `--tier 2` 並指向 §14。 |
+| 9 | 做了：`train upload` 的 rclone 路徑改用 `RcloneDest`（`_hashsum` 刪除）：rclone 失敗 `PlatformError`（FAIL，原本 ABORT）、不在 `rclone_not_found`（ABORT）、`hashsum` exit 3 / 4 才是空；README 訓練層段落更新。 |
+| 10 | 未動（Plan 6 後記的 10 項仍開著）。 |
+
+審查（sonnet）：SPEC ✅、APPROVED，3 LOW：`open_dest` docstring 的「as in the training layer」過時（本次一併改）；spec §14「不寫 verify 列」過時（本次改）；`test_rclone_upload_reports_unverified_and_failures` 仍以 `VcpError` 接（`PlatformError` 是子類，不追）。全套 837 passed / 4 skipped、覆蓋率 96.36%。

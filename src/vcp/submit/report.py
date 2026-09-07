@@ -18,7 +18,6 @@ from vcp.submit.guards import QuotaState, quota_state
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
-from vcp.submit.sync import MATCH_WINDOW
 
 
 @dataclass(frozen=True)
@@ -39,38 +38,35 @@ def _label(r: LedgerRow) -> str:
 
 def assign_scores(uploads: list[LedgerRow], scores: list[LedgerRow]) -> list[LedgerRow | None]:
     """The score that applies to each upload of one submission id (same order as ``uploads``,
-    oldest ``at`` first). A platform-timed score (``at`` present) belongs to the newest upload
-    whose ``at`` is not later than the score's ``at`` + MATCH_WINDOW (the platform's clock
-    can run a little ahead of the moment the upload was recorded); a manual score (no ``at``)
-    belongs to the newest upload recorded (``ts``) before it. Per upload the newest assigned
+    oldest ``at`` first). A platform-timed score (``at`` present) belongs to the upload whose
+    ``at`` is nearest in time to the score's ``at`` (smallest absolute difference; a tie goes to
+    the later upload). A manual score (no ``at``) belongs to the newest upload with
+    ``upload.ts <= score.ts`` (none -> the score is dropped). Per upload, the newest assigned
     score (by ``ts``) wins; an upload nothing was assigned to gets None.
 
-    Scores are processed newest (by ``ts``) first, each claiming the newest still-unclaimed
-    eligible upload; an older score left with no unclaimed upload is simply dropped, which is
-    how "the newest assigned score wins" plays out when two scores would otherwise want the
-    same upload.
+    Each score is placed independently -- scores never compete to "claim" an upload the way an
+    earlier version of this function had them do. Claiming let a corrected score (a later ``ts``
+    for the same moment) bump the score it corrects onto a different, wrong upload; placing each
+    score on its own nearest/eligible upload and then letting the newest ``ts`` win per upload
+    does not have that failure mode.
     """
-    order = sorted(range(len(scores)), key=lambda i: scores[i].ts, reverse=True)
     assigned: list[LedgerRow | None] = [None] * len(uploads)
-    claimed: set[int] = set()
-    for i in order:
-        s = scores[i]
+    if not uploads:
+        return assigned
+    for s in scores:
         if s.at is not None:
-            deadline = parse_stamp(s.at) + MATCH_WINDOW
-            eligible = [
-                idx
-                for idx, u in enumerate(uploads)
-                if idx not in claimed and parse_stamp(str(u.at)) <= deadline
-            ]
-            ranked = sorted(eligible, key=lambda idx: str(uploads[idx].at))
+            score_at = parse_stamp(s.at)
+            winner = min(
+                range(len(uploads)),
+                key=lambda idx: (abs(parse_stamp(str(uploads[idx].at)) - score_at), -idx),
+            )
         else:
-            eligible = [idx for idx, u in enumerate(uploads) if idx not in claimed and u.ts <= s.ts]
-            ranked = sorted(eligible, key=lambda idx: uploads[idx].ts)
-        if not ranked:
-            continue
-        winner = ranked[-1]
-        assigned[winner] = s
-        claimed.add(winner)
+            eligible = [idx for idx, u in enumerate(uploads) if u.ts <= s.ts]
+            if not eligible:
+                continue
+            winner = max(eligible, key=lambda idx: (uploads[idx].ts, idx))
+        if assigned[winner] is None or s.ts > assigned[winner].ts:
+            assigned[winner] = s
     return assigned
 
 

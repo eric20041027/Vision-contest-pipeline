@@ -101,3 +101,21 @@
 | 10 | 做了：kaggle.py 改用 `core.proc.last_line`、`_failed` 型別。未做：三處事件列舉、`samples == rows` 註解、ingest 訊息、`upload` 檢查順序、上傳成功後台帳寫入失敗的固有風險、e2e 只斷 exit_code 的呼叫、file-level `noqa: E501`。 |
 
 審查（sonnet）：SPEC ✅；QUALITY 1 MEDIUM（同距離時依列序 → R2 修）、1 LOW（`_assigned_score` 每列重算一次 `assign_scores`，量小不改）。全套 850 passed / 4 skipped、覆蓋率 96.40%。
+
+## 9. Hygiene C 處置（2026-09-07）
+
+| 項 | 處置 |
+|---|---|
+| C1a | 兩個 CSV writer 在寫檔前驗完整表頭的重名；涵蓋 rename 與未改名欄位、id 欄的衝突，writer / stage CLI 都測。 |
+| C1b | 原有遞迴正確；補兩層融合配對測試與葉節點 `eval_run` / `test_run` fields，不覆蓋內層已提供的身分。 |
+| C1c | 原有 latest 語意正確；補同 prereg PASS→FAIL / FAIL→PASS 測試。 |
+| C1d | 原有 WARN 正確；CLI 測缺一筆預測仍成功、`missing=1` 與 warning 行。 |
+| C1e | 真正 build eval / test 融合 run 再 stage / verify；固定 `rebuild=ok` / `fusion_output=ok`。成員 bytes 被改時 verify 仍通過；改 fuse output 關聯則 FAIL。依 brief 不新增成員重算功能。 |
+| C1f | 保留 sample_id，表頭修為 StudyInstanceUID 並斷言輸出 ID 等於 study 目錄名。本機官方 sample_submission.csv / test.csv 證明這是 study UID，view_stem 是切片 UID。 |
+| §8-9 view 越界 | 補 csv_boxes coords=norm 的 view 越界 FAIL；既有防護正確。 |
+
+裁決：保留 `submit verify` 的輸出核對範圍 — brief C1e 明令不擴功能，spec §6 的 verify 只規定融合輸出 sha — 代價是單獨 verify 不證明成員預測 bytes 未漂移，需 fuse build / backup verify。
+
+裁決：RSNA 用 study ID，修正 §14 的 view_stem 敘述 — 官方本機 CSV 與匯入後路徑一致 — 代價是整合測試表頭由通用 id 改為比賽欄名，核心 writer 介面不變。
+
+C1 驗證：新行為測試先 7 failed / 30 passed；指定 gate 135 passed；全套 921 passed / 4 skipped、覆蓋率 96.68%；真資料 8 passed / 3 skipped；ruff check / format --check 乾淨。自審：無新增 schema 欄位、無時鐘或台帳行為改動；兩側遞迴身分欄位以 setdefault 保留最深失敗位置。

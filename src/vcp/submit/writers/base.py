@@ -143,6 +143,18 @@ def fmt_float(v: float) -> str:
     return repr(float(v))
 
 
+def check_header(header: list[str]) -> None:
+    """Reject ambiguous columns after applying renames, including the id column."""
+    seen: set[str] = set()
+    for name in header:
+        if name in seen:
+            raise ValidationFailed(
+                f"duplicate_column: {name!r} appears more than once in the output header",
+                fields={"column": name},
+            )
+        seen.add(name)
+
+
 def option_is_true(options: dict[str, str], key: str) -> bool:
     """One writer option read as a flag, through the framework-wide truthiness convention."""
     return is_true(options.get(key))

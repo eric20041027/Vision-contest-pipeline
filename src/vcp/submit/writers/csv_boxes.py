@@ -12,6 +12,7 @@ from vcp.measure.schema import PredBox, Prediction
 from vcp.submit.writers.base import (
     WriteContext,
     WriteResult,
+    check_header,
     check_options,
     fmt_float,
     output_ids,
@@ -84,6 +85,8 @@ class CsvBoxesWriter:
                 f"option=columns: unknown column keys {unknown}; known: {list(ORDER)}",
                 fields={"option": "columns"},
             )
+        header = [columns[k] for k in ORDER]
+        check_header(header)
         ids = output_ids(ctx.samples, ctx.options)
         names = {c.id: c.name for c in ctx.dataset.card.categories}
         by_id = predictions_by_id(preds)
@@ -91,7 +94,7 @@ class CsvBoxesWriter:
         ctx.out.parent.mkdir(parents=True, exist_ok=True)
         with ctx.out.open("w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f, lineterminator="\n")
-            writer.writerow([columns[k] for k in ORDER])
+            writer.writerow(header)
             for s in sorted_samples(ctx.samples):
                 p = by_id.get(s.sample_id)
                 boxes = (p.boxes or []) if p is not None else []

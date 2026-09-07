@@ -143,3 +143,22 @@ def test_verify_weights_for_kernels(roots):
     with pytest.raises(ValidationFailed, match="has no weights_hash") as ei:
         verify_weights(roots.data, "e", ["e2"])
     assert ei.value.fields == {"field": "weights_hash", "run": "e2"}
+
+
+def test_nested_fusion_pairing_reports_the_differing_leaf(roots):
+    _fusion_pair(roots)
+    e = _card("outer", "d")
+    t = _card("outer.test", "d-test", preds={"test": _pred("z" * 64)})
+    write_record(roots.data, "outer", _fuse("outer", [("fe", 1.0)], "y" * 64, {}))
+    write_record(
+        roots.data,
+        "outer.test",
+        _fuse("outer.test", [("ft", 1.0)], "z" * 64, {"ft": "o" * 64}),
+    )
+    pairing = verify_pairing(roots.data, e, t, test_subset="test")
+    assert pairing.mode == "fusion" and pairing.members[0].mode == "fusion"
+    save_run(roots.data, _card("m2.test", "d-test", weights=W1, preds={"test": _pred("m" * 64)}))
+    with pytest.raises(ValidationFailed, match="weights_hash differs") as ei:
+        verify_pairing(roots.data, e, t, test_subset="test")
+    assert ei.value.fields["eval_run"] == "m2"
+    assert ei.value.fields["test_run"] == "m2.test"

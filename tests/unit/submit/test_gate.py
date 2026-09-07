@@ -25,6 +25,21 @@ def test_candidate_needs_a_pass_judgement(pair):
     assert set(latest_judgements(pair.eval_paths)) == {"p-good", "p-bad"}
 
 
+@pytest.mark.parametrize("verdicts", [("PASS", "FAIL"), ("FAIL", "PASS")])
+def test_same_prereg_uses_its_latest_judgement(pair, verdicts):
+    seed_eval_runs(pair)
+    ledger = pair.eval_paths.measure_dir / JUDGEMENTS_LEDGER
+    for verdict in verdicts:
+        append_row(ledger, _judgement("p", "good", verdict))
+    good = load_run(pair.roots.data, "good")
+    if verdicts[-1] == "FAIL":
+        with pytest.raises(ValidationFailed, match="not_admitted"):
+            admit(pair.roots.data, pair.eval_paths, good, None, "candidate", None)
+    else:
+        gate = admit(pair.roots.data, pair.eval_paths, good, None, "candidate", None)
+        assert gate.admission == "PASS" and gate.judgements == ["p"]
+
+
 def test_waived_kinds_need_a_reason(pair):
     seed_eval_runs(pair)
     bad = load_run(pair.roots.data, "bad")

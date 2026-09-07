@@ -96,6 +96,12 @@ def run_command(
         status = "ABORT"
         fields = {"reason": f"{type(e).__name__}: {e}", **(context or {}), **_error_fields(e)}
         logger.error("command aborted", exc_info=True, extra={"vcp": {"cmd": cmd}})
+    except KeyboardInterrupt:
+        # 5-4: a BaseException, so the clause above never saw it -- Ctrl+C during a long hash or
+        # upload ended the command with no VERDICT at all. Iron rule 2 holds for Ctrl+C too.
+        status = "ABORT"
+        fields = {"reason": "interrupted", **(context or {})}
+        logger.error("command interrupted", exc_info=True, extra={"vcp": {"cmd": cmd}})
     verdict = Verdict(cmd=cmd, status=status, fields=fields)
     logger.info(verdict.line(), extra={"vcp": {"cmd": cmd, "status": status}})
     if json_mode:

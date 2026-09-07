@@ -1,5 +1,7 @@
 import json
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -11,7 +13,7 @@ from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.runs import load_run, run_dir
-from vcp.train.records import load_record, read_events
+from vcp.train.records import load_record, read_events, save_record
 from vcp.train.run import (
     RUN_BOUND_ELSEWHERE,
     RUN_EXISTS,
@@ -58,6 +60,13 @@ s.note("val_auc", 0.9)
 # C2/I1/I3 + resume regression: the command is byte-identical across attempts, but a counter
 # file (persisted in cwd, which --resume shares) makes best.pt's bytes differ between attempts,
 # the way a real trainer's weights differ after more epochs. last.pt never changes.
+# 5-1: prints one line (so on_line runs) and then outlives any patience the wrapper has.
+SLEEPER = """
+import time
+print("tick", flush=True)
+time.sleep(30)
+"""
+
 RESUME_FAKE = """
 from pathlib import Path
 
@@ -190,6 +199,37 @@ def test_execute_interrupt_terminates_child(work, tmp_path):
     )
     assert status == "interrupted" and code != 0
     assert "[vcp] interrupted" in (tmp_path / "c.log").read_text(encoding="utf-8")
+
+
+def test_execute_terminates_the_child_before_re_raising_any_exception(work, tmp_path, monkeypatch):
+    """5-1: only KeyboardInterrupt used to terminate the child. Anything else raised by
+    ``on_line`` (a --json writer failing, a bug in the caller) left the child running and
+    ``with Popen`` waiting for it -- a training command sleeping for hours hung vcp with it.
+    Now every exception terminates the child, on a bounded wait, and is re-raised unchanged."""
+    (work / "sleeper.py").write_text(SLEEPER, encoding="utf-8")
+    real_popen = subprocess.Popen
+    spawned = {}
+
+    def spy(*args, **kwargs):
+        spawned["proc"] = proc = real_popen(*args, **kwargs)
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", spy)
+
+    def boom(line):
+        raise RuntimeError("the caller blew up")
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="the caller blew up"):
+        execute(
+            [sys.executable, "sleeper.py"],
+            cwd=work,
+            env=None,
+            console=tmp_path / "c.log",
+            on_line=boom,
+        )
+    assert time.monotonic() - started < 2.0  # not the child's 30 s
+    assert spawned["proc"].poll() is not None  # and the child is gone, not orphaned
 
 
 def test_command_found_resolves_relative_to_cwd(tmp_path, monkeypatch):
@@ -332,6 +372,60 @@ def test_train_run_existing_runs(roots, work, tmp_path):
         and first.record.attempts[0] == second.record.attempts[0]
     )
     assert (run_dir(roots.data, "r1") / "train" / "console.2.log").is_file()
+
+
+def test_each_attempt_records_its_own_command_and_seed(roots, work, tmp_path):
+    """5-2: --resume adds an attempt but never rewrote the record's command / seed / venv, so a
+    resumed run's train.yaml described the FIRST attempt while claiming to describe the run.
+    Each attempt now carries its own; the record level keeps the first attempt's values on
+    purpose -- it says how the run began, and `run.yaml`'s config_hash is bound to that."""
+    _seed(roots)
+    cfg = work / "cfg.yaml"  # --config pins config_hash, so the command may differ across attempts
+    cfg.write_text("epochs: 1\n", encoding="utf-8")
+    train_run(_spec(roots, work, config=cfg, seed=11))
+    train_run(
+        _spec(
+            roots,
+            work,
+            config=cfg,
+            seed=22,
+            resume=True,
+            command=[sys.executable, "fake_train.py", "0", "second"],
+        )
+    )
+    rec = load_record(roots.data, "r1")
+    assert [a.n for a in rec.attempts] == [1, 2]
+    assert [a.seed for a in rec.attempts] == [11, 22]
+    assert rec.attempts[0].command == [sys.executable, "fake_train.py", "0"]
+    assert rec.attempts[1].command == [sys.executable, "fake_train.py", "0", "second"]
+    assert [a.venv for a in rec.attempts] == [None, None]  # neither attempt was given one
+    assert rec.seed == 11 and rec.command == rec.attempts[0].command
+    assert rec.venv is None
+
+
+def test_resume_closes_an_attempt_left_running_by_a_crash(roots, work, tmp_path):
+    """5-3: an attempt still marked ``running`` is one vcp itself did not survive -- nothing
+    ever came back to close it, so `train status` WARNed about it for the life of the run.
+    A --resume is the moment it is certainly not running any more: it becomes ``interrupted``
+    with no invented exit code, and the event log says who decided that and when."""
+    _seed(roots)
+    train_run(_spec(roots, work))
+    rec = load_record(roots.data, "r1")
+    crashed = rec.attempts[0].model_copy(
+        update={"status": "running", "exit_code": None, "finished_at": None, "duration_s": None}
+    )
+    save_record(roots.data, rec.model_copy(update={"attempts": [crashed]}))
+    assert status_view(roots.data, "r1").running == 1
+
+    res = train_run(_spec(roots, work, resume=True))
+    assert res.attempt.n == 2 and res.attempt.status == "finished"
+    rec = load_record(roots.data, "r1")
+    assert [a.status for a in rec.attempts] == ["interrupted", "finished"]
+    assert rec.attempts[0].exit_code is None and rec.attempts[0].finished_at is not None
+    assert status_view(roots.data, "r1").running == 0
+    note = next(e for e in read_events(roots.data, "r1") if e["event"] == "note")
+    assert note["attempt"] == 1
+    assert note["value"] == "attempt 1 found running at resume; marked interrupted"
 
 
 def test_train_run_venv_python_must_exist(roots, work, tmp_path):

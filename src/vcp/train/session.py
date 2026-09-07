@@ -15,7 +15,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_data_root, store_path
 from vcp.train.checkpoints import mark_final, register
-from vcp.train.records import append_event, has_record, load_record, save_record
+from vcp.train.records import append_event, current_attempt, has_record, load_record, save_record
 from vcp.train.schema import CheckpointRecord
 
 
@@ -35,19 +35,25 @@ class Session:
         return cls(run_id, root)
 
     def _attempt(self) -> int:
-        record = load_record(self.data_root, self.run_id)
-        return record.attempts[-1].n if record.attempts else 1
+        return current_attempt(load_record(self.data_root, self.run_id))
 
     def register_checkpoint(self, path: str | Path, *, final: bool = False) -> CheckpointRecord:
         file = Path(path).resolve()
         if not file.is_file():
             raise ValidationFailed(f"checkpoint is not a file: {file}")
         record = load_record(self.data_root, self.run_id)
-        n = record.attempts[-1].n if record.attempts else 1
-        record, added = register(
-            record, [file], data_root=self.data_root, attempt=n, source="session"
-        )
+        n = current_attempt(record)
+        # 5-5: one read of what may be a multi-GB file; `register` takes the sha rather than
+        # hashing the same bytes again.
         stored, digest = store_path(file, self.data_root), sha256_file(file)
+        record, added = register(
+            record,
+            [file],
+            data_root=self.data_root,
+            attempt=n,
+            source="session",
+            digests={file: digest},
+        )
         if final:
             record = mark_final(record, stored, digest)
         save_record(self.data_root, record)

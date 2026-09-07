@@ -315,6 +315,22 @@ def test_run_command_merges_context_into_verdict_fields(capsys):
     assert v.count("dataset=") == 1 and "dataset=x" in v
 
 
+def test_run_command_reports_a_keyboard_interrupt_as_an_abort(capsys):
+    """5-4: KeyboardInterrupt is a BaseException, so `except Exception` never saw it. Ctrl+C
+    while a command hashes a checkpoint or uploads GB-scale weights therefore ended it with no
+    VERDICT at all -- a hole in iron rule 2 that every layer shares. It is an ABORT with a
+    reason of its own (exit 2), and the command's `context` fields still say what it was about."""
+
+    def interrupted() -> CmdResult:
+        raise KeyboardInterrupt
+
+    with pytest.raises(typer.Exit) as ei:
+        run_command("t.interrupted", False, None, interrupted, context={"run": "r1"})
+    assert ei.value.exit_code == 2
+    v = _last_verdict(capsys.readouterr().out)
+    assert "status=ABORT" in v and "reason=interrupted" in v and "run=r1" in v
+
+
 def test_parse_opts_and_render_table():
     assert parse_opts(["a=1", "b=x=y"]) == {"a": "1", "b": "x=y"}
     assert parse_opts(None) == {}

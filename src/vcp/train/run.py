@@ -51,6 +51,9 @@ RUN_EXISTS = "run_exists"
 RUN_BOUND_ELSEWHERE = "run_bound_elsewhere"
 TRAINED_ON_MISMATCH = "trained_on_mismatch"
 TERMINATE_TIMEOUT_S = 30
+# 5-1: an exception that is on its way out of execute() has already lost the caller; wait far
+# less for the child to go quietly than when the user asked for the stop (Ctrl+C) themselves.
+ABORT_TIMEOUT_S = 5
 
 
 class RunSpec(BaseModel):
@@ -181,6 +184,20 @@ def child_env(
     return env
 
 
+def stop_child(proc: subprocess.Popen[str], timeout: float) -> int:
+    """Terminate the child and reap it, killing it if it will not go within ``timeout``.
+
+    Bounded on purpose: ``with Popen`` waits for the child forever on the way out, so a training
+    command that ignores SIGTERM must not be able to hold vcp open with it.
+    """
+    proc.terminate()
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return proc.wait()
+
+
 def execute(
     command: list[str],
     *,
@@ -193,6 +210,8 @@ def execute(
 
     A KeyboardInterrupt (Ctrl+C, or a test's ``on_line`` raising it) terminates the child and
     is recorded as ``interrupted`` rather than propagating: the attempt must reach the record.
+    Any OTHER exception (5-1) terminates the child too and is re-raised unchanged -- it has no
+    status to record, but leaving the child running would hang the wrapper on the way out.
     """
     console.parent.mkdir(parents=True, exist_ok=True)
     status: AttemptStatus = "finished"
@@ -217,14 +236,12 @@ def execute(
                         on_line(line)
                 code = proc.wait()
             except KeyboardInterrupt:
-                proc.terminate()
-                try:
-                    code = proc.wait(timeout=TERMINATE_TIMEOUT_S)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    code = proc.wait()
+                code = stop_child(proc, TERMINATE_TIMEOUT_S)
                 status = "interrupted"
                 log.write("\n[vcp] interrupted\n")
+            except BaseException:
+                stop_child(proc, ABORT_TIMEOUT_S)
+                raise
     if status == "finished" and code != 0:
         status = "failed"
     return code, status
@@ -317,6 +334,30 @@ def _new(
 def _replace_attempt(record: TrainRecord, attempt: Attempt) -> TrainRecord:
     attempts = [attempt if a.n == attempt.n else a for a in record.attempts]
     return record.model_copy(update={"attempts": attempts})
+
+
+def _close_running(record: TrainRecord, *, data_root: Path, run_id: str) -> TrainRecord:
+    """5-3: an attempt still marked ``running`` is one vcp itself did not survive -- nothing came
+    back to close it, so it WARNed in ``train status`` forever. A ``--resume`` is the moment it
+    is certainly not running any more. No exit code is invented; the event log records the
+    reconciliation so the yaml's new status is never the only trace of it.
+    """
+    for a in [a for a in record.attempts if a.status == "running"]:
+        record = _replace_attempt(
+            record,
+            a.model_copy(
+                update={"status": "interrupted", "finished_at": stamp(), "exit_code": None}
+            ),
+        )
+        append_event(
+            data_root,
+            run_id,
+            "note",
+            a.n,
+            key="resume",
+            value=f"attempt {a.n} found running at resume; marked interrupted",
+        )
+    return record
 
 
 def _finish_checkpoints(
@@ -433,6 +474,7 @@ def train_run(spec: RunSpec) -> RunResult:
             chash=chash,
             cwd=cwd,
         )
+    record = _close_running(record, data_root=data_root, run_id=spec.run_id)  # no-op for a new run
     n = len(record.attempts) + 1
     # spec 6.1 step 5: the first writes.
     run_root = run_dir(data_root, spec.run_id)
@@ -447,7 +489,14 @@ def train_run(spec: RunSpec) -> RunResult:
                 )
             }
         )
-    attempt = Attempt(n=n, started_at=stamp(), console=f"{TRAIN_DIR}/console.{n}.log")
+    attempt = Attempt(
+        n=n,
+        started_at=stamp(),
+        console=f"{TRAIN_DIR}/console.{n}.log",
+        command=list(spec.command),
+        seed=spec.seed,
+        venv=store_path(spec.venv, data_root) if spec.venv is not None else None,
+    )
     record = record.model_copy(update={"attempts": [*record.attempts, attempt]})
     if created:
         save_run(data_root, card)

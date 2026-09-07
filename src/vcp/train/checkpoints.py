@@ -37,13 +37,18 @@ def register(
     data_root: Path,
     attempt: int,
     source: CheckpointSource = "glob",
+    digests: dict[Path, str] | None = None,
 ) -> tuple[TrainRecord, list[CheckpointRecord]]:
-    """Add every file not already known by (path, sha256); return the record and what was new."""
+    """Add every file not already known by (path, sha256); return the record and what was new.
+
+    ``digests`` lets a caller that has already hashed a file hand the sha over rather than have
+    a multi-GB checkpoint read twice (5-5); anything not in it is hashed here.
+    """
     known = {(c.path, c.sha256) for c in record.checkpoints}
     added: list[CheckpointRecord] = []
     for f in files:
         stored = store_path(f, data_root)
-        digest = sha256_file(f)
+        digest = (digests or {}).get(f) or sha256_file(f)
         if (stored, digest) in known:
             continue
         added.append(

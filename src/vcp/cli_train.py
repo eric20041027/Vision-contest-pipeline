@@ -183,7 +183,13 @@ def status_cmd(
             fields["drift"] = len(st.drift)
         if st.missing:
             fields["missing"] = len(st.missing)
-        human = [f"unbacked: {p}" for p in st.unbacked]
+        # 5-2: the LAST attempt's command. A --resume may have run a different one, and the
+        # record-level command is the FIRST attempt's; older records have neither, so fall back.
+        last = st.record.attempts[-1] if st.record.attempts else None
+        human = []
+        if last is not None:
+            human.append(f"attempt {last.n} command: {' '.join(last.command or st.record.command)}")
+        human += [f"unbacked: {p}" for p in st.unbacked]
         human += [f"missing: {p}" for p in st.missing]
         human += [f"drift: {p}" for p in st.drift]
         warn = bool(st.unbacked or st.missing or st.drift or st.running)

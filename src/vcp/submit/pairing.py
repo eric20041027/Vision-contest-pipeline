@@ -97,9 +97,14 @@ def _fusion(
                 index=str(i),
             )
         tcard = load_run(data_root, tm.run)
-        sub = verify_pairing(
-            data_root, load_run(data_root, em.run), tcard, test_subset=test_subset, index=str(i)
-        )
+        try:
+            sub = verify_pairing(
+                data_root, load_run(data_root, em.run), tcard, test_subset=test_subset, index=str(i)
+            )
+        except ValidationFailed as e:
+            e.fields.setdefault("eval_run", em.run)
+            e.fields.setdefault("test_run", tm.run)
+            raise
         members.append(PairMember(eval=em.run, test=tm.run, mode=sub.mode))
         if UNCHECKED in sub.checks and UNCHECKED not in checks:
             checks.append(UNCHECKED)

@@ -386,3 +386,5 @@ class Platform(Protocol):
 18. **FAIL 而非 ABORT（Plan 6c）**：sealed 子集不在 plan 裡 → `sealed_subset:`；`--test-subset train` 撞到空 train 子集 → `test_subset …`；file 類 profile 給 kernel 選項 → `kernel_options:`；kernel 類給 `--test-run` → `test_run:`。
 19. **決選次序鍵改寫（取代第 13 條，Plan 6c）**：sealed 讀數與 public 同分鍵都依指標的 `higher_is_better`（榜面分數是同一指標，lower-is-better 比賽越低越好）；`public` 缺席一律排最後；再以 `stage.json` 的 `staged_at` 升冪（原本用台帳列的 `ts`，差毫秒）。
 20. **台帳列的時戳（Plan 6c）**：`ts` 與 `at` 必須是 `stamp()` 格式的 UTC 字串（讀入即驗）。
+21. **CSV 表頭與巢狀配對（Hygiene C）**：兩個 CSV writer 在套用 columns 後檢查完整表頭（含 id），重複以 `duplicate_column:` FAIL 並帶 `column=`；巢狀配對失敗以 `eval_run` / `test_run` 保留最深層失敗配對。`submit verify` 的融合檢查只驗輸出 sha 關聯，不重算成員 bytes；成員完整性由 `fuse build` / `backup verify` 稽核。
+22. **RSNA study ID（Hygiene C，修正 §14）**：本機官方 `sample_submission.csv` 的 ID 欄為 `StudyInstanceUID`。匯入器的 `sample_id` 已是 study UID，故用 `id_field=sample_id,id_col=StudyInstanceUID`；`view_stem` 是 slice UID，不適用。

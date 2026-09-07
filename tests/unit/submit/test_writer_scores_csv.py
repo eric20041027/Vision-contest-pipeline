@@ -83,3 +83,13 @@ def test_scores_csv_needs_card_categories(tmp_path):
     with pytest.raises(ValidationFailed, match="needs the dataset card's categories") as ei:
         get_writer("scores_csv").write(preds, _ctx(ds, tmp_path))
     assert ei.value.fields == {"dataset": "r0"}
+
+
+@pytest.mark.parametrize("columns", ["cat=dog", "cat=id", "cat=same,dog=same"])
+def test_duplicate_headers_are_rejected_before_writing(tmp_path, columns):
+    ds, preds = _cls()
+    ctx = _ctx(ds, tmp_path, columns=columns)
+    with pytest.raises(ValidationFailed, match="duplicate_column:") as ei:
+        get_writer("scores_csv").write(preds, ctx)
+    assert ei.value.fields["column"] == columns.split(",")[0].split("=")[1]
+    assert not ctx.out.exists()

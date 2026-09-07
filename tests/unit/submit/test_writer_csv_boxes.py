@@ -67,3 +67,25 @@ def test_norm_needs_view_size(tmp_path):
         get_writer("csv_boxes").write(
             preds, WriteContext(ds, samples, {"coords": "norm"}, tmp_path / "s.csv")
         )
+
+
+@pytest.mark.parametrize("columns", ["image=x", "image=same,label=same"])
+def test_duplicate_headers_are_rejected_before_writing(tmp_path, columns):
+    ds, preds = _det()
+    out = tmp_path / "s.csv"
+    with pytest.raises(ValidationFailed, match="duplicate_column:") as ei:
+        get_writer("csv_boxes").write(
+            preds, WriteContext(ds, list(ds.samples), {"columns": columns}, out)
+        )
+    assert ei.value.fields["column"] == columns.split(",")[0].split("=")[1]
+    assert not out.exists()
+
+
+def test_norm_rejects_a_box_with_an_out_of_range_view(tmp_path):
+    ds, preds = _det()
+    preds[0].boxes[0].view = len(ds.samples[0].views)
+    with pytest.raises(ValidationFailed, match="has no view") as ei:
+        get_writer("csv_boxes").write(
+            preds, WriteContext(ds, list(ds.samples), {"coords": "norm"}, tmp_path / "s.csv")
+        )
+    assert ei.value.fields == {"sample": "s0000"}

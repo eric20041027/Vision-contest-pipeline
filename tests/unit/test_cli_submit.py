@@ -236,3 +236,73 @@ def test_final_slots_below_one_is_a_verdict_fail(pair):
     assert r.exit_code == 1, r.output
     v = _verdict(r.output)
     assert "status=FAIL" in v and "slots" in v
+
+
+def test_stage_rejects_duplicate_columns_without_artifacts(pair):
+    _ready(pair)
+    r = _stage("dup", "good", "good.test", "--writer-opt", "columns=cat=dog")
+    assert r.exit_code == 1, r.output
+    assert "duplicate_column" in _verdict(r.output) and "column=dog" in _verdict(r.output)
+    assert not pair.test_paths.submission_dir("dup").exists()
+    assert not pair.test_paths.submissions_log.exists()
+
+
+def test_stage_allow_missing_warns_with_count(pair):
+    from vcp.measure.predictions import read_predictions, write_predictions
+    from vcp.measure.runs import load_run, prediction_path, save_run
+
+    _ready(pair)
+    card = load_run(pair.roots.data, "good.test")
+    path = prediction_path(pair.roots.data, card.run_id, "test")
+    sha = write_predictions(path, read_predictions(path)[:-1])
+    entry = card.predictions["test"].model_copy(update={"sha256": sha, "samples": 49})
+    save_run(pair.roots.data, card.model_copy(update={"predictions": {"test": entry}}))
+    r = _stage("missing", "good", "good.test", "--writer-opt", "allow_missing=true")
+    assert r.exit_code == 0, r.output
+    assert "status=WARN" in _verdict(r.output) and "missing=1" in _verdict(r.output)
+    assert "1 samples without a prediction (allow_missing)" in r.output
+
+
+def test_verify_fusion_checks_output_but_does_not_rehash_members(pair):
+    """verify pins the output linkage; member-byte audit belongs to fuse build / backup."""
+    from submit_fixtures import STAMP
+    from vcp.fuse.build import BuildSpec, build_run, load_record, write_record
+    from vcp.fuse.recipes import save_recipe
+    from vcp.fuse.schema import Member, Recipe
+    from vcp.measure.runs import prediction_path
+
+    _ready(pair)
+    for paths, plan, recipe, members in (
+        (pair.eval_paths, "fixed-v1", "eval", ["good", "bad"]),
+        (pair.test_paths, "all-v1", "test", ["good.test", "bad.test"]),
+    ):
+        save_recipe(
+            paths,
+            Recipe(
+                recipe_id=recipe,
+                dataset=paths.name,
+                plan_id=plan,
+                method="mean",
+                members=[Member(run=m, weight=1.0) for m in members],
+                created_at=STAMP,
+            ),
+        )
+        build_run(BuildSpec(dataset=paths.name, recipe_id=recipe))
+    r = _stage("fusion", "fuse-eval", "fuse-test", "--kind", "baseline", "--reason", "anchor")
+    assert r.exit_code == 0 and "pairing=fusion" in _verdict(r.output), r.output
+    args = ["submit", "verify", "--dataset", "beach-test", "--id", "fusion", "--json"]
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0, r.output
+    assert _json(r)["result"]["checks"][1:] == ["rebuild=ok", "fusion_output=ok"]
+    prediction_path(pair.roots.data, "good.test", "test").write_text("tampered\n", newline="\n")
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0, r.output
+    assert "fusion_output=ok" in _json(r)["result"]["checks"]
+    record = load_record(pair.roots.data, "fuse-test")
+    subset = record.subsets["test"].model_copy(update={"output_sha256": "0" * 64})
+    write_record(
+        pair.roots.data, "fuse-test", record.model_copy(update={"subsets": {"test": subset}})
+    )
+    r = runner.invoke(app, args)
+    assert r.exit_code == 1, r.output
+    assert "run=fuse-test" in _verdict(r.output)

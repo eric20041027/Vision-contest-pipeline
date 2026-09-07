@@ -11,6 +11,7 @@ from vcp.measure.schema import Prediction, payload_field
 from vcp.submit.writers.base import (
     WriteContext,
     WriteResult,
+    check_header,
     check_options,
     fmt_float,
     option_is_true,
@@ -48,6 +49,7 @@ class ScoresCsvWriter:
                 fields={"missing": len(missing)},
             )
         header = [ctx.options.get("id_col", "id"), *(rename.get(n, n) for n in names)]
+        check_header(header)
         rows = 0
         ctx.out.parent.mkdir(parents=True, exist_ok=True)
         with ctx.out.open("w", encoding="utf-8", newline="") as f:

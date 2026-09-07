@@ -24,11 +24,16 @@
 - `uv run vcp data materialize --name X --mode npy|png [--resize L] [--stack-seq]`
 - `uv run vcp eval measure --run R`（護欄 → 讀數；`--unseal --reason` 才動 sealed 子集）/ `uv run vcp eval judge --dataset D --prereg ID [--strict]`
 - `uv run vcp eval status --dataset D` / `uv run vcp eval report --dataset D`（兩者唯讀）；比賽自己的指標或格式以 `--plugin projects.<contest>.metrics` 登記
-- `uv run vcp fuse recipe --dataset D --id R --plan P --method wbf|mean|rank_mean --member RUN[:W]…` / `uv run vcp fuse ablate --dataset D --recipe R --preregister --metric M`（每位成員一份準入預登記，交給 `vcp eval judge`；先 ablate 再 measure）
+- `uv run vcp fuse recipe --dataset D --id R --plan P --method wbf|mean|rank_mean --member RUN[:W]…` / `uv run vcp fuse ablate --dataset D --recipe R --preregister --metric M [--replace]`（每位成員一份準入預登記，交給 `vcp eval judge`；先 ablate 再 measure）
 - `uv run vcp train run --run R --dataset D --plan P --export DIR --venv ENV --seed N --checkpoints "…" --final "…" [--upload DEST] -- <訓練命令>` / `uv run vcp train status --run R`（唯讀）/ `uv run vcp train upload --run R --dest DEST`（冪等）
 - `uv run vcp submit stage --dataset T --id S --eval-run E --test-run R` / `uv run vcp submit upload --dataset T --id S`（Kaggle）或 `record --at "…"`（手動）/ `uv run vcp submit final --dataset T`（決選 + 封槍）/ `uv run vcp submit status --dataset T`（唯讀）
 - `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
 
 ## 文件
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`
-- 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。`AGENTS.md` 是本檔給 Codex 的同步版本，改一邊要改另一邊。
+- 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。
+
+## 給 Codex / 其他代理
+- 先讀本檔與 `docs/handover/HANDOVER.md`，再讀要改的那一層的 spec 與後記；spec 的「補充決定」以程式碼為準。
+- 一件事一個分支一個 commit（`type(scope): 說明`），不用 `git add -A`；每個行為變更先寫失敗的測試；commit 前 `uv run ruff check . && uv run ruff format --check .`，合併前全套 `uv run pytest --cov=vcp`。
+- 裁決（spec 沒說的決定）與處置寫進該層後記的最後一節；不對 markdown 跑 `ruff format`；測試重寫台帳 / 卡一律 `newline="\n"`。

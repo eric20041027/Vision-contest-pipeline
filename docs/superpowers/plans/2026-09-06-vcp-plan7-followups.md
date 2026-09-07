@@ -113,3 +113,18 @@
 裁決：只傳命令已知的識別欄位，不為錯誤額外讀取 run / dataset — 早期驗證失敗也要可識別且不產副作用 — 可選值 None 省略，深層錯誤欄位仍覆蓋 context，保留真正失敗葉節點。沒有新增憑證或路徑選項。新測試先 4 failed；四層 CLI gate 56 passed。
 
 第一階段最終驗證：933 passed / 4 skipped，覆蓋率 96.69%；真資料 8 passed / 3 skipped；ruff check / format --check 與 git diff --check 乾淨。自審：26 個命令逐一對照旗標與欄位型別；初版傳 None 的問題由既有 report / sigma 測試攔下並修正，既有斷言未弱化；未改台帳或 schema，未增加外部操作。
+
+## 9. RSNA 本機證據處置（2026-09-07）
+
+| 項目 | 實際處置 |
+|---|---|
+| 來源與模型身分 | 程式 commit `8b1f777` 已 push，兩個 checkpoint 的程式 SHA 驗過後以 Session.note 追加 source_commit；不改原始環境快照。 |
+| 兩個訓練 run 的權重副本 | `train upload` 到 `C:/vcp-backup/rsna-knee/weights`，各 uploaded=1 / verified=1；清單記兩個 remote_copy。 |
+| 結論 `all`、清單 `knee-local-v1` | 51 項、missing=0；tier 1 推 25、tier 2 新推 24、tier 3 跳過 49；兩份權重到原副本位置驗證。 |
+| 完整 verify / status | `ok=51 missing=0 mismatch=0 drift=0 bad_stamps=0`；`unverified=0 rclone_conf=absent`。rclone 官方 binary 先比對官方 SHA256SUMS，未建立 remote。 |
+| 核心證據圖外的材料 | notebook bundle 等五檔與清單副本另逐檔驗 SHA；Git source bundle 通過 git bundle verify。實際位置與 SHA 見 RSNA RUNBOOK §9。 |
+| 遠端 / submission 結論 | 待指定目的地及 Kaggle 上傳核准；未建立假的提交 / 分數 / final / remote_forgotten。 |
+
+裁決：先完成同機副本保全已產生的證據 — 遠端目的地尚未提供，真正的外部提交也尚未發生 — 代價是無法抵抗本機磁碟故障，不能宣告異機撤離完成。之後先把權重 `train upload` 到真遠端、再產新 manifest，避免 `remote_copy` 仍指著原本機 C 槽；notebook zip 與 Git source bundle 另存，核心圖不自動收 artifacts。未修改核心邏輯或 schema，效能待辦仍延後。
+
+合併前驗證：全套 949 passed / 5 skipped、coverage 96.67%；真資料 9 passed / 3 skipped；ruff check / format --check 全綠。兩個 train status 均 backed=1 / unbacked=0；submit status 為 staged=0 / uploaded=0，fixed-v1 沒有 unseal ledger。

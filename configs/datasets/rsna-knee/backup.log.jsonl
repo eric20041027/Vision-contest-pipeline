@@ -1,0 +1,5 @@
+{"event":"manifest","ts":"2026-09-07T08:05:13.608Z","manifest_id":"knee-local-v1","conclusion":"all","files":51,"bytes_by_tier":{"1":54860,"2":24943773,"3":455154},"missing":0,"remote_copies":2}
+{"event":"push","ts":"2026-09-07T08:05:19.278Z","manifest_id":"knee-local-v1","dest":"C:/vcp-backup/rsna-knee/evidence","tier":1,"pushed":25,"skipped":0,"verified":25,"failed":[],"bytes":54860}
+{"event":"push","ts":"2026-09-07T08:05:36.631Z","manifest_id":"knee-local-v1","dest":"C:/vcp-backup/rsna-knee/evidence","tier":2,"pushed":24,"skipped":25,"verified":49,"failed":[],"bytes":24943773}
+{"event":"push","ts":"2026-09-07T08:05:42.585Z","manifest_id":"knee-local-v1","dest":"C:/vcp-backup/rsna-knee/evidence","tier":3,"pushed":0,"skipped":49,"verified":49,"failed":[],"bytes":0}
+{"event":"verify","ts":"2026-09-07T08:05:48.382Z","manifest_id":"knee-local-v1","dest":"C:/vcp-backup/rsna-knee/evidence","tier":3,"copies":{"ok":51,"missing":0,"mismatch":0,"absent":0},"drift":0,"bad_stamps":0}

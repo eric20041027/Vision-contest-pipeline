@@ -163,6 +163,11 @@ def test_cls_metrics_match_sklearn_directly():
     y_true = np.array([index_of[s.labels.cls] for s in samples])
     scores = np.array([[by_id[s.sample_id].scores[n] for n in names] for s in samples])
     y_pred = scores.argmax(axis=1)
+    # 3-14: the cross-check below pins sklearn to `labels=[0, 1, 2]`, which only reproduces
+    # vcp's answer while all three classes are actually present in the gold. A fixture change
+    # that dropped one would make macro_f1 and log_loss average over different label sets and
+    # the test would compare two different quantities -- silently, if they happened to agree.
+    assert sorted(set(y_true.tolist())) == [0, 1, 2]
 
     assert _run("accuracy", samples, card, noisy).value == pytest.approx(
         accuracy_score(y_true, y_pred)

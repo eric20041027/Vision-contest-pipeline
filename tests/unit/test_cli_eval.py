@@ -48,6 +48,11 @@ def ingest_perfect(roots, tmp_path, ds, plan, run_id, subset, *, drop=0, extra=(
     paths = DatasetPaths.resolve(ds.card.name, data_root=roots.data, configs_root=roots.configs)
     sub = ds.subset(subset, plan, unseal=unseal, reason="fixture", paths=paths)
     preds = perfect_predictions(sub, ds.card)
+    # 3-14: a negative bound wraps round in Python -- `preds[:-3]` on a 2-row subset is empty,
+    # but `preds[:len-drop]` with drop > len silently slices from the START. A caller asking to
+    # drop more rows than exist has miscounted its fixture; say so instead of measuring
+    # something else.
+    assert 0 <= drop <= len(preds), f"drop={drop} but the subset has {len(preds)} predictions"
     src = tmp_path / f"{run_id}-{subset}.jsonl"
     write_predictions(src, preds[: len(preds) - drop] if drop else preds)
     return runner.invoke(
@@ -535,6 +540,45 @@ def test_eval_status_and_report_on_an_empty_measure_dir(roots, tmp_path):
     assert not paths.measure_dir.exists()
 
 
+def test_eval_report_prints_a_judgement_that_has_no_readings(roots, tmp_path):
+    """3-11 at the CLI: the row for a `missing_readings` judgement carries no numbers, so the
+    line that prints it may not assume any -- and `--plan` must still show it, which is the
+    whole point of resolving its plan from the runs it compares."""
+    ds, plan, _ = seed_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "base", "valA").exit_code == 0
+    preregister = [
+        "eval",
+        "preregister",
+        "--dataset",
+        "tiny",
+        "--id",
+        "p1",
+        "--claim",
+        "a candidate nobody ever measured",
+        "--component",
+        "x",
+        "--class",
+        "model",
+        "--baseline-run",
+        "base",
+        "--candidate-run",
+        "never-run",
+        "--metric",
+        "coco_map",
+    ]
+    r = runner.invoke(app, preregister)
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["eval", "judge", "--dataset", "tiny", "--prereg", "p1"])
+    assert r.exit_code == 0 and "verdict=FAIL" in _last_verdict(r.output), r.output
+    for args in (["--dataset", "tiny"], ["--dataset", "tiny", "--plan", "fixed-v1"]):
+        r = runner.invoke(app, ["eval", "report", *args])
+        assert r.exit_code == 0, (args, r.output)
+        assert "deltas=1" in _last_verdict(r.output), (args, r.output)
+        assert "p1" in r.output and "(no readings)" in r.output, (args, r.output)
+    r = runner.invoke(app, ["eval", "report", "--dataset", "tiny", "--plan", "other-v1"])
+    assert r.exit_code == 0 and "deltas=0" in _last_verdict(r.output), r.output
+
+
 def test_eval_status_and_report_refuse_a_dataset_that_does_not_exist(roots):
     """A typo'd --dataset must not read as "nothing outstanding".
 
@@ -890,6 +934,20 @@ def test_eval_sigma_reports_skipped_resamples_cli(roots, tmp_path):
     assert stored["inputs"]["used"] == 20 - skipped
 
 
+def test_eval_sigma_method_help_does_not_hardcode_the_builtins():
+    """3-15: the sigma_p method is an extension axis (`register_sigma_method`), so a help string
+    listing the three built-ins is wrong for every plugin method -- it says those are the
+    answers. The live registry is what answers, in the unknown-method FAIL."""
+    r = runner.invoke(app, ["eval", "sigma", "--help"])
+    assert r.exit_code == 0, r.output
+    help_text = r.output.replace("\n", " ")
+    assert "registered sigma_p method" in " ".join(help_text.split())
+    # the built-in names must not be presented as the option's domain
+    method_help = help_text.split("--method")[1].split("--params")[0]
+    for builtin in ("splithalf", "bootstrap", "prior"):
+        assert builtin not in method_help, method_help
+
+
 def test_eval_sigma_failures_cli(roots):
     """Each way a user can get `eval sigma` wrong maps to its own status and exit code."""
     seed_det(roots)
@@ -1000,9 +1058,16 @@ def test_eval_preregister_and_judge_failures_cli(roots, tmp_path):
         ([*other_id, "--metric", "accuracy"], 1, "not applicable"),
         ([*other_id, "--metric", "nope"], 2, "RegistryError"),
         ([*other_id, "--params", "foo"], 1, "--params expects key=value"),
-        # Minor 6: the class name alone doesn't say WHICH validation failed.
-        ([*other_id, "--sigma-ratio", "nan"], 1, "must be finite"),
+        # Minor 6: the class name alone doesn't say WHICH validation failed. nan fails the
+        # `> 0` bound (every comparison with nan is False); +inf clears it and is caught by the
+        # finiteness check behind it.
+        ([*other_id, "--sigma-ratio", "nan"], 1, "greater than 0"),
+        ([*other_id, "--sigma-ratio", "inf"], 1, "must be finite"),
         ([*other_id, "--t-min", "inf"], 1, "must be finite"),
+        # 3-10: a threshold nothing can fail is decoration, not a pre-registered bar.
+        ([*other_id, "--sigma-ratio", "0"], 1, "greater than 0"),
+        ([*other_id, "--min-bases", "0"], 1, "greater than or equal to 1"),
+        ([*other_id, "--t-min", "-1"], 1, "greater than or equal to 0"),
         (judge + ["--seed", "-1"], 1, "seed"),
         (judge + ["--resamples", "1"], 1, "resamples"),
         (["eval", "judge", "--dataset", "tiny", "--prereg", "ghost"], 1, "not found"),

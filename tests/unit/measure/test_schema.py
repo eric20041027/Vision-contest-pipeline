@@ -85,26 +85,52 @@ def test_anchor_tolerance_must_be_finite_and_nonnegative():
             _anchor(tolerance=bad)
 
 
+PREREG_BASE = dict(
+    prereg_id="p001",
+    claim="x",
+    component="c",
+    component_class="model",
+    baseline_run="a",
+    candidate_run="b",
+    metric="coco_map",
+    subsets=["valA", "valB"],
+    created_at="2026-09-04T00:00:00.000Z",
+)
+
+
 def test_prereg_threshold_must_be_finite():
     """I1-class defect (mirrors Anchor.tolerance): a nan/inf t_min or sigma_ratio silently
     un-binds the bar it names (`t >= nan` is False for every subset, so nothing ever counts as
     a base, and `mean_delta < nan` is False too, i.e. a vacuous PASS with the sigma_p bar
     silently switched off)."""
-    base = dict(
-        prereg_id="p001",
-        claim="x",
-        component="c",
-        component_class="model",
-        baseline_run="a",
-        candidate_run="b",
-        metric="coco_map",
-        subsets=["valA", "valB"],
-        created_at="2026-09-04T00:00:00.000Z",
-    )
-    # finite, even an unusual value like a negative ratio, stays legal -- a weak bar is a
-    # reviewable choice, not a silently-vanished one (I1 only guards against nan/inf).
-    assert PreRegistration(**{**base, "sigma_ratio": -5.0}).sigma_ratio == -5.0
     for field in ("t_min", "sigma_ratio"):
         for bad in (float("nan"), float("inf"), float("-inf")):
             with pytest.raises(ValidationError):
-                PreRegistration(**{**base, field: bad})
+                PreRegistration(**{**PREREG_BASE, field: bad})
+
+
+@pytest.mark.parametrize(
+    ("field", "bad"),
+    [
+        ("min_bases", 0),
+        ("min_bases", -1),
+        ("sigma_ratio", 0.0),
+        ("sigma_ratio", -5.0),
+        ("t_min", -0.5),
+    ],
+)
+def test_prereg_thresholds_must_be_bars_at_all(field, bad):
+    """3-10: a threshold that cannot be missed is not pre-registration, it is decoration.
+    `min_bases 0` passes with no positive base at all, `sigma_ratio <= 0` makes
+    `mean_delta >= ratio * sigma_p` true for any improvement (and for none), and a negative
+    `t_min` counts a subset the bootstrap says is going the wrong way. Milder than nan, and
+    visible in a yaml already committed to git -- which is why it is caught at the boundary."""
+    with pytest.raises(ValidationError):
+        PreRegistration(**{**PREREG_BASE, field: bad})
+
+
+def test_prereg_thresholds_keep_their_legal_edges():
+    """The boundary values a real claim uses must stay legal: t_min = 0 (any positive delta
+    counts), min_bases = 1 (a single-subset claim) and a fractional sigma_ratio."""
+    pr = PreRegistration(**{**PREREG_BASE, "t_min": 0.0, "min_bases": 1, "sigma_ratio": 0.5})
+    assert (pr.t_min, pr.min_bases, pr.sigma_ratio) == (0.0, 1, 0.5)

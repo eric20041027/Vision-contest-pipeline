@@ -2,14 +2,17 @@ from typing import Any
 
 import pytest
 
-from helpers import det_with_runs
+from helpers import det_with_runs, perfect_predictions
 from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.core.time import stamp
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.anchors import anchor_key, set_anchor
+from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger, append_row, read_rows, reading_id
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.metrics import params_key
+from vcp.measure.predictions import write_predictions
+from vcp.measure.runs import load_run
 from vcp.measure.schema import Anchor, Reading, SigmaEstimate
 from vcp.measure.sigma import (
     SIGMA_ESTIMATORS,
@@ -177,6 +180,7 @@ def test_prior_and_bootstrap(roots, tmp_path):
     )
     assert boot.value > 0
     # 3-3: `resamples` is what was asked for, `used` / `skipped` what the number is made of.
+    # 3-8: `prediction_sha` is the file it was computed from (pinned by its own test below).
     assert boot.inputs == {
         "run_id": "noisy",
         "subset": "valB",
@@ -184,6 +188,7 @@ def test_prior_and_bootstrap(roots, tmp_path):
         "used": 20,
         "skipped": 0,
         "seed": 0,
+        "prediction_sha": load_run(roots.data, "noisy").predictions["valB"].sha256,
     }
     with pytest.raises(ValidationFailed, match="--run"):
         estimate_sigma(_spec(roots, method="bootstrap", subsets=["valA"]))
@@ -191,6 +196,41 @@ def test_prior_and_bootstrap(roots, tmp_path):
         estimate_sigma(_spec(roots, method="magic"))
     rows = (paths.measure_dir / "sigma.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 2
+
+
+def test_bootstrap_records_the_prediction_sha_so_a_replace_invalidates_it(roots, tmp_path):
+    """3-8: the estimate is a number computed FROM a prediction file. Without that file's sha in
+    its inputs, `ingest --replace` leaves an estimate nobody can check and the cache hands the
+    stale one back for ever -- the identity of an estimate must include what it was read from."""
+    ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    spec = _spec(roots, method="bootstrap", run_id="noisy", subsets=["valB"], resamples=20)
+    first = estimate_sigma_result(spec)
+    card = load_run(roots.data, "noisy")
+    assert first.estimate.inputs["prediction_sha"] == card.predictions["valB"].sha256
+    assert estimate_sigma_result(spec).cached is True  # nothing changed -> the stored row
+
+    src = tmp_path / "noisy-valB-again.jsonl"
+    write_predictions(src, perfect_predictions(ds.subset("valB", plan), ds.card))
+    ingest(
+        IngestSpec(
+            run_id="noisy",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            subset="valB",
+            format="jsonl",
+            src=src,
+            replace=True,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    second = estimate_sigma_result(spec)
+    assert second.cached is False
+    assert second.estimate.estimate_id != first.estimate.estimate_id
+    assert second.estimate.inputs["prediction_sha"] != first.estimate.inputs["prediction_sha"]
+    # append-only: the estimate taken on the old predictions is still in the ledger.
+    ids = [row.estimate_id for row in _sigma_rows(paths)]
+    assert first.estimate.estimate_id in ids and second.estimate.estimate_id in ids
 
 
 def test_repeating_an_estimate_is_cached_and_appends_nothing(roots, tmp_path):

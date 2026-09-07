@@ -55,7 +55,11 @@ def test_png_resize_then_skip_then_force(roots):
     res = materialize(_spec(roots, mode="png", resize=4))
     assert (res.materialized, res.skipped, res.failed) == (6, 0, 0)
     assert res.out_dir.name == "png-r4" and (res.out_dir / "s0000" / "0.png").is_file()
-    assert Image.open(res.out_dir / "s0000" / "0.png").size == (4, 4)
+    # 4-10: `Image.open` without a `with` leaks the file handle, which surfaces as a
+    # ResourceWarning from the collector -- and a test suite run under `-W error` then fails on
+    # a test that has nothing to do with the leak.
+    with Image.open(res.out_dir / "s0000" / "0.png") as img:
+        assert img.size == (4, 4)
     rows = read_manifest(res.manifest_path)
     row = rows[row_key("s0000", 0, None)]
     assert row.shape == [4, 4, 3] and row.dtype == "uint8" and row.resize == 4

@@ -229,6 +229,7 @@ def ingest(spec: IngestSpec) -> IngestResult:
         samples=stats.predicted,
         empty=stats.empty,
         format_in=spec.format,
+        format_version=converter.version,
         ingested_at=stamp(),
         export_manifest_sha=export_sha,
     )

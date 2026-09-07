@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -165,3 +166,31 @@ def test_set_anchor_logs_first_then_atomically_replaces_anchors_json(roots, monk
     log_after = (paths.measure_dir / "anchors.log.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(log_after) == 2
     assert list(paths.measure_dir.glob("*.tmp")) == []
+
+
+def test_set_anchor_writes_through_a_uniquely_named_temp_file(roots, monkeypatch):
+    """3-12: the temp file used to be a fixed `anchors.json.tmp`, one path two processes would
+    share -- the second truncating the first's payload before either `os.replace` ran, and a
+    failure in one deleting the other's file. A unique name per write cannot collide."""
+    paths = DatasetPaths.resolve("ds-unique-tmp", data_root=roots.data, configs_root=roots.configs)
+    a = Anchor(
+        run_id="r", reading_id="x", value=0.5, tolerance=1e-6, set_at="2026-09-04T00:00:00.000Z"
+    )
+    seen: list[str] = []
+    real_replace = os.replace
+
+    def record(src, dst, *args, **kwargs):
+        seen.append(Path(src).name)
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", record)
+    keys = [anchor_key("p", subset, "accuracy", "") for subset in ("valA", "valB")]
+    for key in keys:
+        set_anchor(paths, key, a)
+    assert len(seen) == 2 and len(set(seen)) == 2  # never the same name twice
+    assert "anchors.json.tmp" not in seen
+    assert all(n.startswith("anchors.") and n.endswith(".tmp") for n in seen), seen
+    # ... and the writes still landed, with nothing left behind.
+    assert sorted(load_anchors(paths)) == sorted(keys)
+    assert list(paths.measure_dir.glob("*.tmp")) == []
+    assert (paths.measure_dir / "anchors.json").read_bytes().endswith(b"}\n")

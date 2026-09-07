@@ -126,10 +126,19 @@ def create_prereg(paths: DatasetPaths, pr: PreRegistration, readings: ReadingsLe
             f"{measured}; pre-register before measuring the candidate"
         )
     dump_yaml_model(pr.model_copy(update={"params": params}), path)
-    append_row(
-        paths.prereg_log,
-        # ruling 5: the log reads the clock itself. A log whose timestamps are what make a
-        # claim provably earlier than a reading may not record a caller-supplied time.
-        PreregLogEntry(prereg_id=pr.prereg_id, sha256=sha256_file(path), ts=stamp()),
-    )
+    try:
+        append_row(
+            paths.prereg_log,
+            # ruling 5: the log reads the clock itself. A log whose timestamps are what make a
+            # claim provably earlier than a reading may not record a caller-supplied time.
+            PreregLogEntry(prereg_id=pr.prereg_id, sha256=sha256_file(path), ts=stamp()),
+        )
+    except Exception:
+        # 3-9: the two writes are one act. A yaml with no log line is a claim that never became
+        # binding, so `judge` refuses it -- and `create_prereg` refuses to write the id again,
+        # because the path exists. That leaves an id that can neither be used nor re-used, in a
+        # directory that goes to git. The log line is the half that cannot be undone (the log is
+        # append-only), so the yaml is the half that goes back.
+        path.unlink(missing_ok=True)
+        raise
     return path

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -63,9 +65,19 @@ def set_anchor(paths: DatasetPaths, key: str, anchor: Anchor, *, replace: bool =
         + "\n"
     )
     target = paths.measure_dir / "anchors.json"
-    tmp = target.with_name(target.name + ".tmp")
+    # 3-12: a unique temp name per write, never a fixed `anchors.json.tmp`. Two processes
+    # setting an anchor at once shared that one path: the second truncated the first's payload
+    # before either `os.replace` ran, and a failure in one deleted the other's file. (The
+    # read-modify-write above is still unlocked; locking is a separate, larger fix.)
+    # delete=False and closed by the `with` below: the file has to survive being closed so
+    # `os.replace` can move it into place.
+    handle = tempfile.NamedTemporaryFile(
+        dir=paths.measure_dir, prefix="anchors.", suffix=".tmp", delete=False
+    )
+    tmp = Path(handle.name)
     try:
-        tmp.write_text(payload, encoding="utf-8", newline="\n")
+        with handle:
+            handle.write(payload.encode("utf-8"))  # bytes: the payload's newlines are LF already
         os.replace(tmp, target)  # same directory -> atomic; anchors.json is never half-written
     except OSError:
         tmp.unlink(missing_ok=True)  # a failed replace must not leave a stray .tmp behind

@@ -29,7 +29,7 @@ uv run pytest --cov=vcp
 | `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true` |
 | `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數 | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
 | `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
-| `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method splithalf\|bootstrap\|prior`、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
+| `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method`（已登記的 σ_p 估法；內建 `splithalf` / `bootstrap` / `prior`，其餘以 `--plugin` 登記）、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
 | `vcp eval preregister` | 量候選之前先把主張寫死（進 git） | `--dataset`、`--id`、`--claim`、`--component`、`--class model\|tuning`、`--baseline-run`、`--candidate-run`、`--metric`、`--params`、`--subsets`、`--t-min`、`--min-bases`、`--sigma-method`、`--sigma-ratio` |
 | `vcp eval judge` | 配對 bootstrap → Δ、se、t、基底數、σ_p 條件 → 判決 | `--dataset`、`--prereg`、`--resamples`、`--seed`、`--strict`、`--unseal --reason` |
 | `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p | `--dataset`、`--max-age-hours` |

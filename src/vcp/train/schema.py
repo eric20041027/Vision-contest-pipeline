@@ -33,7 +33,13 @@ class ConfigRef(_Strict):
 
 
 class Attempt(_Strict):
-    """One execution of the training command. ``exit_code`` is None while running."""
+    """One execution of the training command. ``exit_code`` is None while running.
+
+    ``command`` / ``seed`` / ``venv`` are what THIS attempt ran with (spec 14): a ``--resume``
+    may legitimately change any of them (the config is what must stay), and the record-level
+    fields keep the first attempt's values. They are optional so a ``train.yaml`` written before
+    they existed still loads; only such a record has them unset.
+    """
 
     n: int
     started_at: str
@@ -43,6 +49,9 @@ class Attempt(_Strict):
     status: AttemptStatus = "running"
     console: str
     env: str | None = None
+    command: list[str] | None = None
+    seed: int | None = None
+    venv: str | None = None
 
 
 class CheckpointRecord(_Strict):

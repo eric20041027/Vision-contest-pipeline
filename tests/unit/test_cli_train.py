@@ -154,6 +154,8 @@ def test_train_upload_and_status_cli(roots, tmp_path):
         and "backed=0" in v
         and "running=0" in v
     )
+    # 5-2: the LAST attempt's command (a --resume may have changed it), not the record's
+    assert f"attempt 1 command: {sys.executable} fake_train.py 0" in r.output
     r = runner.invoke(app, ["train", "upload", "--run", "r1", "--dest", str(tmp_path / "vault")])
     assert r.exit_code == 0, r.output
     v = _verdict(r.output)

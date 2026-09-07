@@ -244,6 +244,7 @@ s.note("val_auc", 0.912)                            # note 事件
 5. **`--resume` 換寫 `weights_hash` 要留痕**：既有 `weights_hash` 非空且與新 final 不同時，先在 `history.jsonl` 記 `{"event": "replace", "field": "weights_hash", "old_sha256", "via": "train.run"}` 再寫 `run.yaml`；有 predictions 的 run 一樣允許 resume（讀數綁的是 `prediction_sha`，不是權重）。
 6. **`uploaded` 事件只記新出現的副本**：`(dest, name, sha256)` 已在 `uploads[]` 裡的重驗證只更新 `train.yaml`（`uploaded_at`），不追加事件；已在目的地且 sha 相同的檔一樣回 `verified=True` 的紀錄（手動放上去的副本也算）。
 7. **命令可執行性預檢對 `--cwd` 解析**：`command_found(token, cwd, PATH)` = PATH 上找得到、或 `cwd / token` 是檔案（絕對路徑自然成立）。
-8. **殘留的 `running` attempt 只揭露不調和**：vcp 自己崩潰留下的 `running`，`train status` WARN `running=`，`--resume` 照常編號 +1；調和方式留待辦。
+8. **殘留的 `running` attempt 由 `--resume` 調和**（2026-09-07 修訂，原「只揭露不調和」作廢）：`train status` 仍只揭露（唯讀，WARN `running=`），但 `--resume` 在寫新 attempt 之前，把每個還是 `running` 的 attempt 標成 `interrupted`、補 `finished_at`、`exit_code` 維持 `None`（沒有結束碼就不編一個出來），並在 `train.log.jsonl` 記一列 `note`（`attempt=<n>`、`value="attempt <n> found running at resume; marked interrupted"`），yaml 的新狀態不會是唯一的痕跡。編號照常 +1。
 9. **環境探針**：探針程式的 cuDNN 行以 `if` 守衛寫法（等價於 §7 的條件式）；`gpus()` 以每列的第二欄為 driver，缺欄位的列略過。
-10. **`assert_plan_matches(plan, card)` 新增於 `vcp/data/split.py`**：本層唯一的資料層改動；既有三份同義檢查留待後續統一。
+10. **`assert_plan_matches(plan, card)` 新增於 `vcp/data/split.py`**：本層唯一的資料層改動；既有三份同義檢查留待後續統一。→ 2026-09-07 已統一：`data/dataset.py`、`measure/ingest.py`、`fuse/members.check_plan` 都改呼叫它，全庫只剩這一份 plan hash 檢查。
+11. **每個 attempt 記自己的 `command` / `seed` / `venv`**（`Attempt` 的三個選填欄位，2026-09-07）：`--resume` 可以換命令（`--config` 釘住 `config_hash` 時）、換 seed、換 venv，紀錄要說得出「第 n 次是拿什麼跑的」。紀錄層的 `command` / `seed` / `venv` 刻意維持**第一個 attempt** 的值——它描述這個 run 是怎麼開始的，`run.yaml` 的 `config_hash` 也綁在那一刻；要看最新的就看 `attempts[-1]`（`train status` 的人類行印的就是它）。舊的 `train.yaml` 三個欄位皆無，照樣載入（`None`）。

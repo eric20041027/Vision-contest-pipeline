@@ -8,6 +8,7 @@ from vcp.train.records import (
     EVENTS_LOG,
     TRAIN_YAML,
     append_event,
+    current_attempt,
     events_path,
     has_record,
     load_record,
@@ -62,6 +63,17 @@ def test_record_defaults():
     assert r.attempts == [] and r.checkpoints == [] and r.uploads == [] and r.notes == ""
     a = Attempt(n=1, started_at=STAMP, console="train/console.1.log")
     assert a.status == "running" and a.exit_code is None and a.env is None
+    # 5-2: an attempt records the command / seed / venv IT ran with. A train.yaml written before
+    # those fields existed simply has none of them, and must still load.
+    assert a.command is None and a.seed is None and a.venv is None
+    old = Attempt.model_validate(
+        {"n": 2, "started_at": STAMP, "console": "train/console.2.log", "status": "finished"}
+    )
+    assert old.command is None and old.seed is None and old.venv is None
+    full = Attempt(
+        n=3, started_at=STAMP, console="c", command=["python", "t.py"], seed=7, venv="venvs/ultra"
+    )
+    assert full.command == ["python", "t.py"] and full.seed == 7 and full.venv == "venvs/ultra"
     e = ExportRef(
         dir="exports/x",
         subset="train",
@@ -117,6 +129,31 @@ def test_events_append_only(roots):
     with pytest.raises(ValueError, match="unknown event"):
         append_event(roots.data, "r1", "bogus", 1)
     assert read_events(roots.data, "none") == []
+
+
+def test_append_event_refuses_to_let_a_payload_overwrite_its_own_keys(roots):
+    """5-6: ``ts`` / ``event`` / ``attempt`` are this module's, and ``**payload`` came last --
+    a caller passing one of them would silently forge the row's timestamp, kind or attempt
+    number. No caller does; the point is that none can."""
+    for reserved in ("ts", "event", "attempt"):
+        with pytest.raises(ValueError, match=reserved):
+            append_event(roots.data, "r1", "note", 1, **{reserved: "forged"})
+    assert read_events(roots.data, "r1") == []  # and nothing reached the log
+    append_event(roots.data, "r1", "note", 1, key="ok", value=1)
+    assert read_events(roots.data, "r1")[0]["attempt"] == 1
+
+
+def test_current_attempt_of_a_record_with_no_attempts_is_one(roots):
+    """5-5: one helper for "the attempt a Session write belongs to", shared by Session.note and
+    Session.register_checkpoint -- a record with no attempt yet still needs a number."""
+    assert current_attempt(_record()) == 1
+    two = _record(
+        attempts=[
+            Attempt(n=1, started_at=STAMP, console="train/console.1.log", status="finished"),
+            Attempt(n=2, started_at=STAMP, console="train/console.2.log"),
+        ]
+    )
+    assert current_attempt(two) == 2
 
 
 def test_env_snapshot_model():

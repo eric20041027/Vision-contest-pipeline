@@ -1,12 +1,15 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.train import Session
+from vcp.train import checkpoints as ckptmod
+from vcp.train import session as sessionmod
 from vcp.train.records import load_record, read_events, save_record
 from vcp.train.schema import Attempt, TrainRecord
 
@@ -65,6 +68,47 @@ def test_register_and_note_in_process(roots, monkeypatch, tmp_path):
     assert len(load_record(roots.data, "r1").checkpoints) == 2
     with pytest.raises(ValidationFailed, match="not a file"):
         s.register_checkpoint(tmp_path / "nope.pt")
+
+
+def test_register_checkpoint_hashes_the_file_once(roots, monkeypatch, tmp_path):
+    """5-5: the session hashed the checkpoint, then `register` hashed the same bytes again --
+    twice through a multi-GB file on every epoch that saved one. One read, one digest, shared."""
+    _running(roots)
+    real = sha256_file
+    hashed: list[Path] = []
+
+    def counting(path):
+        hashed.append(Path(path))
+        return real(path)
+
+    monkeypatch.setattr(sessionmod, "sha256_file", counting)
+    monkeypatch.setattr(ckptmod, "sha256_file", counting)
+    ckpt = tmp_path / "big.pt"
+    ckpt.write_bytes(b"weights")
+    entry = Session("r1", roots.data).register_checkpoint(ckpt, final=True)
+    assert hashed == [ckpt.resolve()]
+    assert entry.sha256 == real(ckpt) and entry.final and entry.attempt == 2
+
+
+def test_session_writes_belong_to_attempt_one_before_any_attempt_exists(roots, tmp_path):
+    """5-5: Session and register_checkpoint answer "which attempt is this?" the same way --
+    one helper, so a record with no attempt yet cannot number the two writes differently."""
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd="work",
+        command=["python"],
+    )
+    save_record(roots.data, rec)
+    ckpt = tmp_path / "e1.pt"
+    ckpt.write_bytes(b"e1")
+    s = Session("r1", roots.data)
+    assert s.register_checkpoint(ckpt).attempt == 1
+    s.note("epoch", 1)
+    assert [e["attempt"] for e in read_events(roots.data, "r1")] == [1, 1]
 
 
 def test_session_from_a_child_process(roots, tmp_path):

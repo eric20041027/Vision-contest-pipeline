@@ -20,6 +20,9 @@ from vcp.train.schema import EVENTS, TrainRecord
 TRAIN_YAML = "train.yaml"
 EVENTS_LOG = "train.log.jsonl"
 TRAIN_DIR = "train"
+# Keys ``append_event`` writes itself; a payload carrying one would forge the row's timestamp,
+# kind or attempt number, because ``**payload`` comes last (5-6).
+RESERVED_EVENT_KEYS = ("ts", "event", "attempt")
 
 
 def train_yaml(data_root: Path, run_id: str) -> Path:
@@ -58,10 +61,26 @@ def save_record(data_root: Path, record: TrainRecord) -> Path:
     return path
 
 
-def append_event(data_root: Path, run_id: str, event: str, attempt: int, **payload: Any) -> None:
-    """One row of ``train.log.jsonl``; ``ts`` is this module's clock, never the caller's."""
+def current_attempt(record: TrainRecord) -> int:
+    """The attempt a write during the command belongs to: the last one, or 1 before any exists.
+
+    Shared by ``Session.note`` and ``Session.register_checkpoint`` (5-5) so the two cannot
+    number the same loop's writes differently.
+    """
+    return record.attempts[-1].n if record.attempts else 1
+
+
+def append_event(data_root: Path, run_id: str, event: str, attempt: int, /, **payload: Any) -> None:
+    """One row of ``train.log.jsonl``; ``ts`` is this module's clock, never the caller's.
+
+    The four leading arguments are positional-only so ``event=`` / ``attempt=`` in a payload
+    reach the reserved-key check below rather than colliding with them as parameters (5-6).
+    """
     if event not in EVENTS:
         raise ValueError(f"unknown event {event!r}; known: {EVENTS}")
+    reserved = [k for k in RESERVED_EVENT_KEYS if k in payload]
+    if reserved:
+        raise ValueError(f"event payload must not carry {reserved}; they are this row's own")
     path = events_path(data_root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": stamp(), "event": event, "attempt": attempt, **payload}

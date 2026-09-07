@@ -380,4 +380,9 @@ class Platform(Protocol):
 12. **`final --slots`**：在函式層檢查 `slots ≥ 1`（FAIL），不用 Click 的 `min=`——每個命令都要以 VERDICT 收尾（鐵則 2）。`--slots 0` 不再等於預設。
 13. **決選次序鍵**：sealed 讀數依指標 `higher_is_better` 取向；public 恆為降冪（§6.4 原意）；再以 `staged_at` 升冪。
 14. **`submission_id` 至多 31 字元**：redact 會把 ≥ 32 字元的英數串遮掉，sync 靠 description 裡的 id 配對。
-15. **報告輸出的私密性**：`upload` 的 `detail`、`sync` 的 `description` 經 redact；`fileName` / `status` / `submittedBy` 目前照原文進台帳（§10.2 與 §11.4 的矛盾留待辦，補 redact 為宜）。
+15. **報告輸出的私密性**：`upload` 的 `detail`、`sync` 的 `description` 經 redact；`fileName` / `status` / `submittedBy` 目前照原文進台帳（§10.2 與 §11.4 的矛盾留待辦，補 redact 為宜）。→ Plan 6c 已補：三個欄位進台帳前都 redact（32+ 字元的檔名會被遮、sync 配不到；本 repo 的候選檔名 `submission.csv` 不受影響）。
+16. **重傳 id 的逐發分數（Plan 6c）**：`sync` 寫的 `scored` 列記平台時間 `at` 與 `platform_ref`；`report` / `status` 對每一發 `uploaded` 列配自己的分數——平台時間的分數配給 `at` 最近的那一發（同距離取 `at` 較晚者），手動 `score` 配給 `ts` 不晚於它的最近一發，每發取最新的一筆；`status` 的 `unscored` 看 `at` 最新的那一發；`final` 仍用最新的分數。
+17. **stage 的 VERDICT（Plan 6c）**：file 類帶 `missing=`；配對有 `config_hash=` 檢查時帶 `config_hash=<12 hex 或 unchecked>`（§9.2 原意）。
+18. **FAIL 而非 ABORT（Plan 6c）**：sealed 子集不在 plan 裡 → `sealed_subset:`；`--test-subset train` 撞到空 train 子集 → `test_subset …`；file 類 profile 給 kernel 選項 → `kernel_options:`；kernel 類給 `--test-run` → `test_run:`。
+19. **決選次序鍵改寫（取代第 13 條，Plan 6c）**：sealed 讀數與 public 同分鍵都依指標的 `higher_is_better`（榜面分數是同一指標，lower-is-better 比賽越低越好）；`public` 缺席一律排最後；再以 `stage.json` 的 `staged_at` 升冪（原本用台帳列的 `ts`，差毫秒）。
+20. **台帳列的時戳（Plan 6c）**：`ts` 與 `at` 必須是 `stamp()` 格式的 UTC 字串（讀入即驗）。

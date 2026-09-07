@@ -84,3 +84,20 @@
 - **brief 裡的測試輸入也要「這個輸入真的會造成那個條件嗎」**：三個 brief 測試是錯的——排序後重寫不改 sha（R4）、句子裡的 token 就是提及（R6）、兩側同權重的配對不會失敗（R9）。實作者三次都正確地判斷是測試錯而非程式錯，並在報告裡說清楚。
 - **控制者自己寫的修正規格也會回歸鐵則**（R12）：碰 CLI 選項的修正要明說「不用 Click 層驗證」。
 - **接縫表有用**：唯一的預檢發現（`local=` 的時區）是靠「誰產、誰吃」逐列對出來的；最終審查的兩個 Important 則都是「一個命令在別的檔案不在時怎麼辦」（`stage.json` 在 data root、台帳在 git）與「一個 CLI 數字未經驗證就到台帳」——下次預檢加兩問：「每個寫入命令的每個輸入在到達台帳前經過誰驗證？」「這個命令讀的檔案哪些是 git 的、哪些是 data root 的，缺了會怎樣？」
+
+## 8. Plan 6c：§6 待辦的處置（2026-09-06，分支 `worktree-plan6c-hygiene`，4 個 commit + 1 個控制者微修）
+
+| §6 項 | 處置 |
+|---|---|
+| 1 | 做了：`sync` 的 `scored` 列記 `at` 與 `platform_ref`；`report.assign_scores`——平台時間的分數配給時間最近的那一發（同距離取 `at` 較晚者，不依賴列的順序），手動分數配給 `ts` 不晚於它的最近一發，每發取最新；`report` / `status` 逐發用它，`status.unscored` 看 `at` 最新的那一發；`final` 仍用 `latest_score`。實作者第一版用「互相搶佔」的配法，會把被修正的舊分數推到前一發——裁決 R1 改成現在的規則；審查再抓到同距離時依列序而非 `at`——R2 微修。 |
+| 2 | 做了：kaggle 的 `fileName` / `status` / `submittedBy` 進台帳前 `redact`（32+ 字元的檔名會被遮、sync 配不到——本 repo 的候選檔名不會）。 |
+| 3 | 做了：stage 的 VERDICT 帶 `missing=`（file 類）與 `config_hash=`（`unchecked` 或 12 hex）。 |
+| 4 | Plan 7 已做（`vcp/core/proc.py`）。 |
+| 5 | 做了：sealed 子集查不到 → `ValidationFailed("sealed_subset: …")`；`--test-subset train` 撞到必有的空 train 子集 → `ValidationFailed("test_subset …")`（原本是未包的 pydantic 錯 → ABORT）。 |
+| 6 | 做了：file 類 profile 給 `--kernel` / `--version` / `--weights` → `kernel_options:`；kernel 類給 `--test-run` → `test_run:`；在 `load_profile` 之後、載入任何 run 之前檢查。 |
+| 7 | 做了：`FinalEntry.staged_at` 取 `stage.json` 的 `staged_at`（原本是台帳列的 `ts`，差毫秒）。 |
+| 8 | 做了：`rank_key(sign)`——public 的同分鍵也依 `higher_is_better`（lower-is-better 比賽的榜面分數同樣越低越好）；`public=None` 兩個方向都排最後；spec §17 第 13 條改寫。 |
+| 9 | 做了一部分：`LedgerRow` 的 `ts` / `at` 必須是 UTC stamp；25 小時 DST、foreign 開頭的 report、`ref=0` 測試。未做：view 越界、`columns` 重名表頭、巢狀融合配對、同 prereg 判兩次、allow_missing WARN、融合 test run 的 `verify`、RSNA 測試改 `id_field=view_stem`。 |
+| 10 | 做了：kaggle.py 改用 `core.proc.last_line`、`_failed` 型別。未做：三處事件列舉、`samples == rows` 註解、ingest 訊息、`upload` 檢查順序、上傳成功後台帳寫入失敗的固有風險、e2e 只斷 exit_code 的呼叫、file-level `noqa: E501`。 |
+
+審查（sonnet）：SPEC ✅；QUALITY 1 MEDIUM（同距離時依列序 → R2 修）、1 LOW（`_assigned_score` 每列重算一次 `assign_scores`，量小不改）。全套 850 passed / 4 skipped、覆蓋率 96.40%。

@@ -155,7 +155,7 @@ def _rclone_runner(runner: Runner | None, dest: str) -> Runner:
 
 
 def open_dest(dest: str, runner: Runner | None = None) -> Destination:
-    """``remote:path`` -> rclone (a Windows drive is local, as in the training layer)."""
+    """``remote:path`` -> rclone; a Windows drive, drive-relative or plain path -> local."""
     if dest_kind(dest) == "local":
         return LocalDest(dest)
     return RcloneDest(dest, _rclone_runner(runner, dest))

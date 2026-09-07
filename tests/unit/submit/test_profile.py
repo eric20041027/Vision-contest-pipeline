@@ -65,6 +65,15 @@ def test_init_reuses_a_matching_plan(pair):
     assert not res.plan_created
 
 
+def test_init_refuses_test_subset_train(pair):
+    with pytest.raises(ValidationFailed, match="test_subset"):
+        init_profile(
+            _profile(test_subset="train"),
+            data_root=pair.roots.data,
+            configs_root=pair.roots.configs,
+        )
+
+
 def test_load_profile_errors(pair):
     with pytest.raises(ValidationFailed, match="no_profile"):
         load_profile(pair.test_paths)

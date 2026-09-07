@@ -132,15 +132,24 @@ def test_stage_and_verify_cli(pair):
     v = _verdict(r.output)
     assert "status=WARN" in v and "admission=PASS" in v and "pairing=single" in v
     assert "rows=50" in v and "writer=scores_csv" in v
+    assert "missing=0" in v and "config_hash=unchecked" in v
     r = _stage("S2", "bad", "bad.test")
     assert r.exit_code == 1 and "not_admitted" in _verdict(r.output)
     r = _stage("S2", "bad", "bad.test", "--kind", "probe", "--reason", "look")
     assert r.exit_code == 0 and "admission=waived" in _verdict(r.output)
+    assert "config_hash=" not in _verdict(r.output)
     r = _stage("S3", "bad", "bad.test", "--kind", "royal")
     assert r.exit_code == 1 and "status=FAIL" in _verdict(r.output)
     r = runner.invoke(app, ["submit", "verify", "--dataset", "beach-test", "--id", "S1", "--json"])
     assert r.exit_code == 0, r.output
     assert _json(r)["result"]["checks"][1] == "rebuild=ok"
+
+
+def test_kernel_options_on_a_file_profile_is_a_verdict_fail(pair):
+    _ready(pair)
+    r = _stage("S1", "good", "good.test", "--kernel", "u/nb")
+    assert r.exit_code == 1, r.output
+    assert "kernel_options" in _verdict(r.output)
 
 
 def test_record_score_cli(pair):

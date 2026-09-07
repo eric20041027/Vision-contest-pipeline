@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from typer.testing import CliRunner
 
 from submit_fixtures import (
     EVAL,
@@ -12,13 +13,17 @@ from submit_fixtures import (
     seed_judgements,
     seed_test_runs,
 )
+from vcp.cli import app
+from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.measure.runs import load_run, save_run
 from vcp.submit.ledger import SubmissionLedger
-from vcp.submit.profile import init_profile
+from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, load_staged, stage, verify
+
+cli_runner = CliRunner()
 
 
 def _profile(**over) -> PlatformProfile:
@@ -108,6 +113,31 @@ def test_trained_on_sealed_is_refused(ready):
     save_run(ready.roots.data, card)
 
 
+def test_bad_sealed_subset_is_fail_not_abort(ready):
+    profile, _ = load_profile(ready.test_paths)
+    dump_yaml_model(
+        profile.model_copy(update={"sealed_subset": "nope"}), ready.test_paths.submit_yaml
+    )
+    with pytest.raises(ValidationFailed, match="sealed_subset"):
+        stage(_spec(ready, "S1", "good", "good.test"))
+    r = cli_runner.invoke(
+        app,
+        [
+            "submit",
+            "stage",
+            "--dataset",
+            TEST,
+            "--id",
+            "S1",
+            "--eval-run",
+            "good",
+            "--test-run",
+            "good.test",
+        ],
+    )
+    assert r.exit_code == 1, r.output
+
+
 def test_locked_and_deadline_and_long_id(ready):
     led = SubmissionLedger(ready.test_paths.submissions_log)
     led.append(LedgerRow(event="lock", ts=STAMP, reason="r0"))
@@ -124,6 +154,28 @@ def test_locked_and_deadline_and_long_id(ready):
     )
     with pytest.raises(ValidationFailed, match="past_deadline"):
         stage(_spec(ready, "S1", "good", "good.test"))
+
+
+def test_kernel_options_on_a_file_profile_are_refused(ready):
+    with pytest.raises(ValidationFailed, match="kernel_options"):
+        stage(_spec(ready, "S1", "good", "good.test", kernel="u/nb"))
+    with pytest.raises(ValidationFailed, match="kernel_options"):
+        stage(_spec(ready, "S1", "good", "good.test", version=3))
+    with pytest.raises(ValidationFailed, match="kernel_options"):
+        stage(_spec(ready, "S1", "good", "good.test", weights=["good"]))
+
+
+def test_test_run_on_a_kernel_profile_is_refused(pair):
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(
+        _profile(platform="kaggle", competition="c1", submission_kind="kernel", writer=None),
+        data_root=pair.roots.data,
+        configs_root=pair.roots.configs,
+    )
+    # The check fires before any run is loaded, so an unknown --test-run name is fine here.
+    with pytest.raises(ValidationFailed, match="test_run"):
+        stage(_spec(pair, "K1", "good", "no-such-run", kernel="u/nb", version=3))
 
 
 def test_kernel_stage(pair):

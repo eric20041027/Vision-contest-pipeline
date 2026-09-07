@@ -158,6 +158,17 @@ def stage(spec: StageSpec) -> StageResult:
         spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
     profile, profile_sha = load_profile(paths)
+    if profile.submission_kind == "file" and (spec.kernel or spec.version or spec.weights):
+        raise ValidationFailed(
+            "kernel_options: --kernel / --version / --weights apply to kernel submissions; "
+            "this profile is submission_kind=file",
+            fields={"kind": "file"},
+        )
+    if profile.submission_kind == "kernel" and spec.test_run:
+        raise ValidationFailed(
+            "test_run: kernel submissions are not rendered from a test run; drop --test-run",
+            fields={"kind": "kernel"},
+        )
     ledger = SubmissionLedger(paths.submissions_log)
     assert_unlocked(ledger)
     assert_before_deadline(profile, utc_now())
@@ -179,9 +190,11 @@ def stage(spec: StageSpec) -> StageResult:
         profile.eval_dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
     eval_plan = load_plan(eval_paths, profile.plan_id)
-    if eval_plan.subset(profile.sealed_subset).role != "sealed":
+    roles = {s.name: s.role for s in eval_plan.subsets}
+    if roles.get(profile.sealed_subset) != "sealed":
         raise ValidationFailed(
-            f"sealed_subset: {profile.sealed_subset!r} is not sealed in plan {profile.plan_id!r}"
+            f"sealed_subset: {profile.sealed_subset!r} is not a sealed subset of plan "
+            f"{profile.plan_id!r} (subsets: {roles})"
         )
     eval_card = _run_on(paths.data_root, spec.eval_run, eval_ds, profile.plan_id, "eval")
     if spec.kind == "candidate" and profile.sealed_subset in eval_card.trained_on:

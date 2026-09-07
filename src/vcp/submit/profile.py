@@ -58,18 +58,23 @@ def ensure_test_plan(paths: DatasetPaths, dataset: Dataset, profile: PlatformPro
             SubsetSpec(name="train", role="train", ratio=0.0),
             SubsetSpec(name=profile.test_subset, role="eval", ratio=1.0),
         ]
+        plan = SplitPlan(
+            plan_id=profile.test_plan,
+            dataset=dataset.card.name,
+            dataset_hash=dataset.card.samples_hash,
+            strategy=TEST_PLAN_STRATEGY,
+            params={
+                "eval_gold_only": False,
+                "stratify_key": "none",
+                "group_key": "auto",
+                "seed": 0,
+            },
+            subsets=subsets,
+            assignment={s.sample_id: profile.test_subset for s in dataset.samples},
+            created_at=stamp(),
+        )
     except ValidationError as e:
         raise ValidationFailed(f"test_subset {profile.test_subset!r}: {e}") from e
-    plan = SplitPlan(
-        plan_id=profile.test_plan,
-        dataset=dataset.card.name,
-        dataset_hash=dataset.card.samples_hash,
-        strategy=TEST_PLAN_STRATEGY,
-        params={"eval_gold_only": False, "stratify_key": "none", "group_key": "auto", "seed": 0},
-        subsets=subsets,
-        assignment={s.sample_id: profile.test_subset for s in dataset.samples},
-        created_at=stamp(),
-    )
     save_plan(plan, paths)
     return True
 

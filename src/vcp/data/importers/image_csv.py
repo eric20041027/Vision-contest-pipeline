@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from vcp.core.config import is_true
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.base import ImportResult, ImportSpec, finalize_import
 from vcp.data.importers.common import count_exif_rotated, exif_policy_option, make_view, read_csv
@@ -12,7 +13,6 @@ from vcp.data.schema import Category, Labels, Sample
 
 TASKS = ("cls", "multilabel", "regression")
 _INT = re.compile(r"^-?\d+$")
-_TRUE = {"1", "true", "yes"}
 
 
 def infer_task(rows: list[dict[str, str]], cols: list[str]) -> str:
@@ -69,7 +69,7 @@ class ImageCsvImporter:
             rel = Path(row[path_col].strip()).as_posix()
             view = make_view(images_dir, rel, exif_policy=exif_policy)
             labels = _labels_for(row, task, target_cols, cls_index, csv_path, lineno)
-            gold = gold_col is None or row[gold_col].strip().lower() in _TRUE
+            gold = gold_col is None or is_true(row[gold_col].strip())
             samples.append(
                 Sample(
                     sample_id=rel,

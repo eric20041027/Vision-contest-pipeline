@@ -5,11 +5,26 @@ A metric must work on any subset of samples (bootstrap needs it).
 
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.data.schema import DatasetCard, Sample
 from vcp.measure.schema import MetricResult, Prediction
+
+# A registry name reaches the VERDICT line as part of a field NAME (`eval status` writes
+# `sigma[<metric>/<method>]=`), and `Verdict.line()` escapes values but not names -- a space or
+# an `=` in one produces a line no reader can parse. The same shape as `core.paths.validate_name`
+# asks of a plan or run id, for the same reason: the string has to survive being written down.
+REGISTRY_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def check_registry_name(kind: str, name: str) -> None:
+    if not REGISTRY_NAME.fullmatch(name):
+        raise RegistryError(
+            f"{kind} name {name!r} is not usable: names must match {REGISTRY_NAME.pattern} "
+            "(they appear as VERDICT field names, which are never escaped)"
+        )
 
 
 class Metric(Protocol):
@@ -34,6 +49,7 @@ METRICS: dict[str, Metric] = {}
 
 
 def register_metric(metric: Metric) -> None:
+    check_registry_name("metric", metric.name)
     if metric.name in METRICS:
         raise RegistryError(f"metric {metric.name!r} already registered")
     if not hasattr(metric, "higher_is_better"):

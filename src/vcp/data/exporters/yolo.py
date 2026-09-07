@@ -8,12 +8,12 @@ from pathlib import Path
 
 import yaml
 
+from vcp.core.config import is_true
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import Dataset
 from vcp.data.exporters.base import ExportOutput, select_view
 from vcp.data.schema import Sample
 
-_TRUE = {"1", "true", "yes"}
 _SYMLINK_DENIED_ERRNO = {errno.EPERM, errno.EACCES}
 _WINERROR_PRIVILEGE_NOT_HELD = 1314
 
@@ -51,7 +51,7 @@ class YoloExporter:
     ) -> ExportOutput:
         if dataset.card.task != "det":
             raise ValidationFailed(f"yolo export supports det datasets, not {dataset.card.task!r}")
-        copy = options.get("copy", "false").lower() in _TRUE
+        copy = is_true(options.get("copy"))
         view_opt = options.get("view")
         index = {c.id: i for i, c in enumerate(dataset.card.categories)}
         images_out, labels_out = out / "images", out / "labels"

@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from vcp.core.config import is_true
 from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.core.log import FieldValue
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Sample
 from vcp.measure.schema import Prediction, payload_field
 
-_TRUE = {"1", "true", "yes"}
 ID_FIELDS = ("sample_id", "view_path", "view_stem")
 
 
@@ -143,5 +143,6 @@ def fmt_float(v: float) -> str:
     return repr(float(v))
 
 
-def is_true(options: dict[str, str], key: str) -> bool:
-    return options.get(key, "false").lower() in _TRUE
+def option_is_true(options: dict[str, str], key: str) -> bool:
+    """One writer option read as a flag, through the framework-wide truthiness convention."""
+    return is_true(options.get(key))

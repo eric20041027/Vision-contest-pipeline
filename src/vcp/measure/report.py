@@ -18,14 +18,16 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
 from vcp.measure.anchors import load_anchors
-from vcp.measure.ledger import ReadingsLedger, read_rows
+from vcp.measure.ledger import (
+    JUDGEMENTS_LEDGER,
+    READINGS_LEDGER,
+    SIGMA_LEDGER,
+    ReadingsLedger,
+    read_rows,
+)
 from vcp.measure.metrics import params_key
 from vcp.measure.prereg import list_preregs, prereg_time
 from vcp.measure.schema import Judgement, Reading, RunCard, SigmaEstimate
-
-JUDGEMENTS_LEDGER = "judgements.jsonl"
-READINGS_LEDGER = "readings.jsonl"
-SIGMA_LEDGER = "sigma.jsonl"
 
 
 @dataclass(frozen=True)

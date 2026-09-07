@@ -9,9 +9,8 @@ from pathlib import Path
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
 from vcp.data.split import load_plan
-from vcp.measure.ledger import ReadingsLedger
+from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.metrics import effective_params, get_metric, params_key
-from vcp.measure.report import READINGS_LEDGER
 from vcp.measure.runs import load_run
 from vcp.submit.final import sealed_reading
 from vcp.submit.guards import QuotaState, quota_state

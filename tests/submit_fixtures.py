@@ -21,11 +21,10 @@ from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
-from vcp.measure.ledger import ReadingsLedger
+from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg
-from vcp.measure.report import READINGS_LEDGER
 from vcp.measure.schema import Prediction, PreRegistration
 
 EVAL = "beach"

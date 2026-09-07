@@ -33,16 +33,20 @@ from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.split import SplitPlan, load_plan
 from vcp.measure.anchors import anchor_key, load_anchors
-from vcp.measure.ledger import ReadingsLedger, append_row, read_rows
+from vcp.measure.ledger import (
+    READINGS_LEDGER,
+    SIGMA_LEDGER,
+    ReadingsLedger,
+    append_row,
+    read_rows,
+)
 from vcp.measure.measure import load_context
-from vcp.measure.metrics import effective_params, get_metric, params_key
+from vcp.measure.metrics import check_registry_name, effective_params, get_metric, params_key
 from vcp.measure.predictions import predictions_by_id, read_predictions
 from vcp.measure.runs import verify_prediction
 from vcp.measure.schema import Reading, SigmaEstimate
 from vcp.measure.stats import bootstrap_sd, sample_sd
 
-SIGMA_LEDGER = "sigma.jsonl"
-READINGS_LEDGER = "readings.jsonl"
 SPLITHALF_SUBSETS = 2
 SPLITHALF_MIN_RUNS = 3
 
@@ -229,7 +233,7 @@ def _bootstrap(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
         )
     samples = dataset.subset(subset, ctx.plan, paths=ctx.paths)
     path = verify_prediction(ctx.paths.data_root, card, subset)
-    value = bootstrap_sd(
+    res = bootstrap_sd(
         samples,
         predictions_by_id(read_predictions(path)),
         get_metric(spec.metric),
@@ -241,12 +245,17 @@ def _bootstrap(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
     inputs: dict[str, Any] = {
         "run_id": run_id,
         "subset": subset,
+        # 3-3: what was asked for, and what the estimate is actually made of. An estimate over
+        # 140 of 200 draws is a different number from one over all 200, and the ledger has to
+        # be able to say so long after the run that produced it is gone.
         "resamples": spec.resamples,
+        "used": res.used,
+        "skipped": res.skipped,
         "seed": spec.seed,
     }
     if from_anchor:
         inputs["run_source"] = "anchor"
-    return value, inputs
+    return res.value, inputs
 
 
 def _prior(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
@@ -272,8 +281,10 @@ def register_sigma_method(name: str, fn: Estimator) -> None:
     The same shape as ``register_metric`` and ``register_converter``, for the same reason: two
     estimators answering to one name would file two different numbers under one ``method`` in
     an append-only ledger, and every judgement that read the wrong one would be unexplainable
-    afterwards.
+    afterwards. The name is held to the same spelling rule too -- it reaches ``eval status``'s
+    ``sigma[<metric>/<method>]=`` as part of a VERDICT field name (3-5).
     """
+    check_registry_name("sigma method", name)
     if name in SIGMA_ESTIMATORS:
         raise RegistryError(f"sigma method {name!r} already registered")
     SIGMA_ESTIMATORS[name] = fn

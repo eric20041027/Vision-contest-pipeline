@@ -17,7 +17,7 @@ from vcp.backup.verify import verify
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
-from vcp.measure.report import READINGS_LEDGER
+from vcp.measure.ledger import READINGS_LEDGER
 
 
 def _kw(world):

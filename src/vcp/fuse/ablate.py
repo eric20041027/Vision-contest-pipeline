@@ -29,11 +29,10 @@ from vcp.fuse.fusers import get_fuser, require_payload, resolve_params
 from vcp.fuse.members import check_members, check_plan, union_trained_on
 from vcp.fuse.recipes import load_recipe, recipe_path, recipe_sha, same_recipe, save_recipe
 from vcp.fuse.schema import Member, Recipe
-from vcp.measure.ledger import ReadingsLedger
+from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.metrics import effective_params as metric_params
 from vcp.measure.metrics import get_metric, params_key
 from vcp.measure.prereg import create_prereg, measured_subsets, prereg_path
-from vcp.measure.report import READINGS_LEDGER
 from vcp.measure.runs import run_dir
 from vcp.measure.schema import PreRegistration, RunCard
 

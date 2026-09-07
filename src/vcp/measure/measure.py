@@ -15,7 +15,7 @@ from vcp.data.lineage import clean_eval_subsets
 from vcp.data.schema import Sample
 from vcp.data.split import SplitPlan, load_plan
 from vcp.measure.anchors import anchor_key, load_anchors
-from vcp.measure.ledger import ReadingsLedger, reading_id
+from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger, reading_id
 from vcp.measure.metrics import (
     Metric,
     applicable_metrics,
@@ -254,7 +254,7 @@ def measure_run(spec: MeasureSpec) -> MeasureResult:
         dataset=dataset,
         plan=plan,
         paths=paths,
-        ledger=ReadingsLedger(paths.measure_dir / "readings.jsonl"),
+        ledger=ReadingsLedger(paths.measure_dir / READINGS_LEDGER),
         anchors=load_anchors(paths),
     )
     readings: list[Reading] = []

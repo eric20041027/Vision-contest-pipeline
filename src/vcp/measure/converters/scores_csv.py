@@ -7,13 +7,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from vcp.core.config import is_true
 from vcp.core.errors import ValidationFailed
 from vcp.data.importers.common import read_csv
 from vcp.measure.converters.base import ConvertContext, parse_mapping
 from vcp.measure.predictions import MAPPING_PAYLOADS
 from vcp.measure.schema import Prediction, payload_field
-
-_TRUE = {"1", "true", "yes"}
 
 
 class ScoresCsvConverter:
@@ -44,7 +43,7 @@ class ScoresCsvConverter:
         if missing:
             raise ValidationFailed(f"{src.name}: missing columns for {missing} (header {header})")
         extra = sorted(set(value_cols) - set(wanted))
-        if extra and ctx.options.get("ignore_extra", "false").lower() not in _TRUE:
+        if extra and not is_true(ctx.options.get("ignore_extra")):
             raise ValidationFailed(
                 f"{src.name}: unexpected columns {extra}; pass --opt ignore_extra=true to drop them"
             )

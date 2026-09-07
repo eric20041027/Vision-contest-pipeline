@@ -23,8 +23,8 @@ from vcp.core.paths import DatasetPaths, logs_dir, resolve_stored_path, validate
 from vcp.core.time import stamp
 from vcp.fuse.build import load_record, record_path
 from vcp.fuse.recipes import recipe_path
+from vcp.measure.ledger import JUDGEMENTS_LEDGER, READINGS_LEDGER, SIGMA_LEDGER
 from vcp.measure.prereg import list_preregs, load_prereg, prereg_path
-from vcp.measure.report import JUDGEMENTS_LEDGER, READINGS_LEDGER, SIGMA_LEDGER
 from vcp.measure.runs import load_run, run_dir
 from vcp.measure.schema import RunCard
 from vcp.submit.ledger import SubmissionLedger

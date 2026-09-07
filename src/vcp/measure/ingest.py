@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.core.config import is_true
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
@@ -24,9 +25,6 @@ from vcp.measure.runs import (
     save_run,
 )
 from vcp.measure.schema import PredictionFile, RunCard, RunSource
-
-# Same truthiness convention as the converters' `--opt` values (Task 3 ruling 2 / Task 5 ruling 3).
-_TRUE = {"1", "true", "yes"}
 
 
 class IngestSpec(BaseModel):
@@ -194,7 +192,8 @@ def ingest(spec: IngestSpec) -> IngestResult:
     converter = get_converter(spec.format)
     ctx = ConvertContext(dataset, ids, spec.export_dir, dict(spec.options))
     preds = converter.convert(spec.src, ctx)
-    allow_unknown = spec.options.get("allow_unknown", "false").lower() in _TRUE
+    # Same truthiness convention as every other `key=value` option (vcp.core.config.is_true).
+    allow_unknown = is_true(spec.options.get("allow_unknown"))
     kept, stats = check_predictions(preds, dataset, ids, allow_unknown=allow_unknown)
     replaced = spec.subset in card.predictions
     if replaced and not spec.replace:

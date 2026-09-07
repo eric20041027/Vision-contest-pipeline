@@ -5,9 +5,8 @@ from submit_fixtures import STAMP, ingest_run, random_scores, seed_eval_runs, se
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.fuse.schema import FuseRecord, MemberRecord
-from vcp.measure.ledger import append_row
+from vcp.measure.ledger import JUDGEMENTS_LEDGER, append_row
 from vcp.measure.prereg import prereg_path
-from vcp.measure.report import JUDGEMENTS_LEDGER
 from vcp.measure.runs import load_run
 from vcp.measure.schema import Judgement, PreRegistration
 from vcp.submit.gate import admit, latest_judgements

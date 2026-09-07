@@ -12,7 +12,7 @@ from vcp.backup.verify import Drift, sha256_prefix, verify
 from vcp.core.errors import PlatformError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
-from vcp.measure.report import READINGS_LEDGER
+from vcp.measure.ledger import READINGS_LEDGER
 from vcp.measure.runs import load_run, run_dir
 from vcp.train.records import load_record, save_record
 from vcp.train.schema import UploadRecord

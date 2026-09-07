@@ -26,6 +26,42 @@ from vcp.measure.runs import load_run
 runner = CliRunner()
 
 
+def test_eval_failure_preserves_command_identity(roots, tmp_path):
+    for extra in ([], ["--json"]):
+        result = runner.invoke(
+            app,
+            [
+                "eval",
+                "ingest",
+                "--dataset",
+                "absent",
+                "--run",
+                "trial",
+                "--plan",
+                "p1",
+                "--subset",
+                "valA",
+                "--format",
+                "scores_csv",
+                "--src",
+                str(tmp_path / "scores.csv"),
+                *extra,
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        verdict = (
+            result.stderr.strip().splitlines()[-1]
+            if extra
+            else result.stdout.strip().splitlines()[-1]
+        )
+        assert verdict.startswith("VERDICT cmd=eval.ingest status=FAIL")
+        assert all(
+            field in verdict for field in ("dataset=absent", "run=trial", "plan=p1", "subset=valA")
+        )
+        if extra:
+            assert json.loads(result.stdout)["fields"]["run"] == "trial"
+
+
 def _last_verdict(output: str) -> str:
     lines = [line for line in output.splitlines() if line.startswith("VERDICT ")]
     assert lines, output

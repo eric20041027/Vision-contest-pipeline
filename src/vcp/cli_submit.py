@@ -120,7 +120,13 @@ def init_cmd(
         payload = {"profile": profile.model_dump(mode="json"), "path": str(res.path)}
         return "OK", fields, payload, [f"profile written to {res.path}"]
 
-    run_command("submit.init", json_mode, data_root, fn)
+    run_command(
+        "submit.init",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "eval_dataset": eval_dataset, "plan": plan},
+    )
 
 
 @submit_app.command("stage")
@@ -205,7 +211,18 @@ def stage_cmd(
         status: Status = "WARN" if res.warnings else "OK"
         return status, fields, st.model_dump(mode="json"), human
 
-    run_command("submit.stage", json_mode, data_root, fn)
+    run_command(
+        "submit.stage",
+        json_mode,
+        data_root,
+        fn,
+        context={
+            "dataset": dataset,
+            "id": submission_id,
+            "eval_run": eval_run,
+            **({"test_run": test_run} if test_run is not None else {}),
+        },
+    )
 
 
 @submit_app.command("verify")
@@ -229,7 +246,9 @@ def verify_cmd(
         }
         return "OK", fields, {"checks": checks}, [f"ok: {c}" for c in checks]
 
-    run_command("submit.verify", json_mode, data_root, fn)
+    run_command(
+        "submit.verify", json_mode, data_root, fn, context={"dataset": dataset, "id": submission_id}
+    )
 
 
 @submit_app.command("upload")
@@ -259,7 +278,9 @@ def upload_cmd(
         status: Status = "OK" if out.row.confirmed else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 
-    run_command("submit.upload", json_mode, data_root, fn)
+    run_command(
+        "submit.upload", json_mode, data_root, fn, context={"dataset": dataset, "id": submission_id}
+    )
 
 
 @submit_app.command("record")
@@ -300,7 +321,9 @@ def record_cmd(
         human = [f"warning: {w}" for w in out.warnings]
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 
-    run_command("submit.record", json_mode, data_root, fn)
+    run_command(
+        "submit.record", json_mode, data_root, fn, context={"dataset": dataset, "id": submission_id}
+    )
 
 
 @submit_app.command("score")
@@ -331,7 +354,9 @@ def score_cmd(
             fields["private"] = row.private
         return "OK", fields, row.model_dump(mode="json", exclude_none=True), []
 
-    run_command("submit.score", json_mode, data_root, fn)
+    run_command(
+        "submit.score", json_mode, data_root, fn, context={"dataset": dataset, "id": submission_id}
+    )
 
 
 @submit_app.command("sync")
@@ -357,7 +382,7 @@ def sync_cmd(
         payload = {"matched": res.matched, "unconfirmed": res.unconfirmed}
         return status, fields, payload, human
 
-    run_command("submit.sync", json_mode, data_root, fn)
+    run_command("submit.sync", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @submit_app.command("final")
@@ -397,7 +422,7 @@ def final_cmd(
         status: Status = "WARN" if warn else "OK"
         return status, fields, res.row.model_dump(mode="json", exclude_none=True), human
 
-    run_command("submit.final", json_mode, data_root, fn)
+    run_command("submit.final", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @submit_app.command("lock")
@@ -419,7 +444,7 @@ def lock_cmd(
             [],
         )
 
-    run_command("submit.lock", json_mode, data_root, fn)
+    run_command("submit.lock", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @submit_app.command("unlock")
@@ -441,7 +466,7 @@ def unlock_cmd(
             [],
         )
 
-    run_command("submit.unlock", json_mode, data_root, fn)
+    run_command("submit.unlock", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @submit_app.command("status")
@@ -486,7 +511,7 @@ def status_cmd(
         }
         return ("WARN" if warn else "OK"), fields, payload, human
 
-    run_command("submit.status", json_mode, data_root, fn)
+    run_command("submit.status", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @submit_app.command("report")
@@ -508,4 +533,4 @@ def report_cmd(
         payload = {"rows": [r.__dict__ for r in rows]}
         return "OK", {"dataset": dataset, "rows": len(rows)}, payload, human
 
-    run_command("submit.report", json_mode, data_root, fn)
+    run_command("submit.report", json_mode, data_root, fn, context={"dataset": dataset})

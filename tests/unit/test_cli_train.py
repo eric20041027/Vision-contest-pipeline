@@ -11,6 +11,29 @@ from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 
 runner = CliRunner()
 
+
+def test_train_failure_preserves_command_identity(roots, tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "train",
+            "upload",
+            "--run",
+            "trial",
+            "--dest",
+            str(tmp_path / "vault"),
+            "--only",
+            "typo",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    verdict = result.stderr.strip().splitlines()[-1]
+    assert verdict.startswith("VERDICT cmd=train.upload status=FAIL")
+    assert "run=trial" in verdict
+    assert json.loads(result.stdout)["fields"]["run"] == "trial"
+
+
 FAKE = """
 import sys
 from pathlib import Path

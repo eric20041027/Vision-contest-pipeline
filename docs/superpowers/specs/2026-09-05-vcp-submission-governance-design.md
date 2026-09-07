@@ -390,3 +390,5 @@ class Platform(Protocol):
 22. **RSNA study ID（Hygiene C，修正 §14）**：本機官方 `sample_submission.csv` 的 ID 欄為 `StudyInstanceUID`。匯入器的 `sample_id` 已是 study UID，故用 `id_field=sample_id,id_col=StudyInstanceUID`；`view_stem` 是 slice UID，不適用。
 23. **上傳順序與失敗視窗（Hygiene C）**：upload 先驗 profile（manual_platform）→ 封槍 → 截止 → staged 檔 sha → 配額 → 平台動作 → 台帳。平台已成功但 uploaded 列寫入失敗是接受的非原子視窗；sync 可將失聯的平台發恢復為 foreign 列，配額仍照計。已有 staged id 被 description 配中時仍按既有 sync 配對規則處理，foreign 不是每一種失聯回應的保證。
 24. **事件單一來源（Hygiene C）**：submit EVENTS 從 Event Literal 推導，測試驗 _REQUIRED 的 key 完全相同。training EVENTS 沒有重複的 Literal，維持原 tuple。
+
+25. **CLI 失敗身分**（2026-09-07）：十二個命令皆传 dataset context；有 --id 者傳 id，init 另傳 eval_dataset / plan，stage 另傳 eval_run 與有提供的 test_run。可選值省略，不把 None 傳入 FieldValue；深層錯誤身分優先，仍能識別融合配對的葉節點。

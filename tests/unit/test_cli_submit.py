@@ -15,6 +15,18 @@ from vcp.submit.schema import PlatformProfile
 runner = CliRunner()
 
 
+def test_submit_failure_preserves_command_identity(roots):
+    result = runner.invoke(
+        app,
+        ["submit", "stage", "--dataset", "absent", "--id", "s1", "--eval-run", "trial", "--json"],
+    )
+    assert result.exit_code == 1, result.output
+    verdict = result.stderr.strip().splitlines()[-1]
+    assert verdict.startswith("VERDICT cmd=submit.stage status=FAIL")
+    assert all(field in verdict for field in ("dataset=absent", "id=s1", "eval_run=trial"))
+    assert json.loads(result.stdout)["fields"]["id"] == "s1"
+
+
 @pytest.fixture
 def pair(roots, tmp_path):
     return make_pair(roots, tmp_path)

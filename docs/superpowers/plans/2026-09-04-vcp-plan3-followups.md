@@ -99,3 +99,9 @@
 ## 8. Hygiene C 接縫處置（2026-09-07）
 
 ingest 權重衝突訊息補 omit --weights 提示；由提交層 C2 帶入並補紅→綠測試，身分驗證規則與既有卡相容性不變。決定 — 提示只加在 weights_hash 衝突；依據 — config_hash 並非 weights 選項；代價 — 不替使用者改寫既有 run 身分。
+
+## 9. CLI 識別欄位與剩餘待辦處置（2026-09-07）
+
+八個 eval 命令均傳 run_command(context=)，保留可得的 dataset / run / plan / subset / prereg / candidate / baseline / metric。可選值未給時省略（FieldValue 不接受 None），錯誤本身的 fields 優先。新 CLI 測試檢查早期失敗、exit 1、文字末行與 JSON stdout / VERDICT stderr。
+
+§5-4 效能明確延後；§5-12 跨程序 append 與 anchors 交易鎖延後，需一併設計讀改寫與崩潰恢复，不能以一把局部鎖冒充完整交易。現有唯一暫存檔保留，使用者流程依序執行。其餘 §7 已完成項不重開。

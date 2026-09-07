@@ -132,6 +132,8 @@ def sync(
                     private=p.private,
                     source="platform",
                     platform_status=p.status or None,
+                    at=p.at,
+                    platform_ref=p.platform_ref,
                 )
             )
             scored += 1

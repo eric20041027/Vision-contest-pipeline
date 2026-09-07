@@ -193,6 +193,12 @@ def stage_cmd(
         if st.artifact.writer:
             fields["writer"] = st.artifact.writer
             fields["rows"] = st.artifact.rows or 0
+        if st.artifact.kind == "file":
+            fields["missing"] = st.artifact.missing or 0
+        for check in st.pairing.checks:
+            if check.startswith("config_hash="):
+                fields["config_hash"] = check.split("=", 1)[1]
+                break
         human = [f"staged {submission_id} -> {res.path}"]
         human += [f"check: {c}" for c in st.pairing.checks]
         human += [f"warning: {w}" for w in res.warnings]

@@ -115,7 +115,7 @@ def test_ingest_scores_csv_with_unknown_ids(roots, tmp_path):
     )
     with pytest.raises(ValidationFailed, match="unknown"):
         ingest(spec)
-    # ruling Task5#3: allow_unknown uses the converters' _TRUE set, not the literal "skip".
+    # ruling Task5#3: allow_unknown is read with vcp.core.config.is_true, not the literal "skip".
     res = ingest(spec.model_copy(update={"options": {"allow_unknown": "true"}}))
     assert res.unknown == ["stranger"] and res.predicted == len(val)
     entry = res.run.predictions["val"]

@@ -175,11 +175,14 @@ def bootstrap_sd(
             # Only the metric's own refusal (spec 15.8). A plugin bug arrives as VcpError from
             # `_value` and still aborts: that is a broken metric, not an awkward draw.
             skipped += 1
-    if skipped > len(values):
+    # Past half the draws skipped the spread is biased; below MIN_RESAMPLES usable draws there is
+    # no spread at all (one value has no sample sd -- it would be nan, not a number).
+    if skipped > len(values) or len(values) < MIN_RESAMPLES:
         raise ValidationFailed(
             f"{TOO_MANY_SKIPPED}: metric {metric.name!r} refused {skipped} of {resamples} "
-            f"bootstrap resamples (seed={seed}), leaving {len(values)} usable; the spread of "
-            "the scoreable draws alone is not sigma_p -- widen the subset or pick another one"
+            f"bootstrap resamples (seed={seed}), leaving {len(values)} usable (need at least "
+            f"{MIN_RESAMPLES} and more than skipped); the spread of the scoreable draws alone "
+            "is not sigma_p -- widen the subset or pick another one"
         )
     return BootstrapSd(
         value=sample_sd(values), resamples=resamples, used=len(values), skipped=skipped

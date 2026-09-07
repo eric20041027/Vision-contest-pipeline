@@ -554,3 +554,9 @@ vcp data audit --name <名> [--against <test 資料集名>] [--max-bad-boxes 0] 
 5. **coords**：越界檢查先於重複檢查（重複的越界框計入 out_of_bounds）；boxes 與 polygons 共用每個 sample 的尺寸快取。
 6. **import 的 `old_card=unreadable`**：只在 `plans_invalidated > 0` 時輸出。
 7. **依賴**：選用 extra 的每個 pin 都同時列在 dev 群組，由 `tests/unit/test_package.py` 守門；不改成 dev 依賴 `vcp[dicom]`。
+
+## 17. v6 補充決定（Hygiene A 資料層，2026-09-06）
+
+1. **標註的 view 索引**：任務驗證器對 `labels.boxes` 與 `labels.masks` 兩個欄位都檢查 `view` 是否落在 `sample.views` 範圍內，不只自己的 `label_field`。det 樣本可以合法帶 masks、seg 樣本可以合法帶 boxes，而 coords 稽核兩個欄位都讀；越界索引在那裡是裸 `IndexError`（ABORT），在邊界擋下才是它本來的樣子：帶定位的 `ValidationFailed`（FAIL），訊息含 sample id 與該筆序號。
+2. **空子集**：`build_plan` 拒絕會拿到零樣本的 `eval` / `sealed` 子集（`ValidationFailed`，`empty_subset: <name> (<role>) would get no samples; adjust ratios or the sample count`），推翻 Plan 1 後記第 13 條的「只 WARN」。空的 `train` 子集仍合法（提交層的單子集測試 plan 就是這個形狀，且它直接建 `SplitPlan` 而不走 `build_plan`）；`params["empty_subsets"]` 因此改為列出所有空子集（含 train），`vcp data split` 的 WARN 只剩 train 會觸發。
+3. **YOLO 匯出 manifest**：`images` 的每一列由裸 sample id 改為 `{"sample_id": ..., "view": <匯出的 view 索引>}`。`select_view` 已算出該索引，記下來讓讀者知道旁邊的 label 檔正規化到哪個 view。`yolo_txt` 兩種形狀都讀（既有匯出目錄不必重做），但它對多 view 樣本的拒絕、以及 det / seg 指標只算 view 0 的限制，都不因此放寬。

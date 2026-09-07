@@ -138,3 +138,27 @@ def test_seg_validation_and_key():
         t.validate(sample(Labels(masks=[Mask(category_id=5, rle="x")])), c)
     with pytest.raises(ValidationFailed, match="view index"):
         t.validate(sample(Labels(masks=[Mask(category_id=1, rle="x", view=2)])), c)
+
+
+def test_view_index_is_checked_on_both_annotation_fields():
+    """2c-1 / 3-13: a validator that only looked at its own ``label_field`` let a stray
+    annotation on the OTHER field through with a view index nothing owns; the coords audit then
+    indexed ``sample.views`` with it and raised a bare ``IndexError`` (ABORT). It is bad input:
+    a located FAIL naming the sample and the offending index, whichever field carries it."""
+    stray_mask = Labels(
+        boxes=[Box(x=0, y=0, w=1, h=1, category_id=0)],
+        masks=[Mask(category_id=1, rle="x", view=1)],
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        get_task("det").validate(sample(stray_mask), card("det"))
+    assert "mask 0: view index 1 out of range" in str(excinfo.value)
+    assert excinfo.value.location == "sample s"
+
+    stray_box = Labels(
+        masks=[Mask(category_id=1, rle="x")],
+        boxes=[Box(x=0, y=0, w=1, h=1, category_id=0, view=1)],
+    )
+    with pytest.raises(ValidationFailed) as excinfo:
+        get_task("seg").validate(sample(stray_box), card("seg"))
+    assert "box 0: view index 1 out of range" in str(excinfo.value)
+    assert excinfo.value.location == "sample s"

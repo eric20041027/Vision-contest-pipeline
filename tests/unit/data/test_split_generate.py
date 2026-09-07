@@ -238,11 +238,38 @@ def test_empty_categories_falls_back_to_random_split():
     assert _counts(plan) == {"train": 10, "val": 10}
 
 
-def test_tiny_pool_reports_empty_subsets():
+def test_tiny_pool_refuses_an_empty_eval_subset():
+    """3-1: the metric layer's empty-subset guard turns this into a loud failure later, but at
+    split time it is plainly a user error -- the ratios cannot buy a single sample."""
     ds = Dataset.from_parts(make_card("det"), det_samples(5, seed=0))
-    plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
-    assert plan.params["empty_subsets"] == ["valA", "valB", "holdout"]
-    assert _counts(plan) == {"train": 5}
+    with pytest.raises(ValidationFailed) as excinfo:
+        build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    assert "empty_subset: valA (eval) would get no samples" in str(excinfo.value)
+    assert "adjust ratios or the sample count" in str(excinfo.value)
+
+
+def test_tiny_pool_refuses_an_empty_sealed_subset():
+    """The sealed subset is caught by the same rule, and named for itself."""
+    ds = Dataset.from_parts(make_card("det"), det_samples(12, seed=0))
+    with pytest.raises(ValidationFailed, match=r"empty_subset: holdout \(sealed\)"):
+        build_plan(
+            ds,
+            plan_id="p",
+            subsets=parse_subsets("train:train:0.5,valA:eval:0.5,holdout:sealed:0.0"),
+            seed=0,
+        )
+
+
+def test_an_empty_train_subset_stays_legal_and_is_reported():
+    """A plan whose train subset is empty is a legitimate shape -- the submission layer's
+    single-subset test plan is exactly that -- so it stays a WARN-worthy fact in ``params``,
+    never a refusal."""
+    ds = Dataset.from_parts(make_card("det"), det_samples(6, seed=0))
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.0,valA:eval:1.0"), seed=0
+    )
+    assert _counts(plan) == {"valA": 6}
+    assert plan.params["empty_subsets"] == ["train"]
 
 
 def test_oversubscribed_ratios_explain_themselves():

@@ -190,7 +190,10 @@ def test_yolo_manifest_categories_and_images_field(det_ds, roots, tmp_path):
     res2 = export_subset(_spec(roots, "yolo", tmp_path / "y2"))
     assert res2.fields["images"] in ("copied", "symlinked")
     ids = {s.sample_id for s in det_ds[0].subset("valA", det_ds[1])}
-    assert set(manifest["images"].values()) == ids
+    assert {row["sample_id"] for row in manifest["images"].values()} == ids
+    # 3-2: every row says which view it came from, so a reader knows whose coordinates the
+    # label file beside it is in.
+    assert all(row["view"] == 0 for row in manifest["images"].values())
     # The keys must be the flattened ON-DISK file names, not the view paths: the yolo_txt
     # converter reverses this map by stem to match labels/<stem>.txt, so a nested view path
     # that kept its separator would leave every prediction of that sample unmatched.
@@ -229,10 +232,66 @@ def test_yolo_manifest_images_keys_are_flattened_names(roots, tmp_path):
     )
     manifest = json.loads(res.manifest_path.read_text(encoding="utf-8"))
     exported = {s.sample_id for s in ds.subset("valA", plan)}
-    assert exported and set(manifest["images"].values()) == exported
+    assert exported and {r["sample_id"] for r in manifest["images"].values()} == exported
     assert set(manifest["images"]) == {
         f"sub__dir__{i}.jpg" for i, s in enumerate(samples) if s.sample_id in exported
     }
+
+
+def test_yolo_manifest_records_the_exported_view_index(roots, tmp_path):
+    """3-2: ``select_view`` already knows which view it picked, so the manifest row records it.
+    Recording it does NOT loosen anything: yolo_txt still refuses a multi-view sample (its
+    coordinates would have to be read back against a view it cannot identify per prediction)."""
+    paths = DatasetPaths.resolve("twoview", data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        s.model_copy(
+            update={
+                "views": [
+                    s.views[0],
+                    s.views[0].model_copy(update={"path": f"nir/{s.sample_id}.jpg"}),
+                ]
+            }
+        )
+        for s in det_samples(6, seed=3)
+    ]
+    write_images(roots.data / "raw" / "twoview", samples)
+    ds = Dataset.from_parts(make_card("det", name="twoview", image_root="raw/twoview"), samples)
+    ds.save(paths)
+    plan = build_plan(
+        ds, plan_id="all-v1", subsets=parse_subsets("train:train:0.5,valA:eval:0.5"), seed=0
+    )
+    save_plan(plan, paths)
+    res = export_subset(
+        ExportSpec(
+            name="twoview",
+            plan_id="all-v1",
+            subset="valA",
+            format="yolo",
+            out=tmp_path / "tv",
+            data_root=roots.data,
+            configs_root=roots.configs,
+            options={"copy": "true", "view": "1"},
+        )
+    )
+    manifest = json.loads(res.manifest_path.read_text(encoding="utf-8"))
+    exported = {s.sample_id for s in ds.subset("valA", plan)}
+    rows = manifest["images"]
+    assert exported and {r["sample_id"] for r in rows.values()} == exported
+    assert set(rows) == {f"nir__{sid}.jpg" for sid in exported}
+    assert all(r["view"] == 1 for r in rows.values())
+    # Without --opt view= the exporter still refuses to guess (unchanged behaviour).
+    with pytest.raises(VcpError, match="views"):
+        export_subset(
+            ExportSpec(
+                name="twoview",
+                plan_id="all-v1",
+                subset="valA",
+                format="yolo",
+                out=tmp_path / "tv2",
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )
 
 
 def test_export_manifest_base_keys_beat_exporter_manifest(det_ds, roots, tmp_path):
@@ -332,18 +391,22 @@ def test_export_yolo_rejects_flatten_collisions(roots, tmp_path):
 
 
 def test_export_empty_subset_warns(roots, tmp_path):
+    # build_plan refuses an empty eval/sealed subset (3-1), so the empty subset an export can
+    # still be pointed at is the train one -- legal, and the shape a test-side plan also has.
     paths = DatasetPaths.resolve("few", data_root=roots.data, configs_root=roots.configs)
     samples = det_samples(5, seed=0)
     write_images(roots.data / "raw" / "few", samples)
     ds = Dataset.from_parts(make_card("det", name="few", image_root="raw/few"), samples)
     ds.save(paths)
-    plan = build_plan(ds, plan_id="p", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    plan = build_plan(
+        ds, plan_id="p", subsets=parse_subsets("train:train:0.0,valA:eval:1.0"), seed=0
+    )
     save_plan(plan, paths)
     res = export_subset(
         ExportSpec(
             name="few",
             plan_id="p",
-            subset="valA",
+            subset="train",
             format="coco",
             out=tmp_path / "e",
             data_root=roots.data,

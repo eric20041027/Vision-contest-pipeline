@@ -94,14 +94,30 @@ def _validate_regression(sample: Sample, card: DatasetCard) -> None:
         _fail(sample, f"regression targets must be finite, got {bad}")
 
 
-def _check_view_and_category(
-    sample: Sample, card: DatasetCard, idx: int, kind: str, view: int, category_id: int
+def _check_annotation_views(sample: Sample) -> None:
+    """Every annotation's ``view`` index must name a view this sample owns -- boxes AND masks,
+    not just the field the task's ``label_field`` points at (2c-1 / 3-13).
+
+    A ``det`` sample may legally carry masks and a ``seg`` one boxes, and the coords audit reads
+    both fields whichever task it runs under. An index past the end reached ``_view_size`` there
+    as a bare ``IndexError`` (ABORT) although it is plainly bad input; checking both fields at
+    the boundary makes it the located FAIL it always was.
+    """
+    if sample.labels is None:
+        return
+    n = len(sample.views)
+    for kind, items in (("box", sample.labels.boxes), ("mask", sample.labels.masks)):
+        for idx, item in enumerate(items or []):
+            if item.view >= n:
+                _fail(
+                    sample,
+                    f"{kind} {idx}: view index {item.view} out of range (sample has {n} views)",
+                )
+
+
+def _check_category(
+    sample: Sample, card: DatasetCard, idx: int, kind: str, category_id: int
 ) -> None:
-    if view >= len(sample.views):
-        _fail(
-            sample,
-            f"{kind} {idx}: view index {view} out of range (sample has {len(sample.views)} views)",
-        )
     if category_id not in _cat_ids(card):
         _fail(sample, f"{kind} {idx}: unknown category id {category_id}")
 
@@ -130,8 +146,9 @@ def _validate_det(sample: Sample, card: DatasetCard) -> None:
     boxes = sample.labels.boxes
     if boxes is None:
         _fail(sample, "task det requires labels.boxes (use [] for a negative sample)")
+    _check_annotation_views(sample)
     for i, b in enumerate(boxes):
-        _check_view_and_category(sample, card, i, "box", b.view, b.category_id)
+        _check_category(sample, card, i, "box", b.category_id)
         _check_bounds(sample, i, b)
 
 
@@ -141,8 +158,9 @@ def _validate_seg(sample: Sample, card: DatasetCard) -> None:
     masks = sample.labels.masks
     if masks is None:
         _fail(sample, "task seg requires labels.masks")
+    _check_annotation_views(sample)
     for i, m in enumerate(masks):
-        _check_view_and_category(sample, card, i, "mask", m.view, m.category_id)
+        _check_category(sample, card, i, "mask", m.category_id)
 
 
 def _key_cls(sample: Sample, card: DatasetCard) -> StratKey | None:

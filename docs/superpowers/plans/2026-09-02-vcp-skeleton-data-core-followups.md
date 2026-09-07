@@ -20,7 +20,7 @@
 10. **Task 14：測試曾寫 log 到真實 `C:/vcp-data/logs`**，加 autouse fixture 讓所有測試都用暫存根目錄。
 11. **最終修正波納入 5 個 Important + 6 個小項**（分布表用 plan 的分層鍵、零寬向量退回隨機、空子集回報、策略登記表接線、groups.json 驗證、`_logger` 全例外保護、plan 最後寫入、`Dataset` 不可變外露、刪除未用夾具、PEP 695、JSON 分流測試）。
 12. **策略登記表現在就接線**（`--strategy`，預設 `fixed`），因為「加一種形態不改 CLI」是通用性原則的核心；K-fold 本身仍不在範圍。
-13. **空的 eval / sealed 子集以 `WARN` + `empty_subsets=` 呈現**，不做 FAIL；plan 仍是使用者要的比例，可見性才是機械保證。若日後被忽略而出事，改成 FAIL。
+13. **空的 eval / sealed 子集以 `WARN` + `empty_subsets=` 呈現**，不做 FAIL；plan 仍是使用者要的比例，可見性才是機械保證。若日後被忽略而出事，改成 FAIL。→ **已改成 FAIL**（Hygiene A，Plan 3 後記 §5-1）：`build_plan` 直接拒絕零樣本的 eval / sealed 子集；空的 train 子集仍合法，`empty_subsets=` 的 WARN 只剩它會觸發。
 14. **`normalize_keys` 的 docstring 對 width==0 退回情況已過時**，只是註解，留給 Plan 2 第一次動到 `split.py` 時修。
 
 ## Plan 2 的 spec / plan 必須納入的事（來自整支審查）

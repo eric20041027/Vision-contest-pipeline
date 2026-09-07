@@ -80,3 +80,23 @@
 - 這一輪沒有 Workflow（ultracode 關閉）：預檢由控制者人工做接縫表，8 個任務只有 Task 3 卡住（計畫夾具缺陷，一條裁決解決），其餘一次過。轉錄型任務用 haiku（Task 1、2、4 各約 2–3 分鐘）、整合型用 sonnet；審查者 sonnet 每次都獨立重算手算案例並讀被消費的相鄰程式碼，8 次審查零 Important。
 - 最終審查抓到的兩個 Important 都是跨任務接縫（寫入順序 vs 被呼叫層的寫入時驗證；首次建構 vs 重建的生命週期），單任務審查看不到——下次預檢清單加一條：「被呼叫層在寫入時做的每一項驗證，呼叫端在任何寫入前都有對應的預檢嗎？」
 - 實作者報告若沒有整套測試的證據行，控制者自己補跑（Task 4）；`SendMessage` 不可用時修正輪改派新實作者並以報告檔為記憶（Task 3）。
+
+## 8. Hygiene B：§6 待辦的處置（2026-09-07，分支 `worktree-hygiene-b-fuse-train`，與 Plan 5 後記 §8 同一批）
+
+| §6 項 | 處置 |
+|---|---|
+| 1 | 做了：`eval ingest` 對 `source.framework == "vcp.fuse"` 的 run 在任何寫入前拒絕（`fusion_run:`，提示 `vcp fuse build --replace`）；`FUSE_FRAMEWORK` 常數改由 `measure/runs.py` 擁有，融合層引用它（審查抓到 measure → fuse 的反向依賴）。 |
+| 2 | 做了：`data.split.assert_plan_matches` 是唯一的 plan hash 檢查；`dataset.py`、`measure/ingest.py`、`fuse/members.check_plan`（保留一行委派）都呼叫它；訊息與原本逐字相同，順帶多檢查 `plan.dataset == card.name`（合法流程不可能觸發）。提交層 `profile.py` 的檢查是 FAIL 類別、刻意不併。 |
+| 3 | 做了：提示改「a converter can allow them with option allow_unknown=true at ingest」，不提 `--opt`。 |
+| 4 | 不做（沒有讀者）。 |
+| 5 | 做了七個測試。其中兩個釘的是實際行為而非原本的猜測：wbf 對 view 索引越界是「不裁邊」的守門（spec §7.2 第 5 步，有尺寸才裁），不是拒絕；run 目錄存在但 `fuse.json` 遺失時 `build_run` 會直接重寫一份新紀錄——但只涵蓋這次重建的子集，快取命中的子集不會回到紀錄裡（審查 F2，見下方新待辦 1）。 |
+| 6 | 做了：`RankMean` 跨 sample 鍵不齊只帶 `sample=`。 |
+| 7 | 做了：`check_existing_run` 的 `assert_run_matches` 錯誤 `setdefault("run", …)`。 |
+| 8 | 不做（ensemble-boxes 不進依賴；人工核對紀錄維持）。 |
+| 9 | 做了：`AblateSpec.replace` → 每個成員的 `BuildSpec`；`vcp fuse ablate --replace`；README 與 spec §14-7 改寫。 |
+| 10 | Hygiene A 已修（漏在測試本身）。 |
+
+新待辦：
+1. **遺失 `fuse.json` 的重建只涵蓋這次重建的子集**（審查 F2，既有行為）：`build_run` 在 `run.yaml` 仍宣告某子集、該子集又快取命中時，重建出的紀錄不含它，`vcp backup` 會把這份不完整的紀錄當證據。應改成 FAIL（`not_found:` + 提示 `--replace`）或把所有子集都列入 `pending` 重建。測試 `test_build_rebuilds_a_missing_fuse_json` 已在 docstring 註明這是已知缺口。
+
+審查（opus）：SPEC ✅（五項偏離中四項接受、一項即上述 F2）；QUALITY APPROVED——1 MEDIUM（層次反轉，本批微修）、1 HIGH 既有（F2，記為待辦）、3 LOW（`superseded` 重複路徑、`--json` 缺 `unbacked`——本批微修；note 先於 yaml 的視窗——刻意，`--resume` 會調和）。

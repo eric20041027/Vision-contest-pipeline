@@ -1,0 +1,98 @@
+# vcp 交接文件（2026-09-07）
+
+給接手開發的人或代理（Codex）。讀完這份就能不靠對話紀錄繼續做。搭配根目錄的 `AGENTS.md` / `CLAUDE.md`（機械鐵則與常用命令）、`README.md`（每層的命令表）。
+
+## 1. 這是什麼
+
+`vcp`（vision contest pipeline）：給 Kaggle / 台灣視覺比賽用的通用框架，六個子專案全部交付：
+
+| 子專案 | 層 | 套件 | CLI 群 |
+|---|---|---|---|
+| 0 / 1 | 骨架 + 資料層 | `src/vcp/core`、`src/vcp/data` | `vcp data import\|validate\|split\|lineage\|export\|audit\|materialize` |
+| 2 | 量測層 | `src/vcp/measure` | `vcp eval ingest\|measure\|anchor\|preregister\|judge\|sigma\|status\|report` |
+| 4 | 融合層 | `src/vcp/fuse` | `vcp fuse recipe\|build\|ablate` |
+| 3 | 訓練層 | `src/vcp/train` | `vcp train run\|upload\|status` |
+| 5 | 提交治理 | `src/vcp/submit` | `vcp submit` ×12（init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report） |
+| 6 | 備份審計 | `src/vcp/backup` | `vcp backup manifest\|push\|verify\|pull\|status` |
+
+起點是賽後報告 `docs/postmortems/2026-08-aidea-marine-debris-detection.md`（§9 藍圖）：public→private 掉分的根因是「只在一個儀器上驗證」「元件準入不一致」「σ_p 太晚估」；框架把這些變成機制（≥2 個互斥驗證集 + 1 個 sealed holdout、護欄先於讀數、預登記 t 門檻、元件準入需 ≥2 個基底、台帳與上傳原子、UTC 時戳）。
+
+## 2. 現況
+
+- 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`），工作樹乾淨；沒有未合併的分支。
+- 測試：`uv run pytest --cov=vcp` 全綠（900+ passed、4 個真資料 skip），覆蓋率約 96.5%；`uv run ruff check .` 與 `uv run ruff format --check .` 乾淨。
+- 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 8 passed / 3 skipped（marine-debris 未匯入）。
+- 環境：Windows 11、`uv` 管 Python 3.12（沒有系統 Python）、typer 0.27；kaggle CLI 2.2.4 由 `uv tool` 裝（不在 PATH，profile 的 `kaggle_command` 可指定）；rclone 未安裝（備份層以假 rclone 測試；真推送要自己裝）。
+
+## 3. 程式碼地圖
+
+```
+src/vcp/core      time（唯一時鐘）errors（VERDICT 狀態）log（VERDICT 行 / jsonl log）paths（DatasetPaths）
+                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact）
+src/vcp/data      schema tasks（任務登記表）dataset split（plan、assert_plan_matches）lineage
+                  importers/ exporters/ audit/ materialize/ dicomio
+src/vcp/measure   schema runs（run.yaml、FUSE_FRAMEWORK）predictions converters/ metrics/ ingest
+                  measure（護欄 → 讀數）anchors ledger（三個台帳檔名）prereg judge sigma stats report plugins
+src/vcp/fuse      schema recipes（配方進 git）fusers/（wbf/mean/rank_mean）members build（fuse.json）ablate
+src/vcp/train     schema records（train.yaml + train.log.jsonl）env checkpoints upload run session reader status
+src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）timewin guards pairing gate
+                  writers/（scores_csv/coco_results/csv_boxes）platforms/（manual/kaggle）stage actions sync final report
+src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
+src/vcp/cli*.py   每層一個 typer app；cli_common.run_command 統一 VERDICT / exit code / --json / context
+projects/rsna-knee  比賽膠水（下載腳本、清單）；比賽專屬程式碼只能放這裡
+tests/            unit/<layer>、integration（真資料）、helpers.py、submit_fixtures.py、backup_fixtures.py
+configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git
+```
+
+十二個變異軸都是登記表（任務、匯入器、匯出器、解碼器、切分策略、稽核、轉換器、指標、σ_p 方法、融合器、輸出格式、平台）：加一種形態 = 加一個登記項，不改 schema、不改 CLI；比賽自己的指標 / 格式用 `--plugin projects.<contest>.metrics`。
+
+## 4. 鐵則與慣例（違反即審查 FAIL）
+
+1. 取時只用 `vcp.core.time.utc_now()/stamp()/parse_stamp()`（ruff TID251 擋其他時鐘）。
+2. 每個 CLI 命令以 `VERDICT cmd=<group>.<name> status=OK|WARN|FAIL|ABORT k=v…` 收尾；exit 0/0/1/2；`--json` 時 JSON 到 stdout、VERDICT 到 stderr；永不互動提問；不用 Click 層的參數驗證（`min=` 之類）——範圍檢查在函式層，才有 VERDICT。
+3. 錯誤對應：`ValidationFailed` / `IntegrityError` / `PlatformError` = FAIL；`VcpError` / `PlanMismatchError` / `RegistryError` = ABORT；訊息以 `reason=` 字彙開頭（`not_found:`、`exists:`、`mismatch:`、…）；`VcpError.fields` 只放機器可讀鍵。
+4. 隱私：vcp 永不讀 / 寫 / 驗 / 記憑證；沒有 token 選項或憑證欄位；子程序繼承環境但不記錄環境；第三方 CLI 的每個位元組落地前經 `vcp.core.proc.redact`。
+5. 台帳只增（`exclude_none`），卡「換寫留痕」，plan / 預登記 / 配方 / 清單寫了不改（要改就換 id）。
+6. venv 隔離：核心一個 venv（`uv sync`）；訓練框架各自 venv 以 editable 裝 vcp。
+7. `src/vcp` 不出現比賽名；檔案 utf-8 / LF；ruff line-length 100；覆蓋率 ≥ 80%；測試永不碰真資料根（`roots` fixture）。
+8. commit 一律 `type(scope): 說明`（繁中說明可），一個 commit 一件事；不用 `git add -A`。
+
+## 5. 文件地圖
+
+- 設計 spec：`docs/superpowers/specs/`（每層一份；每份最後的「補充決定」一節是實作期的定案，**以程式碼為準**）。
+- 實作計畫：`docs/superpowers/plans/<date>-vcp-planN-*.md`（執行當時的程式碼；已被後來修正的地方在計畫末的「執行期修正」一節或後記）。
+- 後記：`docs/superpowers/plans/<date>-vcp-planN-followups.md`——裁決、審查發現、待辦與處置；**開放的待辦都在各後記的最後一節**。
+- 比賽膠水：`projects/rsna-knee/`（下載子集的腳本、Kaggle 打包備案）。
+- 專案 skill：`.claude/skills/` 與 `.agents/skills/`（vcp-data-pipeline、vcp-extend-registry、vcp-contest-onboarding）。
+
+## 6. 開放的待辦（依優先序）
+
+1. **Hygiene C（提交層剩餘）**：`docs/superpowers/plans/2026-09-07-vcp-hygiene-c-submit.md`——已寫好的 brief，直接照做（兩個 commit）。
+2. **新待辦（來自 2026-09-07 的審查）**：
+   - 融合：遺失 `fuse.json` 的重建只涵蓋這次重建的子集（Plan 4 後記 §8 新待辦 1）→ 改 FAIL 或全部重建。
+   - 備份：`pull._fetch` 對 `OSError` 已處理；verify 副本層出錯已寫列；剩 Plan 7 後記 §5 未做的 4（跨層 VERDICT 識別欄位——`run_command(context=)` 已有，其他層照 backup 層採用）、5（`dest_kind("C:backup")` 已做）、6（push 讀檔次數）。
+   - 提交：Plan 6 後記 §8 表裡「未做」的小項（Hygiene C 涵蓋大部分）。
+3. **效能回合**（都刻意延後）：Plan 2c §5-2（materialize 的 `is_dir`/`stat` 兩百萬次）、Plan 3 §5-4（seg 指標配置、護欄重算、judge 載兩次）、Plan 7 §5-6。
+4. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）；`Manifest.data_root` 只作人讀。
+5. **比賽膠水（真正的下一個里程碑）**：RSNA Knee（Kaggle，截止 2026-10-22；DICOM 多序列 study、12 標籤 macro AUC、notebook-only 推論）——`projects/rsna-knee/` 要補：訓練 venv 與 `vcp train run` 的實際命令、`vcp submit init --platform kaggle --kind kernel`、kernel 打包、`vcp backup` 的撤離腳本。
+
+## 7. 開發流程（這個 repo 一直這樣做）
+
+1. **brainstorm → spec**：大改動先寫 `docs/superpowers/specs/<date>-<topic>-design.md`（架構、資料模型、CLI 表、錯誤字彙、測試策略、驗收、不在範圍），使用者核可後才寫計畫。
+2. **plan**：`docs/superpowers/plans/<date>-<topic>.md`，每個任務含完整程式碼與測試、逐步（寫失敗測試 → 跑 → 實作 → 跑 → commit）；**計畫 markdown 不跑 `ruff format`**。
+3. **執行**：一個任務一個實作者（TDD），每個任務一次審查（spec 符合度 + 品質），全部完成後一次全分支審查（跨任務接縫、隱私、錯誤處理、測試品質），最多一輪修正 + 一次範圍限定再審；每個裁決記進後記（「裁決：決定 — 依據 — 代價」）。
+4. **收尾**：後記（結果、裁決、審查發現、待辦）、spec 補充決定、README / AGENTS.md、全套測試、合併到 main、push。
+5. **小修（hygiene）**：不寫 spec / plan，寫一份 brief（決定 + 測試 + commit 分組），一個實作者 + 一個審查者，後記記處置。
+
+## 8. 已知陷阱
+
+- Windows：測試重寫台帳 / 卡一律 `write_text(..., newline="\n")`（否則 CRLF 讓 sha 對不上）；`Path.is_absolute()` 對另一平台的絕對路徑回 False（跨機器路徑用 `PureWindowsPath` / `PurePosixPath` 兩邊都問）。
+- `uv run pytest --cov=vcp -q` 不印 passed 數（`addopts` 已含 `-q`）；要數字就不要再加 `-q`。
+- 真 rclone / kaggle 不在測試裡：備份層的 `vcp.backup.dest.RCLONE` 常數可 monkeypatch 到假腳本；提交層的 `kaggle_command` 可指到假腳本。
+- 計畫裡的測試輸入要先問「這個輸入真的會造成那個條件嗎」——歷史上三次實作者停下來（NEEDS_CONTEXT）都是計畫的測試錯、程式對。
+- 台帳是快照：備份清單寫下後台帳還會長，`push` 推清單那一刻的前 N 位元組、`verify` 用前綴 sha、`pull` 視長大為已有。
+- `--forget-remote` 要整份清單在目的地驗過才刪憑證；帶 `present=false` 條目的清單永遠不能 forget。
+
+## 9. 交接時的數字
+
+見 `git log -1`、`uv run pytest --cov=vcp`（不加 `-q`）與各後記最後一節；本文件不重複數字，以免過時。

@@ -1,0 +1,8 @@
+{
+  "seed": 43,
+  "epochs": 20,
+  "batch_size": 4,
+  "image_size": 256,
+  "learning_rate": 0.001,
+  "weight_decay": 0.01
+}

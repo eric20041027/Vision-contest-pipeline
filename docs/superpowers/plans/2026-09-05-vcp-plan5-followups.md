@@ -101,3 +101,15 @@
 三個 train 命令均傳 context；run 帶 run / dataset / plan，upload / status 帶 run。補 --only 錯值在任何讀取前 FAIL 仍有 run 的 JSON CLI 測試。
 
 §6-9 TOCTOU 延後：消費仍在寫的 checkpoint 需要框架協作的原子發布／鎖或額外快照；單獨增加 stat 不能證明 bytes 穩定。此版要求訓練程式寫完並關檔再 register_checkpoint，wrapper 在子程序結束後再掃描，保留 hash 漂移驗證；不把此設計與效能代價混入 CLI 修正。
+
+## 10. RSNA 實跑處置與新待辦（2026-09-07）
+
+| 項目 | 處置 |
+|---|---|
+| `--venv` 探針成功，Windows 裸 `python` 啟動到沒有 typer 的基底 interpreter | `knee-cnn-s42-v1` attempt 1 失敗，attempt 2 明寫訓練 venv 的絕對 Python 路徑後成功；原事件與 console 保留，未清掉失敗紀錄。 |
+| 訓練側防止 eval / sealed 誤用 | 專案入口在建立 MaterializedReader 前檢查 train role，再核對 Session 身分 / config / attempt seed；synthetic 負面測試證明 unseal ledger bytes 未變。 |
+| framework 隔離與 final 登記 | 專案 `.venv` editable 裝 vcp，torch CUDA 環境獨立；固定 20 epochs、checkpoint 關檔後 Session 登記，兩個 run 實際接上 eval ingest。 |
+
+裁決：Windows 比賽命令先用絕對 interpreter — 依據是探針與實際裸命令選擇的差異，以及相同 config 改絕對命令即成功 — 代價是跨機器須換絕對路徑，保留一個失敗 attempt；本輪專案膠水不混入通用 runner 行為改動。
+
+**新待辦（行為修正，非效能）**：讓 `train run` 在預檢與啟動共用「已解析的可執行檔」，尤其 Windows `Popen` 不以傳入的 `env['PATH']` 覆寫可執行檔搜尋。下輪先寫 Windows 子程序回報 `sys.executable` 的失敗測試，並驗明確相對 / 絕對命令及 `--cwd`；不可只斷言環境探針或 PATH 字串。本輪已具可重現的絕對路徑用法，不阻止現有基準繼續。

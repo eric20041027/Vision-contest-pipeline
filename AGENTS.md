@@ -30,6 +30,7 @@
 - `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
 
 ## 文件
+- RSNA Knee 實際基準流程：`projects/rsna-knee/RUNBOOK.md`（真實命令、讀數、外部待續條件）；設計與裁決：同目錄 `DESIGN.md`。Windows 訓練命令使用獨立 venv 的絕對 interpreter；checkpoint 綁定的前處理 / 模型檔不可在訓練後靜默改動。
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`
 - 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。
 

@@ -1,0 +1,30 @@
+{
+ "plan_id": "all-v1",
+ "dataset": "rsna-knee-test",
+ "dataset_hash": "994945c4c4b7ce7132092b6490597e5638d0c68c904117fa4c34ad33098ba29d",
+ "strategy": "all",
+ "params": {
+  "eval_gold_only": false,
+  "stratify_key": "none",
+  "group_key": "auto",
+  "seed": 0
+ },
+ "subsets": [
+  {
+   "name": "train",
+   "role": "train",
+   "ratio": 0.0
+  },
+  {
+   "name": "test",
+   "role": "eval",
+   "ratio": 1.0
+  }
+ ],
+ "assignment": {
+  "1.2.826.0.1.3680043.8.498.10047035057544427318018579121635276191": "test",
+  "1.2.826.0.1.3680043.8.498.10062861783145312629332250977456991776": "test",
+  "1.2.826.0.1.3680043.8.498.10067514707072572280263481548497591402": "test"
+ },
+ "created_at": "2026-09-07T07:37:24.880Z"
+}

@@ -107,6 +107,47 @@ def test_status_keys_backed_by_bytes_not_path(roots):
     assert st.unbacked == [] and st.backed == 2
 
 
+def test_status_counts_superseded_bytes_apart_from_unbacked(roots, tmp_path):
+    """5-10: a --resume that changes a checkpoint's bytes leaves the older record behind. Those
+    bytes are gone from the path and, if they were never uploaded, no copy will ever appear --
+    so `unbacked` listed them forever: honest, and pure noise. They are counted as `superseded`
+    instead, leaving `unbacked` to mean "current bytes with no copy" -- the number to act on."""
+    w = roots.data / "work" / "weights"
+    w.mkdir(parents=True)
+    (w / "best.pt").write_bytes(b"best-old")
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd="work",
+        command=["python"],
+        attempts=[
+            Attempt(
+                n=1, started_at=STAMP, console="train/console.1.log", status="finished", exit_code=0
+            )
+        ],
+    )
+    rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=1)
+    old_sha = sha256_file(w / "best.pt")
+    (w / "best.pt").write_bytes(b"best-new")
+    rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=2)
+    save_record(roots.data, rec)
+
+    # before any upload: the current bytes are unbacked, the old ones are already superseded
+    st = status(roots.data, "r1")
+    assert st.unbacked == ["work/weights/best.pt"] and st.superseded == ["work/weights/best.pt"]
+    assert st.backed == 0
+
+    # uploading takes the newest record of the path (spec 14-4), so only the new bytes get a copy
+    _, out = upload_run(roots.data, "r1", str(tmp_path / "vault"))
+    assert out.uploaded == 1
+    st = status(roots.data, "r1")
+    assert st.unbacked == [] and st.superseded == ["work/weights/best.pt"] and st.backed == 1
+    assert old_sha not in {u.sha256 for u in st.record.uploads}
+
+
 def test_upload_run_records_and_is_idempotent(roots, tmp_path):
     rec, w = _seeded(roots)
     rec2, out = upload_run(roots.data, "r1", str(tmp_path / "vault"))

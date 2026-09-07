@@ -39,6 +39,7 @@ def _weights(root):
 
 def test_expand_globs_relative_to_cwd(tmp_path):
     w = _weights(tmp_path)
+    assert expand([], tmp_path) == []  # 5-9: no --checkpoints and no --final is not an error
     assert expand(["weights/*.pt"], tmp_path) == [w / "best.pt", w / "last.pt"]
     assert expand(["weights/**/*.pt"], tmp_path) == [
         w / "best.pt",
@@ -111,6 +112,35 @@ def test_mark_final_is_exclusive(roots):
     assert [c.final for c in rec.checkpoints] == [False, True]
     rec = mark_final(rec, "work/weights/best.pt", sha256_file(w / "best.pt"))
     assert [c.final for c in rec.checkpoints] == [True, False]
+
+
+def test_mark_final_with_an_unknown_identity_marks_nothing(roots):
+    """5-9: identity is (path, sha256). An identity no registered checkpoint has simply matches
+    none of them -- the previous final is cleared and nothing takes its place. mark_final does
+    not raise on its own: `resolve_final` is the caller that knows an unmatched glob hit is an
+    error, and it looks at the result (see below) rather than trusting the mark."""
+    w = _weights(roots.data / "work")
+    rec, _ = register(_record(), [w / "best.pt", w / "last.pt"], data_root=roots.data, attempt=1)
+    rec = mark_final(rec, "work/weights/best.pt", sha256_file(w / "best.pt"))
+    assert [c.final for c in rec.checkpoints] == [True, False]
+    same_path_other_bytes = mark_final(rec, "work/weights/best.pt", "ab" * 32)
+    assert [c.final for c in same_path_other_bytes.checkpoints] == [False, False]
+    unknown_path = mark_final(rec, "work/weights/ghost.pt", sha256_file(w / "best.pt"))
+    assert [c.final for c in unknown_path.checkpoints] == [False, False]
+    assert len(unknown_path.checkpoints) == 2  # nothing invented, nothing dropped
+
+
+def test_resolve_final_refuses_a_hit_that_was_never_registered(roots):
+    """5-9: `--final` is treated as one more `--checkpoints` glob, so its hit is normally
+    already registered. If it is not -- a file that appeared between registration and
+    resolution, or a caller that passed --final alone -- the run must not claim a final
+    checkpoint the record cannot describe."""
+    w = _weights(roots.data / "work")
+    rec, _ = register(_record(), [w / "last.pt"], data_root=roots.data, attempt=1)
+    with pytest.raises(ValidationFailed, match="which is not registered") as ei:
+        resolve_final(rec, "weights/best.pt", cwd=roots.data / "work", data_root=roots.data)
+    assert ei.value.fields == {"checkpoint": "weights/best.pt"}
+    assert FINAL_AMBIGUOUS in str(ei.value) and "work/weights/best.pt" in str(ei.value)
 
 
 def test_missing_and_drift(roots):

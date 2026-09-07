@@ -62,6 +62,25 @@ def test_gpus_parses_nvidia_smi_csv(monkeypatch):
     assert gpus() == (["NVIDIA GeForce RTX 5070 Ti", "NVIDIA T4"], "616.56")
 
 
+def test_gpus_without_a_driver_version(monkeypatch):
+    """5-9 / spec 14-9: the driver is the row's SECOND column. A row that has the column but
+    leaves it empty still names a GPU, so the name is kept; a row with no second column at all
+    is not a GPU line and is skipped."""
+    monkeypatch.setattr(envmod.shutil, "which", lambda name, *a, **k: "smi")
+    monkeypatch.setattr(
+        envmod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="NVIDIA T4, \n", stderr=""),
+    )
+    assert gpus() == (["NVIDIA T4"], "")
+    monkeypatch.setattr(
+        envmod.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="garbage\n\n", stderr=""),
+    )
+    assert gpus() == ([], None)
+
+
 def test_gpus_when_tool_missing_or_failing(monkeypatch):
     monkeypatch.setattr(envmod.shutil, "which", lambda name, *a, **k: None)
     assert gpus() == ([], None)
@@ -93,4 +112,9 @@ def test_probe_failures_are_aborts(monkeypatch, tmp_path):
         snapshot(None, tmp_path)
     monkeypatch.setattr(envmod, "PROBE", "print('not json')")
     with pytest.raises(VcpError, match="no JSON"):
+        snapshot(None, tmp_path)
+    # 5-9: valid JSON that is not an object would reach EnvSnapshot(**data) as a TypeError deep
+    # inside pydantic; the probe's contract is checked where the probe is read.
+    monkeypatch.setattr(envmod, "PROBE", "print('[1, 2]')")
+    with pytest.raises(VcpError, match="no JSON object"):
         snapshot(None, tmp_path)

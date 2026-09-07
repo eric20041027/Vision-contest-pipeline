@@ -195,7 +195,10 @@ def test_training_flow(roots, tmp_path):
     assert r.exit_code == 0 and "skipped=2" in _verdict(r.output)
     r = runner.invoke(app, ["train", "status", "--run", "m1", "--json"])
     assert r.exit_code == 0
-    assert len(_json(r)["result"]["uploads"]) == 4  # two destinations x two files
+    doc = _json(r)
+    assert len(doc["result"]["uploads"]) == 4  # two destinations x two files
+    # 5-10: the resumed attempt wrote the same bytes, so no record of a path was superseded
+    assert doc["fields"]["superseded"] == 0 and doc["result"]["superseded"] == []
 
     r = runner.invoke(
         app,

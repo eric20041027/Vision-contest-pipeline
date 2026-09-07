@@ -96,9 +96,9 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 |---|---|---|
 | `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證 | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
 | `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等 | `--run`、`--dest`、`--only final` |
-| `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令） | `--run`、`--verify`（重算 sha） |
+| `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令）；`backed=` / `unbacked=`（目前的 bytes 沒副本，會 WARN）/ `superseded=`（同路徑已被後來的登記取代、又從沒上傳過的舊 bytes，只報不 WARN——它們的副本再也不會出現） | `--run`、`--verify`（重算 sha） |
 
-共用選項：`--json`、`--data-root`、`--configs-root`。`--upload` 的目的地：`remote:path` 走 rclone，經 `vcp.backup.dest.RcloneDest`（`copyto --checksum` + `hashsum sha256` 逐檔比對，指令前綴 `vcp.backup.dest.RCLONE`；rclone 不在 PATH 又沒注入 runner 是 `VcpError("rclone_not_found: ...")` ABORT，指令有跑但失敗是 `PlatformError`〔FAIL，最後一行已去敏〕；`hashsum` exit 3/4 才算「還沒東西」，其餘非 0 或雜湊欄不是 sha256 都是錯誤），其餘是本機 / 掛載目錄（複製後讀回驗 sha）。訓練命令 exit ≠ 0 → `status=FAIL exit_code=N`，checkpoint 仍登記但不上傳；沒給 `--seed`、`--venv`、`--final` 各 WARN 一項。`run.yaml` 就是量測層的 run：之後 `vcp eval ingest --run R ...` 直接接上，不必再給 `--trained-on` / `--framework`。`--resume` 每次都新增一個 attempt，各記自己的 `command` / `seed` / `venv`；`train.yaml` 頂層那三欄刻意留著**第一個** attempt 的值（它描述 run 是怎麼開始的），要看最新的看 `attempts[-1]`。上一輪若還停在 `running`（vcp 自己崩過），`--resume` 會把它標成 `interrupted` 並在 `train.log.jsonl` 記一列 `note`。
+共用選項：`--json`、`--data-root`；`--configs-root` 只有 `vcp train run` 有（另外兩個命令只讀資料根目錄下的 run）。`--upload` 的目的地：`remote:path` 走 rclone，經 `vcp.backup.dest.RcloneDest`（`copyto --checksum` + `hashsum sha256` 逐檔比對，指令前綴 `vcp.backup.dest.RCLONE`；rclone 不在 PATH 又沒注入 runner 是 `VcpError("rclone_not_found: ...")` ABORT，指令有跑但失敗是 `PlatformError`〔FAIL，最後一行已去敏〕；`hashsum` exit 3/4 才算「還沒東西」，其餘非 0 或雜湊欄不是 sha256 都是錯誤），其餘是本機 / 掛載目錄（複製後讀回驗 sha）。訓練命令 exit ≠ 0 → `status=FAIL exit_code=N`，checkpoint 仍登記但不上傳；沒給 `--seed`、`--venv`、`--final` 各 WARN 一項。`run.yaml` 就是量測層的 run：之後 `vcp eval ingest --run R ...` 直接接上，不必再給 `--trained-on` / `--framework`。`--resume` 每次都新增一個 attempt，各記自己的 `command` / `seed` / `venv`；`train.yaml` 頂層那三欄刻意留著**第一個** attempt 的值（它描述 run 是怎麼開始的），要看最新的看 `attempts[-1]`。上一輪若還停在 `running`（vcp 自己崩過），`--resume` 會把它標成 `interrupted` 並在 `train.log.jsonl` 記一列 `note`。
 
 ### 一次訓練到量測
 
@@ -116,6 +116,7 @@ uv run vcp eval measure --run y12x_r2
 自寫 PyTorch loop 只需要兩個名字：
 
 ```python
+# torch 與 NAMES（你的類別名清單）是讀者自己的東西，vcp 不提供也不要求
 from vcp.train import MaterializedReader, Session
 
 reader = MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="train")

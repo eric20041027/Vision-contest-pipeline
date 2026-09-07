@@ -135,9 +135,11 @@ def upload_cmd(
     ] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
-    configs_root: ConfigsRootOpt = None,
 ) -> None:
     """Upload a run's registered checkpoints and verify them (idempotent)."""
+
+    # 5-8: no configs-root option here -- this command reads a run under the data root and
+    # nothing under the configs root; the option was declared and never used.
 
     def fn() -> CmdResult:
         if only not in (None, "final"):
@@ -165,9 +167,11 @@ def status_cmd(
     verify: Annotated[bool, typer.Option("--verify", help="re-hash every checkpoint")] = False,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
-    configs_root: ConfigsRootOpt = None,
 ) -> None:
     """Attempts, checkpoints and their backups. Reads, never writes."""
+
+    # 5-8: no configs-root option here -- this command reads a run under the data root and
+    # nothing under the configs root; the option was declared and never used.
 
     def fn() -> CmdResult:
         st = status_view(resolve_data_root(data_root), run, verify=verify)
@@ -177,6 +181,9 @@ def status_cmd(
             "checkpoints": len(st.record.checkpoints),
             "backed": st.backed,
             "unbacked": len(st.unbacked),
+            # 5-10: bytes a later registration of the same path replaced and nothing ever backed
+            # up. Reported, never WARNed: no copy of them can appear any more.
+            "superseded": len(st.superseded),
             "running": st.running,
         }
         if verify:
@@ -190,10 +197,16 @@ def status_cmd(
         if last is not None:
             human.append(f"attempt {last.n} command: {' '.join(last.command or st.record.command)}")
         human += [f"unbacked: {p}" for p in st.unbacked]
+        human += [f"superseded: {p}" for p in st.superseded]
         human += [f"missing: {p}" for p in st.missing]
         human += [f"drift: {p}" for p in st.drift]
         warn = bool(st.unbacked or st.missing or st.drift or st.running)
-        payload = {**st.record.model_dump(mode="json"), "drift": st.drift, "missing": st.missing}
+        payload = {
+            **st.record.model_dump(mode="json"),
+            "drift": st.drift,
+            "missing": st.missing,
+            "superseded": st.superseded,
+        }
         return ("WARN" if warn else "OK"), fields, payload, human
 
     run_command("train.status", json_mode, data_root, fn)

@@ -14,6 +14,7 @@ from vcp.data.dataset import write_samples_jsonl
 from vcp.data.exporters import EXPORTERS, ExportOutput, register_exporter
 from vcp.data.importers import IMPORTERS, get_importer, register_importer
 from vcp.data.importers.base import ImportSpec
+from vcp.data.schema import Box, Labels, Mask, Sample, View
 
 runner = CliRunner()
 
@@ -189,12 +190,39 @@ def test_split_validates_audit_groups_file(roots, tmp_path):
     assert plan["assignment"]["s0000"] == plan["assignment"]["s0001"]
 
 
-def test_split_reports_warn_for_empty_subsets(roots, tmp_path):
+def test_split_fails_when_an_eval_subset_would_be_empty(roots, tmp_path):
+    """3-1: the default ratios cannot carve an eval subset out of five samples, and a plan
+    whose eval subsets are empty is unmeasurable -- refuse it here, not three commands later."""
     assert _import_tiny(roots, tmp_path, name="tiny5", n=5).exit_code == 0
     r = runner.invoke(app, ["data", "split", "--name", "tiny5", "--plan-id", "p", "--seed", "0"])
+    assert r.exit_code == 1, r.output
+    v = _last_verdict(r.output)
+    assert "status=FAIL" in v and "empty_subset: valA (eval)" in v
+    assert not (roots.configs / "datasets" / "tiny5" / "splits" / "p.json").exists()
+
+
+def test_split_reports_warn_for_an_empty_train_subset(roots, tmp_path):
+    """An empty train subset is legal (the submission layer's test plan is one), so it stays a
+    WARN with the subset named -- the visibility the FAIL above replaced for eval/sealed."""
+    assert _import_tiny(roots, tmp_path, name="tiny6", n=6).exit_code == 0
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "split",
+            "--name",
+            "tiny6",
+            "--plan-id",
+            "p",
+            "--seed",
+            "0",
+            "--subsets",
+            "train:train:0.0,valA:eval:1.0",
+        ],
+    )
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
-    assert "status=WARN" in v and "empty_subsets=valA,valB,holdout" in v
+    assert "status=WARN" in v and "empty_subsets=train" in v
 
 
 def test_split_unknown_strategy_aborts(roots, tmp_path):
@@ -478,6 +506,53 @@ def _jsonl_import_args(src, name):
     ]
 
 
+def test_import_rejects_an_out_of_range_annotation_view(roots, tmp_path):
+    """2c-1 / 3-13: the jsonl importer is the one escape hatch that can hand a stray annotation
+    to a task whose validator never looked at that field -- a seg dataset carrying boxes here.
+    The audit used to meet that view index as a bare IndexError (ABORT); import must refuse it
+    (FAIL) and name the sample."""
+    src = tmp_path / "src"
+    src.mkdir()
+    bad = Sample(
+        sample_id="s0000",
+        views=[View(path="s0000.jpg", width=8, height=8)],
+        labels=Labels(
+            masks=[Mask(category_id=0, rle="0,64")],
+            boxes=[Box(x=0, y=0, w=1, h=1, category_id=0, view=1)],
+        ),
+        label_source="gold",
+    )
+    write_samples_jsonl(src / "samples.jsonl", [bad])
+    (src / "cats.json").write_text(json.dumps([c.model_dump() for c in CATS]), encoding="utf-8")
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "import",
+            "--importer",
+            "jsonl",
+            "--src",
+            str(src),
+            "--name",
+            "strayseg",
+            "--license",
+            "CC0",
+            "--url",
+            "https://example.org",
+            "--downloaded-at",
+            "2026-09-02",
+            "--opt",
+            "task=seg",
+            "--opt",
+            "categories=cats.json",
+        ],
+    )
+    assert r.exit_code == 1, r.output
+    v = _last_verdict(r.output)
+    assert "status=FAIL" in v and 'reason="ValidationFailed' in v
+    assert "s0000" in v and "box 0: view index 1 out of range" in v
+
+
 def test_import_raw_manifest_mode(roots, tmp_path):
     src = tmp_path / "src"
     src.mkdir()
@@ -614,8 +689,24 @@ def test_import_yolo_reports_unlabeled(roots, tmp_path):
 
 
 def test_export_empty_subset_is_warn(roots, tmp_path):
+    # build_plan now refuses an empty eval/sealed subset (3-1), so the empty subset an export
+    # can still meet is the train one -- the shape the submission layer's test plan also has.
     assert _import_tiny(roots, tmp_path, n=5, with_images=True).exit_code == 0
-    r = runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "p1", "--seed", "1"])
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "split",
+            "--name",
+            "tiny",
+            "--plan-id",
+            "p1",
+            "--seed",
+            "1",
+            "--subsets",
+            "train:train:0.0,valA:eval:1.0",
+        ],
+    )
     assert r.exit_code == 0 and "empty_subsets=" in _last_verdict(r.output)
     empty = _last_verdict(r.output).split("empty_subsets=")[1].split()[0].split(",")[0]
     r = runner.invoke(

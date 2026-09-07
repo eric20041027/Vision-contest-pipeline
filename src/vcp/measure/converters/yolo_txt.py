@@ -14,6 +14,29 @@ from vcp.measure.converters.base import ConvertContext
 from vcp.measure.schema import PredBox, Prediction, payload_field
 
 
+def _sample_ids(images: object) -> dict[str, str] | None:
+    """flat image name -> sample id, or ``None`` when this is not a vcp YOLO export's map.
+
+    Two row shapes are accepted: the current one, ``{"sample_id": ..., "view": ...}`` (3-2), and
+    the bare sample id that exports written before the view index carried. Only the sample id is
+    read here -- the view index is recorded for readers, not used to loosen the single-view rule
+    below, which is about de-normalising coordinates, not about naming the view.
+    """
+    if not isinstance(images, dict):
+        return None
+    out: dict[str, str] = {}
+    for flat, row in images.items():
+        if not isinstance(flat, str):
+            return None
+        if isinstance(row, str):
+            out[flat] = row
+        elif isinstance(row, dict) and isinstance(row.get("sample_id"), str):
+            out[flat] = row["sample_id"]
+        else:
+            return None
+    return out
+
+
 def _manifest(ctx: ConvertContext) -> tuple[dict[str, str], dict[int, int]]:
     if ctx.export_dir is None:
         raise ValidationFailed(
@@ -27,21 +50,19 @@ def _manifest(ctx: ConvertContext) -> tuple[dict[str, str], dict[int, int]]:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ValidationFailed(f"{path}: {e}") from e
-    images = doc.get("images") if isinstance(doc, dict) else None
     categories = doc.get("categories") if isinstance(doc, dict) else None
-    valid_images = isinstance(images, dict) and all(
-        isinstance(k, str) and isinstance(v, str) for k, v in images.items()
-    )
+    sample_of = _sample_ids(doc.get("images") if isinstance(doc, dict) else None)
     valid_categories = isinstance(categories, list) and all(
         isinstance(c, dict) and "index" in c and "id" in c for c in categories
     )
-    if not (valid_images and valid_categories):
+    if sample_of is None or not valid_categories:
         raise ValidationFailed(
-            f"{path}: expected the vcp YOLO export's manifest ('images' mapping str to str, "
-            "'categories' entries with 'index' and 'id'); point --export-manifest at the vcp "
-            "export directory, not somewhere else (re-export with the current vcp)"
+            f"{path}: expected the vcp YOLO export's manifest ('images' mapping each flattened "
+            "image name to a row with 'sample_id', 'categories' entries with 'index' and 'id'); "
+            "point --export-manifest at the vcp export directory, not somewhere else "
+            "(re-export with the current vcp)"
         )
-    stem_to_sample = {Path(flat).stem: sid for flat, sid in images.items()}
+    stem_to_sample = {Path(flat).stem: sid for flat, sid in sample_of.items()}
     index_to_id = {int(c["index"]): int(c["id"]) for c in categories}
     return stem_to_sample, index_to_id
 

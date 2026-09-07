@@ -490,7 +490,7 @@ def write_yolo_txt(
 
     Assumes each sample has exactly one view; ``yolo_txt`` itself rejects a multi-view sample.
     """
-    flat_of = {sample_id: flat for flat, sample_id in manifest["images"].items()}
+    flat_of = {row["sample_id"]: flat for flat, row in manifest["images"].items()}
     index_of = {c["id"]: c["index"] for c in manifest["categories"]}
     labels_dir = pred_dir / "labels"
     labels_dir.mkdir(parents=True, exist_ok=True)

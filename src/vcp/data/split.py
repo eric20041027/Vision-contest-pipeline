@@ -337,6 +337,13 @@ def stratified_take(pool: list[str], keys: dict[str, NormKey], n: int, *, seed: 
     return sorted(taken)
 
 
+def empty_subsets(subsets: list[SubsetSpec], assignment: dict[str, str]) -> list[str]:
+    """Declared subsets no sample landed in, in declaration order. Train included: ``build_plan``
+    refuses an empty eval/sealed subset outright, so the WARN this feeds is now train's alone."""
+    taken = set(assignment.values())
+    return [s.name for s in subsets if s.name not in taken]
+
+
 def _combine_keys(ks: list[StratKey | None]) -> StratKey | None:
     """Key of a group of samples: element-wise max for vectors, first labelled sample otherwise."""
     present = [k for k in ks if k is not None]
@@ -430,11 +437,7 @@ def generate_fixed(
     for uid in pool + forced:
         for m in units[uid]:
             assignment[m.sample_id] = train_name
-    empty = [
-        s.name
-        for s in subsets
-        if s.role != "train" and not any(v == s.name for v in assignment.values())
-    ]
+    empty = empty_subsets(subsets, assignment)
     info = {
         "units": len(units),
         "eligible_units": n_eligible,
@@ -473,6 +476,18 @@ def build_plan(
         eval_gold_only=eval_gold_only,
         audit_groups=audit_groups,
     )
+    # 3-1: an eval or sealed subset with no samples is unmeasurable -- every metric refuses it
+    # (`require_nonempty`) and a sealed subset that never held anything proves nothing. It is a
+    # user error at the moment the ratios are chosen, so it is refused here rather than shipped
+    # as a plan committed to git. An empty TRAIN subset stays legal: the submission layer's
+    # single-subset test plan is exactly that shape (built through `SplitPlan` directly).
+    empty = set(empty_subsets(subsets, assignment))
+    for spec in subsets:
+        if spec.role != "train" and spec.name in empty:
+            raise ValidationFailed(
+                f"empty_subset: {spec.name} ({spec.role}) would get no samples; "
+                "adjust ratios or the sample count"
+            )
     params: dict[str, Any] = {
         "seed": seed,
         "stratify_key": stratify_key,

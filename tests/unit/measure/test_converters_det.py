@@ -434,6 +434,25 @@ def test_yolo_txt_bad_export_manifest(det_export, tmp_path):
         get_converter("yolo_txt").convert(pred_dir, _ctx(ds, bad_cats))
 
 
+def test_yolo_txt_reads_an_export_manifest_without_view_indexes(det_export, tmp_path):
+    """3-2 added ``view`` to each manifest row. An export directory written before that maps the
+    flattened name straight to a sample id, and an ingest already in flight must keep working."""
+    ds, outs = det_export
+    manifest = json.loads((outs["yolo"] / "manifest.json").read_text(encoding="utf-8"))
+    legacy_dir = tmp_path / "legacy_yolo"
+    legacy_dir.mkdir()
+    legacy = {
+        **manifest,
+        "images": {flat: row["sample_id"] for flat, row in manifest["images"].items()},
+    }
+    (legacy_dir / "manifest.json").write_text(json.dumps(legacy), encoding="utf-8")
+    pred_dir = tmp_path / "pred_legacy"
+    perfect = perfect_predictions(list(ds.samples), ds.card)
+    write_yolo_txt(pred_dir, ds, perfect, manifest, score=0.8)
+    got = get_converter("yolo_txt").convert(pred_dir, _ctx(ds, legacy_dir))
+    assert {p.sample_id for p in got} == {p.sample_id for p in perfect if p.boxes}
+
+
 def test_yolo_txt_rejects_multi_view_sample(roots, tmp_path):
     """The YOLO export manifest records no view index, so a matched sample with more than one
     view (e.g. exported with --opt view=1) cannot be safely de-normalised against views[0]."""

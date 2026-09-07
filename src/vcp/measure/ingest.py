@@ -13,7 +13,8 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
-from vcp.data.split import load_plan
+from vcp.data.split import assert_plan_matches, load_plan
+from vcp.fuse.build import FRAMEWORK as FUSE_FRAMEWORK
 from vcp.measure.converters import ConvertContext, get_converter
 from vcp.measure.predictions import check_predictions, write_predictions
 from vcp.measure.runs import (
@@ -120,6 +121,15 @@ def _run_card(
     config_sha = _file_sha(spec.config, "config")
     if (run_dir(data_root, spec.run_id) / "run.yaml").is_file():
         card = load_run(data_root, spec.run_id)
+        # 4-1: a fused run's subsets all live in fuse.json with the member bytes they came from;
+        # one added here would be invisible there. Refused before any write, ordinary runs are
+        # untouched -- the way to change a fused subset is to rebuild it.
+        if card.source.framework == FUSE_FRAMEWORK:
+            raise ValidationFailed(
+                f"fusion_run: {spec.run_id!r} was built by vcp fuse; rebuild it with "
+                "`vcp fuse build --replace` instead of ingesting a subset into it",
+                fields={"run": spec.run_id},
+            )
         assert_run_matches(card, dataset)
         if card.plan_id != spec.plan_id:
             raise PlanMismatchError(
@@ -176,11 +186,7 @@ def ingest(spec: IngestSpec) -> IngestResult:
     )
     dataset = Dataset.load(spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root)
     plan = load_plan(paths, spec.plan_id)
-    if plan.dataset_hash != dataset.card.samples_hash:
-        raise PlanMismatchError(
-            f"plan {spec.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
-            f"dataset now has {dataset.card.samples_hash[:12]}"
-        )
+    assert_plan_matches(plan, dataset.card)  # 4-2 / 5-7: the one plan-hash check
     plan.subset(spec.subset)  # PlanMismatchError for an unknown subset
     ids = plan.ids_in(spec.subset)
     # Read once, on every path: a --export-manifest that is not a vcp export directory must fail

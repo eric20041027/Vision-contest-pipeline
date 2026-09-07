@@ -106,11 +106,14 @@ class RankMean:
         keys = next(iter(rows.values()))[0] if rows else []
         for sid, (sample_keys, _) in rows.items():
             if sample_keys != keys:
+                # 4-6: sample against sample, not member against member -- every member already
+                # agreed on this sample's keys in `_aligned`, so naming members[0] would point
+                # at a member that did nothing wrong. `sample=` locates it exactly.
                 raise ValidationFailed(
                     f"sample {sid!r} predicts keys {sample_keys}; the subset's first sample "
                     f"predicts {keys}",
                     location=sid,
-                    fields={"member": members[0].run_id, "sample": sid},
+                    fields={"sample": sid},
                 )
         fused: dict[str, dict[str, float]] = {sid: {} for sid in ctx.ids}
         for k in keys:

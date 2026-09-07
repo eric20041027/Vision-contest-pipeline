@@ -86,6 +86,18 @@ def test_load_checks_id_and_dataset(roots):
         recipe_path(paths, "../r1")
 
 
+def test_load_refuses_a_recipe_that_names_another_id(roots):
+    """4-5: a recipe's id is its file name; a copy under a second name would let two ids share
+    one sha and one `fuse-<id>` run. `load_recipe` refuses the copy instead of trusting either."""
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    save_recipe(paths, _recipe())
+    copy = recipe_path(paths, "r2")
+    copy.write_text(recipe_path(paths, "r1").read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="recipe file names 'r1', not 'r2'") as ei:
+        load_recipe(paths, "r2")
+    assert ei.value.location == str(copy)
+
+
 def test_same_recipe_ignores_notes_and_stamp():
     a = _recipe()
     assert same_recipe(a, _recipe(notes="x", created_at="2030-01-01T00:00:00.000Z"))

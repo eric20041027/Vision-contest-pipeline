@@ -86,9 +86,11 @@ def check_predictions(
             if allow_unknown:
                 unknown.append(p.sample_id)
                 continue
+            # 4-3: this check also runs under `vcp fuse build`, which has no --opt; the hint
+            # names the option a converter reads, not the command line that would set it.
             raise ValidationFailed(
                 f"unknown sample_id {p.sample_id!r} (not in this subset); "
-                "pass --opt allow_unknown=true to skip such rows"
+                "a converter can allow them with option allow_unknown=true at ingest"
             )
         if p.payload_field() != field_name:
             raise ValidationFailed(

@@ -48,6 +48,10 @@ class AblateSpec(BaseModel):
     recipe_id: str
     subsets: list[str] = Field(default_factory=list)
     build: bool = True
+    # 4-9: passed through to every build this command triggers -- after a member is re-ingested
+    # the full recipe AND each variant hold output the recipe no longer produces, so replacing
+    # them one `fuse build --replace` at a time was the only way to rerun an ablation.
+    replace: bool = False
     preregister: bool = False
     metric: str | None = None
     metric_params: dict[str, str] = Field(default_factory=dict)
@@ -245,6 +249,7 @@ def ablate_recipe(spec: AblateSpec) -> AblateResult:
                     dataset=spec.dataset,
                     recipe_id=rid,
                     subsets=subsets,
+                    replace=spec.replace,
                     data_root=spec.data_root,
                     configs_root=spec.configs_root,
                 )

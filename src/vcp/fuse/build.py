@@ -193,7 +193,13 @@ def check_existing_run(
             f"config_hash={card.source.config_hash!r}); pick another --run",
             fields={"run": run_id},
         )
-    assert_run_matches(card, dataset)
+    try:
+        assert_run_matches(card, dataset)
+    except VcpError as e:
+        # 4-7: shared with the measurement layer, so it knows nothing of this run id; every
+        # other refusal in this function names the run, and so must this one.
+        e.fields.setdefault("run", run_id)
+        raise
     if card.plan_id != recipe.plan_id:
         raise PlanMismatchError(
             f"run {run_id!r} uses plan {card.plan_id!r}, not {recipe.plan_id!r}",

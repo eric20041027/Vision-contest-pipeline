@@ -53,8 +53,11 @@ def test_check_predictions_det_rules():
         check_predictions(bad_cat, ds, ids)
     ghost = [Prediction(sample_id="ghost", boxes=[])]
     # F3: the hint must actually say how to skip such rows, not just say "unknown".
-    with pytest.raises(ValidationFailed, match="allow_unknown"):
+    # 4-3: and it must not name a command -- this check also runs under `vcp fuse build`, which
+    # has no --opt of its own, so the hint speaks of the option, not of how to type it.
+    with pytest.raises(ValidationFailed, match="allow_unknown") as ei:
         check_predictions(ghost, ds, ids)
+    assert "--opt" not in str(ei.value) and "at ingest" in str(ei.value)
     kept, stats = check_predictions(ghost, ds, ids, allow_unknown=True)
     assert kept == [] and stats.unknown == ["ghost"] and stats.empty == 6
     dup = [Prediction(sample_id="s0000", boxes=[]), Prediction(sample_id="s0000", boxes=[])]

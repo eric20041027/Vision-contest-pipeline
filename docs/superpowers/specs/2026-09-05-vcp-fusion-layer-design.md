@@ -314,5 +314,5 @@ def effective_params(fuser: Fuser, params: dict[str, str]) -> dict[str, str]   #
 4. **`fields` 的字彙補 `sample=`**：§7.3 / §7.4 的缺 sample、鍵不齊錯誤帶 `member=` 與 `sample=`（計畫的 Global Constraints 清單漏了後者）。
 5. **§11 的「半對」判決只斷言存在且非 INVALID**：合成資料上 Δ 的符號不可靠，端到端測試斷言 `good` PASS、`noise` FAIL（噪音 = 與 gold 永不重疊的遠處假陽性，Δ ≤ 0 是結構保證）、`half` ∈ {PASS, FAIL}。§12 第 3 條依此解讀。
 6. **共用 helper**：`cli_common.parse_csv` 取代 `cli_eval` / `cli_fuse` 各自的 `_csv`；`measure/predictions.predictions_text` 是 `write_predictions` 與 `build.content_sha` 唯一的序列化來源（原計畫層決定 2 的「刻意重複」作廢）。
-7. **`ablate` 沒有 `--replace`**：成員重新 ingest 後，先對每個 `fuse-<R>*` run 跑 `vcp fuse build --replace`，再重跑 ablate（會是 cached）。
+7. **`ablate` 有 `--replace`**（2026-09-07 修訂，原「沒有 `--replace`，先逐 run `fuse build --replace` 再重跑」作廢）：這面旗子透傳給 `ablate` 觸發的每一次 `build_run`（完整配方與每個變體），語意就是那一層的 `--replace`——只有位元真的不同的子集會重寫，舊 sha 進該 run 的 `history.jsonl`，其餘照樣 cached。`ablate` 自己不因此多寫任何東西：變體配方仍是寫了不改，`--replace` 不會覆蓋既有配方或預登記。
 8. **WBF 的 oracle**：ensemble-boxes 不進任何依賴群組；等價性於 2026-09-05 對上游 `weighted_boxes_fusion(allows_overflow=False)` 人工逐行核對，紀錄在 `test_wbf.py` 的 oracle 測試上方。

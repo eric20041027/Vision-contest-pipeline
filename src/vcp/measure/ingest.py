@@ -14,10 +14,10 @@ from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.data.split import assert_plan_matches, load_plan
-from vcp.fuse.build import FRAMEWORK as FUSE_FRAMEWORK
 from vcp.measure.converters import ConvertContext, get_converter
 from vcp.measure.predictions import check_predictions, write_predictions
 from vcp.measure.runs import (
+    FUSE_FRAMEWORK,
     append_history,
     assert_run_matches,
     load_run,

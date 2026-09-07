@@ -14,6 +14,10 @@ from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.measure.schema import RunCard
 
+# The `source.framework` a run card carries when `vcp fuse build` wrote it. Owned here, not by
+# the fusion layer: the measurement layer must recognise a fused run without importing fusion.
+FUSE_FRAMEWORK = "vcp.fuse"
+
 
 def run_dir(data_root: Path, run_id: str) -> Path:
     return run_path(data_root, run_id)

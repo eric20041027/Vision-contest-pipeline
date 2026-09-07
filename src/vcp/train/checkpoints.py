@@ -68,7 +68,9 @@ def register(
 
 
 def mark_final(record: TrainRecord, path: str, sha256: str) -> TrainRecord:
-    """Exactly one checkpoint carries ``final=True``: the one with this stored path and sha."""
+    """At most one checkpoint carries ``final=True``: the one with this stored path and sha. An
+    identity that is not registered clears every flag and marks nothing -- ``resolve_final`` is
+    the guard that turns that into an error."""
     marks = [
         c.model_copy(update={"final": c.path == path and c.sha256 == sha256})
         for c in record.checkpoints

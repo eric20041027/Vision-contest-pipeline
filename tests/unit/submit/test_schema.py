@@ -129,6 +129,18 @@ def test_ledger_rows_require_their_event_fields():
         LedgerRow(event="party", ts=STAMP)
 
 
+def test_ledger_row_ts_and_at_must_be_stamps():
+    with pytest.raises(ValidationError):
+        LedgerRow(event="lock", ts="2026-09-05 00:00", reason="x")
+    LedgerRow(
+        event="foreign",
+        ts=STAMP,
+        platform_ref="x",
+        file_name="f.csv",
+        at="2026-09-05T00:00:00Z",
+    )
+
+
 def test_paths(roots):
     paths = DatasetPaths.resolve("t", data_root=roots.data, configs_root=roots.configs)
     assert paths.submit_yaml == roots.configs / "datasets" / "t" / "submit.yaml"

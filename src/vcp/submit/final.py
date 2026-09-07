@@ -4,6 +4,8 @@ never by the public board."""
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from vcp.submit.guards import assert_unlocked
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
+from vcp.submit.stage import load_staged
 
 NOT_RANKED = ("probe", "not_uploaded")
 
@@ -91,6 +94,20 @@ def _open(
     return paths, profile, sha, SubmissionLedger(paths.submissions_log)
 
 
+def rank_key(sign: float) -> Callable[[FinalEntry], tuple[float, float, str]]:
+    """Spec 6.4: rank by the sealed reading, public breaks ties, ``staged_at`` breaks the rest.
+    Both value keys follow ``higher_is_better`` (``sign`` is +1 or -1) because the board reports
+    the same metric the sealed reading does; a missing public always sorts last whatever the
+    direction."""
+
+    def key(e: FinalEntry) -> tuple[float, float, str]:
+        sealed_or_0 = e.sealed_value if e.sealed_value is not None else 0.0
+        public = e.public if e.public is not None else -math.inf * sign
+        return (-sign * sealed_or_0, -sign * public, e.staged_at)
+
+    return key
+
+
 def final(
     dataset: str,
     *,
@@ -139,17 +156,10 @@ def final(
                 sealed_value=reading.value if reading is not None else None,
                 sealed_reading_id=reading.reading_id if reading is not None else None,
                 public=public,
-                staged_at=st.ts,
+                staged_at=load_staged(paths, sid).staged_at,
             )
         )
-    ranked = sorted(
-        (e for e in entries if e.eligible),
-        key=lambda e: (
-            -sign * float(e.sealed_value if e.sealed_value is not None else 0.0),
-            -(e.public if e.public is not None else float("-inf")),
-            e.staged_at,
-        ),
-    )
+    ranked = sorted((e for e in entries if e.eligible), key=rank_key(sign))
     if not ranked:
         raise ValidationFailed(
             "no_sealed_readings: no uploaded candidate or baseline has a usable sealed reading; "

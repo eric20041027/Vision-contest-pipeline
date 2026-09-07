@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from submit_fixtures import EVAL, STAMP, TEST, seed_eval_runs, seed_judgements, seed_test_runs
-from vcp.core.time import stamp, utc_now
+from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.submit.actions import record, score
 from vcp.submit.final import lock
@@ -184,3 +184,23 @@ def test_report_scores_each_upload(pair):
         ("S1", 0.9, pytest.approx(0.2)),
     ]
     assert status(TEST, **_kw(pair)).unscored == []
+
+
+def test_report_when_a_foreign_upload_comes_first(pair):
+    _seed(pair, _profile())
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    s1_at = led.uploads("S1")[0].at
+    earlier = stamp(parse_stamp(str(s1_at)) - timedelta(minutes=5))
+    led.append(
+        LedgerRow(
+            event="foreign",
+            ts=stamp(),
+            platform_ref="f1",
+            file_name="x.csv",
+            at=earlier,
+            public=0.5,
+        )
+    )
+    rows = report(TEST, **_kw(pair))
+    assert rows[0].submission_id == "foreign:f1" and rows[0].delta is None
+    assert rows[1].submission_id == "S1" and rows[1].delta == pytest.approx(0.8 - 0.5)

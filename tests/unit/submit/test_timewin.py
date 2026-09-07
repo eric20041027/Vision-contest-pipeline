@@ -32,6 +32,12 @@ def test_window_across_dst_is_23_hours():
     assert w.end == datetime(2026, 3, 9, 4, 0, tzinfo=UTC)
 
 
+def test_window_across_dst_is_25_hours():
+    berlin = Quota(per_day=5, day_tz="Europe/Berlin", day_start="00:00")
+    w = window_for(parse_stamp("2026-10-25T10:00:00Z"), berlin)
+    assert w.end - w.start == timedelta(hours=25)
+
+
 def test_parse_at_formats_and_zones():
     at = parse_at("2026-08-31 21:28", "America/New_York")
     assert at == datetime(2026, 9, 1, 1, 28, tzinfo=UTC)

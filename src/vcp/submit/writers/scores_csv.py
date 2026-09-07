@@ -13,7 +13,7 @@ from vcp.submit.writers.base import (
     WriteResult,
     check_options,
     fmt_float,
-    is_true,
+    option_is_true,
     output_ids,
     parse_columns,
     sorted_samples,
@@ -41,7 +41,7 @@ class ScoresCsvWriter:
                 fields={"dataset": ctx.dataset.card.name},
             )
         missing = [s.sample_id for s in sorted_samples(ctx.samples) if s.sample_id not in by_id]
-        if missing and not is_true(ctx.options, "allow_missing"):
+        if missing and not option_is_true(ctx.options, "allow_missing"):
             raise ValidationFailed(
                 f"missing: {len(missing)} samples have no prediction (e.g. {missing[:3]}); "
                 "pass allow_missing=true to write the rest",

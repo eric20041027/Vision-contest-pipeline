@@ -185,7 +185,7 @@ def test_eval_flow(roots, tmp_path):
     doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
     rows, lvl = doc["result"]["readings"], doc["result"]["last_vs_last"]
     assert doc["fields"]["rows"] == len(rows) == 4
-    assert doc["fields"]["judgements"] == len(lvl) == 4  # two judgements x two subsets
+    assert doc["fields"]["deltas"] == len(lvl) == 4  # two judgements x two subsets
     assert {(r["run_id"], r["subset"]) for r in rows} == {
         ("base", "valA"),
         ("base", "valB"),
@@ -201,4 +201,4 @@ def test_eval_flow(roots, tmp_path):
     # never measured is empty top and bottom, not empty above and every judgement below.
     r = runner.invoke(app, ["eval", "report", "--dataset", "flow", "--metric", "accuracy"])
     assert r.exit_code == 0, r.output
-    assert "rows=0" in _verdicts(r.output)[-1] and "judgements=0" in _verdicts(r.output)[-1]
+    assert "rows=0" in _verdicts(r.output)[-1] and "deltas=0" in _verdicts(r.output)[-1]

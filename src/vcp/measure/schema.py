@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,6 +11,13 @@ from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.data.tasks import get_task
 
 PAYLOAD_FIELDS = ("boxes", "masks", "scores", "targets")
+
+# What kind of change a pre-registered claim is about, in one place (3-6): the model's own type,
+# the tuple `vcp eval preregister` validates `--class` against, and the one class the judge
+# holds to the sigma_p condition (spec 6.2 steps 4-5) all read from here.
+ComponentClass = Literal["model", "tuning"]
+COMPONENT_CLASSES: tuple[str, ...] = get_args(ComponentClass)
+TUNING_CLASS = "tuning"
 
 
 def payload_field(task: str) -> str:
@@ -186,7 +193,7 @@ class PreRegistration(_Strict):
     prereg_id: str
     claim: str
     component: str
-    component_class: Literal["model", "tuning"]
+    component_class: ComponentClass
     baseline_run: str
     candidate_run: str
     metric: str

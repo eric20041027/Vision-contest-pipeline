@@ -24,13 +24,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
-from vcp.measure.ledger import ReadingsLedger, append_row
+from vcp.measure.ledger import JUDGEMENTS_LEDGER, READINGS_LEDGER, ReadingsLedger, append_row
 from vcp.measure.measure import load_context
 from vcp.measure.metrics import Metric, effective_params, get_metric, params_key
 from vcp.measure.predictions import predictions_by_id, read_predictions
 from vcp.measure.prereg import load_prereg, prereg_time
 from vcp.measure.runs import verify_prediction
 from vcp.measure.schema import (
+    TUNING_CLASS,
     Judgement,
     PreRegistration,
     Reading,
@@ -40,10 +41,6 @@ from vcp.measure.schema import (
 )
 from vcp.measure.sigma import latest_sigma
 from vcp.measure.stats import paired_bootstrap
-
-JUDGEMENTS_LEDGER = "judgements.jsonl"
-READINGS_LEDGER = "readings.jsonl"
-TUNING_CLASS = "tuning"
 
 # Task 12 ruling 0c: the caller name the data layer records when this command opens a sealed
 # subset, exactly like `vcp eval measure` records "vcp eval measure".

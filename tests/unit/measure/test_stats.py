@@ -60,9 +60,11 @@ def test_bootstrap_sd():
     card = make_card("cls")
     metric = get_metric("accuracy")
     perfect = predictions_by_id(perfect_predictions(samples, card))
-    assert bootstrap_sd(samples, perfect, metric, card, {}, resamples=30, seed=0) == 0.0
+    flat = bootstrap_sd(samples, perfect, metric, card, {}, resamples=30, seed=0)
+    assert flat.value == 0.0
+    assert (flat.resamples, flat.used, flat.skipped) == (30, 30, 0)
     noisy = predictions_by_id(noisy_predictions(samples, card, seed=3, flip=0.3))
-    sd = bootstrap_sd(samples, noisy, metric, card, {}, resamples=30, seed=0)
+    sd = bootstrap_sd(samples, noisy, metric, card, {}, resamples=30, seed=0).value
     assert 0.0 < sd < 0.2
     # Ruling 1: one draw has no spread to measure. That is a user-facing ValidationFailed (the
     # CLI's --resamples reaches straight here), not a bare ValueError, and it is raised before
@@ -86,10 +88,10 @@ def test_bootstrap_is_bit_identical_across_calls_and_sample_order():
     shuffled = random.Random(11).sample(samples, len(samples))
     assert [s.sample_id for s in shuffled] != [s.sample_id for s in samples]
 
-    sd = bootstrap_sd(samples, noisy, metric, card, {}, resamples=64, seed=7)
+    sd = bootstrap_sd(samples, noisy, metric, card, {}, resamples=64, seed=7).value
     assert sd == GOLDEN_SD
-    assert bootstrap_sd(samples, noisy, metric, card, {}, resamples=64, seed=7) == sd
-    assert bootstrap_sd(shuffled, noisy, metric, card, {}, resamples=64, seed=7) == sd
+    assert bootstrap_sd(samples, noisy, metric, card, {}, resamples=64, seed=7).value == sd
+    assert bootstrap_sd(shuffled, noisy, metric, card, {}, resamples=64, seed=7).value == sd
 
     _, se, deltas = paired_bootstrap(
         samples, perfect, noisy, metric, card, {}, resamples=64, seed=7
@@ -135,8 +137,8 @@ def test_paired_se_is_far_below_the_unpaired_one():
     b = {**a, **{s.sample_id: _one_hot(s, names, gold_of) for s in wrong}}
     delta, se, _ = paired_bootstrap(samples, a, b, metric, card, {}, resamples=200, seed=0)
     assert delta == pytest.approx(fixed / n)  # b is better on exactly those samples
-    sd_a = bootstrap_sd(samples, a, metric, card, {}, resamples=200, seed=1)
-    sd_b = bootstrap_sd(samples, b, metric, card, {}, resamples=200, seed=2)
+    sd_a = bootstrap_sd(samples, a, metric, card, {}, resamples=200, seed=1).value
+    sd_b = bootstrap_sd(samples, b, metric, card, {}, resamples=200, seed=2).value
     unpaired = float(np.hypot(sd_a, sd_b))  # what independent resampling would report
     assert se < unpaired / 3
     # 2 corrected samples out of 120: sd(delta) = sqrt(120 * (1/60) * (59/60)) / 120 = 0.0117
@@ -158,19 +160,59 @@ def _mostly_empty_seg(n: int) -> list[Sample]:
     ]
 
 
-def test_a_metric_refusing_a_resample_names_the_resample_and_the_seed():
-    """Ruling 0: a refused resample is a loud, located failure, never a dropped iteration --
-    dropping them would bias sigma_p towards the draws that happen to be scoreable."""
+def test_a_metric_refusing_a_resample_is_counted_not_fatal():
+    """3-3, replacing ruling 0's "never skip": one draw hitting the metric's own guard is bad
+    luck, not a broken estimate. It is skipped and counted, so the caller can file how many
+    draws the number is actually made of -- and `too_many_skipped` below still refuses an
+    estimate built from a minority of the draws."""
     samples = _mostly_empty_seg(8)
     card = make_card("seg", categories=SEG_CATS)
     preds = predictions_by_id(perfect_predictions(samples, card))
     metric = get_metric("dice")
     assert metric.compute(samples, preds, card, {}).value == 1.0  # the full subset scores fine
+    res = bootstrap_sd(samples, preds, metric, card, {}, resamples=20, seed=0)
+    assert res.resamples == 20 and res.used + res.skipped == 20
+    assert 0 < res.skipped <= res.used  # (7/8)^8 of the draws miss the only labelled sample
+    assert res.value == 0.0  # every scoreable draw scores a perfect 1.0
+    # Same seed, same counts: skipping is as deterministic as the draws it skips.
+    assert bootstrap_sd(samples, preds, metric, card, {}, resamples=20, seed=0) == res
+
+
+class _PickyMetric:
+    """Refuses every resample after the first ``allow`` of them. The whole-subset call
+    ``bootstrap_sd`` makes before any draw is the first call and is always allowed."""
+
+    name = "picky"
+    version = "1"
+    tasks = frozenset({"cls"})
+    defaults: dict[str, str] = {}
+    higher_is_better = True
+
+    def __init__(self, allow: int) -> None:
+        self.allow = allow
+        self.calls = 0
+
+    def compute(self, samples, predictions, card, params) -> MetricResult:
+        self.calls += 1
+        if self.calls > self.allow + 1:
+            raise ValidationFailed("no gold in this draw")
+        return MetricResult(value=float(len({s.sample_id for s in samples})), n=len(samples))
+
+
+def test_bootstrap_refuses_an_estimate_made_of_a_minority_of_the_draws():
+    """3-3: skipping is only honest while most draws survive. Past half, the spread being
+    reported is the spread of whatever happened to be scoreable, so it is a FAIL that names
+    the counts rather than a quietly-biased sigma_p."""
+    samples = cls_samples(10, seed=0)
+    card = make_card("cls")
     with pytest.raises(ValidationFailed) as excinfo:
-        bootstrap_sd(samples, preds, metric, card, {}, resamples=20, seed=0)
+        bootstrap_sd(samples, {}, _PickyMetric(allow=4), card, {}, resamples=10, seed=0)
     message = str(excinfo.value)
-    assert "resample" in message and "seed=0" in message and "'dice'" in message
-    assert "no category has any gold or predicted pixels" in message
+    assert message.startswith("too_many_skipped:")
+    assert "6" in message and "4" in message and "10" in message
+    # One more usable draw than skipped ones and the estimate stands.
+    res = bootstrap_sd(samples, {}, _PickyMetric(allow=6), card, {}, resamples=10, seed=0)
+    assert (res.resamples, res.used, res.skipped) == (10, 6, 4) and res.value > 0.0
 
 
 def _all_empty_seg(n: int) -> list[Sample]:
@@ -198,7 +240,7 @@ def test_bootstrap_sd_reports_a_subset_wide_failure_without_a_resample_label():
         bootstrap_sd(samples, {}, metric, card, {}, resamples=5, seed=0)
     message = str(excinfo.value)
     assert "no category has any gold or predicted pixels" in message
-    assert "resample" not in message
+    assert "resample" not in message and "too_many_skipped" not in message
 
 
 class _FlakyMetric:

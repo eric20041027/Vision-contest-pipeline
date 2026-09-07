@@ -17,7 +17,7 @@ from vcp.backup.manifest import load_manifest
 from vcp.cli import app
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import utc_now
-from vcp.measure.report import READINGS_LEDGER
+from vcp.measure.ledger import READINGS_LEDGER
 from vcp.measure.runs import load_run, run_dir
 
 runner = CliRunner()

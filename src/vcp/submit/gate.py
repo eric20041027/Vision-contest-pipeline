@@ -7,9 +7,8 @@ from pathlib import Path
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.fuse.schema import FuseRecord
-from vcp.measure.ledger import ReadingsLedger, read_rows
+from vcp.measure.ledger import JUDGEMENTS_LEDGER, READINGS_LEDGER, ReadingsLedger, read_rows
 from vcp.measure.prereg import load_prereg
-from vcp.measure.report import JUDGEMENTS_LEDGER, READINGS_LEDGER
 from vcp.measure.runs import load_run
 from vcp.measure.schema import Judgement, RunCard
 from vcp.submit.schema import CandidateKind, Gate

@@ -26,14 +26,14 @@ from vcp.core.time import stamp
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
-from vcp.measure.ledger import ReadingsLedger
+from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.measure import MeasureSpec, load_context, measure_run
 from vcp.measure.metrics import effective_params, get_metric, params_key
 from vcp.measure.plugins import load_plugins
 from vcp.measure.prereg import create_prereg, load_prereg
 from vcp.measure.report import last_vs_last, report_rows
 from vcp.measure.report import status as status_view  # `status` is a local name in 4 commands
-from vcp.measure.schema import Anchor, PreRegistration
+from vcp.measure.schema import COMPONENT_CLASSES, Anchor, PreRegistration
 from vcp.measure.sigma import SigmaSpec, estimate_sigma_result
 
 eval_app = typer.Typer(no_args_is_help=True, help="measurement commands")
@@ -46,9 +46,6 @@ PluginOpt = Annotated[
         "--plugin", help="python module to import (registers metrics / converters / sigma methods)"
     ),
 ]
-
-COMPONENT_CLASSES = ("model", "tuning")
-READINGS_LEDGER = "readings.jsonl"
 
 
 def _read_only_paths(
@@ -254,7 +251,7 @@ def anchor_cmd(
         entry = card.predictions.get(subset)
         if entry is None:
             raise ValidationFailed(f"run {run!r} has no predictions for subset {subset!r}")
-        ledger = ReadingsLedger(paths.measure_dir / "readings.jsonl")
+        ledger = ReadingsLedger(paths.measure_dir / READINGS_LEDGER)
         match = [
             r
             for r in ledger.rows
@@ -279,6 +276,9 @@ def anchor_cmd(
         )
         set_anchor(paths, key, anchor, replace=replace)
         fields: dict[str, FieldValue] = {
+            # 3-5: this command takes its dataset from the run, not from an option, so without
+            # this the VERDICT never said whose anchors.json it just rewrote.
+            "dataset": card.dataset,
             "key": key,
             "value": reading.value,
             "tolerance": tolerance,
@@ -344,7 +344,11 @@ def sigma_cmd(
             "method": method,
             "value": est.value,
             "estimate": est.estimate_id[:12],
-            "cached": res.cached,
+            # `existing=`, an int, not `cached=`, a bool: `eval measure` already spends
+            # `cached=` on a COUNT of rows already in the ledger, and one name may not mean two
+            # shapes across the machine-readable interface (3-5). An estimate is one row, so
+            # this is 0 or 1.
+            "existing": int(res.cached),
         }
         if "runs" in est.inputs:
             fields["runs"] = len(est.inputs["runs"])
@@ -355,6 +359,17 @@ def sigma_cmd(
         if est.value == 0.0:
             status = "WARN"
             human.append(f"sigma_p is 0.0: method {method!r} found no spread to measure here")
+        # 3-3: draws the metric refused are skipped, not fatal -- but an estimate made of fewer
+        # draws than were asked for is a weaker number, so the count is on the VERDICT line.
+        skipped = int(est.inputs.get("skipped") or 0)
+        if skipped:
+            status = "WARN"
+            fields["skipped"] = skipped
+            human.append(
+                f"{skipped} of {est.inputs.get('resamples')} resamples were refused by "
+                f"{metric!r} and skipped; sigma_p is the spread of the remaining "
+                f"{est.inputs.get('used')}"
+            )
         return status, fields, {"estimate": est.model_dump(mode="json")}, human
 
     run_command("eval.sigma", json_mode, data_root, fn)
@@ -553,11 +568,13 @@ def report_cmd(
             for r in lvl
         ]
         # `rows=` not `readings=`: `eval measure` already spends `readings=` on the number of
-        # rows it WROTE, and one name may not mean two quantities across the interface.
+        # rows it WROTE, and one name may not mean two quantities across the interface. Same
+        # rule for `deltas=`: this counts judgement x subset rows, while `eval status`'s
+        # `judged=` counts claims (3-5).
         fields: dict[str, FieldValue] = {
             "dataset": dataset,
             "rows": len(rows),
-            "judgements": len(lvl),
+            "deltas": len(lvl),
         }
         return "OK", fields, {"readings": rows, "last_vs_last": lvl}, human
 

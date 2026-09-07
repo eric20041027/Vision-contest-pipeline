@@ -71,6 +71,22 @@ def test_sigma_methods_are_the_estimator_registry_keys():
     assert tuple(SIGMA_ESTIMATORS) == ("splithalf", "bootstrap", "prior")
 
 
+@pytest.mark.parametrize("bad", ["split half", "half=x", "-lead", "", "sigma[x]"])
+def test_register_sigma_method_rejects_a_name_that_cannot_go_in_a_verdict(bad):
+    """3-5: the method name lands in `eval status`'s `sigma[<metric>/<method>]=` field name,
+    which `Verdict.line()` does not escape. Same rule, same place, as `register_metric`."""
+
+    def estimator(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
+        raise NotImplementedError
+
+    try:
+        with pytest.raises(RegistryError, match="name"):
+            register_sigma_method(bad, estimator)
+    finally:
+        SIGMA_ESTIMATORS.pop(bad, None)
+    assert bad not in SIGMA_ESTIMATORS
+
+
 def test_register_sigma_method_extends_the_axis_and_refuses_a_duplicate(roots, tmp_path):
     """spec 2.1 makes the sigma_p method an extension axis, so a fourth one is registered the
     same way a metric or a converter is: one public call, the same duplicate guard, and a
@@ -160,7 +176,15 @@ def test_prior_and_bootstrap(roots, tmp_path):
         _spec(roots, method="bootstrap", run_id="noisy", subsets=["valB"], resamples=20)
     )
     assert boot.value > 0
-    assert boot.inputs == {"run_id": "noisy", "subset": "valB", "resamples": 20, "seed": 0}
+    # 3-3: `resamples` is what was asked for, `used` / `skipped` what the number is made of.
+    assert boot.inputs == {
+        "run_id": "noisy",
+        "subset": "valB",
+        "resamples": 20,
+        "used": 20,
+        "skipped": 0,
+        "seed": 0,
+    }
     with pytest.raises(ValidationFailed, match="--run"):
         estimate_sigma(_spec(roots, method="bootstrap", subsets=["valA"]))
     with pytest.raises(ValidationFailed, match="method"):

@@ -3,7 +3,13 @@ import pytest
 from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.data.schema import Sample, View
 from vcp.submit.writers import WRITERS, get_writer, register_writer, writer_for
-from vcp.submit.writers.base import check_options, fmt_float, is_true, output_ids, parse_columns
+from vcp.submit.writers.base import (
+    check_options,
+    fmt_float,
+    option_is_true,
+    output_ids,
+    parse_columns,
+)
 
 
 def _samples():
@@ -48,8 +54,8 @@ def test_options_helpers():
     with pytest.raises(ValidationFailed, match="option=columns"):
         parse_columns("cat")
     assert fmt_float(0.1) == "0.1" and fmt_float(1) == "1.0"
-    assert is_true({"allow_missing": "True"}, "allow_missing")
-    assert not is_true({}, "allow_missing")
+    assert option_is_true({"allow_missing": "True"}, "allow_missing")
+    assert not option_is_true({}, "allow_missing")
 
 
 def test_registry_and_task_check():

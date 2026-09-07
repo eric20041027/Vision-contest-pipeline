@@ -331,6 +331,31 @@ def test_register_metric_requires_higher_is_better():
         METRICS.pop("no_direction_metric", None)
 
 
+@pytest.mark.parametrize("bad", ["my metric", "weird=name", "_leading", "", "sigma[x]"])
+def test_register_metric_rejects_a_name_that_cannot_go_in_a_verdict(bad):
+    """3-5: a metric name reaches the VERDICT line as a field name (`sigma[<metric>/<method>]=`)
+    and `Verdict.line()` does not escape field names, so a space or an `=` in one produces a
+    line no reader can parse. The registry is where that is caught, once."""
+
+    class _OddlyNamed:
+        version = "1"
+        tasks = frozenset({"cls"})
+        defaults: dict[str, str] = {}
+        higher_is_better = True
+
+        def compute(self, samples, predictions, card, params):
+            raise NotImplementedError
+
+    metric = _OddlyNamed()
+    metric.name = bad
+    try:
+        with pytest.raises(RegistryError, match="name"):
+            register_metric(metric)
+    finally:
+        METRICS.pop(bad, None)
+    assert bad not in METRICS
+
+
 # --- fix round 1 minors ------------------------------------------------------------------------
 
 

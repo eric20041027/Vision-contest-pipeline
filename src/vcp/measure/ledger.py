@@ -11,6 +11,14 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_text
 from vcp.measure.schema import Reading
 
+# The three append-only ledgers of `measure/<dataset>/`, named once (3-6). Every module that
+# opens one imports the name from here: five modules used to declare their own copy and two
+# more spelled it inline, so a rename could quietly leave a reader looking at a file nobody
+# writes any more.
+READINGS_LEDGER = "readings.jsonl"
+JUDGEMENTS_LEDGER = "judgements.jsonl"
+SIGMA_LEDGER = "sigma.jsonl"
+
 
 def append_row(path: Path, model: BaseModel) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

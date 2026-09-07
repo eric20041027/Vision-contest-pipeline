@@ -16,6 +16,7 @@ from vcp.cli_eval import load_plugins
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
+from vcp.data.schema import Box, Labels, Sample, View
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
@@ -422,6 +423,9 @@ def test_eval_measure_and_anchor_cli(roots, tmp_path):
     assert "key=fixed-v1/valA/coco_map/iou=50:95,max_dets=100" in _last_verdict(r.output).replace(
         '"', ""
     )
+    # 3-5: `anchor` is the one eval command that took its dataset from the run rather than an
+    # option, so its VERDICT never said which dataset it wrote an anchor into.
+    assert "dataset=tiny" in _last_verdict(r.output)
     r = runner.invoke(app, anchor_args)
     assert r.exit_code == 1 and "replace" in _last_verdict(r.output)
     r = runner.invoke(
@@ -524,7 +528,10 @@ def test_eval_status_and_report_on_an_empty_measure_dir(roots, tmp_path):
     r = runner.invoke(app, ["eval", "report", "--dataset", "tiny"])
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
-    assert "status=OK" in v and "rows=0" in v and "judgements=0" in v
+    # 3-5: `deltas=` counts judgement x subset rows; `status`'s `judged=` counts claims, and
+    # one name may not mean two quantities across the machine-readable interface.
+    assert "status=OK" in v and "rows=0" in v and "deltas=0" in v
+    assert "judgements=" not in v
     assert not paths.measure_dir.exists()
 
 
@@ -746,10 +753,13 @@ def test_eval_sigma_cli(roots):
     r = runner.invoke(app, prior)
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
-    assert "status=OK" in v and "method=prior" in v and "value=0.008" in v and "cached=false" in v
+    # 3-5: `existing=` is a count of rows already in the ledger, spelled the way `measure`
+    # spells the same idea -- `cached=` was a bool there and an int here.
+    assert "status=OK" in v and "method=prior" in v and "value=0.008" in v and "existing=0" in v
+    assert "cached=" not in v
     r = runner.invoke(app, prior)
     assert r.exit_code == 0, r.output
-    assert "cached=true" in _last_verdict(r.output)
+    assert "existing=1" in _last_verdict(r.output)
     # append-only: the same estimate is one row, for ever
     sigma_jsonl = paths.measure_dir / "sigma.jsonl"
     assert len(sigma_jsonl.read_text(encoding="utf-8").splitlines()) == 1
@@ -810,6 +820,74 @@ def test_eval_sigma_plugin_registers_a_contest_sigma_method(roots, tmp_path, mon
         SIGMA_ESTIMATORS.pop("constant_quarter", None)
         sys.modules.pop(module, None)
     assert tuple(SIGMA_ESTIMATORS) == ("splithalf", "bootstrap", "prior")
+
+
+def _seed_sparse_det(roots, name="sparse", n=8):
+    """A det dataset whose entire gold is one box on one sample, in a single eval subset.
+
+    Roughly a third of the bootstrap draws of that subset therefore contain no gold box at all
+    -- exactly what `coco_map` refuses ("mAP is undefined") -- while the full subset scores
+    fine. This is the shape 3-3 is about: a small eval subset with many negative samples.
+    """
+    paths = DatasetPaths.resolve(name, data_root=roots.data, configs_root=roots.configs)
+    samples = [
+        Sample(
+            sample_id=f"s{i:04d}",
+            views=[View(path=f"s{i:04d}.jpg", width=8, height=8)],
+            labels=Labels(boxes=[Box(x=1, y=1, w=2, h=2, category_id=0)] if i == 0 else []),
+            label_source="gold",
+        )
+        for i in range(n)
+    ]
+    write_images(roots.data / "raw" / name, samples)
+    ds = Dataset.from_parts(make_card("det", name=name, image_root=f"raw/{name}"), samples)
+    ds.save(paths)
+    plan = build_plan(
+        ds,
+        plan_id="fixed-v1",
+        subsets=parse_subsets("train:train:0.0,valA:eval:1.0"),
+        seed=0,
+    )
+    save_plan(plan, paths)
+    return ds, plan, paths
+
+
+def test_eval_sigma_reports_skipped_resamples_cli(roots, tmp_path):
+    """3-3: a draw the metric refuses is skipped and counted, not fatal. The estimate is still
+    written, but the VERDICT says how many draws it is short of and WARNs, so nobody reads it
+    as a full-strength number."""
+    ds, plan, paths = _seed_sparse_det(roots)
+    assert ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA").exit_code == 0
+    r = runner.invoke(
+        app,
+        [
+            "eval",
+            "sigma",
+            "--dataset",
+            "sparse",
+            "--plan",
+            "fixed-v1",
+            "--metric",
+            "coco_map",
+            "--method",
+            "bootstrap",
+            "--run",
+            "m1",
+            "--subsets",
+            "valA",
+            "--resamples",
+            "20",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    v = _last_verdict(r.output)
+    assert "status=WARN" in v and "skipped=" in v
+    skipped = int(v.split("skipped=")[1].split()[0])
+    assert skipped > 0
+    stored = json.loads((paths.measure_dir / "sigma.jsonl").read_text(encoding="utf-8"))
+    assert stored["inputs"]["resamples"] == 20
+    assert stored["inputs"]["skipped"] == skipped
+    assert stored["inputs"]["used"] == 20 - skipped
 
 
 def test_eval_sigma_failures_cli(roots):

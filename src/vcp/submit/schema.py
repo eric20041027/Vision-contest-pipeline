@@ -273,6 +273,13 @@ class LedgerRow(_Strict):
     reason: str | None = None
     text: str | None = None
 
+    @field_validator("ts", "at")
+    @classmethod
+    def _is_stamp(cls, v: str | None) -> str | None:
+        if v is not None:
+            parse_stamp(v)
+        return v
+
     @model_validator(mode="after")
     def _shape(self) -> LedgerRow:
         missing = [f for f in _REQUIRED[self.event] if getattr(self, f) is None]

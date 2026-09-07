@@ -14,11 +14,11 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.time import utc_now
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.submit.actions import record, score
-from vcp.submit.final import count_unseals, final, lock, unlock
+from vcp.submit.final import count_unseals, final, lock, rank_key, unlock
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile
-from vcp.submit.schema import PlatformProfile
-from vcp.submit.stage import StageSpec, stage
+from vcp.submit.schema import FinalEntry, PlatformProfile
+from vcp.submit.stage import StageSpec, load_staged, stage
 
 
 def _profile(**over) -> PlatformProfile:
@@ -102,6 +102,8 @@ def test_final_picks_by_sealed_not_public(uploaded):
     assert table["S2"].eligible and table["S2"].sealed_value < 1.0 and table["S2"].public == 0.9
     assert not table["S3"].eligible and table["S3"].why == "probe"
     assert res.row.holdout_unseals >= 3 and res.row.metric == "accuracy"
+    for sid in ("S1", "S2", "S3"):
+        assert table[sid].staged_at == load_staged(uploaded.test_paths, sid).staged_at
     led = SubmissionLedger(uploaded.test_paths.submissions_log)
     assert led.lock_state().reason == "final" and led.latest_final().chosen == ["S1"]
     with pytest.raises(ValidationFailed, match="locked"):
@@ -162,3 +164,48 @@ def test_final_rejects_slots_below_one(uploaded):
     with pytest.raises(ValidationFailed, match="slots: must be >= 1"):
         final(TEST, slots=-1, dry_run=True, **_kw(uploaded))
     assert SubmissionLedger(uploaded.test_paths.submissions_log).of("final") == []
+
+
+def _entry(sid: str, sealed: float | None, public: float | None, staged_at: str) -> FinalEntry:
+    return FinalEntry(
+        submission_id=sid,
+        eligible=True,
+        why="",
+        sealed_value=sealed,
+        public=public,
+        staged_at=staged_at,
+    )
+
+
+def test_rank_key():
+    t1, t2 = "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"
+
+    # sign +1: higher sealed first, then higher public, then earlier staged_at.
+    entries = [
+        _entry("a", 0.5, 0.1, t1),
+        _entry("b", 0.9, 0.2, t2),
+        _entry("c", 0.9, 0.2, t1),
+        _entry("d", 0.9, 0.4, t1),
+    ]
+    ranked = sorted(entries, key=rank_key(1.0))
+    assert [e.submission_id for e in ranked] == ["d", "c", "b", "a"]
+
+    # sign -1: lower sealed first, then LOWER public.
+    entries2 = [
+        _entry("a", 0.9, 0.1, t1),
+        _entry("b", 0.5, 0.4, t1),
+        _entry("c", 0.5, 0.2, t1),
+    ]
+    ranked2 = sorted(entries2, key=rank_key(-1.0))
+    assert [e.submission_id for e in ranked2] == ["c", "b", "a"]
+
+    # public=None sorts after any number, whichever direction the metric goes.
+    tied = [_entry("has_public", 0.5, 0.3, t1), _entry("no_public", 0.5, None, t1)]
+    assert [e.submission_id for e in sorted(tied, key=rank_key(1.0))] == [
+        "has_public",
+        "no_public",
+    ]
+    assert [e.submission_id for e in sorted(tied, key=rank_key(-1.0))] == [
+        "has_public",
+        "no_public",
+    ]

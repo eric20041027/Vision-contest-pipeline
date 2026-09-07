@@ -97,7 +97,7 @@ source:
   notes: ""
 created_at: <UTC stamp>
 predictions:
-  valA: {path: predictions/valA.jsonl, sha256: <...>, samples: 187, empty: 3, format_in: yolo_txt, ingested_at: <stamp>}
+  valA: {path: predictions/valA.jsonl, sha256: <...>, samples: 187, empty: 3, format_in: yolo_txt, format_version: "1", ingested_at: <stamp>}
 ```
 
 ### 4.3 讀數（`measure/<dataset>/readings.jsonl`，只 append）
@@ -304,3 +304,10 @@ WBF 與其他融合技術、TTA、per-class 門檻調整工具、上傳配額與
 2. **VERDICT 欄位改名**（接 §15-3 的「一個名字不指兩個量」）：`sigma` 的 `cached=`（bool）改為 `existing=`（int，0 或 1），與 `measure` 的 `cached=`（列數）同形；`report` 的 `judgements=` 改為 `deltas=`，因為它數的是判決 × 子集的列數，而 `status` 的 `judged=` 數的是主張；`anchor` 的 VERDICT 加 `dataset=`（它的資料集來自 run 而非選項，原本沒有任何欄位說出它改了誰的 `anchors.json`）。
 3. **登記表名稱驗證**：`register_metric` 與 `register_sigma_method` 拒收不符 `^[A-Za-z0-9][A-Za-z0-9._-]*$` 的名稱（`RegistryError`）。名稱會進 VERDICT 的**欄位名**（`eval status` 的 `sigma[<metric>/<method>]=`），而 `Verdict.line()` 只跳脫值不跳脫欄位名，含空白或 `=` 的名字會產生無法解析的一行。
 4. **單一來源**：三個台帳檔名（`READINGS_LEDGER` / `JUDGEMENTS_LEDGER` / `SIGMA_LEDGER`）宣告在 `vcp/measure/ledger.py`；`key=value` 選項的真值字彙是 `vcp.core.config.TRUE_VALUES` 與 `is_true(value)`（提交層的 `option_is_true(options, key)` 包在它外面）；主張的元件類別是 `vcp/measure/schema.py` 的 `ComponentClass` / `COMPONENT_CLASSES` / `TUNING_CLASS`。行為不變。
+5. **`PredictionFile.format_version`**（§4.3 的欄位表漏了它）：`vcp eval ingest` 記下該次用的 `Converter.version`。轉換器改了讀法就升版，只記名稱的 run 卡說不出這批預測是哪一版讀出來的。欄位可為 null，舊 run 卡仍可載入；融合寫出的 `PredictionFile`（`format_in="fuse:<method>"`）不經轉換器，維持 null。
+6. **σ_p bootstrap 記 `prediction_sha`**：估計是「從某個預測檔算出來的一個數」，`inputs` 記下該檔的 sha256。`estimate_id` 由 `inputs` 推導，所以 `ingest --replace` 之後同一組參數會算出新估計而不是拿回舊的；舊列留在只增不改的台帳裡。
+7. **`create_prereg` 全有全無**：yaml 寫完之後 log append 失敗即刪掉 yaml 再往上拋。只有 yaml 沒有 log 列的 id 既判不了（judge 要求 log 列）也重登記不了（路徑已存在），等於白燒一個進 git 的 id；log 只增不改，所以能收回的是 yaml 那一半。
+8. **預登記門檻的下界**：`t_min >= 0`、`min_bases >= 1`、`sigma_ratio > 0`。`min_bases 0` 讓「零個正基底」也過，`sigma_ratio <= 0` 讓 `mean_delta >= ratio × σ_p` 對任何候選都成立，負的 `t_min` 會把 bootstrap 說在變壞的子集算成基底。比 nan 輕，而且在已提交的 yaml 裡看得到，所以在邊界就擋。nan 由這些界擋掉（與 nan 的比較恆為 False），+inf 由既有的有限性檢查擋掉。
+9. **`report --plan` 不藏 `missing_readings` 的判決**：這種判決沒有讀數（所以沒有 plan）也沒有 per-subset 結果（所以沒有列），兩頭都看不見。`last_vs_last` 改為：判決沒有任何 per-subset 結果時輸出一列，`subset` / `delta` / `t` 皆為 null；plan 從判決的讀數推導，沒有讀數時退回它比較的兩個 run 的 `run.yaml`（讀不動的卡不貢獻 plan，唯讀視圖不因一張壞卡而死）。`deltas=` 因此是「判決 × 子集列數，沒有子集的判決算一列」。
+10. **`set_anchor` 的暫存檔名唯一**：`tempfile.NamedTemporaryFile(dir=…, prefix="anchors.", suffix=".tmp", delete=False)` + `os.replace`，不再是固定的 `anchors.json.tmp`（兩個程序共用同一個路徑時，後者會在任一方 `os.replace` 之前截斷前者的內容，而任一方失敗都會刪掉對方的檔）。上鎖不在範圍：`set_anchor` 仍是未上鎖的讀改寫。
+11. **`--method` 的說明不寫死內建名**：σ_p 估法是擴充軸，help 字串列三個內建名等於宣告那就是全部答案。改為 `registered sigma_p method`；未知方法的 FAIL 訊息讀活的登記表，插件登記的方法會出現在那裡。

@@ -170,6 +170,50 @@ def test_report_keeps_only_the_newest_judgement_per_claim_and_filters_it(roots, 
     assert last_vs_last(paths, plan_id="other-v1") == []
 
 
+def test_report_shows_a_judgement_that_has_no_readings(roots, tmp_path):
+    """3-11: a claim judged FAIL for want of readings names no reading, so it used to have no
+    plan either -- and `--plan` dropped exactly the judgements a reader most needs to see. The
+    runs the judgement compares still say which plan they were made under, so it counts there.
+    """
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    create_prereg(
+        paths,
+        PreRegistration(
+            prereg_id="unmeasured",
+            claim="noisy beats perfect",
+            component="x",
+            component_class="model",
+            baseline_run="perfect",
+            candidate_run="noisy",
+            metric="coco_map",
+            subsets=["valA", "valB"],
+            created_at="2026-09-01T00:00:00.000Z",
+        ),
+        ReadingsLedger(paths.measure_dir / "readings.jsonl"),
+    )
+    _measure(roots, "perfect")  # the baseline only: the candidate is never measured
+    judgement = _judge(roots, "unmeasured", resamples=20)
+    assert judgement.verdict == "FAIL" and not judgement.per_subset
+    assert any(r.startswith("missing_readings") for r in judgement.reasons)
+    assert judgement.reading_ids == []
+
+    rows = last_vs_last(paths)
+    assert [r["prereg_id"] for r in rows] == ["unmeasured"]
+    assert rows[0]["subset"] is None and rows[0]["delta"] is None and rows[0]["verdict"] == "FAIL"
+    # The point of the item: the plan filter must not hide it.
+    assert last_vs_last(paths, plan_id="fixed-v1") == rows
+    assert last_vs_last(paths, plan_id="other-v1") == []
+    assert last_vs_last(paths, metric="accuracy") == []
+
+    # An unreadable run card contributes no plan rather than taking the view down with it (the
+    # same discipline `status` keeps for `runs=`): the judgement then matches no --plan, and an
+    # unfiltered report still shows it.
+    for run_id in ("perfect", "noisy"):
+        (paths.runs_dir / run_id / "run.yaml").write_text("card: [broken", encoding="utf-8")
+    assert last_vs_last(paths, plan_id="fixed-v1") == []
+    assert last_vs_last(paths) == rows
+
+
 def test_status_reports_the_latest_sigma_per_metric_and_method(roots, tmp_path):
     """Two estimates of the same metric/method: the newest is the one a judge would use, so it
     is the one status shows."""

@@ -27,7 +27,7 @@ from vcp.measure.ledger import (
 )
 from vcp.measure.metrics import params_key
 from vcp.measure.prereg import list_preregs, prereg_time
-from vcp.measure.schema import Judgement, Reading, RunCard, SigmaEstimate
+from vcp.measure.schema import Judgement, Reading, RunCard, SigmaEstimate, SubsetJudgement
 
 
 @dataclass(frozen=True)
@@ -138,6 +138,35 @@ def report_rows(
     ]
 
 
+def _plan_of_run(paths: DatasetPaths, run_id: str) -> str | None:
+    """The plan a run was ingested against, from its card; ``None`` when it cannot be read.
+
+    A read-only view never dies on one unreadable file (the same discipline ``_runs_for`` keeps),
+    so a missing or mangled run card simply contributes no plan.
+    """
+    try:
+        return load_yaml_model(paths.runs_dir / run_id / "run.yaml", RunCard).plan_id
+    except (ValidationFailed, OSError, UnicodeDecodeError):
+        return None
+
+
+def _judgement_plans(
+    paths: DatasetPaths,
+    judgement: Judgement,
+    plan_of: dict[str, str],
+    cache: dict[str, str | None],
+) -> set[str]:
+    """The plans a judgement belongs to: its readings' plan, or -- when it has none (3-11) --
+    the plan of the runs it compares. ``cache`` keeps one card read per run per call."""
+    plans = {plan_of[rid] for rid in judgement.reading_ids if rid in plan_of}
+    if plans:
+        return plans
+    for run_id in (judgement.baseline_run, judgement.candidate_run):
+        if run_id not in cache:
+            cache[run_id] = _plan_of_run(paths, run_id)
+    return {p for p in (cache[judgement.baseline_run], cache[judgement.candidate_run]) if p}
+
+
 def last_vs_last(
     paths: DatasetPaths, *, plan_id: str | None = None, metric: str | None = None
 ) -> list[dict]:
@@ -154,28 +183,37 @@ def last_vs_last(
     (the judge applies the metric's direction once, when it judges). ``plan_id`` is not on a
     judgement row, so it is resolved through the readings the judgement names: every reading in
     one judgement was taken under the same plan (``judge._assert_one_plan``).
+
+    3-11: a judgement blocked by ``missing_readings`` names no readings and has no per-subset
+    result either, so on both counts it used to be invisible here -- and `--plan` hid exactly
+    the claims a reader is looking for. Such a judgement gets one row with ``subset``,
+    ``delta`` and ``t`` set to ``None``, and its plan is resolved from the two runs it compares.
     """
     readings = ReadingsLedger(paths.measure_dir / READINGS_LEDGER).rows
     plan_of = {r.reading_id: r.plan_id for r in readings}
+    run_plans: dict[str, str | None] = {}
     rows = read_rows(paths.measure_dir / JUDGEMENTS_LEDGER, Judgement)
     latest: dict[str, Judgement] = {}
     for j in sorted(rows, key=lambda j: j.ts):
         if metric and j.metric != metric:
             continue
-        if plan_id and plan_id not in {plan_of.get(rid) for rid in j.reading_ids}:
+        if plan_id and plan_id not in _judgement_plans(paths, j, plan_of, run_plans):
             continue
         latest[j.prereg_id] = j
     out: list[dict] = []
     for j in latest.values():
-        for subset, s in j.per_subset.items():
+        results: list[tuple[str | None, SubsetJudgement | None]] = list(j.per_subset.items()) or [
+            (None, None)
+        ]
+        for subset, s in results:
             out.append(
                 {
                     "prereg_id": j.prereg_id,
                     "baseline_run": j.baseline_run,
                     "candidate_run": j.candidate_run,
                     "subset": subset,
-                    "delta": s.delta,
-                    "t": s.t,
+                    "delta": None if s is None else s.delta,
+                    "t": None if s is None else s.t,
                     "verdict": j.verdict,
                     "ts": j.ts,
                 }

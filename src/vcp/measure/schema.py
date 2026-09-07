@@ -126,6 +126,11 @@ class PredictionFile(_Strict):
     samples: int
     empty: int
     format_in: str
+    # The converter implementation that produced them (`Converter.version`), so a run card says
+    # which reading of the framework's output these predictions came from -- a converter whose
+    # parsing changes bumps its version, exactly as a metric does (3-7). Optional so run cards
+    # written before this field stay loadable, and None on rows no converter wrote (fuse).
+    format_version: str | None = None
     ingested_at: str
     # sha256 of the export directory's manifest.json these predictions were converted against
     # (yolo_txt and coco_results need one); None when no --export-manifest was given. Optional
@@ -199,18 +204,24 @@ class PreRegistration(_Strict):
     metric: str
     params: dict[str, str] = Field(default_factory=dict)
     subsets: list[str]
-    t_min: float = 2.0
-    min_bases: int = 2
+    # 3-10: each bound is the point below which the bar stops being a bar. `t_min` may be 0 (any
+    # positive delta counts) but not negative (that would count a subset the bootstrap says is
+    # going the wrong way); `min_bases` must ask for at least one positive base; `sigma_ratio`
+    # must be strictly positive, since 0 makes `mean_delta >= ratio * sigma_p` true for every
+    # candidate. Milder than nan below, and reviewable in a yaml -- which is exactly why it has
+    # been seen in one.
+    t_min: float = Field(default=2.0, ge=0)
+    min_bases: int = Field(default=2, ge=1)
     sigma_method: str = "splithalf"
-    sigma_ratio: float = 1.0
+    sigma_ratio: float = Field(default=1.0, gt=0)
     created_at: str
 
     @field_validator("t_min", "sigma_ratio")
     @classmethod
     def _finite_threshold(cls, v: float) -> float:
-        # A pre-registration exists to make a bar binding, and nan silently un-binds one:
-        # `t >= nan` is False for every subset (nothing ever counts) and `mean_delta < nan`
-        # is False too (the sigma_p condition passes vacuously). Mirrors Anchor.tolerance.
+        # The bounds above already reject nan (every comparison with it is False) and -inf; this
+        # catches +inf, a bar nothing can clear rather than one anything can. Mirrors
+        # Anchor.tolerance.
         _finite([v], "pre-registration threshold")
         return v
 

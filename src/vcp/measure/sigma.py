@@ -252,6 +252,10 @@ def _bootstrap(ctx: SigmaContext) -> tuple[float, dict[str, Any]]:
         "used": res.used,
         "skipped": res.skipped,
         "seed": spec.seed,
+        # 3-8: the file the number was computed from. `estimate_id` is derived from `inputs`,
+        # so an `ingest --replace` on this subset produces a different id: the stale estimate
+        # stops satisfying the cache instead of being handed back for a run that has moved on.
+        "prediction_sha": card.predictions[subset].sha256,
     }
     if from_anchor:
         inputs["run_source"] = "anchor"

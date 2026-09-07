@@ -208,6 +208,26 @@ def test_create_prereg_failures(roots, tmp_path):
     assert list_preregs(paths) == []  # not one of them left a file behind
 
 
+def test_create_prereg_leaves_no_yaml_when_the_log_append_fails(roots, tmp_path, monkeypatch):
+    """3-9: the yaml and its log line are one act. A yaml with no log line is a claim the judge
+    refuses (it never became binding) that `create_prereg` also refuses to write again (the path
+    exists) -- an id burnt into git for nothing. So a failed log append takes the yaml with it.
+    """
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+
+    def boom(*args, **kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("vcp.measure.prereg.append_row", boom)
+    with pytest.raises(OSError, match="no space"):
+        create_prereg(paths, _pr(), _ledger(paths))
+    assert list_preregs(paths) == [] and prereg_time(paths, "p001") is None
+    # ... and the id is still free, which is the whole point.
+    monkeypatch.undo()
+    assert create_prereg(paths, _pr(), _ledger(paths)).is_file()
+    assert list_preregs(paths) == ["p001"] and prereg_time(paths, "p001") is not None
+
+
 def test_judge_fail_pass_and_sigma_rules(roots, tmp_path):
     _, _, paths = det_with_runs(roots, tmp_path, n=60)
     # ruling 1: every pre-registration is written BEFORE anything is measured

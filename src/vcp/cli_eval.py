@@ -65,6 +65,17 @@ def _read_only_paths(
     return paths
 
 
+def _delta_line(row: dict) -> str:
+    """One last-vs-last row. A judgement that produced no per-subset result at all (3-11:
+    blocked by ``missing_readings``) has no numbers to print, only the verdict that says so."""
+    if row["subset"] is None:
+        return f"{row['prereg_id']:<12} {'(no readings)':>15} {row['verdict']}"
+    return (
+        f"{row['prereg_id']:<12} {row['subset']:>8} delta={row['delta']!r} "
+        f"t={row['t']:.2f} {row['verdict']}"
+    )
+
+
 def _check_tolerance(tolerance: float) -> None:
     """I1: nan/inf silently disables the guardrail (any drift compares `<= tolerance`, which is
     vacuously true for +inf and always False for nan) and a negative tolerance jams it (nothing
@@ -295,7 +306,10 @@ def sigma_cmd(
     dataset: DatasetOpt,
     plan: Annotated[str, typer.Option("--plan")],
     metric: Annotated[str, typer.Option("--metric")],
-    method: Annotated[str, typer.Option("--method", help="splithalf | bootstrap | prior")],
+    # 3-15: not the three built-in names. The method is an extension axis, so a `--plugin`'s
+    # estimator is as valid an answer as any built-in and could never appear in a fixed string;
+    # the unknown-method FAIL reads the live registry and lists what is actually available.
+    method: Annotated[str, typer.Option("--method", help="registered sigma_p method")],
     params: Annotated[list[str] | None, typer.Option("--params")] = None,
     subsets: Annotated[
         str | None,
@@ -562,15 +576,11 @@ def report_cmd(
         human = [
             f"{r['run_id']:<20} {r['subset']:>8} {r['metric']:<12} {r['value']!r}" for r in rows
         ]
-        human += [
-            f"{r['prereg_id']:<12} {r['subset']:>8} delta={r['delta']!r} "
-            f"t={r['t']:.2f} {r['verdict']}"
-            for r in lvl
-        ]
+        human += [_delta_line(r) for r in lvl]
         # `rows=` not `readings=`: `eval measure` already spends `readings=` on the number of
         # rows it WROTE, and one name may not mean two quantities across the interface. Same
-        # rule for `deltas=`: this counts judgement x subset rows, while `eval status`'s
-        # `judged=` counts claims (3-5).
+        # rule for `deltas=`: this counts judgement x subset rows (one row for a judgement that
+        # produced none), while `eval status`'s `judged=` counts claims (3-5).
         fields: dict[str, FieldValue] = {
             "dataset": dataset,
             "rows": len(rows),

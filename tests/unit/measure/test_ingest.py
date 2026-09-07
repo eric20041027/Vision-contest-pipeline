@@ -7,6 +7,7 @@ from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.measure.converters import get_converter
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.predictions import read_predictions, write_predictions
 from vcp.measure.runs import load_run
@@ -117,7 +118,12 @@ def test_ingest_scores_csv_with_unknown_ids(roots, tmp_path):
     # ruling Task5#3: allow_unknown uses the converters' _TRUE set, not the literal "skip".
     res = ingest(spec.model_copy(update={"options": {"allow_unknown": "true"}}))
     assert res.unknown == ["stranger"] and res.predicted == len(val)
-    assert res.run.predictions["val"].format_in == "scores_csv"
+    entry = res.run.predictions["val"]
+    # 3-7: the converter's NAME alone does not say which implementation ran. A converter that
+    # changes how it reads a framework's output bumps its version, and the run card has to be
+    # able to say which one produced these predictions.
+    assert entry.format_in == "scores_csv"
+    assert entry.format_version == get_converter("scores_csv").version
     assert json.loads(res.path.read_text(encoding="utf-8").splitlines()[0])["scores"]["cat"] == 1.0
 
 

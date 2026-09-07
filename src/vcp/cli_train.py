@@ -205,6 +205,7 @@ def status_cmd(
             **st.record.model_dump(mode="json"),
             "drift": st.drift,
             "missing": st.missing,
+            "unbacked": st.unbacked,
             "superseded": st.superseded,
         }
         return ("WARN" if warn else "OK"), fields, payload, human

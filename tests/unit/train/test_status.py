@@ -157,3 +157,30 @@ def test_upload_run_records_and_is_idempotent(roots, tmp_path):
     rec3, again = upload_run(roots.data, "r1", str(tmp_path / "vault"))
     assert again.uploaded == 0 and again.skipped == 2 and len(rec3.uploads) == 2
     assert len(read_events(roots.data, "r1")) == 2  # a re-verification is not an event
+
+
+def test_superseded_names_a_path_once_however_many_times_it_was_replaced(roots):
+    """Three registrations of one path with three shas, none uploaded: one superseded entry,
+    not two -- the count is files, and the human lines must not repeat."""
+    w = roots.data / "work" / "weights"
+    w.mkdir(parents=True)
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd="work",
+        command=["python"],
+        attempts=[
+            Attempt(
+                n=1, started_at=STAMP, console="train/console.1.log", status="finished", exit_code=0
+            )
+        ],
+    )
+    for n, payload in enumerate((b"v1", b"v2", b"v3"), start=1):
+        (w / "best.pt").write_bytes(payload)
+        rec, _ = register(rec, [w / "best.pt"], data_root=roots.data, attempt=n)
+    save_record(roots.data, rec)
+    st = status(roots.data, "r1")
+    assert st.superseded == ["work/weights/best.pt"] and st.unbacked == ["work/weights/best.pt"]

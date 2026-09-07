@@ -39,7 +39,9 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
         record=record,
         backed=sum(1 for c in record.checkpoints if c.sha256 in verified),
         unbacked=[c.path for c in stale if newest[c.path] == c.sha256],
-        superseded=[c.path for c in stale if newest[c.path] != c.sha256],
+        # One line per path: a path re-registered several times with unverified bytes is one
+        # superseded checkpoint, not several.
+        superseded=list(dict.fromkeys(c.path for c in stale if newest[c.path] != c.sha256)),
         missing=_missing(record, data_root),
         drift=_drift(record, data_root) if verify else [],
         running=sum(1 for a in record.attempts if a.status == "running"),

@@ -49,6 +49,7 @@ from vcp.measure.predictions import (
     write_predictions,
 )
 from vcp.measure.runs import (
+    FUSE_FRAMEWORK,
     append_history,
     assert_run_matches,
     load_run,
@@ -59,7 +60,7 @@ from vcp.measure.runs import (
 )
 from vcp.measure.schema import Prediction, PredictionFile, RunCard, RunSource
 
-FRAMEWORK = "vcp.fuse"
+FRAMEWORK = FUSE_FRAMEWORK
 RECORD_FILE = "fuse.json"
 NO_COMMON_SUBSET = "no_common_subset"
 OUTPUT_EXISTS = "output_exists"

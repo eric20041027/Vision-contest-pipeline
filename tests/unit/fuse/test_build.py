@@ -337,7 +337,9 @@ def test_build_refuses_a_member_whose_trained_on_drifted(roots, tmp_path):
 def test_build_rebuilds_a_missing_fuse_json(roots, tmp_path):
     """4-5: the run card and fuse.json are two files; a run whose fuse.json was lost is still a
     build of this recipe (framework + config_hash prove it), so the build goes on and writes a
-    fresh record -- carrying nothing forward, because there was nothing to carry."""
+    fresh record. Pinned as it is: the recreated record only covers the subsets rebuilt in this
+    call (cached ones never re-enter it), so it under-reports provenance for the subsets the
+    card still declares -- a known gap (Plan 4 followups §8-1), not a promise."""
     ds, plan, paths = det_with_runs(roots, tmp_path)
     _recipe(paths)
     first = _build(roots)

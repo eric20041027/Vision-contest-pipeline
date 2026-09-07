@@ -177,6 +177,12 @@ def test_assign_scores():
     oldest_manual = assign_scores(uploads, [_manual_score(-100, 0.1, base=base)])
     assert oldest_manual == [None, None]
 
+    # Uploads appended out of platform-time order (`record --at` allows it): an exact tie goes
+    # to the upload with the later `at`, whatever its position in the list.
+    out_of_order = [_upload(10, base=base), _upload(0, base=base)]
+    tie = assign_scores(out_of_order, [_platform_score(5, 0.5, base=base)])
+    assert [a.public if a else None for a in tie] == [0.5, None]
+
 
 def test_report_scores_each_upload(pair):
     _seed(pair, _profile())

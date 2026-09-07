@@ -149,26 +149,33 @@ def test_assign_scores():
     base = utc_now()
     uploads = [_upload(0, base=base), _upload(5, base=base)]
 
-    # T0/T5 uploads, T1/T6 platform scores: each maps to its own (closest-below) upload.
+    # T0/T5 uploads, T1/T6 platform scores: each maps to the upload nearest to it in time.
     scores = [_platform_score(1, 0.6, base=base), _platform_score(6, 0.7, base=base)]
     assigned = assign_scores(uploads, scores)
     assert [a.public if a else None for a in assigned] == [0.6, 0.7]
 
-    # Clock skew: a score 3 minutes before the second upload's `at` still maps to it, because
-    # the newest eligible upload (at <= score.at + MATCH_WINDOW) wins.
-    skew_uploads = [_upload(0, base=base), _upload(20, base=base)]
-    skewed = [_platform_score(17, 0.5, base=base)]
-    assigned = assign_scores(skew_uploads, skewed)
-    assert [a.public if a else None for a in assigned] == [None, 0.5]
+    # A platform score 20 seconds before the second upload's `at` is 20s away from it and
+    # 4m40s away from the first -- nearest wins, so it maps to the second upload.
+    near_second = assign_scores(uploads, [_platform_score(5 - 20 / 60, 0.5, base=base)])
+    assert [a.public if a else None for a in near_second] == [None, 0.5]
 
-    # A manual score (no `at`) with `ts` after both uploads -> assigned to the second (newest
-    # upload recorded before it).
-    assigned = assign_scores(uploads, [_manual_score(100, 0.9, base=base)])
-    assert [a.public if a else None for a in assigned] == [None, 0.9]
+    # Correction: two manual scores both qualify only for the second upload (the newest upload
+    # with ts <= their own ts is the same one for both) -- the newer of the two by `ts` wins
+    # there, and the first upload, which neither score is eligible for, gets nothing. A
+    # claim-based match got this wrong: it handed the superseded score to the first upload
+    # instead of dropping it.
+    corrected = assign_scores(
+        uploads, [_manual_score(6, 0.7, base=base), _manual_score(7, 0.71, base=base)]
+    )
+    assert [a.public if a else None for a in corrected] == [None, 0.71]
 
-    # A score older than every upload matches nothing.
-    assigned = assign_scores(uploads, [_platform_score(-100, 0.1, base=base)])
-    assert assigned == [None, None]
+    # A platform score older than every upload still has a nearest upload: the first one.
+    oldest_platform = assign_scores(uploads, [_platform_score(-100, 0.1, base=base)])
+    assert [a.public if a else None for a in oldest_platform] == [0.1, None]
+
+    # A manual score older than every upload has no upload recorded before it -> dropped.
+    oldest_manual = assign_scores(uploads, [_manual_score(-100, 0.1, base=base)])
+    assert oldest_manual == [None, None]
 
 
 def test_report_scores_each_upload(pair):

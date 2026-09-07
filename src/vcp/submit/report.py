@@ -38,11 +38,13 @@ def _label(r: LedgerRow) -> str:
 
 def assign_scores(uploads: list[LedgerRow], scores: list[LedgerRow]) -> list[LedgerRow | None]:
     """The score that applies to each upload of one submission id (same order as ``uploads``,
-    oldest ``at`` first). A platform-timed score (``at`` present) belongs to the upload whose
-    ``at`` is nearest in time to the score's ``at`` (smallest absolute difference; a tie goes to
-    the later upload). A manual score (no ``at``) belongs to the newest upload with
-    ``upload.ts <= score.ts`` (none -> the score is dropped). Per upload, the newest assigned
-    score (by ``ts``) wins; an upload nothing was assigned to gets None.
+    which may be in any order -- ``record --at`` can append an upload whose platform time
+    precedes an earlier row's). A platform-timed score (``at`` present) belongs to the upload
+    whose ``at`` is nearest in time to the score's ``at`` (smallest absolute difference; a tie
+    goes to the upload with the later ``at``). A manual score (no ``at``) belongs to the newest
+    upload (by ``ts``) with ``upload.ts <= score.ts`` (none -> the score is dropped). Per
+    upload, the newest assigned score (by ``ts``) wins; an upload nothing was assigned to gets
+    None.
 
     Each score is placed independently -- scores never compete to "claim" an upload the way an
     earlier version of this function had them do. Claiming let a corrected score (a later ``ts``
@@ -53,12 +55,13 @@ def assign_scores(uploads: list[LedgerRow], scores: list[LedgerRow]) -> list[Led
     assigned: list[LedgerRow | None] = [None] * len(uploads)
     if not uploads:
         return assigned
+    ats = [parse_stamp(str(u.at)) for u in uploads]
     for s in scores:
         if s.at is not None:
             score_at = parse_stamp(s.at)
             winner = min(
                 range(len(uploads)),
-                key=lambda idx: (abs(parse_stamp(str(uploads[idx].at)) - score_at), -idx),
+                key=lambda idx: (abs(ats[idx] - score_at), -ats[idx].timestamp()),
             )
         else:
             eligible = [idx for idx, u in enumerate(uploads) if u.ts <= s.ts]
@@ -111,7 +114,8 @@ def status(
         if not uploads:
             continue
         assigned = assign_scores(uploads, ledger.of("scored", sid))
-        if assigned[-1] is None:
+        newest = max(range(len(uploads)), key=lambda i: (uploads[i].at or "", uploads[i].ts))
+        if assigned[newest] is None:
             unscored.append(sid)
     return StatusView(
         staged=len(ledger.ids()),

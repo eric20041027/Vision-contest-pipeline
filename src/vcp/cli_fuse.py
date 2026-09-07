@@ -163,6 +163,9 @@ def ablate_cmd(
         str | None, typer.Option("--subsets", help="comma-separated; default: common subsets")
     ] = None,
     build: Annotated[bool, typer.Option("--build/--no-build", help="build the runs")] = True,
+    replace: Annotated[
+        bool, typer.Option("--replace", help="pass --replace to every build this triggers")
+    ] = False,
     preregister: Annotated[
         bool, typer.Option("--preregister", help="write one admission claim per member")
     ] = False,
@@ -190,6 +193,7 @@ def ablate_cmd(
                 recipe_id=recipe_id,
                 subsets=parse_csv(subsets),
                 build=build,
+                replace=replace,
                 preregister=preregister,
                 metric=metric,
                 metric_params=parse_opts(metric_params, "--metric-params"),

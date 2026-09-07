@@ -2,15 +2,26 @@ import json
 
 import pytest
 
-from helpers import cls_samples, det_samples, make_card, perfect_predictions, write_images
+from helpers import (
+    cls_samples,
+    det_samples,
+    det_with_runs,
+    make_card,
+    perfect_predictions,
+    write_images,
+)
 from vcp.core.errors import PlanMismatchError, ValidationFailed
+from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.fuse.build import BuildSpec, build_run
+from vcp.fuse.recipes import save_recipe
+from vcp.fuse.schema import Member, Recipe
 from vcp.measure.converters import get_converter
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.predictions import read_predictions, write_predictions
-from vcp.measure.runs import load_run
+from vcp.measure.runs import load_run, run_dir
 
 
 def _det(roots, name="tiny", n=40):
@@ -211,3 +222,43 @@ def test_ingest_second_subset_source_metadata_conflicts_and_match(roots, tmp_pat
         ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", framework="fw2"))
     with pytest.raises(ValidationFailed, match="notes"):
         ingest(_spec(roots, subset="valB", src=tmp_path / "valB.jsonl", notes="n2"))
+
+
+def test_ingest_refuses_a_run_built_by_vcp_fuse(roots, tmp_path):
+    """4-1: every subset of a fused run is recorded in ``fuse.json`` with the member bytes it
+    came from. A subset ingested into that run would be invisible there -- and the next
+    ``fuse build`` would meet predictions it never produced -- so ingest refuses the run
+    outright, before anything is written. Ordinary runs are untouched."""
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    save_recipe(
+        paths,
+        Recipe(
+            recipe_id="r1",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            method="wbf",
+            members=[Member(run="perfect"), Member(run="noisy")],
+            created_at="2026-09-05T00:00:00.000Z",
+        ),
+    )
+    build_run(
+        BuildSpec(dataset="tiny", recipe_id="r1", data_root=roots.data, configs_root=roots.configs)
+    )
+    src = tmp_path / "extra.jsonl"
+    write_predictions(
+        src,
+        perfect_predictions(
+            ds.subset("holdout", plan, unseal=True, reason="t", paths=paths), ds.card
+        ),
+    )
+    fused = run_dir(roots.data, "fuse-r1")
+    before = sha256_file(fused / "run.yaml")
+    with pytest.raises(ValidationFailed, match="fusion_run") as ei:
+        ingest(_spec(roots, run_id="fuse-r1", subset="holdout", src=src))
+    assert ei.value.fields == {"run": "fuse-r1"}
+    assert "fuse build --replace" in str(ei.value)
+    assert sha256_file(fused / "run.yaml") == before
+    assert not (fused / "predictions" / "holdout.jsonl").exists()
+    # an ordinary run still takes the same subset
+    res = ingest(_spec(roots, run_id="noisy", subset="holdout", src=src))
+    assert res.subset == "holdout" and not res.created_run

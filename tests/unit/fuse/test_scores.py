@@ -119,6 +119,22 @@ def test_rank_mean_uses_subset_as_population():
     assert out[0].scores["acl"] == pytest.approx(0.75 / 4)
 
 
+def test_rank_mean_refuses_a_subset_whose_samples_predict_different_keys():
+    """4-5 / 4-6: `rank_mean` ranks each key over the WHOLE subset, so every sample must carry
+    the same key set -- a per-sample check `mean` (which works one sample at a time) does not
+    need. The failure is a sample-to-sample disagreement, so it carries `sample=` alone; the
+    old `member=` pointed at members[0], which is not where the disagreement is."""
+    samples = multilabel_samples(2, seed=0)
+    ids = [s.sample_id for s in samples]
+    full = {"acl": 0.1, "mcl": 0.2, "effusion": 0.3}
+    a = _scores_member("a", 1.0, {ids[0]: full, ids[1]: {"acl": 0.4, "mcl": 0.5}})
+    b = _scores_member("b", 1.0, {ids[0]: full, ids[1]: {"acl": 0.6, "mcl": 0.7}})
+    with pytest.raises(ValidationFailed, match="the subset's first sample") as ei:
+        get_fuser("rank_mean").fuse([a, b], _ctx("multilabel", samples, ML_CATS))
+    assert ei.value.fields == {"sample": ids[1]}
+    assert ei.value.location == ids[1]
+
+
 def test_rank_mean_refuses_targets_and_wbf_refuses_scores():
     with pytest.raises(ValidationFailed) as ei:
         require_payload(get_fuser("rank_mean"), "regression")

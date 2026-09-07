@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.data.dataset import Dataset
-from vcp.data.split import SplitPlan
+from vcp.data.split import SplitPlan, assert_plan_matches
 from vcp.fuse.schema import Member
 from vcp.measure.runs import assert_run_matches, load_run
 from vcp.measure.schema import RunCard
@@ -37,12 +37,9 @@ def parse_member(item: str) -> Member:
 
 
 def check_plan(plan: SplitPlan, dataset: Dataset) -> None:
-    """The plan must have been built on this dataset version (same check `ingest` makes)."""
-    if plan.dataset_hash != dataset.card.samples_hash:
-        raise PlanMismatchError(
-            f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
-            f"dataset now has {dataset.card.samples_hash[:12]}"
-        )
+    """The plan must belong to this dataset version -- the fusion layer's door onto the one
+    implementation of that check (4-2 / 5-7: `vcp.data.split.assert_plan_matches`)."""
+    assert_plan_matches(plan, dataset.card)
 
 
 def check_members(

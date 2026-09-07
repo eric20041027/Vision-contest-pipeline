@@ -293,6 +293,87 @@ def test_run_id_is_bound_to_one_recipe(roots, tmp_path):
     assert res.run.run_id == "custom" and load_record(roots.data, "custom").recipe_id == "r2"
 
 
+def test_existing_run_checks_carry_the_run_id(roots, tmp_path):
+    """4-5 / 4-7: every refusal `check_existing_run` can make names the run it is about.
+    `assert_run_matches` is shared with the measurement layer and knows nothing of this run id,
+    so the wrapper fills it in -- the other branches here already carried it."""
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    _build(roots)
+    card_path = run_dir(roots.data, "fuse-r1") / "run.yaml"
+    # the fused run remembers another version of the dataset (a card rewritten under it)
+    card_path.write_text(
+        card_path.read_text(encoding="utf-8").replace(ds.card.samples_hash, "ab" * 32),
+        encoding="utf-8",
+        newline="\n",
+    )
+    with pytest.raises(PlanMismatchError, match="was created on samples_hash") as ei:
+        _build(roots)
+    assert ei.value.fields == {"run": "fuse-r1"}
+
+
+def test_build_refuses_a_member_whose_trained_on_drifted(roots, tmp_path):
+    """4-5: a member re-declared as trained on more subsets changes the union the fused run
+    must declare; the run card already on disk says otherwise, so the build is refused rather
+    than quietly relabelling a run whose readings are already in the ledger."""
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    first = _build(roots)
+    assert first.run.trained_on == ["train"]
+    member_path = run_dir(roots.data, "noisy") / "run.yaml"
+    member_path.write_text(
+        member_path.read_text(encoding="utf-8").replace("- train\n", "- train\n- valA\n", 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+    assert load_run(roots.data, "noisy").trained_on == ["train", "valA"]
+    with pytest.raises(ValidationFailed, match="declares trained_on") as ei:
+        _build(roots)
+    assert ei.value.fields == {"run": "fuse-r1"}
+    assert "['train', 'valA']" in str(ei.value)
+    assert load_run(roots.data, "fuse-r1").trained_on == ["train"]
+
+
+def test_build_rebuilds_a_missing_fuse_json(roots, tmp_path):
+    """4-5: the run card and fuse.json are two files; a run whose fuse.json was lost is still a
+    build of this recipe (framework + config_hash prove it), so the build goes on and writes a
+    fresh record -- carrying nothing forward, because there was nothing to carry."""
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    first = _build(roots)
+    record_path(roots.data, "fuse-r1").unlink()
+    src = tmp_path / "noisy2-valA.jsonl"
+    write_predictions(src, noisy_predictions(ds.subset("valA", plan), ds.card, seed=99, flip=0.6))
+    ingest(
+        IngestSpec(
+            run_id="noisy",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            subset="valA",
+            format="jsonl",
+            src=src,
+            replace=True,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    res = _build(roots, replace=True)
+    assert res.built == 1 and res.cached == 1 and not res.created_run
+    rec = load_record(roots.data, "fuse-r1")
+    # only the subset this build wrote is in the fresh record: valB's provenance went with the
+    # deleted file and is not invented back
+    assert set(rec.subsets) == {"valA"}
+    assert rec.subsets["valA"].output_sha256 == res.subsets["valA"].sha256
+    assert rec.subsets["valA"].output_sha256 != first.subsets["valA"].sha256
+
+
+def test_requested_subsets_are_deduplicated(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path)
+    _recipe(paths)
+    res = _build(roots, subsets=["valA", "valA"])
+    assert list(res.subsets) == ["valA"] and res.built == 1
+
+
 def test_plugin_fuser_output_is_validated_and_nothing_written(roots, tmp_path, monkeypatch):
     ds, plan, paths = det_with_runs(roots, tmp_path)
 

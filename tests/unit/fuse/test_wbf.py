@@ -144,6 +144,33 @@ def test_clipping_only_when_view_size_is_known():
     assert (b.x, b.y, b.w, b.h) == (6.0, 6.0, 5.0, 5.0)
 
 
+def test_zero_scored_cluster_falls_back_to_a_plain_mean():
+    """4-5: the score-weighted mean of the corners divides by the cluster's total weighted
+    score. Every member scoring a box 0.0 is legal (only `skip` > 0 would drop it), so the sum
+    can be 0 -- the corners then come from an unweighted mean, not from 0/0."""
+    s = [_sample("s1")]
+    m1 = _member("a", 1.0, {"s1": [_box(0, 0, 10, 10, 0.0)]})
+    m2 = _member("b", 1.0, {"s1": [_box(2, 0, 10, 10, 0.0)]})
+    (b,) = _fuse([m1, m2], _ctx(s, iou=0.55))["s1"]
+    assert b.x == pytest.approx(1.0) and b.y == 0.0  # plain mean of 0 and 2, not nan
+    assert b.w == pytest.approx(10.0) and b.h == pytest.approx(10.0)
+    assert b.score == 0.0
+
+
+def test_a_box_on_a_view_the_sample_does_not_have_is_left_unclipped():
+    """4-5: clipping needs the view's width and height; a `view` index past the end of the
+    sample's views has neither, so the box passes through with its coordinates intact -- the
+    same fall-through a view without a recorded size takes. Nothing is dropped or renumbered:
+    the fused row still carries the index the members used."""
+    s = [_sample("s1", (8, 8))]  # one view only
+    inside = _member("a", 1.0, {"s1": [_box(6, 6, 5, 5, 0.9, view=0)]})
+    (b,) = _fuse([inside], _ctx(s))["s1"]
+    assert (b.x, b.y, b.w, b.h) == (6.0, 6.0, 2.0, 2.0)  # clipped to the 8x8 view
+    stray = _member("a", 1.0, {"s1": [_box(6, 6, 5, 5, 0.9, view=1)]})
+    (b,) = _fuse([stray], _ctx(s))["s1"]
+    assert (b.x, b.y, b.w, b.h) == (6.0, 6.0, 5.0, 5.0) and b.view == 1
+
+
 def test_missing_prediction_means_no_boxes():
     s = [_sample("s1"), _sample("s2")]
     m1 = _member("a", 1.0, {"s1": [_box(0, 0, 4, 4, 0.8)]})

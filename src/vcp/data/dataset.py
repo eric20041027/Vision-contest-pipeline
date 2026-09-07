@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from vcp.core.config import dump_yaml_model, load_yaml_model
-from vcp.core.errors import IntegrityError, PlanMismatchError, SealedSubsetError, ValidationFailed
+from vcp.core.errors import IntegrityError, SealedSubsetError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -140,18 +140,11 @@ class Dataset:
         """Samples of one subset. A sealed subset opens only with an explicit, recorded unseal."""
         from vcp.data.split import (  # local: split imports Dataset lazily
             assert_plan_invariants,
+            assert_plan_matches,
             resolve_group_fn,
         )
 
-        if plan.dataset != self.card.name:
-            raise PlanMismatchError(
-                f"plan {plan.plan_id!r} belongs to dataset {plan.dataset!r}, not {self.card.name!r}"
-            )
-        if plan.dataset_hash != self.card.samples_hash:
-            raise PlanMismatchError(
-                f"plan {plan.plan_id!r} was built on samples_hash {plan.dataset_hash[:12]}, "
-                f"dataset now has {self.card.samples_hash[:12]}"
-            )
+        assert_plan_matches(plan, self.card)  # 4-2 / 5-7: the one plan-hash check
         group_of = resolve_group_fn(str(plan.params.get("group_key", "auto")))
         assert_plan_invariants(plan, self, group_of=group_of)
         spec = plan.subset(name)

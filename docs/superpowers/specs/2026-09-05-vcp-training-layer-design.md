@@ -240,7 +240,7 @@ s.note("val_auc", 0.912)                            # note 事件
 1. **`ConfigRef` 的欄位名是 `copied_to`**（§4.2 的 yaml 鍵 `copy:` 作廢）：`copy` 會遮蔽 pydantic `BaseModel.copy` 並在 import 時發警告。
 2. **`--` 無法偵測**：Typer / Click 把 `--` 之後的參數原封放進命令並拿掉 `--` 本身，所以「沒有 `--` 就 FAIL」改為「命令非空且第一個 token 不以 `-` 開頭，否則 FAIL」；`--` 仍是文件上的分隔符（訓練命令的選項名與 vcp 的撞名時必要）。
 3. **包裝器在命令結束後重讀 `train.yaml`**：§8.2「命令執行期間只有 Session 會寫，所以沒有並行寫入」是真的，但不夠——包裝器在命令後的寫入是整檔重寫，必須先從磁碟重讀（否則 Session 登記的 checkpoint 與 final 會被蓋掉）。§6.1 第 7 步的「結束記 exit code」隱含這條。
-4. **checkpoint 的「現在」是每個檔名最新的一筆**：同一路徑可能有多筆 `(path, sha256)` 紀錄（`--resume` 換了權重）。上傳 / 備份的標的是每個檔名最後登記的一筆；舊紀錄是歷史，不是撞名。撞名只指「不同路徑、同檔名、不同 sha」。`train status` 的 backed / unbacked 以 sha256 判斷、涵蓋全部紀錄——舊 bytes 沒有副本就列為 unbacked（誠實）。
+4. **checkpoint 的「現在」是每個檔名最新的一筆**：同一路徑可能有多筆 `(path, sha256)` 紀錄（`--resume` 換了權重）。上傳 / 備份的標的是每個檔名最後登記的一筆；舊紀錄是歷史，不是撞名。撞名只指「不同路徑、同檔名、不同 sha」。`train status` 的 backed / unbacked 以 sha256 判斷、涵蓋全部紀錄。（後半的「舊 bytes 沒有副本就列為 unbacked」見第 12 條修訂。）
 5. **`--resume` 換寫 `weights_hash` 要留痕**：既有 `weights_hash` 非空且與新 final 不同時，先在 `history.jsonl` 記 `{"event": "replace", "field": "weights_hash", "old_sha256", "via": "train.run"}` 再寫 `run.yaml`；有 predictions 的 run 一樣允許 resume（讀數綁的是 `prediction_sha`，不是權重）。
 6. **`uploaded` 事件只記新出現的副本**：`(dest, name, sha256)` 已在 `uploads[]` 裡的重驗證只更新 `train.yaml`（`uploaded_at`），不追加事件；已在目的地且 sha 相同的檔一樣回 `verified=True` 的紀錄（手動放上去的副本也算）。
 7. **命令可執行性預檢對 `--cwd` 解析**：`command_found(token, cwd, PATH)` = PATH 上找得到、或 `cwd / token` 是檔案（絕對路徑自然成立）。
@@ -248,3 +248,5 @@ s.note("val_auc", 0.912)                            # note 事件
 9. **環境探針**：探針程式的 cuDNN 行以 `if` 守衛寫法（等價於 §7 的條件式）；`gpus()` 以每列的第二欄為 driver，缺欄位的列略過。
 10. **`assert_plan_matches(plan, card)` 新增於 `vcp/data/split.py`**：本層唯一的資料層改動；既有三份同義檢查留待後續統一。→ 2026-09-07 已統一：`data/dataset.py`、`measure/ingest.py`、`fuse/members.check_plan` 都改呼叫它，全庫只剩這一份 plan hash 檢查。
 11. **每個 attempt 記自己的 `command` / `seed` / `venv`**（`Attempt` 的三個選填欄位，2026-09-07）：`--resume` 可以換命令（`--config` 釘住 `config_hash` 時）、換 seed、換 venv，紀錄要說得出「第 n 次是拿什麼跑的」。紀錄層的 `command` / `seed` / `venv` 刻意維持**第一個 attempt** 的值——它描述這個 run 是怎麼開始的，`run.yaml` 的 `config_hash` 也綁在那一刻；要看最新的就看 `attempts[-1]`（`train status` 的人類行印的就是它）。舊的 `train.yaml` 三個欄位皆無，照樣載入（`None`）。
+12. **`train status` 另計 `superseded=`**（2026-09-07，修訂第 4 條後半）：同一路徑被後來的登記取代、又從沒上傳過的舊 bytes，不再算進 `unbacked=`，改成 `superseded=`（`--json` 另附路徑清單），也不列入 WARN 條件。理由：那些 bytes 已經不在檔案裡，副本再也不可能出現，永遠掛在 `unbacked` 只是噪音；`unbacked=` 因此收斂成「目前的 bytes 沒有副本」——唯一可行動的數字。`backed=` 的定義不變（sha256 有驗過副本的紀錄數，含舊的）。
+13. **`--cwd` 與兩個 CLI 細節**（2026-09-07）：`--cwd` 不是目錄 → `ValidationFailed("not_found: --cwd <path> is not a directory")`，與其他預檢一起在第一次寫入之前（原本是 `Popen` 丟裸 `OSError`〔ABORT〕，而且 `run.yaml` 與一個 `running` attempt 已經落地）；`not_found:` 沿用全庫既有前綴，§9 的 `reason=` 清單照此補。`--final` 沒解出來時的 WARN 由「`final=skipped (command failed)`」改為「`final=skipped (attempt <status>)`」（`failed` / `interrupted`）。`train upload` 與 `train status` 移除宣告了卻沒用的 `--configs-root`（兩者只讀資料根目錄下的 run），只有 `train run` 保留。

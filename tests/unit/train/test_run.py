@@ -57,9 +57,6 @@ s.register_checkpoint("weights/epoch.pt", final=True)
 s.note("val_auc", 0.9)
 """
 
-# C2/I1/I3 + resume regression: the command is byte-identical across attempts, but a counter
-# file (persisted in cwd, which --resume shares) makes best.pt's bytes differ between attempts,
-# the way a real trainer's weights differ after more epochs. last.pt never changes.
 # 5-1: prints one line (so on_line runs) and then outlives any patience the wrapper has.
 SLEEPER = """
 import time
@@ -67,6 +64,9 @@ print("tick", flush=True)
 time.sleep(30)
 """
 
+# C2/I1/I3 + resume regression: the command is byte-identical across attempts, but a counter
+# file (persisted in cwd, which --resume shares) makes best.pt's bytes differ between attempts,
+# the way a real trainer's weights differ after more epochs. last.pt never changes.
 RESUME_FAKE = """
 from pathlib import Path
 
@@ -330,9 +330,27 @@ def test_train_run_failed_command_registers_but_does_not_upload(roots, work, tmp
     )
     assert res.attempt.status == "failed" and res.attempt.exit_code == 2
     assert res.registered == 2 and res.final is None and res.uploaded == 0
-    assert "final=skipped (command failed)" in res.warnings
+    # 5-8: the warning names the attempt's status, because "command failed" was a lie whenever
+    # the attempt ended some other way (see the interrupted case below).
+    assert "final=skipped (attempt failed)" in res.warnings
     assert not (tmp_path / "vault").exists()
     assert load_run(roots.data, "r1").source.weights_hash is None
+
+
+def test_train_run_interrupted_attempt_says_so_in_the_final_warning(roots, work, tmp_path):
+    """5-8: an interrupted attempt did not "fail" -- nothing about the command went wrong, it
+    was stopped. The warning reads the attempt's own status instead of assuming one."""
+    _seed(roots)
+
+    def boom(line):
+        raise KeyboardInterrupt
+
+    res = train_run(
+        _spec(roots, work, command=[sys.executable, "fake_train.py", "0"], on_line=boom)
+    )
+    assert res.attempt.status == "interrupted"
+    assert "final=skipped (attempt interrupted)" in res.warnings
+    assert res.final is None
 
 
 def test_train_run_checks_before_writing(roots, work, tmp_path):
@@ -426,6 +444,22 @@ def test_resume_closes_an_attempt_left_running_by_a_crash(roots, work, tmp_path)
     note = next(e for e in read_events(roots.data, "r1") if e["event"] == "note")
     assert note["attempt"] == 1
     assert note["value"] == "attempt 1 found running at resume; marked interrupted"
+
+
+def test_cwd_must_be_a_directory_and_nothing_is_written(roots, work, tmp_path):
+    """5-8: a --cwd that does not exist used to reach Popen as a bare OSError -- an ABORT, after
+    run.yaml, train.yaml and a `running` attempt were already on disk. It is plainly bad input:
+    a located FAIL, checked with everything else before the first write."""
+    _seed(roots)
+    with pytest.raises(ValidationFailed, match="not_found: --cwd") as ei:
+        train_run(_spec(roots, work, cwd=tmp_path / "nowhere"))
+    assert "is not a directory" in str(ei.value)
+    assert not run_dir(roots.data, "r1").exists()
+    a_file = tmp_path / "a.txt"
+    a_file.write_text("x", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="not_found: --cwd"):
+        train_run(_spec(roots, work, cwd=a_file))
+    assert not run_dir(roots.data, "r1").exists()
 
 
 def test_train_run_venv_python_must_exist(roots, work, tmp_path):

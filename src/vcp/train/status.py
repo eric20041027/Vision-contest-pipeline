@@ -17,6 +17,7 @@ class StatusResult:
     record: TrainRecord
     backed: int
     unbacked: list[str]
+    superseded: list[str]
     missing: list[str]
     drift: list[str]
     running: int
@@ -26,13 +27,19 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
     record = load_record(data_root, run_id)
     # Backed-ness is keyed by bytes (sha256), not path: a --resume that changes a checkpoint's
     # bytes adds a second CheckpointRecord for the same path, and a verified upload of the OLD
-    # bytes must not mark the NEW record backed. A path can appear twice in ``unbacked`` if two
-    # records of it (e.g. the old and the new) are both unbacked.
+    # bytes must not mark the NEW record backed.
     verified = {u.sha256 for u in record.uploads if u.verified}
+    # 5-10: registration appends, so the LAST record of a path holds its current bytes. An
+    # earlier record with no copy can never gain one -- the file it describes is gone -- so it
+    # is reported as ``superseded`` rather than sitting in ``unbacked`` for the life of the run.
+    # ``unbacked`` then means what it can be acted on: current bytes with no copy anywhere.
+    newest = {c.path: c.sha256 for c in record.checkpoints}
+    stale = [c for c in record.checkpoints if c.sha256 not in verified]
     return StatusResult(
         record=record,
         backed=sum(1 for c in record.checkpoints if c.sha256 in verified),
-        unbacked=[c.path for c in record.checkpoints if c.sha256 not in verified],
+        unbacked=[c.path for c in stale if newest[c.path] == c.sha256],
+        superseded=[c.path for c in stale if newest[c.path] != c.sha256],
         missing=_missing(record, data_root),
         drift=_drift(record, data_root) if verify else [],
         running=sum(1 for a in record.attempts if a.status == "running"),

@@ -153,6 +153,7 @@ def test_train_upload_and_status_cli(roots, tmp_path):
         and "unbacked=1" in v
         and "backed=0" in v
         and "running=0" in v
+        and "superseded=0" in v  # 5-10: always reported, so 0 is a statement, not a silence
     )
     # 5-2: the LAST attempt's command (a --resume may have changed it), not the record's
     assert f"attempt 1 command: {sys.executable} fake_train.py 0" in r.output
@@ -181,3 +182,38 @@ def test_train_upload_and_status_cli(roots, tmp_path):
     assert r.exit_code == 1 and "changed since" in _verdict(r.output)
     r = runner.invoke(app, ["train", "status", "--run", "ghost"])
     assert r.exit_code == 1 and "run=ghost" in _verdict(r.output)
+
+
+def test_upload_and_status_have_no_configs_root_option(roots, tmp_path):
+    """5-8: both declared `--configs-root` and never read it -- they take a run id and a data
+    root, nothing that lives under configs/. An option that does nothing is worse than absent."""
+    for cmd in (
+        ["train", "status", "--run", "r1", "--configs-root", str(tmp_path)],
+        [
+            "train",
+            "upload",
+            "--run",
+            "r1",
+            "--dest",
+            str(tmp_path),
+            "--configs-root",
+            str(tmp_path),
+        ],
+    ):
+        r = runner.invoke(app, cmd)
+        assert r.exit_code != 0, r.output
+        assert "configs-root" in (r.output + (r.stderr if r.stderr_bytes else ""))
+    assert "--configs-root" not in runner.invoke(app, ["train", "status", "--help"]).output
+    assert "--configs-root" not in runner.invoke(app, ["train", "upload", "--help"]).output
+    assert "--configs-root" in runner.invoke(app, ["train", "run", "--help"]).output
+
+
+def test_upload_only_accepts_final(roots, tmp_path):
+    """5-9: `--only` is a two-valued flag spelled as a string; anything else must say what the
+    one accepted value is rather than silently uploading everything."""
+    r = runner.invoke(
+        app, ["train", "upload", "--run", "r1", "--dest", str(tmp_path), "--only", "garbage"]
+    )
+    assert r.exit_code == 1, r.output
+    v = _verdict(r.output)
+    assert "status=FAIL" in v and "'final'" in v and "garbage" in v

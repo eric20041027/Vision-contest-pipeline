@@ -393,7 +393,8 @@ def _finish_checkpoints(
         if final is None:
             warnings.append("final=none")
     elif spec.final:
-        warnings.append("final=skipped (command failed)")
+        # 5-8: the attempt's own status -- "command failed" was wrong for an interrupted one.
+        warnings.append(f"final=skipped (attempt {status})")
     if final is not None:
         old_hash = card.source.weights_hash
         if old_hash is not None and old_hash != final.sha256:
@@ -454,6 +455,11 @@ def train_run(spec: RunSpec) -> RunResult:
     if not spec.command or spec.command[0].startswith("-"):
         raise ValidationFailed("a training command is required after -- (e.g. -- python train.py)")
     cwd = (spec.cwd or Path.cwd()).resolve()
+    # 5-8: Popen would meet this as a bare OSError (ABORT) only after run.yaml, train.yaml and a
+    # `running` attempt were on disk. It is bad input, so it is a located FAIL, checked here with
+    # everything else that must hold before the first write.
+    if not cwd.is_dir():
+        raise ValidationFailed(f"not_found: --cwd {cwd} is not a directory")
     trained_on, refs = derive_trained_on(
         spec.exports, spec.trained_on, dataset=dataset, plan=plan, data_root=data_root
     )

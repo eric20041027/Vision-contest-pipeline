@@ -213,6 +213,10 @@ def test_bootstrap_refuses_an_estimate_made_of_a_minority_of_the_draws():
     # One more usable draw than skipped ones and the estimate stands.
     res = bootstrap_sd(samples, {}, _PickyMetric(allow=6), card, {}, resamples=10, seed=0)
     assert (res.resamples, res.used, res.skipped) == (10, 6, 4) and res.value > 0.0
+    # A single usable draw has no spread: refused with the same reason, never a nan.
+    with pytest.raises(ValidationFailed, match="too_many_skipped") as single:
+        bootstrap_sd(samples, {}, _PickyMetric(allow=1), card, {}, resamples=2, seed=0)
+    assert "leaving 1 usable" in str(single.value)
 
 
 def _all_empty_seg(n: int) -> list[Sample]:

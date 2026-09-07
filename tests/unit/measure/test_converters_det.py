@@ -454,8 +454,9 @@ def test_yolo_txt_reads_an_export_manifest_without_view_indexes(det_export, tmp_
 
 
 def test_yolo_txt_rejects_multi_view_sample(roots, tmp_path):
-    """The YOLO export manifest records no view index, so a matched sample with more than one
-    view (e.g. exported with --opt view=1) cannot be safely de-normalised against views[0]."""
+    """The YOLO export manifest records the exported view index, but `yolo_txt` still
+    de-normalises against views[0] only, so a matched sample with more than one view (e.g.
+    exported with --opt view=1) is refused rather than silently scaled by the wrong view."""
     paths = DatasetPaths.resolve("mv", data_root=roots.data, configs_root=roots.configs)
     samples = [
         Sample(

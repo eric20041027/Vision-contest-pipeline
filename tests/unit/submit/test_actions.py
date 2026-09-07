@@ -4,12 +4,13 @@ from datetime import timedelta
 import pytest
 
 from submit_fixtures import EVAL, STAMP, TEST, seed_eval_runs, seed_judgements, seed_test_runs
+from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError, ValidationFailed
-from vcp.core.time import parse_stamp, utc_now
+from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.actions import record, score, upload
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile
-from vcp.submit.schema import PlatformProfile, Quota
+from vcp.submit.schema import LedgerRow, PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage
 
 SECRET = "fakesecretfakesecretfakesecret1234"
@@ -152,3 +153,25 @@ def test_upload_on_manual_platform_is_refused(pair):
     _staged(pair, _profile())
     with pytest.raises(ValidationFailed, match="manual_platform"):
         upload(TEST, "S1", runner=FakeRunner([]), **_kw(pair))
+
+
+@pytest.mark.parametrize("first", ["manual_platform", "locked", "past_deadline"])
+def test_upload_checks_profile_and_guards_before_artifact_hash(pair, first):
+    profile = (
+        _profile() if first == "manual_platform" else _profile(platform="kaggle", competition="c1")
+    )
+    _staged(pair, profile)
+    ledger = SubmissionLedger(pair.test_paths.submissions_log)
+    if first == "locked":
+        ledger.append(LedgerRow(event="lock", ts=stamp(), reason="freeze"))
+    if first in {"locked", "past_deadline"}:
+        profile = profile.model_copy(update={"deadline": "2000-01-01T00:00:00Z"})
+        dump_yaml_model(profile, pair.test_paths.submit_yaml)
+    artifact = pair.test_paths.submission_dir("S1") / "submission.csv"
+    artifact.write_bytes(artifact.read_bytes() + b"tampered")
+    before = pair.test_paths.submissions_log.read_bytes()
+    runner = FakeRunner([])
+    with pytest.raises(ValidationFailed, match=first):
+        upload(TEST, "S1", runner=runner, **_kw(pair))
+    assert runner.calls == []
+    assert pair.test_paths.submissions_log.read_bytes() == before

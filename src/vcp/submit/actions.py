@@ -41,12 +41,25 @@ class Prepared:
 
 
 def _prepare(
-    dataset: str, submission_id: str, data_root: Path | None, configs_root: Path | None
+    dataset: str,
+    submission_id: str,
+    data_root: Path | None,
+    configs_root: Path | None,
+    *,
+    uploading: bool = False,
 ) -> Prepared:
     """The staged submission with its artifact re-hashed (the second of the three checks)."""
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, sha = load_profile(paths)
     ledger = SubmissionLedger(paths.submissions_log)
+    if uploading:
+        if profile.platform == "manual":
+            raise ValidationFailed(
+                "manual_platform: this profile has no upload API; upload by hand, then "
+                "`vcp submit record`"
+            )
+        assert_unlocked(ledger, submission_id=submission_id)
+        assert_before_deadline(profile, utc_now())
     if ledger.staged(submission_id) is None:
         raise ValidationFailed(
             f"not_staged: {submission_id!r} has no staged row", fields={"id": submission_id}
@@ -82,15 +95,8 @@ def upload(
     data_root: Path | None = None,
     configs_root: Path | None = None,
 ) -> UploadOutcome:
-    p = _prepare(dataset, submission_id, data_root, configs_root)
-    if p.profile.platform == "manual":
-        raise ValidationFailed(
-            "manual_platform: this profile has no upload API; upload by hand, then "
-            "`vcp submit record`"
-        )
+    p = _prepare(dataset, submission_id, data_root, configs_root, uploading=True)
     now = utc_now()
-    assert_unlocked(p.ledger, submission_id=submission_id)
-    assert_before_deadline(p.profile, now)
     assert_quota(quota_state(p.ledger, p.profile, now))
     msg = f"{submission_id} {message}".strip() if message else submission_id
     result = get_platform(p.profile.platform).upload(p.staged, p.artifact, msg, p.profile, runner)

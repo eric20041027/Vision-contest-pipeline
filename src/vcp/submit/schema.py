@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Literal
+from typing import Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -20,7 +20,7 @@ CandidateKind = Literal["candidate", "baseline", "probe"]
 Admission = Literal["PASS", "waived"]
 PairingMode = Literal["single", "fusion", "kernel"]
 Event = Literal["staged", "uploaded", "scored", "foreign", "final", "lock", "unlock", "note"]
-EVENTS = ("staged", "uploaded", "scored", "foreign", "final", "lock", "unlock", "note")
+EVENTS = get_args(Event)
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _REQUIRED: dict[str, tuple[str, ...]] = {
     "staged": ("submission_id", "kind", "eval_run", "gate", "profile_sha256"),

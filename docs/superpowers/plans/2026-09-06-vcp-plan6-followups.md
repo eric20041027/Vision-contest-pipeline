@@ -119,3 +119,16 @@
 裁決：RSNA 用 study ID，修正 §14 的 view_stem 敘述 — 官方本機 CSV 與匯入後路徑一致 — 代價是整合測試表頭由通用 id 改為比賽欄名，核心 writer 介面不變。
 
 C1 驗證：新行為測試先 7 failed / 30 passed；指定 gate 135 passed；全套 921 passed / 4 skipped、覆蓋率 96.68%；真資料 8 passed / 3 skipped；ruff check / format --check 乾淨。自審：無新增 schema 欄位、無時鐘或台帳行為改動；兩側遞迴身分欄位以 setdefault 保留最深失敗位置。
+
+| 項 | 處置 |
+|---|---|
+| C2a | submit EVENTS 由 get_args(Event) 產生；測試釘 _REQUIRED 完整性。training EVENTS 未重複 Literal，不改。 |
+| C2b | upload 的平台／封槍／截止先於 sha；三個複合失敗測試斷言優先 reason、零新台帳、零平台呼叫。record 用平台發生時間驗截止，維持既有流程，本 brief 不改。 |
+| C2c | weights_hash 衝突訊息追加 omit --weights 提示；保留原衝突斷言並補訊息結尾。 |
+| C2d | 目前沒有 samples == rows 比較或誤導註解；在 scores_csv 的 WriteResult 解釋一筆預測對一列的關係，不虛構新檢查。 |
+| C2e | e2e stage 的 admission / pairing、逐發 record quota、score public、holdout readings 與 init platform 皆補斷言；final 既有 chosen 斷言保留；file-level noqa: E501 維持。 |
+| C2f | spec §17 記平台成功但寫台帳失敗的視窗。核對 sync 發現 description 若命中 staged id 走配對路徑，只有未配對者是 foreign；如實記錄，不承諾必成 foreign。 |
+
+裁決：sync 的 foreign 恢復敘述加適用條件 — 既有配對規則先看 description，brief 的無條件措辭不精確 — 本回合接受非原子視窗，不擴上傳對帳機制。
+
+C2 驗證：新行為測試先 4 failed / 28 passed；指定 gate（加 identity 測試）143 passed；全套 925 passed / 4 skipped、覆蓋率 96.68%；真資料 8 passed / 3 skipped；ruff check / format --check 乾淨。自審：upload 的檢查先後符合 spec，record 的時間語意不變；Event 字彙、台帳格式與既有 run 身分均相容。

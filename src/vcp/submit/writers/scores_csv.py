@@ -68,4 +68,5 @@ class ScoresCsvWriter:
                     )
                 writer.writerow([ids[s.sample_id], *(fmt_float(values[n]) for n in names)])
                 rows += 1
+        # One row per predicted sample: missing rows are reported separately, never duplicated.
         return WriteResult(rows=rows, samples=rows, missing=missing)

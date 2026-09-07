@@ -76,6 +76,7 @@ def _measure_holdout(run):
         ],
     )
     assert r.exit_code == 0, r.output
+    assert "readings=1" in _verdict(r.output)
 
 
 def _ready(pair):
@@ -111,6 +112,7 @@ def test_manual_platform_story(pair):
         "2999-01-01T00:00:00Z",
     )
     assert r.exit_code == 0, r.output
+    assert "platform=manual" in _verdict(r.output)
     seed_test_runs(pair)
     stage = ["stage", "--dataset", "beach-test"]
     r = _run(*stage, "--id", "S1", "--eval-run", "good", "--test-run", "good.test")
@@ -145,19 +147,21 @@ def test_manual_platform_story(pair):
         "anchor",
     )
     assert r.exit_code == 0, r.output
+    assert "admission=waived" in _verdict(r.output) and "pairing=single" in _verdict(r.output)
     r = _run(*stage, "--id", "S4", "--eval-run", "bad", "--test-run", "bad.mismatch")
     assert r.exit_code == 1 and "identity" in _verdict(r.output)
     r = _run("verify", "--dataset", "beach-test", "--id", "S1")
     assert r.exit_code == 0 and "checks=2" in _verdict(r.output)
     at = utc_now().strftime("%Y-%m-%d %H:%M:%S")
-    for sid in ("S1", "S2", "S3"):
+    for used, sid in enumerate(("S1", "S2", "S3"), start=1):
         r = _run("record", "--dataset", "beach-test", "--id", sid, "--tz", "utc", "--at", at)
         assert r.exit_code == 0, r.output
+        assert f"quota={used}/3" in _verdict(r.output)
     assert "quota=3/3" in _verdict(r.output)
     r = _run("score", "--dataset", "beach-test", "--id", "S1", "--public", "0.8")
-    assert r.exit_code == 0
+    assert r.exit_code == 0 and "public=0.8" in _verdict(r.output)
     r = _run("score", "--dataset", "beach-test", "--id", "S3", "--public", "0.9")
-    assert r.exit_code == 0
+    assert r.exit_code == 0 and "public=0.9" in _verdict(r.output)
     r = _run("report", "--dataset", "beach-test")
     assert r.exit_code == 0 and "rows=3" in _verdict(r.output)
     r = _run("status", "--dataset", "beach-test")
@@ -233,6 +237,8 @@ def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
     ):
         r = _run(*stage, "--id", sid, "--eval-run", ev, "--test-run", tr, *extra)
         assert r.exit_code == 0, r.output
+        admission = "PASS" if sid == "S1" else "waived"
+        assert f"admission={admission}" in _verdict(r.output)
     monkeypatch.setenv("FAKE_KAGGLE_FAIL", "1")
     r = _run("upload", "--dataset", "beach-test", "--id", "S1")
     outputs.append(r.output)

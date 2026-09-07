@@ -1,0 +1,17 @@
+prereg_id: knee-mean-v1-admit-knee-cnn-s42-v1
+claim: 'recipe knee-mean-v1: member knee-cnn-s42-v1 contributes (fused with it beats
+  fused without it)'
+component: knee-cnn-s42-v1
+component_class: model
+baseline_run: fuse-knee-mean-v1-minus-knee-cnn-s42-v1
+candidate_run: fuse-knee-mean-v1
+metric: macro_auc
+params: {}
+subsets:
+- valA
+- valB
+t_min: 2.0
+min_bases: 2
+sigma_method: splithalf
+sigma_ratio: 1.0
+created_at: '2026-09-07T07:34:03.319Z'

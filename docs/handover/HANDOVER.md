@@ -20,9 +20,9 @@
 ## 2. 現況
 
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`），工作樹乾淨；沒有未合併的分支。
-- 測試：`uv run pytest --cov=vcp` 全綠（900+ passed、4 個真資料 skip），覆蓋率約 96.5%；`uv run ruff check .` 與 `uv run ruff format --check .` 乾淨。
-- 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 8 passed / 3 skipped（marine-debris 未匯入）。
-- 環境：Windows 11、`uv` 管 Python 3.12（沒有系統 Python）、typer 0.27；kaggle CLI 2.2.4 由 `uv tool` 裝（不在 PATH，profile 的 `kaggle_command` 可指定）；rclone 未安裝（備份層以假 rclone 測試；真推送要自己裝）。
+- 測試：`uv run pytest --cov=vcp`，覆蓋率約 96.7%；實際最新數字見 RSNA RUNBOOK 驗證紀錄。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
+- 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
+- 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。
 
 ## 3. 程式碼地圖
 
@@ -39,7 +39,7 @@ src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）ti
                   writers/（scores_csv/coco_results/csv_boxes）platforms/（manual/kaggle）stage actions sync final report
 src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
 src/vcp/cli*.py   每層一個 typer app；cli_common.run_command 統一 VERDICT / exit code / --json / context
-projects/rsna-knee  比賽膠水（下載腳本、清單）；比賽專屬程式碼只能放這裡
+projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
 tests/            unit/<layer>、integration（真資料）、helpers.py、submit_fixtures.py、backup_fixtures.py
 configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git
 ```
@@ -62,7 +62,7 @@ configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、
 - 設計 spec：`docs/superpowers/specs/`（每層一份；每份最後的「補充決定」一節是實作期的定案，**以程式碼為準**）。
 - 實作計畫：`docs/superpowers/plans/<date>-vcp-planN-*.md`（執行當時的程式碼；已被後來修正的地方在計畫末的「執行期修正」一節或後記）。
 - 後記：`docs/superpowers/plans/<date>-vcp-planN-followups.md`——裁決、審查發現、待辦與處置；**開放的待辦都在各後記的最後一節**。
-- 比賽膠水：`projects/rsna-knee/`（下載子集的腳本、Kaggle 打包備案）。
+- 比賽膠水：`projects/rsna-knee/RUNBOOK.md`（實際步驟與讀數）、`DESIGN.md`（設計與裁決），以及歷史下載腳本。
 - 專案 skill：`.claude/skills/` 與 `.agents/skills/`（vcp-data-pipeline、vcp-extend-registry、vcp-contest-onboarding）。
 
 ## 6. 開放的待辦（依優先序）
@@ -71,7 +71,8 @@ configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、
 2. **接續修復已完成**：遺失 `fuse.json` 時拒絕不完整紀錄，`--replace` 重建所有宣告子集（`7c31c3d`，Plan 4 §9）；eval / fuse / train / submit 的 26 個命令全部採用 `run_command(context=)`（Plan 7 §8）。歷史「未做」清單已逐層核對，處置在各後記最新節；不要依舊節再做一遍。
 3. **效能回合**（都刻意延後）：Plan 2c §5-2（materialize 的 `is_dir`/`stat` 兩百萬次）、Plan 3 §5-4（seg 指標配置、護欄重算、judge 載兩次）、Plan 7 §5-6。
 4. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）、Plan 5 checkpoint TOCTOU 仍延後；`Manifest.data_root` 刻意保留作人讀來源標記。
-5. **比賽膠水（真正的下一個里程碑）**：RSNA Knee（Kaggle，截止 2026-10-22；DICOM 多序列 study、12 標籤 macro AUC、notebook-only 推論）——`projects/rsna-knee/` 要補：訓練 venv 與 `vcp train run` 的實際命令、`vcp submit init --platform kaggle --kind kernel`、kernel 打包、`vcp backup` 的撤離腳本。
+5. **RSNA Knee 已實跑本機基準**：200 study 固定切分、PNG256、兩個種子訓練、預登記 / macro AUC / judge、平均融合消融、test profile、離線 bundle 已完成；讀數與命令見 `projects/rsna-knee/RUNBOOK.md`。seed 43 與融合均未準入，第一個 seed 42 是 baseline。**尚未完成外部里程碑**：指定私有 Kaggle dataset 上傳待核准，notebook 執行 / 提交 / scored / sealed final 未發生；備份目的地未提供。不要把手冊中待執行命令當成已完成，也不要先解封 holdout。
+6. **Windows 命令解析**：裸 `python` 可啟動到 venv 以外，即使 `--venv` 探針正確；專案已用絕對 interpreter 完成訓練，通用解析修復另列 Plan 5 §10，與效能回合分開。
 
 ## 7. 開發流程（這個 repo 一直這樣做）
 

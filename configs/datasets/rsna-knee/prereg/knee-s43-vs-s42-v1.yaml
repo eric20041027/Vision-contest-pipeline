@@ -1,0 +1,16 @@
+prereg_id: knee-s43-vs-s42-v1
+claim: Fixed seed 43 improves over fixed seed 42 on both untouched eval subsets
+component: seed43
+component_class: model
+baseline_run: knee-cnn-s42-v1
+candidate_run: knee-cnn-s43-v1
+metric: macro_auc
+params: {}
+subsets:
+- valA
+- valB
+t_min: 2.0
+min_bases: 2
+sigma_method: splithalf
+sigma_ratio: 1.0
+created_at: '2026-09-07T07:30:57.238Z'

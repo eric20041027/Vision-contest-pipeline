@@ -215,6 +215,8 @@ uv run vcp submit verify --dataset D-test --id SUB34                    # 位元
 
 ## DICOM 形態的用法（以 RSNA Knee 為例）
 
+200-study 影像基準的實際訓練、量測、融合、離線 notebook 打包、提交與備份命令見 [RSNA Knee RUNBOOK](projects/rsna-knee/RUNBOOK.md)。已實跑到本機 bundle；外部上傳與備份的待續條件也記在手冊。PyTorch 使用 `projects/rsna-knee/.venv`，Windows wrapper 後的訓練命令使用該 venv 的絕對 Python 路徑。
+
 ```bash
 uv run vcp data import --importer dicom --src C:/vcp-data/raw/rsna-knee/train_series --name rsna-knee \
   --license "Competition rules" --url https://www.kaggle.com/competitions/rsna-knee-abnormality-detection \

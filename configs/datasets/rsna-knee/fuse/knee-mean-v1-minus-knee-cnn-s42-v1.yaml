@@ -1,0 +1,10 @@
+recipe_id: knee-mean-v1-minus-knee-cnn-s42-v1
+dataset: rsna-knee
+plan_id: fixed-v1
+method: mean
+params: {}
+members:
+- run: knee-cnn-s43-v1
+  weight: 1.0
+notes: ''
+created_at: '2026-09-07T07:34:03.319Z'

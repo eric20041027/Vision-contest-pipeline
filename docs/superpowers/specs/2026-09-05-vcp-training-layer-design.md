@@ -252,3 +252,5 @@ s.note("val_auc", 0.912)                            # note 事件
 13. **`--cwd` 與兩個 CLI 細節**（2026-09-07）：`--cwd` 不是目錄 → `ValidationFailed("not_found: --cwd <path> is not a directory")`，與其他預檢一起在第一次寫入之前（原本是 `Popen` 丟裸 `OSError`〔ABORT〕，而且 `run.yaml` 與一個 `running` attempt 已經落地）；`not_found:` 沿用全庫既有前綴，§9 的 `reason=` 清單照此補。`--final` 沒解出來時的 WARN 由「`final=skipped (command failed)`」改為「`final=skipped (attempt <status>)`」（`failed` / `interrupted`）。`train upload` 與 `train status` 移除宣告了卻沒用的 `--configs-root`（兩者只讀資料根目錄下的 run），只有 `train run` 保留。
 
 14. **CLI 失敗身分**（2026-09-07）：run / upload / status 的 context 均帶 run，run 另帶 dataset / plan；早期驗證失敗也輸出這些欄位，錯誤 fields 優先，JSON 與 VERDICT 一致。
+
+15. **Windows 使用命令的絕對 interpreter**（2026-09-07，RSNA 現場驗證）：`--venv` 的探針 / 環境設定不代表 Windows `Popen` 會依子程序 PATH 選到裸 `python`；已觀測實際訓練落到基底 Python 而失敗。現行可行契約是呼叫者明寫 `<venv>/Scripts/python.exe` 的絕對路徑，失敗 attempt 用相同 config 的 `--resume` 留痕接續。這是現行限制與使用裁決，並非本輪改過核心命令解析；通用修復待 Plan 5 後記 §10。

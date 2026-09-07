@@ -78,3 +78,20 @@
 - 八次任務審查抓到 4 個 Important，都是計畫層的缺陷（欄位名遮蔽、測試把改命令當 resume、預檢對錯 cwd、冪等重跑灌事件）——轉錄型任務的價值在審查者獨立跑程式碼與探針，而不是在實作者。
 - 最終審查的兩個 Critical 都是**跨任務的生命週期接縫**（包裝器與 Session 對同一個檔的先後寫入；checkpoint 身分是 (path, sha) 但兩個下游只看 path）。下次預檢清單加兩條：「同一個檔有幾個寫者、各在什麼時間點、後寫者有沒有先重讀？」、「複合身分有沒有在某個消費者被壓成單鍵？」
 - 修正輪本身也可能帶進新問題（`with Popen` 的 `__exit__` 語意）：範圍限定再審抓到了，斷路器規則讓它成為有記錄的待辦而不是第二輪。
+
+## 8. Hygiene B：§6 待辦的處置（2026-09-07，分支 `worktree-hygiene-b-fuse-train`，3 個 commit + 1 個控制者微修）
+
+| §6 項 | 處置 |
+|---|---|
+| 1 | 做了：`execute()` 的 `on_line` 拋任何例外都 `stop_child`（terminate → 有時限 wait → kill）再重拋；Ctrl+C 分支維持 `interrupted` 與 30 秒；新增 `ABORT_TIMEOUT_S = 5`。測試：`on_line` 拋 `RuntimeError`、子程序 sleep，2 秒內返回且子程序已結束。 |
+| 2 | 做了：`Attempt` 多 `command` / `seed` / `venv`（可選，舊紀錄可讀）；每個 attempt（含 `--resume`）記自己的值；紀錄層級維持第一個 attempt 的值；`train status` 印最後一個 attempt 的命令。 |
+| 3 | 做了：`--resume` 把還是 `running` 的上一個 attempt 標成 `interrupted`（`finished_at=stamp()`、`exit_code=None`）並寫一列 `note`；`status` 不再為它 WARN。note 先於 `train.yaml` 重寫的視窗刻意保留（spec §14-8：yaml 不會是唯一痕跡，下一次 resume 會調和）。 |
+| 4 | 做了：`run_command` 接 `KeyboardInterrupt` → `status=ABORT reason=interrupted`（含 context 欄位），exit 2；不接 `SystemExit` / `typer.Exit`。 |
+| 5 | 做了：`register(..., digests=)` 讓 `Session.register_checkpoint` 只 hash 一次；`records.current_attempt(record)` 共用。 |
+| 6 | 做了：`append_event` 前四個參數改 positional-only（否則 `event=` / `attempt=` 會先撞 TypeError，守門到不了），payload 帶 `ts` / `event` / `attempt` 即 `ValueError`。 |
+| 7 | 做了（Plan 4 後記 §8-2）。 |
+| 8 | 做了：`--cwd` 不是目錄 → `not_found:`（任何寫入前）；`final=skipped (attempt <status>)`；`train upload` / `train status` 去掉沒用的 `--configs-root`（README 表更新）；README 的 PyTorch 示範加註 `torch` 與 `NAMES` 是讀者自己的；training spec §14-13。 |
+| 9 | 做了六個測試；其中兩個釘實際行為：`mark_final` 對未登記的身分只清旗標不拋錯（`resolve_final` 才是守門，docstring 已改）；環境探針回非 dict JSON 是 `VcpError`（ABORT，spec §9）。TOCTOU 不做。 |
+| 10 | 做了：`StatusResult.superseded`（每路徑一筆、去重）；VERDICT `superseded=<int>`、`--json` 列 `superseded` 與 `unbacked`；不計入 WARN；spec §14 與 README。 |
+
+審查（opus）：SPEC ✅；QUALITY APPROVED——1 MEDIUM（`measure/ingest.py` 反向依賴 `fuse/build.py` 的常數 → 微修：`FUSE_FRAMEWORK` 改由 `measure/runs.py` 擁有）、3 LOW（`superseded` 重複路徑與 `--json` 缺 `unbacked` → 微修；note 先於 yaml 的視窗 → 刻意）。微修後全套 909 passed / 4 skipped、覆蓋率 96.56%、真資料整合 8 passed。

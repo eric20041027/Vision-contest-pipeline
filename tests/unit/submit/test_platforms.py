@@ -165,6 +165,30 @@ def test_parse_submissions_shapes_and_paging():
         parse_date("yesterday")
 
 
+def test_parse_submissions_redacts_platform_strings():
+    rows = [
+        {
+            "ref": 7,
+            "fileName": SECRET,
+            "date": "2026-08-31T21:28:00Z",
+            "status": SECRET,
+            "submittedBy": SECRET,
+        }
+    ]
+    subs, _ = parse_submissions(json.dumps(rows))
+    sub = subs[0]
+    assert SECRET not in sub.file_name and "<redacted>" in sub.file_name
+    assert SECRET not in sub.status and "<redacted>" in sub.status
+    assert sub.submitted_by is not None
+    assert SECRET not in sub.submitted_by and "<redacted>" in sub.submitted_by
+
+
+def test_parse_submissions_ref_zero_is_not_the_sha_fallback():
+    rows = [{"ref": 0, "fileName": "x.csv", "date": "2026-08-31T21:28:00Z"}]
+    subs, _ = parse_submissions(json.dumps(rows))
+    assert subs[0].platform_ref == "0"
+
+
 def test_kaggle_list_pages_to_the_end():
     p = get_platform("kaggle")
     page1 = json.dumps(

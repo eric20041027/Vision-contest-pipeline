@@ -104,6 +104,7 @@ def test_sync_matches_scores_and_records_foreign(staged):
     led = SubmissionLedger(staged.test_paths.submissions_log)
     assert led.latest_score("S1").public == 0.7 and led.latest_score("S1").source == "platform"
     assert led.latest_score("S2").public == 0.6 and led.latest_score("S3").public == 0.5
+    assert led.latest_score("S1").at == at and led.latest_score("S1").platform_ref == "1"
     foreign = led.of("foreign")
     assert len(foreign) == 1 and foreign[0].submitted_by == "mate" and foreign[0].public == 0.4
     again = sync(TEST, runner=FakeRunner(rows), **_kw(staged))

@@ -18,6 +18,7 @@ from vcp.submit.guards import QuotaState, quota_state
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
+from vcp.submit.sync import MATCH_WINDOW
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,56 @@ def _label(r: LedgerRow) -> str:
     return r.submission_id if r.submission_id else f"foreign:{r.platform_ref}"
 
 
+def assign_scores(uploads: list[LedgerRow], scores: list[LedgerRow]) -> list[LedgerRow | None]:
+    """The score that applies to each upload of one submission id (same order as ``uploads``,
+    oldest ``at`` first). A platform-timed score (``at`` present) belongs to the newest upload
+    whose ``at`` is not later than the score's ``at`` + MATCH_WINDOW (the platform's clock
+    can run a little ahead of the moment the upload was recorded); a manual score (no ``at``)
+    belongs to the newest upload recorded (``ts``) before it. Per upload the newest assigned
+    score (by ``ts``) wins; an upload nothing was assigned to gets None.
+
+    Scores are processed newest (by ``ts``) first, each claiming the newest still-unclaimed
+    eligible upload; an older score left with no unclaimed upload is simply dropped, which is
+    how "the newest assigned score wins" plays out when two scores would otherwise want the
+    same upload.
+    """
+    order = sorted(range(len(scores)), key=lambda i: scores[i].ts, reverse=True)
+    assigned: list[LedgerRow | None] = [None] * len(uploads)
+    claimed: set[int] = set()
+    for i in order:
+        s = scores[i]
+        if s.at is not None:
+            deadline = parse_stamp(s.at) + MATCH_WINDOW
+            eligible = [
+                idx
+                for idx, u in enumerate(uploads)
+                if idx not in claimed and parse_stamp(str(u.at)) <= deadline
+            ]
+            ranked = sorted(eligible, key=lambda idx: str(uploads[idx].at))
+        else:
+            eligible = [idx for idx, u in enumerate(uploads) if idx not in claimed and u.ts <= s.ts]
+            ranked = sorted(eligible, key=lambda idx: uploads[idx].ts)
+        if not ranked:
+            continue
+        winner = ranked[-1]
+        assigned[winner] = s
+        claimed.add(winner)
+    return assigned
+
+
+def _assigned_score(ledger: SubmissionLedger, r: LedgerRow) -> LedgerRow | None:
+    """The score ``assign_scores`` gives this particular ``uploaded`` row of its submission id."""
+    sid = str(r.submission_id)
+    uploads = ledger.uploads(sid)
+    assigned = assign_scores(uploads, ledger.of("scored", sid))
+    return next((a for u, a in zip(uploads, assigned, strict=True) if u is r), None)
+
+
 def _public(ledger: SubmissionLedger, r: LedgerRow) -> float | None:
     if r.event == "foreign":
         return r.public
-    latest = ledger.latest_score(str(r.submission_id))
-    return latest.public if latest is not None else None
+    assigned = _assigned_score(ledger, r)
+    return assigned.public if assigned is not None else None
 
 
 def status(
@@ -63,9 +109,14 @@ def status(
             public = _public(ledger, r)
             if public is not None and (best is None or public > best):
                 best, current = public, _label(r)
-    unscored = [
-        sid for sid in ledger.ids() if ledger.uploads(sid) and ledger.latest_score(sid) is None
-    ]
+    unscored: list[str] = []
+    for sid in ledger.ids():
+        uploads = ledger.uploads(sid)
+        if not uploads:
+            continue
+        assigned = assign_scores(uploads, ledger.of("scored", sid))
+        if assigned[-1] is None:
+            unscored.append(sid)
     return StatusView(
         staged=len(ledger.ids()),
         uploaded=len(ledger.of("uploaded")),
@@ -110,9 +161,9 @@ def report(
         else:
             st = ledger.staged(str(r.submission_id))
             kind = str(st.kind) if st is not None else "?"
-            latest = ledger.latest_score(str(r.submission_id))
-            public = latest.public if latest is not None else None
-            private = latest.private if latest is not None else None
+            assigned = _assigned_score(ledger, r)
+            public = assigned.public if assigned is not None else None
+            private = assigned.private if assigned is not None else None
             sealed = None
             if st is not None:
                 card = load_run(paths.data_root, str(st.eval_run))

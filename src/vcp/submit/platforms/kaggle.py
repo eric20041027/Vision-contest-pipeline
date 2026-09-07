@@ -1,6 +1,12 @@
 """Kaggle through its own CLI (spec 10.2). vcp never sees a credential: the CLI reads its own
 config, the subprocess inherits the environment unrecorded, and every byte it prints is
-redacted before it can reach a ledger, a log or a VERDICT (spec 11)."""
+redacted before it can reach a ledger, a log or a VERDICT (spec 11).
+
+``fileName``, ``status`` and ``submittedBy`` are redacted the moment they are parsed (spec
+11.4): a file name made of 32+ token characters therefore comes back as ``<redacted>`` and
+can never be matched by ``sync``'s file-and-time rule -- the staged artifact names vcp itself
+writes (``submission.csv``) are always short enough to survive redaction.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +14,11 @@ import json
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vcp.core.errors import PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_text
+from vcp.core.proc import last_line
 from vcp.core.time import stamp
 from vcp.submit.platforms.base import (
     PlatformSubmission,
@@ -21,6 +28,9 @@ from vcp.submit.platforms.base import (
     redact,
 )
 from vcp.submit.schema import PlatformProfile, Staged
+
+if TYPE_CHECKING:
+    import subprocess
 
 SUCCESS = "successfully submitted"
 PAGE_SIZE = "200"
@@ -40,15 +50,10 @@ def _command(profile: PlatformProfile, runner: Runner | None) -> tuple[list[str]
     return list(profile.kaggle_command), runner
 
 
-def _last_line(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return redact(lines[-1]) if lines else ""
-
-
-def _failed(proc: Any) -> PlatformError:
+def _failed(proc: subprocess.CompletedProcess[str]) -> PlatformError:
     text = (proc.stderr or "").strip() or (proc.stdout or "")
     return PlatformError(
-        f"kaggle CLI failed (exit {proc.returncode}): {_last_line(text)}",
+        f"kaggle CLI failed (exit {proc.returncode}): {last_line(text)}",
         fields={"exit_code": proc.returncode},
     )
 
@@ -111,13 +116,13 @@ def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None]:
         out.append(
             PlatformSubmission(
                 platform_ref=platform_ref,
-                file_name=str(item["fileName"]),
+                file_name=redact(str(item["fileName"])),
                 at=at,
                 description=redact(str(item.get("description") or "")),
                 public=parse_score(item.get("publicScore"), "publicScore"),
                 private=parse_score(item.get("privateScore"), "privateScore"),
-                status=str(item.get("status") or ""),
-                submitted_by=str(item["submittedBy"]) if item.get("submittedBy") else None,
+                status=redact(str(item.get("status") or "")),
+                submitted_by=redact(str(item["submittedBy"])) if item.get("submittedBy") else None,
             )
         )
     return out, token
@@ -148,7 +153,7 @@ class KagglePlatform:
         return UploadResult(
             confirmed=SUCCESS in proc.stdout.lower(),
             platform_ref=None,
-            detail=_last_line(proc.stdout),
+            detail=last_line(proc.stdout),
         )
 
     def list_submissions(

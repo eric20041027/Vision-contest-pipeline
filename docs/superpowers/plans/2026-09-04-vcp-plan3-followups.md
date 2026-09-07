@@ -95,3 +95,7 @@
 | 15 | 做了：`--method` 說明改「registered sigma_p method」。 |
 
 審查（opus）：SPEC ✅、APPROVED；1 MEDIUM（可用重抽只剩 1 次回 nan → 微修）、3 LOW（spec §15-7 與兩則註解過時 → 一併改；`BootstrapSd.resamples` 只有測試讀）。全套 881 passed / 4 skipped、覆蓋率 96.40%、真資料整合 8 passed。
+
+## 8. Hygiene C 接縫處置（2026-09-07）
+
+ingest 權重衝突訊息補 omit --weights 提示；由提交層 C2 帶入並補紅→綠測試，身分驗證規則與既有卡相容性不變。決定 — 提示只加在 weights_hash 衝突；依據 — config_hash 並非 weights 選項；代價 — 不替使用者改寫既有 run 身分。

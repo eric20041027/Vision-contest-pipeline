@@ -67,8 +67,9 @@ def test_second_ingest_may_fill_but_not_change_identity(roots, tmp_path):
     assert load_run(roots.data, "r1").source.weights_hash == sha256_file(weights)
     other = tmp_path / "other.pt"
     other.write_bytes(b"other")
-    with pytest.raises(ValidationFailed, match="already declares weights_hash"):
+    with pytest.raises(ValidationFailed, match="already declares weights_hash") as ei:
         ingest(_spec(roots, tmp_path, ds, plan, "valB", weights=other, replace=True))
+    assert str(ei.value).endswith("(omit --weights to keep the recorded hash)")
     assert load_run(roots.data, "r1").source.weights_hash == sha256_file(weights)
 
 

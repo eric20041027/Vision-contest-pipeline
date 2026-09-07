@@ -300,6 +300,8 @@ WBF 與其他融合技術、TTA、per-class 門檻調整工具、上傳配額與
 
 ## 16. v3 補充決定（Hygiene A 量測層，2026-09-06）
 
+Hygiene C（2026-09-07）補充：ingest 的 weights_hash 衝突訊息提示 `(omit --weights to keep the recorded hash)`；省略旗標只保留已記錄的身分，不會接受不同權重，非空 hash 仍不可任意覆寫。
+
 1. **bootstrap 對命中指標守門的重抽記 skipped**（推翻 §15-8 後半）：`bootstrap_sd` 遇到指標自己拋的 `ValidationFailed`（該次抽樣沒有 gold 框、每個類別都沒定義）就跳過該次並計數，不再整個中止。原本的行為在「小 eval 子集 + 多負樣本」下必然踩到，而使用者只能換 seed 或換子集，那不是可行動的訊息。跳過確實讓答案偏向可評分的抽樣，所以偏差有上界：`skipped > used`（超過一半）即 `ValidationFailed`（`too_many_skipped: …`，訊息帶三個數字）。σ_p 估計的 `inputs` 一律記 `resamples`（要求數）、`used`、`skipped`，`vcp eval sigma` 在 `skipped > 0` 時 VERDICT 帶 `skipped=` 並 WARN。指標的插件 bug（非 `ValidationFailed` 的例外）仍然 ABORT；`paired_bootstrap`（judge 用）維持全部拋出——判決比較的是兩個指名的 run，不得靜默丟掉比較的一部分。
 2. **VERDICT 欄位改名**（接 §15-3 的「一個名字不指兩個量」）：`sigma` 的 `cached=`（bool）改為 `existing=`（int，0 或 1），與 `measure` 的 `cached=`（列數）同形；`report` 的 `judgements=` 改為 `deltas=`，因為它數的是判決 × 子集的列數，而 `status` 的 `judged=` 數的是主張；`anchor` 的 VERDICT 加 `dataset=`（它的資料集來自 run 而非選項，原本沒有任何欄位說出它改了誰的 `anchors.json`）。
 3. **登記表名稱驗證**：`register_metric` 與 `register_sigma_method` 拒收不符 `^[A-Za-z0-9][A-Za-z0-9._-]*$` 的名稱（`RegistryError`）。名稱會進 VERDICT 的**欄位名**（`eval status` 的 `sigma[<metric>/<method>]=`），而 `Verdict.line()` 只跳脫值不跳脫欄位名，含空白或 `=` 的名字會產生無法解析的一行。

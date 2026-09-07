@@ -1,3 +1,4 @@
+from typing import get_args
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -5,9 +6,23 @@ from pydantic import ValidationError
 
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
-from vcp.submit.schema import EVENTS, Artifact, Gate, LedgerRow, PlatformProfile, Quota
+from vcp.submit.schema import (
+    _REQUIRED,
+    EVENTS,
+    Artifact,
+    Event,
+    Gate,
+    LedgerRow,
+    PlatformProfile,
+    Quota,
+)
 
 STAMP = "2026-09-05T00:00:00.000Z"
+
+
+def test_event_requirements_cover_exactly_the_event_type():
+    assert EVENTS == get_args(Event)
+    assert set(_REQUIRED) == set(EVENTS)
 
 
 def _profile(**over):

@@ -101,9 +101,10 @@ def _with_identity(card: RunCard, weights_sha: str | None, config_sha: str | Non
             continue
         current = getattr(source, name)
         if current is not None and current != sha:
+            hint = " (omit --weights to keep the recorded hash)" if name == "weights_hash" else ""
             raise ValidationFailed(
                 f"run {card.run_id!r} already declares {name}={current[:12]}; "
-                f"the given file hashes to {sha[:12]}"
+                f"the given file hashes to {sha[:12]}{hint}"
             )
         source = source.model_copy(update={name: sha})
     return card.model_copy(update={"source": source})

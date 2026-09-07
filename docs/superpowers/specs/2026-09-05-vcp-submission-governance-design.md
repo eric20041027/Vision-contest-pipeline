@@ -388,3 +388,5 @@ class Platform(Protocol):
 20. **台帳列的時戳（Plan 6c）**：`ts` 與 `at` 必須是 `stamp()` 格式的 UTC 字串（讀入即驗）。
 21. **CSV 表頭與巢狀配對（Hygiene C）**：兩個 CSV writer 在套用 columns 後檢查完整表頭（含 id），重複以 `duplicate_column:` FAIL 並帶 `column=`；巢狀配對失敗以 `eval_run` / `test_run` 保留最深層失敗配對。`submit verify` 的融合檢查只驗輸出 sha 關聯，不重算成員 bytes；成員完整性由 `fuse build` / `backup verify` 稽核。
 22. **RSNA study ID（Hygiene C，修正 §14）**：本機官方 `sample_submission.csv` 的 ID 欄為 `StudyInstanceUID`。匯入器的 `sample_id` 已是 study UID，故用 `id_field=sample_id,id_col=StudyInstanceUID`；`view_stem` 是 slice UID，不適用。
+23. **上傳順序與失敗視窗（Hygiene C）**：upload 先驗 profile（manual_platform）→ 封槍 → 截止 → staged 檔 sha → 配額 → 平台動作 → 台帳。平台已成功但 uploaded 列寫入失敗是接受的非原子視窗；sync 可將失聯的平台發恢復為 foreign 列，配額仍照計。已有 staged id 被 description 配中時仍按既有 sync 配對規則處理，foreign 不是每一種失聯回應的保證。
+24. **事件單一來源（Hygiene C）**：submit EVENTS 從 Event Literal 推導，測試驗 _REQUIRED 的 key 完全相同。training EVENTS 沒有重複的 Literal，維持原 tuple。

@@ -23,7 +23,7 @@ from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.data.split import load_plan
 from vcp.fuse.ablate import AblateSpec, ablate_recipe
-from vcp.fuse.build import BuildSpec, build_run
+from vcp.fuse.build import BuildSpec, build_run, default_run_id
 from vcp.fuse.fusers import get_fuser, require_payload, resolve_params
 from vcp.fuse.members import check_members, check_plan, parse_member
 from vcp.fuse.recipes import save_recipe
@@ -94,7 +94,13 @@ def recipe_cmd(
         payload = {"recipe": recipe.model_dump(mode="json"), "path": str(path)}
         return "OK", fields, payload, [f"wrote recipe {recipe_id} -> {path}"]
 
-    run_command("fuse.recipe", json_mode, data_root, fn)
+    run_command(
+        "fuse.recipe",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "recipe": recipe_id, "plan": plan},
+    )
 
 
 @fuse_app.command("build")
@@ -152,7 +158,13 @@ def build_cmd(
         ]
         return "OK", fields, payload, human
 
-    run_command("fuse.build", json_mode, data_root, fn)
+    run_command(
+        "fuse.build",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "recipe": recipe_id, "run": run or default_run_id(recipe_id)},
+    )
 
 
 @fuse_app.command("ablate")
@@ -218,4 +230,6 @@ def ablate_cmd(
         human = [f"variant {v}" for v in res.variants] + [f"claim {p}" for p in res.preregs]
         return "OK", fields, res.model_dump(mode="json"), human
 
-    run_command("fuse.ablate", json_mode, data_root, fn)
+    run_command(
+        "fuse.ablate", json_mode, data_root, fn, context={"dataset": dataset, "recipe": recipe_id}
+    )

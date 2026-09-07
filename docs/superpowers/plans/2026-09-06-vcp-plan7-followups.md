@@ -100,3 +100,16 @@
 | 10 | 未動（Plan 6 後記的 10 項仍開著）。 |
 
 審查（sonnet）：SPEC ✅、APPROVED，3 LOW：`open_dest` docstring 的「as in the training layer」過時（本次一併改）；spec §14「不寫 verify 列」過時（本次改）；`test_rclone_upload_reports_unverified_and_failures` 仍以 `VcpError` 接（`PlatformError` 是子類，不追）。全套 837 passed / 4 skipped、覆蓋率 96.36%。
+
+## 8. 跨層識別欄位與第一階段處置（2026-09-07）
+
+| 項 | 處置 |
+|---|---|
+| §5-4 / §7-4 | eval 8、fuse 3、train 3、submit 12 個命令全部採用既有 context；各層補一個早期失敗 CLI 測試。backup 的五個命令原已完成，不改 runner 或欄位 schema。 |
+| §7-10 | Plan 6 Hygiene C 兩個 commit 完成，詳該後記 §9；其他小项結案／延期理由見各層最新節。 |
+| §5-6 | 依指定範圍留到效能回合，目的地讀回為驗證本體，不能省去。 |
+| Manifest.data_root | 留作人讀來源標記（spec §14），非未完成程式；移除會減少搬移後的可追溯性。 |
+
+裁決：只傳命令已知的識別欄位，不為錯誤額外讀取 run / dataset — 早期驗證失敗也要可識別且不產副作用 — 可選值 None 省略，深層錯誤欄位仍覆蓋 context，保留真正失敗葉節點。沒有新增憑證或路徑選項。新測試先 4 failed；四層 CLI gate 56 passed。
+
+第一階段最終驗證：933 passed / 4 skipped，覆蓋率 96.69%；真資料 8 passed / 3 skipped；ruff check / format --check 與 git diff --check 乾淨。自審：26 個命令逐一對照旗標與欄位型別；初版傳 None 的問題由既有 report / sigma 測試攔下並修正，既有斷言未弱化；未改台帳或 schema，未增加外部操作。

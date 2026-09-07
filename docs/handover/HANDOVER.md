@@ -67,13 +67,10 @@ configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、
 
 ## 6. 開放的待辦（依優先序）
 
-1. **Hygiene C（提交層剩餘）**：`docs/superpowers/plans/2026-09-07-vcp-hygiene-c-submit.md`——已寫好的 brief，直接照做（兩個 commit）。
-2. **新待辦（來自 2026-09-07 的審查）**：
-   - 融合：遺失 `fuse.json` 的重建只涵蓋這次重建的子集（Plan 4 後記 §8 新待辦 1）→ 改 FAIL 或全部重建。
-   - 備份：`pull._fetch` 對 `OSError` 已處理；verify 副本層出錯已寫列；剩 Plan 7 後記 §5 未做的 4（跨層 VERDICT 識別欄位——`run_command(context=)` 已有，其他層照 backup 層採用）、5（`dest_kind("C:backup")` 已做）、6（push 讀檔次數）。
-   - 提交：Plan 6 後記 §8 表裡「未做」的小項（Hygiene C 涵蓋大部分）。
+1. **Hygiene C 已完成**：兩個 commit `6a4cc58`、`12a9cd4`；處置與驗證見 Plan 6 後記 §9。
+2. **接續修復已完成**：遺失 `fuse.json` 時拒絕不完整紀錄，`--replace` 重建所有宣告子集（`7c31c3d`，Plan 4 §9）；eval / fuse / train / submit 的 26 個命令全部採用 `run_command(context=)`（Plan 7 §8）。歷史「未做」清單已逐層核對，處置在各後記最新節；不要依舊節再做一遍。
 3. **效能回合**（都刻意延後）：Plan 2c §5-2（materialize 的 `is_dir`/`stat` 兩百萬次）、Plan 3 §5-4（seg 指標配置、護欄重算、judge 載兩次）、Plan 7 §5-6。
-4. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）；`Manifest.data_root` 只作人讀。
+4. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）、Plan 5 checkpoint TOCTOU 仍延後；`Manifest.data_root` 刻意保留作人讀來源標記。
 5. **比賽膠水（真正的下一個里程碑）**：RSNA Knee（Kaggle，截止 2026-10-22；DICOM 多序列 study、12 標籤 macro AUC、notebook-only 推論）——`projects/rsna-knee/` 要補：訓練 venv 與 `vcp train run` 的實際命令、`vcp submit init --platform kaggle --kind kernel`、kernel 打包、`vcp backup` 的撤離腳本。
 
 ## 7. 開發流程（這個 repo 一直這樣做）

@@ -132,3 +132,9 @@ C1 驗證：新行為測試先 7 failed / 30 passed；指定 gate 135 passed；�
 裁決：sync 的 foreign 恢復敘述加適用條件 — 既有配對規則先看 description，brief 的無條件措辭不精確 — 本回合接受非原子視窗，不擴上傳對帳機制。
 
 C2 驗證：新行為測試先 4 failed / 28 passed；指定 gate（加 identity 測試）143 passed；全套 925 passed / 4 skipped、覆蓋率 96.68%；真資料 8 passed / 3 skipped；ruff check / format --check 乾淨。自審：upload 的檢查先後符合 spec，record 的時間語意不變；Event 字彙、台帳格式與既有 run 身分均相容。
+
+## 10. CLI 識別欄位與剩餘待辦處置（2026-09-07）
+
+十二個 submit 命令均傳 context：dataset；有 --id 者加 id；init 加 eval_dataset / plan；stage 加 eval_run 與有提供的 test_run。profile 尚不存在的 FAIL 仍含提交身分，JSON / stderr 皆測。
+
+§8-9、10 的剩餘行為／測試由 §9 C1/C2 全部處置。file-level noqa: E501 維持 brief 裁決：測試流程長命令的可讀性高於拆行；不另開格式回合。平台成功與台帳失敗的非原子視窗依 §9 記錄，不加未授權的對帳推測。

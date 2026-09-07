@@ -16,6 +16,18 @@ STAMP = "2026-09-05T00:00:00.000Z"
 runner = CliRunner()
 
 
+def test_fuse_failure_preserves_command_identity(roots):
+    result = runner.invoke(
+        app,
+        ["fuse", "build", "--dataset", "absent", "--recipe", "mix", "--run", "trial", "--json"],
+    )
+    assert result.exit_code == 1, result.output
+    verdict = result.stderr.strip().splitlines()[-1]
+    assert verdict.startswith("VERDICT cmd=fuse.build status=FAIL")
+    assert all(field in verdict for field in ("dataset=absent", "recipe=mix", "run=trial"))
+    assert json.loads(result.stdout)["fields"]["recipe"] == "mix"
+
+
 def _last_verdict(output: str) -> str:
     lines = [line for line in output.splitlines() if line.startswith("VERDICT ")]
     assert lines, output

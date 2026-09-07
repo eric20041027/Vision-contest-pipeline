@@ -174,7 +174,13 @@ def ingest_cmd(
         }
         return status, fields, payload, human
 
-    run_command("eval.ingest", json_mode, data_root, fn)
+    run_command(
+        "eval.ingest",
+        json_mode,
+        data_root,
+        fn,
+        context={"dataset": dataset, "run": run, "plan": plan, "subset": subset},
+    )
 
 
 @eval_app.command("measure")
@@ -236,7 +242,7 @@ def measure_cmd(
         }
         return status, fields, payload, human
 
-    run_command("eval.measure", json_mode, data_root, fn)
+    run_command("eval.measure", json_mode, data_root, fn, context={"run": run})
 
 
 @eval_app.command("anchor")
@@ -298,7 +304,13 @@ def anchor_cmd(
         payload = {"key": key, "anchor": anchor.model_dump(mode="json")}
         return "OK", fields, payload, [f"anchor {key} = {reading.value!r}"]
 
-    run_command("eval.anchor", json_mode, data_root, fn)
+    run_command(
+        "eval.anchor",
+        json_mode,
+        data_root,
+        fn,
+        context={"run": run, "subset": subset, "metric": metric},
+    )
 
 
 @eval_app.command("sigma")
@@ -386,7 +398,18 @@ def sigma_cmd(
             )
         return status, fields, {"estimate": est.model_dump(mode="json")}, human
 
-    run_command("eval.sigma", json_mode, data_root, fn)
+    run_command(
+        "eval.sigma",
+        json_mode,
+        data_root,
+        fn,
+        context={
+            "dataset": dataset,
+            "plan": plan,
+            "metric": metric,
+            **({"run": run} if run is not None else {}),
+        },
+    )
 
 
 @eval_app.command("preregister")
@@ -455,7 +478,18 @@ def preregister_cmd(
         payload = {"prereg": stored.model_dump(mode="json"), "path": str(path)}
         return "OK", fields, payload, [f"pre-registered {prereg_id} -> {path}"]
 
-    run_command("eval.preregister", json_mode, data_root, fn)
+    run_command(
+        "eval.preregister",
+        json_mode,
+        data_root,
+        fn,
+        context={
+            "dataset": dataset,
+            "prereg": prereg_id,
+            "candidate": candidate_run,
+            "baseline": baseline_run,
+        },
+    )
 
 
 @eval_app.command("judge")
@@ -510,7 +544,9 @@ def judge_cmd(
         status: Status = "FAIL" if strict and j.verdict != "PASS" else "OK"
         return status, fields, {"judgement": j.model_dump(mode="json")}, human
 
-    run_command("eval.judge", json_mode, data_root, fn)
+    run_command(
+        "eval.judge", json_mode, data_root, fn, context={"dataset": dataset, "prereg": prereg_id}
+    )
 
 
 @eval_app.command("status")
@@ -553,7 +589,7 @@ def status_cmd(
         status: Status = "WARN" if st.orphans or st.unreadable else "OK"
         return status, fields, {"status": asdict(st)}, human
 
-    run_command("eval.status", json_mode, data_root, fn)
+    run_command("eval.status", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @eval_app.command("report")
@@ -588,4 +624,14 @@ def report_cmd(
         }
         return "OK", fields, {"readings": rows, "last_vs_last": lvl}, human
 
-    run_command("eval.report", json_mode, data_root, fn)
+    run_command(
+        "eval.report",
+        json_mode,
+        data_root,
+        fn,
+        context={
+            "dataset": dataset,
+            **({"plan": plan} if plan is not None else {}),
+            **({"metric": metric} if metric is not None else {}),
+        },
+    )

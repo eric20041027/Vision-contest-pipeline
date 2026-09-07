@@ -313,3 +313,5 @@ Hygiene C（2026-09-07）補充：ingest 的 weights_hash 衝突訊息提示 `(o
 9. **`report --plan` 不藏 `missing_readings` 的判決**：這種判決沒有讀數（所以沒有 plan）也沒有 per-subset 結果（所以沒有列），兩頭都看不見。`last_vs_last` 改為：判決沒有任何 per-subset 結果時輸出一列，`subset` / `delta` / `t` 皆為 null；plan 從判決的讀數推導，沒有讀數時退回它比較的兩個 run 的 `run.yaml`（讀不動的卡不貢獻 plan，唯讀視圖不因一張壞卡而死）。`deltas=` 因此是「判決 × 子集列數，沒有子集的判決算一列」。
 10. **`set_anchor` 的暫存檔名唯一**：`tempfile.NamedTemporaryFile(dir=…, prefix="anchors.", suffix=".tmp", delete=False)` + `os.replace`，不再是固定的 `anchors.json.tmp`（兩個程序共用同一個路徑時，後者會在任一方 `os.replace` 之前截斷前者的內容，而任一方失敗都會刪掉對方的檔）。上鎖不在範圍：`set_anchor` 仍是未上鎖的讀改寫。
 11. **`--method` 的說明不寫死內建名**：σ_p 估法是擴充軸，help 字串列三個內建名等於宣告那就是全部答案。改為 `registered sigma_p method`；未知方法的 FAIL 訊息讀活的登記表，插件登記的方法會出現在那裡。
+
+- **CLI 失敗身分**（2026-09-07）：八個 eval 命令透過 run_command(context=) 保留已知 dataset / run / plan / subset / prereg 等識別欄位。可選欄位未給時省略；VcpError.fields 優先，JSON fields 與 VERDICT 相同；不為識別額外讀檔。

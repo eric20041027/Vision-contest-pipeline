@@ -1,6 +1,6 @@
 # vcp — vision contest pipeline
 
-可重複使用的影像競賽框架：標準資料格式、多重驗證集切分、lineage、進場稽核、materialize 快取；量測層接標準預測格式、指標、護欄、σ_p、預登記與判決，提交治理留後續子專案。設計文件見 `docs/superpowers/specs/`，操作慣例見 `CLAUDE.md`。
+可重複使用的影像競賽框架：標準資料格式、多重驗證集切分、lineage、進場稽核、materialize 快取；量測層接標準預測格式、指標、護欄、σ_p、預登記與判決，並提供融合、訓練紀錄、提交治理與備份審計。設計文件見 `docs/superpowers/specs/`，操作慣例見 `AGENTS.md`。
 
 ```bash
 uv sync                      # 核心 venv；DICOM 支援：uv sync --extra dicom
@@ -20,7 +20,7 @@ uv run pytest --cov=vcp
 | `vcp data export` | 子集 → COCO / YOLO 目錄 + manifest | `--plan`、`--subset`、`--format`、`--out`、`--opt view=`、`--opt copy=true`、`--unseal --reason` |
 | `vcp data materialize` | 每個 view 解碼一次成 npy / png 快取 + manifest | `--mode`、`--resize`、`--stack-seq`、`--window`、`--workers`、`--force`、`--decoder` |
 
-每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。
+每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。eval / fuse / train / submit / backup 失敗時仍帶命令已知的 dataset / run / recipe / id 等識別欄位；深層錯誤可提供更精確的身分。
 
 ## 量測層命令 `vcp eval`
 

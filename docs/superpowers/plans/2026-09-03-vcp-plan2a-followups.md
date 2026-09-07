@@ -66,3 +66,7 @@
 8. **CLI 層測試**：`unlabeled=` 欄位、空子集 `status=WARN`、`plans_invalidated` 的 WARN 行。
 9. **dicom 匯入器、materialize / 解碼器登記表、cache 命名**（Plan 2b 主體，spec §14.5）。
 10. **`count_invalidated_plans`** 在 card 不可讀時計入全部 plans：是否在 VERDICT 標示原因（`old_card=unreadable`）。
+
+## 6. 接續待辦核對（2026-09-07）
+
+§5 的 EXIF、coords、多視角 dedup、YOLO categories、rows_read、images、symlink 退回、CLI WARN、DICOM 與 old_card 都已由 Plan 2b / 2c / Hygiene A 實作及測試承接。核對現行 exporters/yolo.py、importers/base.py、test_cli.py 的 unlabeled / plans_invalidated / old_card / images 斷言；不重做已完成事項。dataset 層不加預設 view 欄位：現行 select_view 明確要求多視角呼叫者選索引／role，避免默選錯視角，代價是呼叫者多給一個選項。

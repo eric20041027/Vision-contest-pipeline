@@ -113,3 +113,9 @@
 自審：無新增 schema 欄位；歷史仍 append-only，預測與卡沿用換寫留痕；backup / submit 取得完整 fuse.json，未從舊卡猜測成員 sha。新測試先 5 failed / 15 passed。
 
 驗證：融合 gate 89 passed / 1 skipped；全套 929 passed / 4 skipped、覆蓋率 96.69%；真資料 8 passed / 3 skipped；ruff check / format --check 乾淨。
+
+## 10. CLI 識別欄位與剩餘待辦處置（2026-09-07）
+
+三個 fuse 命令均傳 context；build 未給 --run 時以既有 default_run_id 計算身分。CLI 缺 dataset 的 FAIL 仍含 dataset / recipe / run，JSON 可解析。§8 新待辦 1 已由 §9 完成。
+
+§6-4 暫不調整 BuildResult.record：目前沒有生產讀者，快取命中不寫檔的既有契約優先；未來若有使用者需定義回傳磁碟快照還是當次估算。§6-8 oracle 維持人工上游核對與可選測試，spec 明定 ensemble-boxes 不進依賴，不為單一 oracle 引入 numba 相容成本。

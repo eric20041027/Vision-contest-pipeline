@@ -123,7 +123,13 @@ def run_cmd(
         human += [f"warning: {w}" for w in res.warnings]
         return status, fields, res.record.model_dump(mode="json"), human
 
-    run_command("train.run", json_mode, data_root, fn)
+    run_command(
+        "train.run",
+        json_mode,
+        data_root,
+        fn,
+        context={"run": run, "dataset": dataset, "plan": plan},
+    )
 
 
 @train_app.command("upload")
@@ -158,7 +164,7 @@ def upload_cmd(
         human = [f"{r.name}: {'verified' if r.verified else 'NOT verified'}" for r in out.records]
         return status, fields, record.model_dump(mode="json"), human
 
-    run_command("train.upload", json_mode, data_root, fn)
+    run_command("train.upload", json_mode, data_root, fn, context={"run": run})
 
 
 @train_app.command("status")
@@ -210,4 +216,4 @@ def status_cmd(
         }
         return ("WARN" if warn else "OK"), fields, payload, human
 
-    run_command("train.status", json_mode, data_root, fn)
+    run_command("train.status", json_mode, data_root, fn, context={"run": run})

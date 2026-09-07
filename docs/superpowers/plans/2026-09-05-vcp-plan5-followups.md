@@ -95,3 +95,9 @@
 | 10 | 做了：`StatusResult.superseded`（每路徑一筆、去重）；VERDICT `superseded=<int>`、`--json` 列 `superseded` 與 `unbacked`；不計入 WARN；spec §14 與 README。 |
 
 審查（opus）：SPEC ✅；QUALITY APPROVED——1 MEDIUM（`measure/ingest.py` 反向依賴 `fuse/build.py` 的常數 → 微修：`FUSE_FRAMEWORK` 改由 `measure/runs.py` 擁有）、3 LOW（`superseded` 重複路徑與 `--json` 缺 `unbacked` → 微修；note 先於 yaml 的視窗 → 刻意）。微修後全套 909 passed / 4 skipped、覆蓋率 96.56%、真資料整合 8 passed。
+
+## 9. CLI 識別欄位與剩餘待辦處置（2026-09-07）
+
+三個 train 命令均傳 context；run 帶 run / dataset / plan，upload / status 帶 run。補 --only 錯值在任何讀取前 FAIL 仍有 run 的 JSON CLI 測試。
+
+§6-9 TOCTOU 延後：消費仍在寫的 checkpoint 需要框架協作的原子發布／鎖或額外快照；單獨增加 stat 不能證明 bytes 穩定。此版要求訓練程式寫完並關檔再 register_checkpoint，wrapper 在子程序結束後再掃描，保留 hash 漂移驗證；不把此設計與效能代價混入 CLI 修正。

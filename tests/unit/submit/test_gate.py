@@ -4,9 +4,10 @@ from helpers import noisy_predictions
 from submit_fixtures import STAMP, ingest_run, random_scores, seed_eval_runs, seed_judgements
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
+from vcp.core.hashing import sha256_file
 from vcp.fuse.schema import FuseRecord, MemberRecord
 from vcp.measure.ledger import JUDGEMENTS_LEDGER, append_row
-from vcp.measure.prereg import prereg_path
+from vcp.measure.prereg import PreregLogEntry, prereg_path
 from vcp.measure.runs import load_run
 from vcp.measure.schema import Judgement, PreRegistration
 from vcp.submit.gate import admit, latest_judgements
@@ -109,7 +110,12 @@ def _prereg(pair, pid, component, candidate):
         subsets=["valA", "valB"],
         created_at=STAMP,
     )
-    dump_yaml_model(pr, prereg_path(pair.eval_paths, pid))
+    path = prereg_path(pair.eval_paths, pid)
+    dump_yaml_model(pr, path)
+    append_row(
+        pair.eval_paths.prereg_log,
+        PreregLogEntry(prereg_id=pid, sha256=sha256_file(path), ts=STAMP),
+    )
 
 
 def test_fusion_candidate_needs_every_member_admitted(pair):

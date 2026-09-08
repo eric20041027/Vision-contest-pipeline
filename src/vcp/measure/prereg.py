@@ -15,7 +15,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from vcp.core.config import dump_yaml_model, load_yaml_model
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths, validate_name
 from vcp.core.time import stamp
@@ -53,7 +53,23 @@ def load_prereg(paths: DatasetPaths, prereg_id: str) -> PreRegistration:
     path = prereg_path(paths, prereg_id)
     if not path.is_file():
         raise ValidationFailed(f"pre-registration not found: {path}")
+    entry = _first_prereg_entry(paths, prereg_id)
+    if entry is None:
+        raise ValidationFailed(f"pre-registration {prereg_id!r} is not in {paths.prereg_log}")
+    digest = sha256_file(path)
+    if entry.sha256 != digest:
+        raise IntegrityError(
+            f"pre-registration {prereg_id!r} SHA256 differs from its first log entry"
+        )
     return load_yaml_model(path, PreRegistration)
+
+
+def _first_prereg_entry(paths: DatasetPaths, prereg_id: str) -> PreregLogEntry | None:
+    """The first append-only identity row for this id, or ``None``."""
+    for row in read_rows(paths.prereg_log, PreregLogEntry):
+        if row.prereg_id == prereg_id:
+            return row
+    return None
 
 
 def prereg_time(paths: DatasetPaths, prereg_id: str) -> str | None:
@@ -62,10 +78,8 @@ def prereg_time(paths: DatasetPaths, prereg_id: str) -> str | None:
     The first line wins: the log is append-only, so a second line for the same id could only
     ever move the deadline forwards and make an already-measured candidate look legal.
     """
-    for row in read_rows(paths.prereg_log, PreregLogEntry):
-        if row.prereg_id == prereg_id:
-            return row.ts
-    return None
+    entry = _first_prereg_entry(paths, prereg_id)
+    return entry.ts if entry is not None else None
 
 
 def _dataset_task(paths: DatasetPaths) -> str:

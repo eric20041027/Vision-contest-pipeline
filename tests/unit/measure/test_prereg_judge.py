@@ -13,7 +13,14 @@ from helpers import (
     regression_samples,
     write_images,
 )
-from vcp.core.errors import PlanMismatchError, RegistryError, SealedSubsetError, ValidationFailed
+from vcp.core.errors import (
+    IntegrityError,
+    PlanMismatchError,
+    RegistryError,
+    SealedSubsetError,
+    ValidationFailed,
+)
+from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
@@ -99,11 +106,11 @@ def _assert_delta_is_the_signed_reading_difference(j):
         assert s.delta == pytest.approx(sign * (s.candidate - s.baseline)), name
 
 
-def _log_prereg(paths, prereg_id, ts):
+def _log_prereg(paths, prereg_id, ts, sha256):
     """Append a log line by hand -- the only way to forge the moment a claim became binding."""
     paths.prereg_log.parent.mkdir(parents=True, exist_ok=True)
     with paths.prereg_log.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps({"prereg_id": prereg_id, "sha256": "0" * 64, "ts": ts}) + "\n")
+        f.write(json.dumps({"prereg_id": prereg_id, "sha256": sha256, "ts": ts}) + "\n")
 
 
 def _hand_write(paths, pr, *, ts=None):
@@ -115,8 +122,21 @@ def _hand_write(paths, pr, *, ts=None):
         encoding="utf-8",
         newline="\n",
     )
-    _log_prereg(paths, pr.prereg_id, ts or stamp())
+    _log_prereg(paths, pr.prereg_id, ts or stamp(), sha256_file(path))
     return path
+
+
+def test_prereg_tampering_differs_from_first_logged_sha(roots, tmp_path):
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    path = create_prereg(paths, _pr(), _ledger(paths))
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["t_min"] = 0.0
+    document["min_bases"] = 1
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8", newline="\n")
+    with pytest.raises(IntegrityError, match="SHA256 differs"):
+        load_prereg(paths, "p001")
+    with pytest.raises(IntegrityError, match="SHA256 differs"):
+        _judge(roots)
 
 
 def _regression_with_runs(roots, tmp_path, *, n=120):
@@ -427,7 +447,12 @@ def test_judge_failures(roots, tmp_path):
     (paths.prereg_dir / "broken.yaml").write_text(
         "claim: no id here\n", encoding="utf-8", newline="\n"
     )
-    _log_prereg(paths, "broken", stamp())
+    _log_prereg(
+        paths,
+        "broken",
+        stamp(),
+        sha256_file(paths.prereg_dir / "broken.yaml"),
+    )
     with pytest.raises(ValidationFailed, match="broken.yaml"):
         _judge(roots, "broken")
     # a yaml that was never logged has no binding moment to compare readings against

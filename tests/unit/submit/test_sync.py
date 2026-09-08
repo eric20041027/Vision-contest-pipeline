@@ -10,6 +10,7 @@ from vcp.core.time import stamp, utc_now
 from vcp.submit.actions import record
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile
+from vcp.submit.report import report, status
 from vcp.submit.schema import PlatformProfile
 from vcp.submit.stage import StageSpec, stage
 from vcp.submit.sync import sync
@@ -114,6 +115,45 @@ def test_sync_matches_scores_and_records_foreign(staged):
     third = sync(TEST, runner=FakeRunner(rows), **_kw(staged))
     assert third.scored == 1
     assert SubmissionLedger(staged.test_paths.submissions_log).latest_score("S1").private == 0.65
+
+
+def test_sync_refreshes_pending_foreign_score_without_counting_a_second_arrival(staged):
+    at = stamp(utc_now() - timedelta(hours=1))
+    pending = {
+        "ref": "foreign-1",
+        "fileName": "submission.csv",
+        "date": at,
+        "description": "teammate run",
+        "status": "SubmissionStatus.PENDING",
+    }
+    first = sync(TEST, runner=FakeRunner([pending]), **_kw(staged))
+    assert first.foreign == 1
+
+    complete = {
+        **pending,
+        "status": "SubmissionStatus.COMPLETE",
+        "publicScore": "0.935",
+    }
+    second = sync(TEST, runner=FakeRunner([complete]), **_kw(staged))
+    assert second.foreign == 0
+
+    ledger = SubmissionLedger(staged.test_paths.submissions_log)
+    snapshots = [r for r in ledger.of("foreign") if r.platform_ref == "foreign-1"]
+    assert len(snapshots) == 2
+    assert snapshots[0].public is None and snapshots[1].public == 0.935
+    assert snapshots[1].platform_status == "SubmissionStatus.COMPLETE"
+    assert len([r for r in ledger.arrivals() if r.platform_ref == "foreign-1"]) == 1
+
+    view = status(TEST, **_kw(staged))
+    assert view.foreign == 1 and view.current == "foreign:foreign-1"
+    rows = report(TEST, **_kw(staged))
+    foreign_rows = [r for r in rows if r.submission_id == "foreign:foreign-1"]
+    assert len(foreign_rows) == 1 and foreign_rows[0].public == 0.935
+
+    before = len(ledger.rows)
+    third = sync(TEST, runner=FakeRunner([complete]), **_kw(staged))
+    assert third.foreign == 0
+    assert len(SubmissionLedger(staged.test_paths.submissions_log).rows) == before
 
 
 def test_sync_refuses_manual(pair):

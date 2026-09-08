@@ -49,9 +49,17 @@ class SubmissionLedger:
 
     def arrivals(self) -> list[LedgerRow]:
         """Every upload the platform saw -- ours (``uploaded``) and others' (``foreign``) -- in
-        platform-time order. Stamps share one format, so string order is time order; ties keep
-        ledger order."""
-        rows = [r for r in self.rows if r.event in ("uploaded", "foreign")]
+        platform-time order. A foreign upload may have multiple append-only snapshots while its
+        platform status changes; only its newest snapshot is an arrival. Stamps share one format,
+        so string order is time order; ties keep ledger order."""
+        latest_foreign: dict[str, LedgerRow] = {}
+        uploads: list[LedgerRow] = []
+        for row in self.rows:
+            if row.event == "uploaded":
+                uploads.append(row)
+            elif row.event == "foreign" and row.platform_ref:
+                latest_foreign[row.platform_ref] = row
+        rows = [*uploads, *latest_foreign.values()]
         return sorted(rows, key=lambda r: r.at or "")
 
     def last_uploaded(self) -> LedgerRow | None:
@@ -60,6 +68,10 @@ class SubmissionLedger:
 
     def foreign_refs(self) -> set[str]:
         return {r.platform_ref for r in self.of("foreign") if r.platform_ref}
+
+    def latest_foreign(self, platform_ref: str) -> LedgerRow | None:
+        rows = [r for r in self.of("foreign") if r.platform_ref == platform_ref]
+        return rows[-1] if rows else None
 
     def lock_state(self) -> LedgerRow | None:
         """The lock row in force, or None: the newest of lock / unlock decides."""

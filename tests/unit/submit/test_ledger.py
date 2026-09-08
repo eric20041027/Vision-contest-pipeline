@@ -65,6 +65,35 @@ def test_arrivals_last_uploaded_and_foreign_refs(tmp_path):
     assert led.foreign_refs() == {"f1"}
 
 
+def test_arrivals_use_the_latest_snapshot_of_a_foreign_ref(tmp_path):
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(
+        LedgerRow(
+            event="foreign",
+            ts=T1,
+            platform_ref="f1",
+            file_name="x.csv",
+            at=T0,
+            platform_status="pending",
+        )
+    )
+    led.append(
+        LedgerRow(
+            event="foreign",
+            ts=T2,
+            platform_ref="f1",
+            file_name="x.csv",
+            at=T0,
+            platform_status="complete",
+            public=0.935,
+        )
+    )
+    arrivals = led.arrivals()
+    assert len(arrivals) == 1
+    assert arrivals[0].public == 0.935 and arrivals[0].platform_status == "complete"
+    assert led.latest_foreign("f1") is arrivals[0]
+
+
 def test_lock_state_and_latest_final(tmp_path):
     led = SubmissionLedger(tmp_path / "s.jsonl")
     assert led.lock_state() is None and led.latest_final() is None

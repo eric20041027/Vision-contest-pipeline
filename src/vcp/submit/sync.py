@@ -100,21 +100,34 @@ def sync(
     for p in sorted(subs, key=lambda s: s.at):
         sid = match_submission(p, ledger, file_names, taken=set(matched.values()))
         if sid is None:
+            row = _row(
+                event="foreign",
+                ts=stamp(),
+                platform_ref=p.platform_ref,
+                file_name=p.file_name,
+                at=p.at,
+                public=p.public,
+                private=p.private,
+                platform_status=p.status or None,
+                submitted_by=p.submitted_by,
+            )
+            previous = ledger.latest_foreign(p.platform_ref)
+            if previous is not None and all(
+                getattr(previous, field) == getattr(row, field)
+                for field in (
+                    "platform_ref",
+                    "file_name",
+                    "at",
+                    "public",
+                    "private",
+                    "platform_status",
+                    "submitted_by",
+                )
+            ):
+                continue
+            ledger.append(row)
             if p.platform_ref in known_foreign:
                 continue
-            ledger.append(
-                _row(
-                    event="foreign",
-                    ts=stamp(),
-                    platform_ref=p.platform_ref,
-                    file_name=p.file_name,
-                    at=p.at,
-                    public=p.public,
-                    private=p.private,
-                    platform_status=p.status or None,
-                    submitted_by=p.submitted_by,
-                )
-            )
             known_foreign.add(p.platform_ref)
             foreign += 1
             continue

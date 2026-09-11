@@ -1067,7 +1067,8 @@ def test_eval_preregister_and_judge_cli(roots, tmp_path):
     r = runner.invoke(app, [*args[:4], "--id", "p2", *args[6:]])  # same candidate, now measured
     assert r.exit_code == 1 and "already_measured" in _last_verdict(r.output)
     r = runner.invoke(app, ["eval", "judge", "--dataset", "tiny", "--prereg", "p404", "--strict"])
-    assert r.exit_code == 1 and "not found" in _last_verdict(r.output)
+    assert r.exit_code == 1 and "not_found: pre-registration" in _last_verdict(r.output)
+    assert "prereg=p404" in _last_verdict(r.output)
     # --json puts the judgement on stdout and the VERDICT on stderr
     r = runner.invoke(app, [*judge_args, "--json"])
     assert r.exit_code == 0, r.output
@@ -1106,7 +1107,7 @@ def test_eval_preregister_and_judge_failures_cli(roots, tmp_path):
         ([*other_id, "--t-min", "-1"], 1, "greater than or equal to 0"),
         (judge + ["--seed", "-1"], 1, "seed"),
         (judge + ["--resamples", "1"], 1, "resamples"),
-        (["eval", "judge", "--dataset", "tiny", "--prereg", "ghost"], 1, "not found"),
+        (["eval", "judge", "--dataset", "tiny", "--prereg", "ghost"], 1, "not_found: pre-reg"),
     ]
     for args, code, needle in cases:
         r = runner.invoke(app, args)

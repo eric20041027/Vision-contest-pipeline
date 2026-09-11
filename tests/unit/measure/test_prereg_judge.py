@@ -133,10 +133,25 @@ def test_prereg_tampering_differs_from_first_logged_sha(roots, tmp_path):
     document["t_min"] = 0.0
     document["min_bases"] = 1
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8", newline="\n")
-    with pytest.raises(IntegrityError, match="SHA256 differs"):
+    with pytest.raises(IntegrityError, match="^mismatch: .*SHA256 differs") as ei:
         load_prereg(paths, "p001")
-    with pytest.raises(IntegrityError, match="SHA256 differs"):
+    assert ei.value.fields == {"prereg": "p001"} and ei.value.location == str(path)
+    with pytest.raises(IntegrityError, match="mismatch"):
         _judge(roots)
+
+
+def test_prereg_yaml_without_a_log_row_was_never_registered(roots, tmp_path):
+    """A hand-written yaml (or one whose log append failed) has no identity row: not a claim."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    path = create_prereg(paths, _pr(), _ledger(paths))
+    orphan = path.with_name("p002.yaml")
+    orphan.write_bytes(path.read_bytes())
+    with pytest.raises(ValidationFailed, match="^not_found: .*never registered") as ei:
+        load_prereg(paths, "p002")
+    assert ei.value.fields == {"prereg": "p002"}
+    with pytest.raises(ValidationFailed, match="^not_found: ") as ei:
+        load_prereg(paths, "p003")  # no yaml at all
+    assert ei.value.fields == {"prereg": "p003"}
 
 
 def _regression_with_runs(roots, tmp_path, *, n=120):
@@ -305,7 +320,7 @@ def test_judge_missing_readings_and_invalid_ordering(roots, tmp_path):
     # ruling 2: the hand-written file carries `params: {}`; the judge normalises it itself,
     # or it would find no readings and report missing_readings instead of the INVALID it is.
     assert j.params == COCO_PARAMS
-    with pytest.raises(ValidationFailed, match="not found"):
+    with pytest.raises(ValidationFailed, match="^not_found: "):
         _judge(roots, "p404")
 
 
@@ -467,11 +482,11 @@ def test_judge_failures(roots, tmp_path):
         encoding="utf-8",
         newline="\n",
     )
-    with pytest.raises(ValidationFailed, match="not in"):
+    with pytest.raises(ValidationFailed, match="^not_found: .*never registered"):
         _judge(roots, "unlogged")
     # a logged id whose file is gone
     (paths.prereg_dir / "p001.yaml").unlink()
-    with pytest.raises(ValidationFailed, match="not found"):
+    with pytest.raises(ValidationFailed, match="^not_found: .*p001"):
         _judge(roots)
 
 

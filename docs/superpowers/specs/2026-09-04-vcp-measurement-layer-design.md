@@ -315,3 +315,9 @@ Hygiene C（2026-09-07）補充：ingest 的 weights_hash 衝突訊息提示 `(o
 11. **`--method` 的說明不寫死內建名**：σ_p 估法是擴充軸，help 字串列三個內建名等於宣告那就是全部答案。改為 `registered sigma_p method`；未知方法的 FAIL 訊息讀活的登記表，插件登記的方法會出現在那裡。
 
 - **CLI 失敗身分**（2026-09-07）：八個 eval 命令透過 run_command(context=) 保留已知 dataset / run / plan / subset / prereg 等識別欄位。可選欄位未給時省略；VcpError.fields 優先，JSON fields 與 VERDICT 相同；不為識別額外讀檔。
+
+## 17. 稽核 Wave 0 補充決定（2026-09-11，VCP-008）
+
+- **預登記的身分是第一筆 log 列**：`load_prereg` 只信任 bytes 仍 hash 到 `prereg.log.jsonl` 裡該 id **第一筆**列的 yaml。沒有列的 yaml（手寫的，或 log 寫入失敗後留下的）→ `ValidationFailed("not_found: … never registered")`；hash 變了的 yaml（登記後被改）→ `IntegrityError("mismatch: …")`，`location` 是 yaml 路徑，兩者 `fields={"prereg": id}`。同一 id 之後再出現的列不改變綁定（§4.5 的「第一行贏」從時間延伸到內容）。要改主張就換 id。
+- **傳播**：`judge`、提交層的 gate（準入判決對應的預登記）、備份層的 `judgement:` 走法都經 `load_prereg`，所以一份被竄改的預登記會讓判決、staging 與 `backup manifest --conclusion judgement:` 一起 FAIL；`backup manifest --conclusion all` 對 `not_found` 容忍（記進 `skipped`），對 `mismatch` 不容忍（`IntegrityError` 不是 `ValidationFailed`）——被竄改的證據不該靜靜地從撤離清單消失。`eval report` / `status` 的孤兒偵測只用 `prereg_time`，不受影響。
+- **既有預登記的稽核**（不改歷史）：合併當天檢查 repo 內 `configs/datasets/rsna-knee/prereg/` 的三份 yaml 對第一筆 log 列——3/3 相符，無需新 id。

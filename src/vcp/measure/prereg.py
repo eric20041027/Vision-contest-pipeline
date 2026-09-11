@@ -50,16 +50,30 @@ def list_preregs(paths: DatasetPaths) -> list[str]:
 
 
 def load_prereg(paths: DatasetPaths, prereg_id: str) -> PreRegistration:
+    """The pre-registration as it was logged: the yaml is trusted only when its bytes still hash
+    to the FIRST log row for this id. A yaml with no row was never registered (hand-written, or
+    the log append failed and the yaml was not cleaned up); a yaml whose hash moved was edited
+    after the claim became binding -- either way the claim cannot be judged."""
     path = prereg_path(paths, prereg_id)
     if not path.is_file():
-        raise ValidationFailed(f"pre-registration not found: {path}")
+        raise ValidationFailed(
+            f"not_found: pre-registration {prereg_id!r} ({path})", fields={"prereg": prereg_id}
+        )
     entry = _first_prereg_entry(paths, prereg_id)
     if entry is None:
-        raise ValidationFailed(f"pre-registration {prereg_id!r} is not in {paths.prereg_log}")
+        raise ValidationFailed(
+            f"not_found: pre-registration {prereg_id!r} has no row in {paths.prereg_log.name}; "
+            "it was never registered",
+            fields={"prereg": prereg_id},
+        )
     digest = sha256_file(path)
     if entry.sha256 != digest:
         raise IntegrityError(
-            f"pre-registration {prereg_id!r} SHA256 differs from its first log entry"
+            f"mismatch: pre-registration {prereg_id!r} SHA256 differs from its first log entry "
+            f"({digest[:12]} != {entry.sha256[:12]}); the yaml was edited after registration, "
+            "register the changed claim under a new id",
+            location=str(path),
+            fields={"prereg": prereg_id},
         )
     return load_yaml_model(path, PreRegistration)
 

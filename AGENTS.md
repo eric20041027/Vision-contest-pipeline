@@ -29,6 +29,10 @@
 - `uv run vcp submit stage --dataset T --id S --eval-run E --test-run R` / `uv run vcp submit upload --dataset T --id S`（Kaggle）或 `record --at "…"`（手動）/ `uv run vcp submit final --dataset T`（決選 + 封槍）/ `uv run vcp submit status --dataset T`（唯讀）
 - `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
 
+## 版本
+- SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1 落地。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。
+- `src/vcp/__init__.py` 的 `__version__` 是唯一來源（`pyproject.toml` 動態讀它）。產物的 `vcp_version` 是 `vcp.core.build.build_string()`——版本 + commit + dirty（`0.2.0+g<sha>.dirty`），`vcp version` 印同一字串；每個 release 一個 `vX.Y.Z` annotated tag。`0.1.0` 是未發版的開發期，該時期的產物回推不到單一 commit（CHANGELOG 有說明）。
+
 ## 文件
 - RSNA Knee 實際基準流程：`projects/rsna-knee/RUNBOOK.md`（真實命令、讀數、外部待續條件）；設計與裁決：同目錄 `DESIGN.md`。Windows 訓練命令使用獨立 venv 的絕對 interpreter；checkpoint 綁定的前處理 / 模型檔不可在訓練後靜默改動。
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`

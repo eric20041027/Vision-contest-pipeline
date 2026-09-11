@@ -20,6 +20,7 @@
 ## 2. 現況
 
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`），工作樹乾淨；沒有未合併的分支。
+- 版本：`0.2.0`（tag `v0.2.0`，2026-09-11）是第一個有 tag 的 release；規則與發版步驟在 `CHANGELOG.md` 表頭。之前 240 個 commit 都宣告 `0.1.0` 且無 tag——RSNA 早期產物裡的 `"vcp_version": "0.1.0"` 回推不到單一 commit；0.2.0 起產物記 `版本+g<commit>[.dirty]`。稽核 Wave 0 的兩個修正分支（prereg SHA、foreign score refresh）合併後是 `0.3.0`。
 - 測試：`uv run pytest --cov=vcp`，覆蓋率約 96.7%；實際最新數字見 RSNA RUNBOOK 驗證紀錄。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
 - 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。
@@ -82,6 +83,7 @@ configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、
 3. **執行**：一個任務一個實作者（TDD），每個任務一次審查（spec 符合度 + 品質），全部完成後一次全分支審查（跨任務接縫、隱私、錯誤處理、測試品質），最多一輪修正 + 一次範圍限定再審；每個裁決記進後記（「裁決：決定 — 依據 — 代價」）。
 4. **收尾**：後記（結果、裁決、審查發現、待辦）、spec 補充決定、README / AGENTS.md、全套測試、合併到 main、push。
 5. **小修（hygiene）**：不寫 spec / plan，寫一份 brief（決定 + 測試 + commit 分組），一個實作者 + 一個審查者，後記記處置。
+6. **發版**：合併後若這批變更動了產物 / 台帳內容或 CLI 契約就 bump MINOR，否則 PATCH；步驟在 `CHANGELOG.md` 表頭（改 `__version__` → 加 CHANGELOG 條目 → 測試 → commit → tag → push 分支與 tag）。一個 release 可以包好幾批工作；不必每次合併都發版，但發版前的產物都會帶著 `+g<commit>` 而不是裸版本號，所以不會被誤認成 release。
 
 ## 8. 已知陷阱
 

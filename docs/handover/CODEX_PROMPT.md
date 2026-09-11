@@ -14,6 +14,7 @@
 ## 工作方式（照這個 repo 的慣例）
 
 - **每一件事先開分支**（`git switch -c <topic>`），一件事一個 commit，訊息 `type(scope): 說明`（繁中可），不用 `git add -A`；做完跑全套 `uv run pytest --cov=vcp`（不加 `-q`，才有 passed 數）與 `uv run ruff check . && uv run ruff format --check .`，都綠才 fast-forward 合併到 `main` 並 push。
+- **發版**：一批工作合併後，若它改了寫進產物 / 台帳的內容或 CLI 契約就 bump MINOR，否則 PATCH（規則與四個步驟在 `CHANGELOG.md` 表頭；`__version__` 在 `src/vcp/__init__.py`，是唯一來源）。稽核 Wave 0 合併後發 `0.3.0`。
 - **TDD**：每個行為變更先寫會失敗的測試，跑到紅，再實作，跑到綠；不弱化既有斷言；測試永不碰真資料根（用 `roots` fixture、`tests/submit_fixtures.py`、`tests/backup_fixtures.py`）；重寫台帳 / 卡的測試一律 `write_text(..., newline="\n")`（Windows CRLF）。
 - **自我審查**：每個 commit 前對照三件事——spec 符合度（有沒有多做 / 少做）、鐵則（時鐘、VERDICT / exit code、`reason=` 字彙、隱私 redact、台帳只增、不用 Click 層驗證）、跨層接縫（誰產這個檔 / 欄位、誰吃；新增欄位是否可選、舊檔還能讀）。
 - **裁決要留痕**：spec 沒說的事你自己決定，把「決定 — 依據 — 代價」寫進該層後記的最後一節；做完一批就在後記加一節「處置」表（哪項做了、怎麼做、哪項不做與理由），spec 的「補充決定」加條目，README / AGENTS.md 若命令或欄位改了要同步。

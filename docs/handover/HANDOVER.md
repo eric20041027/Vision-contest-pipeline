@@ -20,7 +20,7 @@
 ## 2. 現況
 
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`），工作樹乾淨；沒有未合併的分支。
-- 版本：`0.2.0`（tag `v0.2.0`，2026-09-11）是第一個有 tag 的 release；規則與發版步驟在 `CHANGELOG.md` 表頭。之前 240 個 commit 都宣告 `0.1.0` 且無 tag——RSNA 早期產物裡的 `"vcp_version": "0.1.0"` 回推不到單一 commit；0.2.0 起產物記 `版本+g<commit>[.dirty]`。稽核 Wave 0 的兩個修正分支（prereg SHA、foreign score refresh）合併後是 `0.3.0`。
+- 版本：`0.3.0`（tag `v0.3.0`，2026-09-11）= 稽核 Wave 0（prereg SHA 綁定、foreign 狀態刷新、回歸門檻）；`0.2.0` 是第一個有 tag 的 release（同日）。規則與發版步驟在 `CHANGELOG.md` 表頭。`0.2.0` 之前 240 個 commit 都宣告 `0.1.0` 且無 tag——RSNA 早期產物裡的 `"vcp_version": "0.1.0"` 回推不到單一 commit；0.2.0 起產物記 `版本+g<commit>[.dirty]`。下一步是稽核 Wave 1（provenance substrate；見 `projects/rsna-knee/` 的稽核文件 §11）。
 - 測試：`uv run pytest --cov=vcp`，覆蓋率約 96.7%；實際最新數字見 RSNA RUNBOOK 驗證紀錄。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
 - 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。

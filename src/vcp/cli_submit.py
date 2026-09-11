@@ -375,11 +375,16 @@ def sync_cmd(
             "platform_rows": res.platform_rows,
             "scored": res.scored,
             "foreign": res.foreign,
+            "refreshed": res.refreshed,
             "unconfirmed": len(res.unconfirmed),
         }
         human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
         status: Status = "WARN" if res.foreign or res.unconfirmed else "OK"
-        payload = {"matched": res.matched, "unconfirmed": res.unconfirmed}
+        payload = {
+            "matched": res.matched,
+            "unconfirmed": res.unconfirmed,
+            "refreshed": res.refreshed,
+        }
         return status, fields, payload, human
 
     run_command("submit.sync", json_mode, data_root, fn, context={"dataset": dataset})

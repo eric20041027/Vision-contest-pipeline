@@ -150,7 +150,7 @@ s.note("val_auc", 0.91)
 | `vcp submit stage` | 四道門（封槍 / 截止、eval-test 配對核對、準入判決、產檔）全過才寫 `submit/<test>/<id>/` 與台帳 `staged` 列 | `--id`、`--eval-run`、`--test-run`、`--kind candidate\|baseline\|probe`、`--reason`、kernel 類 `--kernel --version --weights RUN[:sha]`、`--writer-opt`、`--plugin` |
 | `vcp submit upload` | Kaggle：再驗 sha → 配額 → `kaggle competitions submit` → `uploaded` 列 | `--id`、`--message` |
 | `vcp submit record` | 手動平台：你在網頁上傳後回填，平台顯示時間換成 UTC | `--id`、`--at "YYYY-MM-DD HH:MM"`、`--tz platform\|utc`、`--platform-ref` |
-| `vcp submit score` / `sync` | 回填 public / private；Kaggle 以 `competitions submissions` 回讀、配對、把別人的發記成 `foreign`（照數配額） | `--public`、`--private` |
+| `vcp submit score` / `sync` | 回填 public / private；Kaggle 以 `competitions submissions` 回讀、配對、把別人的發記成 `foreign`（照數配額）。同一個 foreign ref 的狀態或分數變了（PENDING → COMPLETE 等）就多記一筆快照，VERDICT `refreshed=`；配額與到達仍每個 ref 算一次 | `--public`、`--private` |
 | `vcp submit final` | 已準入且已上傳的候選依 sealed 讀數（同分看 public、再看 staged 時間）選出 `final_slots` 個，寫決選表並封槍 | `--slots`、`--dry-run` |
 | `vcp submit lock` / `unlock` | 封槍 / 解封（留理由） | `--reason` |
 | `vcp submit status` / `report` | 配額剩餘與重置時間、截止倒數、榜面現任、未回填；每發 last-vs-last、sealed 讀數、public→private 位移（唯讀） | |

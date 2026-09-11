@@ -36,9 +36,10 @@ def _row(**fields: Any) -> LedgerRow:
 class SyncResult:
     platform_rows: int
     scored: int
-    foreign: int
+    foreign: int  # platform refs seen for the first time (each spent quota once)
     unconfirmed: list[str]
     matched: dict[str, str] = field(default_factory=dict)
+    refreshed: int = 0  # already-known foreign refs whose status or score changed (new snapshot)
 
 
 def _mentions(description: str, submission_id: str) -> bool:
@@ -94,7 +95,7 @@ def sync(
         )
     known_foreign = ledger.foreign_refs()
     matched: dict[str, str] = {}
-    scored = foreign = 0
+    scored = foreign = refreshed = 0
     # Oldest first (stamps sort as strings), so a resubmitted id's scored rows land in time
     # order and its newest platform score is the ledger's latest (ruling R7).
     for p in sorted(subs, key=lambda s: s.at):
@@ -127,6 +128,7 @@ def sync(
                 continue
             ledger.append(row)
             if p.platform_ref in known_foreign:
+                refreshed += 1  # a later snapshot of a ref already counted: no second arrival
                 continue
             known_foreign.add(p.platform_ref)
             foreign += 1
@@ -152,4 +154,4 @@ def sync(
             scored += 1
     confirmed = set(matched.values())
     unconfirmed = [sid for sid in ledger.ids() if ledger.uploads(sid) and sid not in confirmed]
-    return SyncResult(len(subs), scored, foreign, unconfirmed, matched)
+    return SyncResult(len(subs), scored, foreign, unconfirmed, matched, refreshed=refreshed)

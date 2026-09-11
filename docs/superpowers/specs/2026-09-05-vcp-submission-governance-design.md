@@ -392,3 +392,4 @@ class Platform(Protocol):
 24. **事件單一來源（Hygiene C）**：submit EVENTS 從 Event Literal 推導，測試驗 _REQUIRED 的 key 完全相同。training EVENTS 沒有重複的 Literal，維持原 tuple。
 
 25. **CLI 失敗身分**（2026-09-07）：十二個命令皆传 dataset context；有 --id 者傳 id，init 另傳 eval_dataset / plan，stage 另傳 eval_run 與有提供的 test_run。可選值省略，不把 None 傳入 FieldValue；深層錯誤身分優先，仍能識別融合配對的葉節點。
+26. **foreign 列是狀態快照（稽核 Wave 0，VCP-009，2026-09-11）**：同一個 `platform_ref` 可以有多筆 `foreign` 列——`sync` 在該 ref 的狀態或分數與最新快照不同時才 append（PENDING → COMPLETE、PENDING → ERROR、COMPLETE 的分數修正各一筆；同一頁重複列出同一 ref 只留一筆；同頁重跑零新列）。`arrivals()` 對每個 ref 只取最新快照，所以 quota、`status` 的 `foreign=`（改為 ref 數）、榜面現任與 `report` 都看最新狀態、但每個 ref 只算一次到達。`SyncResult.refreshed` 與 VERDICT `refreshed=` 計「已知 ref 的新快照數」，否則 PENDING → COMPLETE 的刷新在 VERDICT 上看不出來；刷新不觸發 WARN（WARN 仍只因新 foreign 或 unconfirmed）。平台沒給 `ref` 的列，其 `platform_ref` 由檔名 + 時間導出，跨次 sync 穩定，快照照樣接得上。原始問題：第一次 sync 在 PENDING 時記下 ref，之後同 ref 的 COMPLETE/分數因「ref 已知」被跳過，台帳永遠沒有分數（RSNA 第一次真實 submission）。

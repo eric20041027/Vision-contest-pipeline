@@ -267,9 +267,16 @@ def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
     outputs.append(r.output)
     assert r.exit_code == 0, r.output
     v = _verdict(r.output)
-    assert "scored=2" in v and "foreign=1" in v and "status=WARN" in v
+    assert "scored=2" in v and "foreign=1" in v and "refreshed=0" in v and "status=WARN" in v
     r = _run("sync", "--dataset", "beach-test")
     assert "scored=0" in _verdict(r.output) and "foreign=0" in _verdict(r.output)
+    # the teammate's row later turns COMPLETE with a score: a refresh, not a second arrival
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    doc["submissions"][-1] = {**doc["submissions"][-1], "status": "complete", "publicScore": "0.45"}
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    r = _run("sync", "--dataset", "beach-test")
+    v = _verdict(r.output)
+    assert "foreign=0" in v and "refreshed=1" in v and "status=OK" in v
     r = _run("status", "--dataset", "beach-test")
     outputs.append(r.output)
     assert "current=S2" in _verdict(r.output)  # board_rule=best: S2 scored higher by the fake
@@ -280,6 +287,7 @@ def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
     assert r.exit_code == 0, r.output
     assert "chosen=S1,S2" in _verdict(r.output) and "needs_reupload" not in _verdict(r.output)
     led = SubmissionLedger(pair.test_paths.submissions_log)
-    assert len(led.of("uploaded")) == 2 and len(led.of("foreign")) == 1
+    assert len(led.of("uploaded")) == 2
+    assert len(led.of("foreign")) == 2 and len(led.foreign_refs()) == 1  # two snapshots, one ref
     assert led.latest_score("S1").source == "platform"
     _scan(pair, outputs)

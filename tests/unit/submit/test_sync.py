@@ -127,7 +127,7 @@ def test_sync_refreshes_pending_foreign_score_without_counting_a_second_arrival(
         "status": "SubmissionStatus.PENDING",
     }
     first = sync(TEST, runner=FakeRunner([pending]), **_kw(staged))
-    assert first.foreign == 1
+    assert first.foreign == 1 and first.refreshed == 0
 
     complete = {
         **pending,
@@ -135,7 +135,7 @@ def test_sync_refreshes_pending_foreign_score_without_counting_a_second_arrival(
         "publicScore": "0.935",
     }
     second = sync(TEST, runner=FakeRunner([complete]), **_kw(staged))
-    assert second.foreign == 0
+    assert second.foreign == 0 and second.refreshed == 1
 
     ledger = SubmissionLedger(staged.test_paths.submissions_log)
     snapshots = [r for r in ledger.of("foreign") if r.platform_ref == "foreign-1"]
@@ -152,7 +152,106 @@ def test_sync_refreshes_pending_foreign_score_without_counting_a_second_arrival(
 
     before = len(ledger.rows)
     third = sync(TEST, runner=FakeRunner([complete]), **_kw(staged))
-    assert third.foreign == 0
+    assert third.foreign == 0 and third.refreshed == 0
+    assert len(SubmissionLedger(staged.test_paths.submissions_log).rows) == before
+
+
+def _foreign(ref, at, status_="SubmissionStatus.PENDING", **more):
+    row = {"fileName": "submission.csv", "date": at, "description": "teammate", "status": status_}
+    if ref is not None:
+        row["ref"] = ref
+    return {**row, **more}
+
+
+def _snapshots(staged, ref=None):
+    rows = SubmissionLedger(staged.test_paths.submissions_log).of("foreign")
+    return [r for r in rows if ref is None or r.platform_ref == ref]
+
+
+def _arrivals(staged):
+    """What quota is charged on: ``guards.quota_state`` counts ``ledger.arrivals()``."""
+    return len(SubmissionLedger(staged.test_paths.submissions_log).arrivals())
+
+
+def test_foreign_pending_to_error_is_a_snapshot_without_a_score(staged):
+    """VCP-009 matrix: a status change alone (no score) is still worth a row -- the report must
+    stop showing the ref as pending -- but it is neither an arrival nor a score."""
+    at = stamp(utc_now() - timedelta(hours=1))
+    sync(TEST, runner=FakeRunner([_foreign("f-err", at)]), **_kw(staged))
+    used = _arrivals(staged)
+    res = sync(
+        TEST, runner=FakeRunner([_foreign("f-err", at, "SubmissionStatus.ERROR")]), **_kw(staged)
+    )
+    assert (res.foreign, res.refreshed, res.scored) == (0, 1, 0)
+    snaps = _snapshots(staged, "f-err")
+    assert [s.platform_status for s in snaps] == [
+        "SubmissionStatus.PENDING",
+        "SubmissionStatus.ERROR",
+    ]
+    assert all(s.public is None for s in snaps)
+    arrival = [
+        r
+        for r in SubmissionLedger(staged.test_paths.submissions_log).arrivals()
+        if r.platform_ref == "f-err"
+    ]
+    assert len(arrival) == 1 and arrival[0].platform_status == "SubmissionStatus.ERROR"
+    assert _arrivals(staged) == used  # the ref is one arrival however many snapshots it has
+    row = next(r for r in report(TEST, **_kw(staged)) if r.submission_id == "foreign:f-err")
+    assert row.public is None
+
+
+def test_foreign_complete_score_correction_keeps_the_newest(staged):
+    """VCP-009 matrix: a platform that corrects a COMPLETE score yields a third snapshot; the
+    arrival, the board and the report all read the newest, quota still counts one."""
+    at = stamp(utc_now() - timedelta(hours=1))
+    complete = _foreign("f-fix", at, "SubmissionStatus.COMPLETE", publicScore="0.935")
+    sync(TEST, runner=FakeRunner([_foreign("f-fix", at)]), **_kw(staged))
+    sync(TEST, runner=FakeRunner([complete]), **_kw(staged))
+    used = _arrivals(staged)
+    res = sync(TEST, runner=FakeRunner([{**complete, "publicScore": "0.940"}]), **_kw(staged))
+    assert (res.foreign, res.refreshed) == (0, 1)
+    assert [s.public for s in _snapshots(staged, "f-fix")] == [None, 0.935, 0.940]
+    led = SubmissionLedger(staged.test_paths.submissions_log)
+    assert led.latest_foreign("f-fix").public == 0.940
+    assert [r.public for r in led.arrivals() if r.platform_ref == "f-fix"] == [0.940]
+    assert _arrivals(staged) == used
+    row = next(r for r in report(TEST, **_kw(staged)) if r.submission_id == "foreign:f-fix")
+    assert row.public == 0.940
+
+
+def test_foreign_without_a_platform_ref_still_refreshes_by_its_derived_ref(staged):
+    """VCP-009 matrix: a row the platform lists without ``ref`` gets a ref derived from its
+    file name and time; that derivation is stable across syncs, so its snapshots chain up."""
+    at = stamp(utc_now() - timedelta(hours=1))
+    first = sync(TEST, runner=FakeRunner([_foreign(None, at)]), **_kw(staged))
+    assert first.foreign == 1
+    snaps = _snapshots(staged)
+    ref = snaps[-1].platform_ref
+    assert ref and "foreign" not in ref
+    res = sync(
+        TEST,
+        runner=FakeRunner([_foreign(None, at, "SubmissionStatus.COMPLETE", publicScore="0.5")]),
+        **_kw(staged),
+    )
+    assert (res.foreign, res.refreshed) == (0, 1)
+    assert [s.public for s in _snapshots(staged, ref)] == [None, 0.5]
+
+
+def test_foreign_duplicate_rows_at_the_same_time(staged):
+    """VCP-009 matrix: one page listing the same ref twice yields one snapshot (the second is
+    identical to the one just appended); two different refs sharing a timestamp are two arrivals
+    in ledger order, and a rerun of the same page appends nothing."""
+    at = stamp(utc_now() - timedelta(hours=1))
+    page = [_foreign("f-a", at), _foreign("f-a", at), _foreign("f-b", at)]
+    res = sync(TEST, runner=FakeRunner(page), **_kw(staged))
+    assert (res.foreign, res.refreshed) == (2, 0)
+    assert [s.platform_ref for s in _snapshots(staged)] == ["f-a", "f-b"]
+    led = SubmissionLedger(staged.test_paths.submissions_log)
+    same_time = [r.platform_ref for r in led.arrivals() if r.at == at]
+    assert same_time == ["f-a", "f-b"]
+    before = len(led.rows)
+    again = sync(TEST, runner=FakeRunner(page), **_kw(staged))
+    assert (again.foreign, again.refreshed) == (0, 0)
     assert len(SubmissionLedger(staged.test_paths.submissions_log).rows) == before
 
 

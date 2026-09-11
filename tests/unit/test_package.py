@@ -26,3 +26,12 @@ def test_dev_group_pins_every_optional_extra():
     for extra, pins in doc["project"]["optional-dependencies"].items():
         missing = [p for p in pins if p not in dev]
         assert not missing, f"extra {extra!r} pins {missing} are missing from the dev group"
+
+
+def test_changelog_leads_with_the_current_version():
+    """A bump is three edits that must agree: ``__version__``, the newest CHANGELOG entry, and the
+    tag cut from that commit. The first two are checked here; the tag is the release step."""
+    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    heads = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", text, flags=re.M)
+    assert heads, "CHANGELOG.md has no `## [x.y.z]` entry"
+    assert heads[0] == vcp.__version__, f"newest CHANGELOG entry {heads[0]} != {vcp.__version__}"

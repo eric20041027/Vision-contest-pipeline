@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from vcp import __version__
+from vcp.core.build import build_string, git_head
 from vcp.core.errors import VcpError
 from vcp.core.time import stamp
 from vcp.train.schema import EnvSnapshot, GitInfo
@@ -92,19 +92,10 @@ def gpus() -> tuple[list[str], str | None]:
 
 
 def git_info(cwd: Path) -> GitInfo | None:
-    """Commit and dirty flag of the repository containing ``cwd``; None outside any repo."""
-    exe = shutil.which("git")
-    if not exe:
-        return None
-    head = subprocess.run(
-        [exe, "-C", str(cwd), "rev-parse", "HEAD"], capture_output=True, text=True
-    )
-    if head.returncode != 0:
-        return None
-    status = subprocess.run(
-        [exe, "-C", str(cwd), "status", "--porcelain"], capture_output=True, text=True
-    )
-    return GitInfo(commit=head.stdout.strip(), dirty=bool(status.stdout.strip()))
+    """Commit and dirty flag of the repository containing ``cwd`` (the training working
+    directory, not vcp's own); None outside any repo."""
+    head = git_head(cwd)
+    return None if head is None else GitInfo(commit=head[0], dirty=head[1])
 
 
 def snapshot(python: Path | None, cwd: Path) -> EnvSnapshot:
@@ -115,7 +106,7 @@ def snapshot(python: Path | None, cwd: Path) -> EnvSnapshot:
         **data,
         gpus=names,
         nvidia_driver=driver,
-        vcp_version=__version__,
+        vcp_version=build_string(),
         git=git_info(cwd),
         taken_at=stamp(),
     )

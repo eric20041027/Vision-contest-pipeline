@@ -10,7 +10,7 @@ from helpers import (
     noisy_predictions,
     perfect_predictions,
 )
-from vcp import __version__
+from vcp.core.build import build_string
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.fuse.build import (
@@ -95,7 +95,7 @@ def test_build_writes_an_ordinary_run_with_provenance(roots, tmp_path):
         and rec.recipe_id == "r1"
         and rec.recipe_sha256 == card.source.config_hash
     )
-    assert rec.method == "wbf" and rec.method_version == "1" and rec.vcp_version == __version__
+    assert rec.method == "wbf" and rec.method_version == "1" and rec.vcp_version == build_string()
     assert rec.params["iou"] == "0.5" and rec.params["conf_type"] == "avg"
     assert [(m.run, m.weight, m.trained_on) for m in rec.members] == [
         ("perfect", 1.0, ["train"]),
@@ -263,7 +263,7 @@ def test_rebuild_refreshes_metadata_but_keeps_prior_subsets(roots, tmp_path):
     )
     res = _build(roots, replace=True)
     rec = load_record(roots.data, "fuse-r1")
-    assert rec.method_version == "1" and rec.vcp_version == __version__
+    assert rec.method_version == "1" and rec.vcp_version == build_string()
     assert rec.subsets["valA"].output_sha256 == res.subsets["valA"].sha256
     # the untouched subset's SubsetBuild is still carried forward from the first build
     assert rec.subsets["valB"].output_sha256 == first.subsets["valB"].sha256

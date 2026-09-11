@@ -12,10 +12,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vcp import __version__
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import default_manifest_id, write_manifest
 from vcp.backup.schema import ROLES, TIER_OF, BackupRow, FileEntry, Manifest, RemoteCopy
+from vcp.core.build import build_string
 from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
@@ -344,7 +344,7 @@ def build_manifest(
         dataset=dataset,
         conclusion=conclusion,
         created_at=stamp(),
-        vcp_version=__version__,
+        vcp_version=build_string(),
         data_root=paths.data_root.as_posix(),
         files=col.files_of(),
     )

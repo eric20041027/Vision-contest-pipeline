@@ -1,16 +1,26 @@
+import importlib.metadata
+import re
+import tomllib
+from pathlib import Path
+
 import vcp
 
+ROOT = Path(__file__).resolve().parents[2]
+SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
-def test_version_is_non_empty_string():
-    assert isinstance(vcp.__version__, str)
-    assert vcp.__version__ == "0.1.0"
+
+def test_version_is_semver_and_single_sourced():
+    """``__version__`` is the one declaration: pyproject reads it (hatchling dynamic version) and
+    the installed distribution reports the same string."""
+    assert SEMVER.match(vcp.__version__), vcp.__version__
+    doc = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "version" not in doc["project"] and doc["project"]["dynamic"] == ["version"]
+    assert doc["tool"]["hatch"]["version"]["path"] == "src/vcp/__init__.py"
+    assert importlib.metadata.version("vcp") == vcp.__version__
 
 
 def test_dev_group_pins_every_optional_extra():
-    import tomllib
-    from pathlib import Path
-
-    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    pyproject = ROOT / "pyproject.toml"
     doc = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     dev = set(doc["dependency-groups"]["dev"])
     for extra, pins in doc["project"]["optional-dependencies"].items():

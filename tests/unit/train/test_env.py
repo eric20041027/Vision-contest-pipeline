@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from vcp import __version__
+from vcp.core.build import build_string
 from vcp.core.errors import VcpError
 from vcp.train import env as envmod
 from vcp.train.env import PROBE, git_info, gpus, snapshot, venv_python
@@ -39,7 +39,7 @@ def test_snapshot_uses_current_interpreter_and_repo_git(monkeypatch):
         lambda name, *a, **k: None if name == "nvidia-smi" else real_which(name),
     )
     snap = snapshot(None, REPO)
-    assert snap.vcp_version == __version__ and snap.taken_at.endswith("Z")
+    assert snap.vcp_version == build_string() and snap.taken_at.endswith("Z")
     assert snap.gpus == [] and snap.nvidia_driver is None
     assert snap.git is not None and len(snap.git.commit) == 40 and isinstance(snap.git.dirty, bool)
     assert "pydantic" in snap.packages

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from vcp import __version__
+from vcp.core.build import build_string
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import md5_file, sha256_file
 from vcp.core.paths import DatasetPaths, validate_name
@@ -255,7 +255,7 @@ def stage(spec: StageSpec) -> StageResult:
             gate=gate,
             profile_sha256=profile_sha,
             staged_at=stamp(),
-            vcp_version=__version__,
+            vcp_version=build_string(),
         )
         text = json.dumps(staged.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
         (final_dir / STAGE_FILE).write_text(text, encoding="utf-8", newline="\n")

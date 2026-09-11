@@ -16,7 +16,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from vcp import __version__
+from vcp.core.build import build_string
 from vcp.core.errors import (
     IntegrityError,
     InvariantError,
@@ -292,7 +292,7 @@ def _new_record(
             MemberRecord(run=m.run, weight=m.weight, trained_on=list(c.trained_on))
             for m, c in zip(recipe.members, cards, strict=True)
         ],
-        vcp_version=__version__,
+        vcp_version=build_string(),
     )
 
 

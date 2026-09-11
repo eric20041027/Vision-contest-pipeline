@@ -6,9 +6,11 @@ import yaml
 from PIL import Image
 from typer.testing import CliRunner
 
+import vcp
 from helpers import CATS, det_samples, write_dicom_study, write_exif_image, write_images
 from vcp.cli import app, parse_opts, render_table
 from vcp.cli_common import CmdResult, run_command
+from vcp.core.build import build_info, build_string
 from vcp.core.errors import ValidationFailed
 from vcp.data.dataset import write_samples_jsonl
 from vcp.data.exporters import EXPORTERS, ExportOutput, register_exporter
@@ -60,13 +62,20 @@ def _import_tiny(roots, tmp_path, name="tiny", n=60, with_images=False):
 
 def test_help_and_version():
     assert runner.invoke(app, ["--help"]).exit_code == 0
+    info = build_info()
     r = runner.invoke(app, ["version"])
-    assert r.exit_code == 0 and "0.1.0" in r.output
-    assert _last_verdict(r.output) == "VERDICT cmd=version status=OK version=0.1.0"
+    assert r.exit_code == 0 and build_string() in r.output
+    v = _last_verdict(r.output)
+    assert v.startswith(f"VERDICT cmd=version status=OK version={vcp.__version__} build=")
+    assert f"build={build_string()}" in v
+    if info.commit is not None:
+        assert f"commit={info.commit}" in v and f"dirty={'true' if info.dirty else 'false'}" in v
     r = runner.invoke(app, ["version", "--json"])
     assert r.exit_code == 0
     doc = json.loads(next(line for line in r.output.splitlines() if line.startswith("{")))
-    assert doc["cmd"] == "version" and doc["result"]["version"] == "0.1.0"
+    assert doc["cmd"] == "version" and doc["result"]["version"] == vcp.__version__
+    assert doc["result"]["build"] == build_string()
+    assert doc["result"]["commit"] == info.commit and doc["result"]["dirty"] == info.dirty
 
 
 def test_import_validate_split_lineage_flow(roots, tmp_path):
@@ -252,7 +261,9 @@ def test_logger_falls_back_to_plain_logger_on_error(roots, monkeypatch, error):
     monkeypatch.setattr("vcp.cli_common.setup_logging", _boom)
     r = runner.invoke(app, ["version"])
     assert r.exit_code == 0
-    assert _last_verdict(r.output) == "VERDICT cmd=version status=OK version=0.1.0"
+    assert _last_verdict(r.output).startswith(
+        f"VERDICT cmd=version status=OK version={vcp.__version__} build="
+    )
 
 
 def test_run_command_wraps_non_vcp_error_as_abort(roots, tmp_path):

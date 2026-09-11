@@ -8,7 +8,6 @@ from typing import Annotated
 import typer
 from pydantic import TypeAdapter, ValidationError
 
-from vcp import __version__
 from vcp.cli_backup import backup_app
 from vcp.cli_common import (
     CmdResult,
@@ -24,6 +23,7 @@ from vcp.cli_eval import eval_app
 from vcp.cli_fuse import fuse_app
 from vcp.cli_submit import submit_app
 from vcp.cli_train import train_app
+from vcp.core.build import build_info, build_string
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import MANIFEST_MODES
 from vcp.core.log import FieldValue, Status, Verdict
@@ -60,10 +60,22 @@ def _root() -> None:
 
 @app.command("version")
 def version_cmd(json_mode: JsonOpt = False, data_root: DataRootOpt = None) -> None:
-    """Print the vcp version."""
+    """Print the vcp version and, when run from a checkout, the commit it runs from."""
 
     def fn() -> CmdResult:
-        return "OK", {"version": __version__}, {"version": __version__}, [__version__]
+        info = build_info()
+        build = build_string(info)
+        fields: dict[str, FieldValue] = {"version": info.version, "build": build}
+        if info.commit is not None:
+            fields["commit"] = info.commit
+            fields["dirty"] = bool(info.dirty)
+        payload = {
+            "version": info.version,
+            "build": build,
+            "commit": info.commit,
+            "dirty": info.dirty,
+        }
+        return "OK", fields, payload, [build]
 
     run_command("version", json_mode, data_root, fn)
 

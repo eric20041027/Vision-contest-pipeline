@@ -11,9 +11,25 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
 - **發版步驟**（一個 commit 一個 tag）：
   1. 改 `src/vcp/__init__.py` 的 `__version__`——它是唯一來源，`pyproject.toml` 以 `[tool.hatch.version]` 動態讀它，`uv.lock` 不記版本字面值。
   2. 在本檔最上方加一條 `## [x.y.z] - YYYY-MM-DD`，列 Added / Changed / Fixed / Removed 與影響的層。
-  3. `uv run pytest --cov=vcp`（`tests/unit/test_package.py` 會擋住 `__version__`、安裝 metadata 與本檔最新條目三者不一致）與 `uv run ruff check . && uv run ruff format --check .`。
+  3. `uv sync --reinstall-package vcp`（editable 安裝的 metadata 不會因 `__init__.py` 改動自動重建），再 `uv run pytest --cov=vcp`（`tests/unit/test_package.py` 會擋住 `__version__`、安裝 metadata 與本檔最新條目三者不一致）與 `uv run ruff check . && uv run ruff format --check .`。
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
+
+## [0.3.0] - 2026-09-11
+
+稽核（2026-09-11，VCP-001..034）的 **Wave 0**：兩個已寫好但未進 main 的正確性修正、既有預登記的稽核、release 回歸門檻。MINOR 的理由：台帳的 `foreign` 列語意改變（同 ref 可多筆快照）、`sync` 的 VERDICT 多 `refreshed=`、預登記錯誤的 `reason=` 字彙與 `prereg=` 欄位改變。
+
+### Fixed
+- **預登記綁定第一筆 log 列**（measure，VCP-008，原 Codex commit d193113）：`load_prereg` 只信任 bytes 仍 hash 到 `prereg.log.jsonl` 該 id 第一筆列的 yaml——沒有列 → `ValidationFailed("not_found: … never registered")`，hash 變了 → `IntegrityError("mismatch: …")`，兩者 `fields={"prereg": id}`。登記後改 `t_min` / `min_bases` / claim 再借用早先時戳的「事後預登記」從此不可能。judge、提交層 gate、備份層 `judgement:` 走法都經它，所以一份被竄改的預登記讓三者一起 FAIL。既有 `configs/datasets/rsna-knee/prereg/` 三份 yaml 對第一筆 log 列 **3/3 相符**（不改歷史）。
+- **foreign submission 的狀態刷新**（submit，VCP-009，原 Codex commit d881a1d）：同一 `platform_ref` 可有多筆 `foreign` 快照，`sync` 在狀態或分數改變時 append（PENDING → COMPLETE / ERROR、COMPLETE 分數修正），`arrivals()` 每個 ref 只取最新，quota 與 `status` 的 `foreign=` 每個 ref 算一次；同頁重跑零新列。原問題：PENDING 時記下 ref 後，同 ref 的 COMPLETE/分數因「ref 已知」被跳過，台帳永遠沒有分數。
+
+### Added
+- `SyncResult.refreshed` 與 `vcp submit sync` 的 VERDICT / `--json` `refreshed=`（已知 ref 的新快照數；不觸發 WARN）。
+- **Release 回歸門檻** `tests/unit/test_regression_gate.py`：稽核 §11 點名的六個修正（8c6b5c4 台帳快照與路徑安全、883da62 備份端到端與隱私掃描、d9b2331 CLI 失敗身分、7c31c3d 遺失 fuse.json 的完整重建、12a9cd4 事件單一來源與上傳檢查順序、6a4cc58 重複表頭 / 巢狀配對 / 最新判決）加 Wave 0 兩項，各對應其測試函式；刪掉或改名任一個測試即紅。
+- 狀態序列測試：PENDING → ERROR、COMPLETE 分數修正、平台無 `ref` 的列、同頁重複 / 同時間兩個 ref；端到端多一次「隊友的發轉 COMPLETE」。
+
+### Changed
+- 量測 spec §17、提交治理 spec §17-26、README `sync` 列。
 
 ## [0.2.0] - 2026-09-11
 

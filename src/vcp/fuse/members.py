@@ -51,7 +51,7 @@ def check_members(
     for m in members:
         try:
             card = load_run(data_root, m.run)
-            assert_run_matches(card, dataset)
+            assert_run_matches(card, dataset.card)
             if card.plan_id != plan_id:
                 raise PlanMismatchError(
                     f"member {m.run!r} uses plan {card.plan_id!r}, not {plan_id!r}"

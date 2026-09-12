@@ -61,7 +61,9 @@ def load_context(
     card = load_run(resolve_data_root(data_root), run_id)
     paths = DatasetPaths.resolve(card.dataset, data_root=data_root, configs_root=configs_root)
     dataset = Dataset.load(card.dataset, data_root=data_root, configs_root=configs_root)
-    assert_run_matches(card, dataset)  # one owner for the run-vs-dataset check (Task 5 ruling 4)
+    assert_run_matches(
+        card, dataset.card
+    )  # one owner for the run-vs-dataset check (Task 5 ruling 4)
     plan = load_plan(paths, card.plan_id)
     return card, dataset, plan, paths
 
@@ -173,7 +175,7 @@ def _guardrail(
     # A stale anchor run (its card no longer matching the dataset, e.g. after a re-import) must
     # surface as the PlanMismatchError it is, not a confusing GuardrailError from recomputing a
     # metric against samples the anchor run was never measured on (Minor 4).
-    assert_run_matches(anchor_run, ctx.dataset)
+    assert_run_matches(anchor_run, ctx.dataset.card)
     anchor_preds = predictions_by_id(read_predictions(verify_prediction(root, anchor_run, subset)))
     got = metric.compute(samples, anchor_preds, ctx.dataset.card, params).value
     if abs(got - anchor.value) > anchor.tolerance:

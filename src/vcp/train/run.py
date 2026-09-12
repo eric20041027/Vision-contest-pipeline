@@ -280,7 +280,7 @@ def _existing(
             "a different config is a new run",
             fields={"run": spec.run_id},
         )
-    assert_run_matches(card, dataset)
+    assert_run_matches(card, dataset.card)
     if card.plan_id != spec.plan_id or card.trained_on != trained_on:
         raise ValidationFailed(
             f"{RUN_EXISTS}: run {spec.run_id!r} was trained on {card.trained_on} under plan "

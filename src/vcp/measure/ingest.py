@@ -131,7 +131,7 @@ def _run_card(
                 "`vcp fuse build --replace` instead of ingesting a subset into it",
                 fields={"run": spec.run_id},
             )
-        assert_run_matches(card, dataset)
+        assert_run_matches(card, dataset.card)
         if card.plan_id != spec.plan_id:
             raise PlanMismatchError(
                 f"run {spec.run_id!r} uses plan {card.plan_id!r}, not {spec.plan_id!r}"

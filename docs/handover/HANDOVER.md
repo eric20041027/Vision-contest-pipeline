@@ -29,7 +29,7 @@
 
 ```
 src/vcp/core      time（唯一時鐘）errors（VERDICT 狀態）log（VERDICT 行 / jsonl log）paths（DatasetPaths）
-                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact）
+                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact）atomic（write_once 原語）
 src/vcp/data      schema tasks（任務登記表）dataset split（plan、assert_plan_matches）lineage
                   importers/ exporters/ audit/ materialize/ dicomio
 src/vcp/measure   schema runs（run.yaml、FUSE_FRAMEWORK）predictions converters/ metrics/ ingest
@@ -39,7 +39,10 @@ src/vcp/train     schema records（train.yaml + train.log.jsonl）env checkpoint
 src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）timewin guards pairing gate
                   writers/（scores_csv/coco_results/csv_boxes）platforms/（manual/kaggle）stage actions sync final report
 src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
-src/vcp/cli*.py   每層一個 typer app；cli_common.run_command 統一 VERDICT / exit code / --json / context
+src/vcp/artifact  schema（pydantic 模型、check_file_name）ledger（supersession.jsonl 讀寫）store（load/reuse/verify）
+                  writer（ArtifactWriter：claim/write/commit）lineage（chain/successors/head/forks）clean（scan/clean）
+src/vcp/cli*.py   每層一個 typer app（含 cli_artifact.py 的 `vcp artifact` 群：create/show/verify/lineage/status/
+                  relink/clean）；cli_common.run_command 統一 VERDICT / exit code / --json / context
 projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
 tests/            unit/<layer>、integration（真資料）、helpers.py、submit_fixtures.py、backup_fixtures.py
 configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git

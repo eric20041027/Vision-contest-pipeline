@@ -218,13 +218,17 @@ uv run vcp submit verify --dataset D-test --id SUB34                    # 位元
 ```python
 from vcp.artifact.schema import ArtifactSpec, InputRef
 from vcp.artifact.writer import ArtifactWriter
+from vcp.core.paths import DatasetPaths
 
+paths = DatasetPaths.resolve("knee")
 spec = ArtifactSpec(
     kind="selection",
     id="six-slot-v2-s42",
     seed=42,
     id_pattern=r"six-slot-v2-s(?P<seed>\d+)",
-    inputs=[InputRef(name="plan", path="configs/datasets/knee/splits/fixed-v1.json")],
+    inputs=[
+        InputRef(name="plan", path=str(paths.plan_json("fixed-v1")))
+    ],  # 絕對路徑；相對路徑以 data root 為基準
 )
 with ArtifactWriter.create(spec, data_root=root) as art:
     art.write_json("receipt.json", payload)  # write_text / write_bytes 也有

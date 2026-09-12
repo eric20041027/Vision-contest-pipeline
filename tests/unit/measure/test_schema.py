@@ -8,6 +8,7 @@ from vcp.measure.schema import (
     Prediction,
     PredMask,
     PreRegistration,
+    Reading,
     RunCard,
     RunSource,
     payload_field,
@@ -134,3 +135,20 @@ def test_prereg_thresholds_keep_their_legal_edges():
     counts), min_bases = 1 (a single-subset claim) and a fractional sigma_ratio."""
     pr = PreRegistration(**{**PREREG_BASE, "t_min": 0.0, "min_bases": 1, "sigma_ratio": 0.5})
     assert (pr.t_min, pr.min_bases, pr.sigma_ratio) == (0.0, 1, 0.5)
+
+
+def test_run_card_and_reading_carry_optional_provenance_fields():
+    card = RunCard(
+        run_id="r",
+        dataset="d",
+        samples_hash="a" * 64,
+        plan_id="p",
+        trained_on=[],
+        source=RunSource(),
+        created_at="2026-09-12T00:00:00.000Z",
+    )
+    assert card.access == []
+    assert RunCard.model_validate(card.model_dump(mode="json")).access == []
+    assert (
+        "provenance" in Reading.model_fields and Reading.model_fields["provenance"].default is None
+    )

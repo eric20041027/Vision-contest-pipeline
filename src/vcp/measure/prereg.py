@@ -14,7 +14,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from vcp.core.config import dump_yaml_model, load_yaml_model
+from vcp.core.atomic import write_once_text
+from vcp.core.config import dump_yaml_text, load_yaml_model
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths, validate_name
@@ -153,7 +154,7 @@ def create_prereg(paths: DatasetPaths, pr: PreRegistration, readings: ReadingsLe
             f"{ALREADY_MEASURED}: candidate {pr.candidate_run!r} has {pr.metric} readings on "
             f"{measured}; pre-register before measuring the candidate"
         )
-    dump_yaml_model(pr.model_copy(update={"params": params}), path)
+    write_once_text(path, dump_yaml_text(pr.model_copy(update={"params": params})))
     try:
         append_row(
             paths.prereg_log,

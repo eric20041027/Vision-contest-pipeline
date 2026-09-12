@@ -71,6 +71,7 @@ def test_save_refuses_existing(roots):
         save_recipe(paths, _recipe(params={"iou": "0.7"}))
     assert ei.value.fields == {"recipe": "r1"}
     assert recipe_path(paths, "r1").read_bytes() == before
+    assert [p.name for p in fuse_dir(paths).iterdir()] == ["r1.yaml"]
 
 
 def test_load_checks_id_and_dataset(roots):

@@ -201,8 +201,11 @@ def test_create_prereg_refuses_measured_candidate(roots, tmp_path):
     assert log["prereg_id"] == "p001" and len(log["sha256"]) == 64
     # ruling 5: a log whose timestamps prove ordering reads its own clock, never created_at
     assert log["ts"] != CREATED_AT and prereg_time(paths, "p001") == log["ts"]
+    before = path.read_bytes()
     with pytest.raises(ValidationFailed, match="already exists"):
         create_prereg(paths, _pr(), ledger)
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in path.parent.iterdir()) == ["p001.yaml"]
     _measure(roots, "noisy", subsets=["valA"])
     with pytest.raises(ValidationFailed, match="already_measured") as seen:
         create_prereg(paths, _pr(prereg_id="p002"), _ledger(paths))

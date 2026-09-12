@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from vcp.core.config import dump_yaml_model, load_yaml_model
+from vcp.core.atomic import write_once_text
+from vcp.core.config import dump_yaml_text, load_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths, validate_name
@@ -53,7 +54,7 @@ def save_recipe(paths: DatasetPaths, recipe: Recipe) -> Path:
             "a changed recipe is a new id",
             fields={"recipe": recipe.recipe_id},
         )
-    dump_yaml_model(recipe, path)
+    write_once_text(path, dump_yaml_text(recipe))
     return path
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from vcp.artifact import store
+from vcp.artifact.ledger import append_supersession, row_for
 from vcp.artifact.schema import (
     ArtifactManifest,
     ArtifactSpec,
@@ -181,9 +182,35 @@ class ArtifactWriter:
                     fields={**self._ident(), "input": ref.name},
                 )
 
+    def _check_supersedes(self) -> str | None:
+        """The old artifact must exist, be committed and verify clean (mismatch / missing /
+        extra); a missing ledger row on it does not block. Returns the sha of its manifest."""
+        old = self.spec.supersedes
+        if old is None:
+            return None
+        res = store.verify(self.data_root, self.spec.kind, old)
+        if res.failed:
+            raise IntegrityError(
+                f"mismatch: superseded artifact {self.spec.kind}/{old} no longer matches its "
+                f"manifest (mismatch={len(res.mismatch)} missing={len(res.missing)} "
+                f"extra={len(res.extra)}); it cannot be superseded until `vcp artifact verify` "
+                "passes",
+                fields={**self._ident(), "supersedes": old},
+            )
+        return sha256_file(store.manifest_path(self.data_root, self.spec.kind, old))
+
+    def _link(self, manifest: ArtifactManifest) -> None:
+        """The ledger row, after the commit point. A crash between the two leaves a valid
+        artifact that ``verify`` reports as unlinked and ``relink`` repairs."""
+        if manifest.spec.supersedes is None:
+            return
+        append_supersession(
+            self.data_root, row_for(manifest, sha256_file(self.dir / store.MANIFEST))
+        )
+
     def commit(self) -> ArtifactManifest:
-        """Reserved files present → inputs unchanged → ``manifest.json`` (the commit point).
-        Afterwards the writer is closed."""
+        """Reserved files present → inputs unchanged → superseded artifact verified →
+        ``manifest.json`` (the commit point) → ledger row. Afterwards the writer is closed."""
         if self._closed:
             raise ValidationFailed(
                 f"closed: artifact {self.spec.kind}/{self.spec.id} is committed or closed",
@@ -191,13 +218,16 @@ class ArtifactWriter:
             )
         self._check_reserved()
         self._check_drift()
+        supersedes_sha256 = self._check_supersedes()
         manifest = ArtifactManifest(
             spec=self.spec,
             files=[self._files[n] for n in sorted(self._files)],
             created_at=stamp(),
             vcp_version=build_string(),
+            supersedes_sha256=supersedes_sha256,
         )
         write_once(self.dir / store.MANIFEST, _json_bytes(manifest.model_dump(mode="json")))
         self.manifest = manifest
         self._closed = True
+        self._link(manifest)
         return manifest

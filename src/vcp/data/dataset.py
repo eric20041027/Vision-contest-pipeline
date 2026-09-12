@@ -51,6 +51,26 @@ def read_samples_jsonl(path: Path) -> Iterator[Sample]:
                 raise ValidationFailed(str(e), location=f"{path}:{lineno}") from e
 
 
+def append_unseal(
+    paths: DatasetPaths, plan: SplitPlan, subset: str, reason: str, caller: str
+) -> str:
+    """Record one opening of a sealed subset (spec 7.4) and return the sha256 of the line."""
+    record = {
+        "ts": stamp(),
+        "plan_id": plan.plan_id,
+        "dataset_hash": plan.dataset_hash,
+        "subset": subset,
+        "reason": reason,
+        "caller": caller,
+    }
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    target = paths.unseal_jsonl(plan.plan_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(line)
+    return sha256_text(line)
+
+
 class Dataset:
     def __init__(self, card: DatasetCard, samples: Iterable[Sample]) -> None:
         self.card = card
@@ -83,6 +103,21 @@ class Dataset:
         return ds
 
     @classmethod
+    def load_card(
+        cls, name: str, *, data_root: Path | None = None, configs_root: Path | None = None
+    ) -> DatasetCard:
+        """The card alone: no samples file is opened, hashed or parsed (spec 6.1)."""
+        paths = DatasetPaths.resolve(name, data_root=data_root, configs_root=configs_root)
+        if not paths.card_yaml.is_file():
+            raise ValidationFailed(f"dataset card not found: {paths.card_yaml}")
+        card = load_yaml_model(paths.card_yaml, DatasetCard)
+        if card.name != name:
+            raise ValidationFailed(
+                f"card name {card.name!r} != {name!r}", location=str(paths.card_yaml)
+            )
+        return card
+
+    @classmethod
     def load(
         cls,
         name: str,
@@ -97,13 +132,7 @@ class Dataset:
         (card.samples_hash -> samples.jsonl -> plan.dataset_hash) intact.
         """
         paths = DatasetPaths.resolve(name, data_root=data_root, configs_root=configs_root)
-        if not paths.card_yaml.is_file():
-            raise ValidationFailed(f"dataset card not found: {paths.card_yaml}")
-        card = load_yaml_model(paths.card_yaml, DatasetCard)
-        if card.name != name:
-            raise ValidationFailed(
-                f"card name {card.name!r} != {name!r}", location=str(paths.card_yaml)
-            )
+        card = cls.load_card(name, data_root=data_root, configs_root=configs_root)
         if not paths.samples_jsonl.is_file():
             raise ValidationFailed(f"samples file not found: {paths.samples_jsonl}")
         if verify_hash:
@@ -157,16 +186,5 @@ class Dataset:
                 raise SealedSubsetError("unseal requires a non-empty reason")
             if paths is None:
                 raise SealedSubsetError("unseal requires paths so the unseal can be recorded")
-            record = {
-                "ts": stamp(),
-                "plan_id": plan.plan_id,
-                "dataset_hash": plan.dataset_hash,
-                "subset": name,
-                "reason": reason,
-                "caller": caller or "unknown",
-            }
-            target = paths.unseal_jsonl(plan.plan_id)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("a", encoding="utf-8", newline="\n") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            append_unseal(paths, plan, name, reason, caller or "unknown")
         return [s for s in self.samples if plan.assignment.get(s.sample_id) == name]

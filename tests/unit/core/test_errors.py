@@ -1,4 +1,5 @@
 from vcp.core.errors import (
+    AccessDeniedError,
     GuardrailError,
     IntegrityError,
     InvariantError,
@@ -30,3 +31,9 @@ def test_guardrail_error_is_abort():
     e = GuardrailError("anchor mismatch", location="valA/coco_map")
     assert isinstance(e, VcpError) and e.status == "ABORT"
     assert "anchor mismatch" in str(e) and "valA/coco_map" in str(e)
+
+
+def test_access_denied_is_a_fail():
+    e = AccessDeniedError("denied: subset 'valA' is not authorized", fields={"subset": "valA"})
+    assert e.status == "FAIL" and e.fields == {"subset": "valA"}
+    assert str(e).startswith("denied: ")

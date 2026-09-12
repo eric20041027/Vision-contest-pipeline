@@ -78,12 +78,12 @@ def test_assert_run_matches_dataset_name_and_hash(roots):
     """Task 5 ruling 4: the run-vs-dataset check lives here once so Task 9 can reuse it."""
     ds = Dataset.from_parts(make_card("det", name="tiny"), det_samples(5, seed=0))
     card = _card(run_id="r1", dataset="tiny", samples_hash=ds.card.samples_hash)
-    assert_run_matches(card, ds)  # no error: name and hash both agree
+    assert_run_matches(card, ds.card)  # no error: name and hash both agree
 
     wrong_name = _card(run_id="r1", dataset="other", samples_hash=ds.card.samples_hash)
     with pytest.raises(PlanMismatchError, match="dataset"):
-        assert_run_matches(wrong_name, ds)
+        assert_run_matches(wrong_name, ds.card)
 
     wrong_hash = _card(run_id="r1", dataset="tiny", samples_hash="stale-hash")
     with pytest.raises(PlanMismatchError, match="samples_hash"):
-        assert_run_matches(wrong_hash, ds)
+        assert_run_matches(wrong_hash, ds.card)

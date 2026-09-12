@@ -195,7 +195,7 @@ def check_existing_run(
             fields={"run": run_id},
         )
     try:
-        assert_run_matches(card, dataset)
+        assert_run_matches(card, dataset.card)
     except VcpError as e:
         # 4-7: shared with the measurement layer, so it knows nothing of this run id; every
         # other refusal in this function names the run, and so must this one.

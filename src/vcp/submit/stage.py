@@ -88,7 +88,7 @@ def load_staged(paths: DatasetPaths, submission_id: str) -> Staged:
 
 def _run_on(data_root: Path, run_id: str, dataset: Dataset, plan_id: str, side: str) -> RunCard:
     card = load_run(data_root, run_id)
-    assert_run_matches(card, dataset)
+    assert_run_matches(card, dataset.card)
     if card.plan_id != plan_id:
         raise PlanMismatchError(
             f"run {run_id!r} uses plan {card.plan_id!r}; the profile's {side} plan is {plan_id!r}",

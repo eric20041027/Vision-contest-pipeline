@@ -1,4 +1,5 @@
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -76,3 +77,19 @@ def test_text_is_utf8_with_the_given_line_ends(tmp_path):
 )
 def test_is_tmp_name(name, expected):
     assert atomic.is_tmp_name(name) is expected
+
+
+SRC = Path(__file__).resolve().parents[3] / "src" / "vcp"
+WRITE_ONCE_SITES = (
+    "data/split.py",
+    "measure/prereg.py",
+    "fuse/recipes.py",
+    "backup/manifest.py",
+)
+
+
+@pytest.mark.parametrize("rel", WRITE_ONCE_SITES)
+def test_the_four_write_once_sites_use_the_primitive(rel):
+    text = (SRC / rel).read_text(encoding="utf-8")
+    assert "from vcp.core.atomic import write_once_text" in text, rel
+    assert "write_once_text(" in text, rel

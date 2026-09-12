@@ -214,10 +214,18 @@ class DatasetAccess:
         )
         # The receipt is claimed (above) before this write, and a failed identity/coverage check
         # above never reaches here: a failed open leaves no unseal line pointing at no receipt.
+        # append_unseal does raw file I/O and can raise (OSError, ...); if it does, `access` is a
+        # local nobody else can reach, so no caller-side with/close() would ever run -- close the
+        # claim here as a failed receipt before letting the exception propagate, rather than
+        # leaving an orphaned partial with no manifest.json and no failure.json.
         if sealed_name is not None:
-            access._unseal_event_sha256 = append_unseal(
-                paths, plan, sealed_name, unseal_reason, caller or purpose
-            )
+            try:
+                access._unseal_event_sha256 = append_unseal(
+                    paths, plan, sealed_name, unseal_reason, caller or purpose
+                )
+            except BaseException as exc:
+                access._close(exc)
+                raise
         return access
 
     # -- reads --------------------------------------------------------------------------------

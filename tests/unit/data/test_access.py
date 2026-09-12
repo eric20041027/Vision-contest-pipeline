@@ -165,6 +165,26 @@ def test_more_than_one_sealed_subset_is_refused(roots):
     assert not paths.unseal_jsonl("two-sealed").is_file()
 
 
+def test_an_unseal_failure_after_the_claim_still_leaves_a_failed_receipt(roots, monkeypatch):
+    ds, plan, paths = _seed(roots)
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("vcp.data.access.access.append_unseal", _boom)
+    with pytest.raises(OSError):
+        _open(roots, subsets={"holdout"}, unseal_reason="test")
+    assert not paths.unseal_jsonl("fixed-v1").is_file()
+    receipts_dir = roots.data / "artifacts" / "access_receipt"
+    entries = [p for p in receipts_dir.iterdir() if p.is_dir()]
+    assert len(entries) == 1
+    receipt = read_receipt(roots.data, entries[0].name).receipt
+    assert receipt.outcome == "failed"
+    assert receipt.exception == "OSError"
+    assert receipt.sealed_accessed is False
+    assert receipt.unseal_event_sha256 is None
+
+
 def test_a_row_that_changed_after_open_is_refused(roots):
     ds, plan, paths = _seed(roots)
     access = _open(roots)

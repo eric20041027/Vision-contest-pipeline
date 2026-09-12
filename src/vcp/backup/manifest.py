@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from vcp.backup.schema import FileEntry, Manifest
+from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import utc_now
@@ -24,13 +25,8 @@ def write_manifest(paths: DatasetPaths, manifest: Manifest) -> Path:
             f"exists: manifest {manifest.manifest_id!r} is already written at {path}",
             fields={"manifest": manifest.manifest_id},
         )
-    path.parent.mkdir(parents=True, exist_ok=True)
     doc = manifest.model_dump(mode="json", by_alias=True)
-    path.write_text(
-        json.dumps(doc, ensure_ascii=False, indent=1) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    write_once_text(path, json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
     return path
 
 

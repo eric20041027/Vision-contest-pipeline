@@ -40,7 +40,13 @@ def load_yaml_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:
         raise ValidationFailed(str(e), location=str(path)) from e
 
 
+def dump_yaml_text(model: BaseModel) -> str:
+    """The yaml ``dump_yaml_model`` writes, as text: what a write-once site hands to
+    ``vcp.core.atomic.write_once_text``."""
+    return yaml.safe_dump(model.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
+
+
 def dump_yaml_model(model: BaseModel, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as f:
-        yaml.safe_dump(model.model_dump(mode="json"), f, sort_keys=False, allow_unicode=True)
+        f.write(dump_yaml_text(model))

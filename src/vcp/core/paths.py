@@ -58,6 +58,32 @@ def validate_name(name: str) -> None:
         )
 
 
+_DRIVE = re.compile(r"^[A-Za-z]:")
+_BAD_SEGMENTS = frozenset({"", ".", ".."})
+
+
+def check_relative_path(path: str) -> None:
+    """A path stored inside a card, a manifest or an artifact is a relative posix path under one
+    root. Nothing else is accepted: restores and artifact writes land at ``<root>/<path>``, so a
+    path that can climb out of the root is a way to write anywhere on the machine. Raises
+    ``ValueError`` (the pydantic-validator convention); callers outside a validator wrap it."""
+    if not path or "\\" in path or path.startswith("/") or _DRIVE.match(path):
+        raise ValueError(f"path must be a relative posix path, got {path!r}")
+    if any(segment in _BAD_SEGMENTS for segment in path.split("/")):
+        raise ValueError(f"path must have no empty, '.' or '..' segment, got {path!r}")
+
+
+def artifacts_root(data_root: Path) -> Path:
+    return data_root / "artifacts"
+
+
+def artifact_dir(data_root: Path, kind: str, artifact_id: str) -> Path:
+    """``<data_root>/artifacts/<kind>/<id>/``: the only place an artifact can live (spec 5)."""
+    validate_name(kind)
+    validate_name(artifact_id)
+    return artifacts_root(data_root) / kind / artifact_id
+
+
 def logs_dir(data_root: Path) -> Path:
     return data_root / "logs"
 

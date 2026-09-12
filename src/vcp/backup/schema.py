@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from vcp.core.paths import check_relative_path
 
 Root = Literal["data", "configs", "external"]
 Kind = Literal["file", "remote_copy"]
@@ -91,20 +92,6 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
     "pull": ("manifest_id", "dest", "tier", "pulled", "skipped", "conflicts"),
     "remote_forgotten": ("manifest_id", "remote"),
 }
-
-
-_DRIVE = re.compile(r"^[A-Za-z]:")
-_BAD_SEGMENTS = frozenset({"", ".", ".."})
-
-
-def check_relative_path(path: str) -> None:
-    """A manifest entry's ``path`` is a relative posix path under one of the roots. Nothing else
-    is accepted: ``pull`` writes to it, so a path that can climb out of the root is a way to make
-    a restore write anywhere on the machine."""
-    if not path or "\\" in path or path.startswith("/") or _DRIVE.match(path):
-        raise ValueError(f"path must be a relative posix path, got {path!r}")
-    if any(segment in _BAD_SEGMENTS for segment in path.split("/")):
-        raise ValueError(f"path must have no empty, '.' or '..' segment, got {path!r}")
 
 
 def _absolute(source: str) -> bool:

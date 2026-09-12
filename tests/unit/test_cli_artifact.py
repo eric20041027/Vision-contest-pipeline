@@ -103,6 +103,25 @@ def test_create_show_and_the_second_write(roots, tmp_path):
     assert r.exit_code == 0 and [f["name"] for f in _json(r)["result"]["files"]] == ["renamed.txt"]
 
 
+def test_create_rejects_duplicate_names_and_bad_names_before_claiming_the_id(roots, tmp_path):
+    a = tmp_path / "a" / "same.txt"
+    a.parent.mkdir()
+    a.write_text("a", encoding="utf-8")
+    b = tmp_path / "b" / "same.txt"
+    b.parent.mkdir()
+    b.write_text("b", encoding="utf-8")
+    r = _run("create", "--kind", "receipt", "--id", "dup", "--file", str(a), "--file", str(b))
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "exists: --file 'same.txt' given twice" in v
+    assert not artifact_dir(roots.data, "receipt", "dup").exists()
+    target = tmp_path / "target.txt"
+    target.write_text("t", encoding="utf-8")
+    r = _run("create", "--kind", "receipt", "--id", "badname", "--file", f"../x={target}")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "unsafe_path:" in v
+    assert not artifact_dir(roots.data, "receipt", "badname").exists()
+
+
 def test_verify_relink_and_lineage(roots, tmp_path):
     assert _create(tmp_path, "r1").exit_code == 0
     r = _create(tmp_path, "r2", "--supersedes", "r1", "--reason", "seed fix")

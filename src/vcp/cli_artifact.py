@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from vcp.artifact import store
 from vcp.artifact.clean import clean, parse_age, scan
 from vcp.artifact.lineage import lineage as lineage_of
-from vcp.artifact.schema import ArtifactManifest, ArtifactSpec, InputRef
+from vcp.artifact.schema import ArtifactManifest, ArtifactSpec, InputRef, check_file_name
 from vcp.artifact.writer import ArtifactWriter
 from vcp.cli_common import CmdResult, DataRootOpt, JsonOpt, parse_opts, run_command
 from vcp.core.errors import ValidationFailed
@@ -110,9 +110,17 @@ def create_cmd(
         files = [_file_arg(f) for f in file or []]
         if not files:
             raise ValidationFailed("create needs at least one --file")
+        seen_names: set[str] = set()
         for name, path in files:
             if not path.is_file():
                 raise ValidationFailed(f"not_found: --file {path}", fields={"file": name})
+            try:
+                check_file_name(name)
+            except ValueError as e:
+                raise ValidationFailed(str(e), fields={"file": name}) from e
+            if name in seen_names:
+                raise ValidationFailed(f"exists: --file {name!r} given twice")
+            seen_names.add(name)
         root = resolve_data_root(data_root)
         with ArtifactWriter.create(spec, data_root=root) as art:
             for name, path in files:

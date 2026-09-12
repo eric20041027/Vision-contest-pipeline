@@ -23,6 +23,7 @@ from vcp.core.errors import (
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
@@ -32,6 +33,8 @@ from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.metrics import METRICS, params_key, register_metric
 from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg, list_preregs, load_prereg, prereg_time
+from vcp.measure.provenance import attach_receipts
+from vcp.measure.runs import load_run, save_run
 from vcp.measure.schema import Judgement, MetricResult, PreRegistration, SubsetJudgement
 from vcp.measure.sigma import SigmaSpec, estimate_sigma
 
@@ -715,3 +718,44 @@ def test_judge_refuses_a_stale_reading_then_uses_the_newer_one_after_replace(roo
     assert fresh.value != stale.value and fresh.ts > stale.ts
     j = _judge(roots)
     assert j.per_subset["valA"].candidate == fresh.value
+
+
+def _attach(roots, run_id, subsets, *, purpose="custom"):
+    with DatasetAccess.open(
+        "tiny",
+        "fixed-v1",
+        subsets=set(subsets),
+        purpose=purpose,
+        run_id=run_id,
+        data_root=roots.data,
+        configs_root=roots.configs,
+    ) as access:
+        for s in subsets:
+            list(access.iter(s))
+    card = attach_receipts(load_run(roots.data, run_id), [access.receipt_id], data_root=roots.data)
+    save_run(roots.data, card)
+
+
+def test_a_run_that_read_a_claimed_subset_makes_the_judgement_invalid(roots, tmp_path):
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    _measure(roots, "perfect")
+    create_prereg(paths, _pr(), _ledger(paths))
+    _measure(roots, "noisy")
+    _attach(roots, "noisy", ["valA"])  # the candidate peeked at valA after being measured
+    j = _judge(roots)
+    assert j.verdict == "INVALID" and "contaminated:noisy/valA" in j.reasons
+    assert j.provenance == "declared" and j.per_subset == {}
+    _attach(roots, "perfect", ["valB"])  # the baseline too
+    j = _judge(roots)
+    assert j.reasons[:2] == ["contaminated:noisy/valA", "contaminated:perfect/valB"]
+
+
+def test_a_train_receipt_grades_the_judgement(roots, tmp_path):
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    _attach(roots, "noisy", ["train"], purpose="train")
+    _measure(roots, "perfect")
+    create_prereg(paths, _pr(), _ledger(paths))
+    _measure(roots, "noisy")
+    j = _judge(roots)
+    assert j.verdict in ("PASS", "FAIL") and j.provenance == "receipt"
+    assert not any(r.startswith("contaminated") for r in j.reasons)

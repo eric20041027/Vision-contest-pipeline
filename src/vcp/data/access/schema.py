@@ -31,6 +31,12 @@ class AccessedSubset(_Strict):
     ids_sha256: str
     records_parsed: int = Field(ge=0)
 
+    @model_validator(mode="after")
+    def _validate_hashes(self) -> AccessedSubset:
+        if not _SHA.fullmatch(self.ids_sha256):
+            raise ValueError("ids_sha256 must be 64 hex characters")
+        return self
+
 
 class AccessReceipt(_Strict):
     """``receipt.json`` of an ``access_receipt`` artifact. Built by the accessor at close; the
@@ -84,6 +90,9 @@ class AccessReceipt(_Strict):
         ):
             if not _SHA.fullmatch(value):
                 raise ValueError(f"{name} must be 64 hex characters")
+        if self.unseal_event_sha256 is not None:
+            if not _SHA.fullmatch(self.unseal_event_sha256):
+                raise ValueError("unseal_event_sha256 must be 64 hex characters")
         return self
 
 
@@ -97,3 +106,9 @@ class AccessRef(_Strict):
     denied: int = Field(ge=0)
     receipt_sha256: str
     binding: Binding
+
+    @model_validator(mode="after")
+    def _validate_hashes(self) -> AccessRef:
+        if not _SHA.fullmatch(self.receipt_sha256):
+            raise ValueError("receipt_sha256 must be 64 hex characters")
+        return self

@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from vcp.artifact.ledger import supersession_of
+from vcp.artifact.ledger import append_supersession, row_for, supersession_of
 from vcp.artifact.schema import RESERVED_NAMES, ArtifactManifest, ArtifactSpec, InputRef
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
@@ -169,3 +169,16 @@ def reuse(
                 fields=_ident(resolved.kind, resolved.id),
             )
     return manifest
+
+
+def relink(data_root: Path, kind: str, artifact_id: str) -> bool:
+    """Append the supersession row a committed manifest implies when the ledger lacks it (the
+    crash window after ``manifest.json``). Idempotent: ``False`` when nothing was appended."""
+    manifest = load_manifest(data_root, kind, artifact_id)
+    if manifest.spec.supersedes is None:
+        return False
+    if supersession_of(data_root, kind, artifact_id) is not None:
+        return False
+    sha = sha256_file(manifest_path(data_root, kind, artifact_id))
+    append_supersession(data_root, row_for(manifest, sha))
+    return True

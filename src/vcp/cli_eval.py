@@ -591,6 +591,8 @@ def status_cmd(
         if st.unreadable:
             # `runs=` is then a count of what could be read, so say how much was not.
             fields["unreadable"] = len(st.unreadable)
+        if st.provenance_failed:
+            fields["provenance_failed"] = len(st.provenance_failed)
         if st.orphans:
             fields["orphans"] = ",".join(st.orphans)
         for key, value in st.sigma.items():
@@ -601,13 +603,17 @@ def status_cmd(
         ]
         human += [f"unreadable run card (not counted in runs=): {p}" for p in st.unreadable]
         human += [
+            f"provenance unavailable for run {run}: {msg}"
+            for run, msg in st.provenance_failed.items()
+        ]
+        human += [
             f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'}"
             for run, g in st.provenance.items()
         ]
         # An abandoned claim is the one thing here that wants attention; everything else is a
-        # count of what exists -- except a run card nobody can read, which makes that count a
-        # partial answer rather than the answer.
-        status: Status = "WARN" if st.orphans or st.unreadable else "OK"
+        # count of what exists -- except a run card nobody can read, or a run whose grade could
+        # not be computed at all, which makes that count a partial answer rather than the answer.
+        status: Status = "WARN" if st.orphans or st.unreadable or st.provenance_failed else "OK"
         return status, fields, {"status": asdict(st)}, human
 
     run_command("eval.status", json_mode, data_root, fn, context={"dataset": dataset})

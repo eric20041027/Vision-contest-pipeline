@@ -16,14 +16,18 @@ from vcp.cli import app
 from vcp.cli_eval import load_plugins
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
+from vcp.core.time import stamp
 from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Labels, Sample, View
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.fuse.build import write_record
+from vcp.fuse.schema import FuseRecord, MemberRecord
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.predictions import write_predictions
-from vcp.measure.runs import load_run
+from vcp.measure.runs import FUSE_FRAMEWORK, load_run, save_run
+from vcp.measure.schema import RunCard, RunSource
 
 runner = CliRunner()
 
@@ -1251,3 +1255,45 @@ def test_ingest_receipt_binds_and_refuses_the_wrong_run(roots, tmp_path):
     assert "perfect: provenance=receipt observed=train" in r.output
     r = runner.invoke(app, ["eval", "report", "--dataset", "tiny"])
     assert r.exit_code == 0 and "receipt" in r.output
+
+
+def test_eval_status_warns_when_a_fused_runs_member_cannot_be_read(roots, tmp_path):
+    """A fused run naming a member that no longer exists makes `provenance()` raise -- correctly,
+    since measure / judge / stage must still FAIL on a broken fusion. `eval status` is a
+    read-only view over every run in the dataset, so it must survive that one broken fused run
+    the same way it already survives an unreadable run card: WARN and name it, never abort."""
+    ds, _, _ = det_with_runs(roots, tmp_path, n=40)
+    save_run(
+        roots.data,
+        RunCard(
+            run_id="fused",
+            dataset="tiny",
+            samples_hash=ds.card.samples_hash,
+            plan_id="fixed-v1",
+            trained_on=["train"],
+            source=RunSource(framework=FUSE_FRAMEWORK),
+            created_at=stamp(),
+        ),
+    )
+    write_record(
+        roots.data,
+        "fused",
+        FuseRecord(
+            run_id="fused",
+            recipe_id="r1",
+            recipe_sha256="a" * 64,
+            method="mean",
+            method_version="1",
+            params={},
+            members=[
+                MemberRecord(run="perfect", weight=1.0, trained_on=["train"]),
+                MemberRecord(run="gone", weight=1.0, trained_on=["train"]),
+            ],
+            vcp_version="0",
+        ),
+    )
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny"])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "status=WARN" in v and "provenance_failed=1" in v
+    assert "provenance unavailable for run fused:" in r.output

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -8,13 +9,12 @@ from vcp.core.config import dump_yaml_model
 from vcp.core.errors import (
     AccessDeniedError,
     IntegrityError,
-    InvariantError,
     SealedSubsetError,
     ValidationFailed,
 )
 from vcp.core.hashing import sha256_file, sha256_json, sha256_text
 from vcp.core.paths import DatasetPaths, artifact_dir
-from vcp.data.access.access import DatasetAccess
+from vcp.data.access.access import DatasetAccess, index_samples
 from vcp.data.access.receipt import read_receipt, standalone_receipt_id
 from vcp.data.access.schema import AccessRef
 from vcp.data.dataset import Dataset
@@ -139,6 +139,48 @@ def test_roles_expand_to_subsets_and_sealed_needs_a_reason(roots):
         DatasetAccess.open("tiny", "fixed-v1", data_root=roots.data, configs_root=roots.configs)
 
 
+def test_roles_matching_no_subset_is_refused(roots):
+    ds, plan, paths = _seed(roots)
+    with pytest.raises(ValidationFailed, match="^roles: no subset"):
+        _open(roots, roles={"nope"})
+
+
+def test_more_than_one_sealed_subset_is_refused(roots):
+    ds, plan, paths = _seed(roots)
+    plan2 = build_plan(
+        ds,
+        plan_id="two-sealed",
+        subsets=parse_subsets("train:train:0.6,h1:sealed:0.2,h2:sealed:0.2"),
+        seed=0,
+    )
+    save_plan(plan2, paths)
+    with pytest.raises(ValidationFailed, match="sealed: an access may open at most one"):
+        DatasetAccess.open(
+            "tiny",
+            "two-sealed",
+            data_root=roots.data,
+            configs_root=roots.configs,
+            roles={"sealed"},
+        )
+    assert not paths.unseal_jsonl("two-sealed").is_file()
+
+
+def test_a_row_that_changed_after_open_is_refused(roots):
+    ds, plan, paths = _seed(roots)
+    access = _open(roots)
+    a = access.ids("train")[0]
+    _, index = index_samples(paths.samples_jsonl)
+    b = next(sid for sid in index if sid != a and len(sid) == len(a))
+    rewritten = paths.samples_jsonl.read_bytes().replace(
+        f'"sample_id": "{a}"'.encode(), f'"sample_id": "{b}"'.encode(), 1
+    )
+    paths.samples_jsonl.write_bytes(rewritten)
+    with pytest.raises(IntegrityError, match="mismatch"):
+        access.by_id(a)
+    with pytest.raises(IntegrityError, match="drift"):
+        access.close()
+
+
 def test_identity_and_index_checks(roots):
     ds, plan, paths = _seed(roots)
     original = paths.samples_jsonl.read_bytes()
@@ -156,8 +198,13 @@ def test_identity_and_index_checks(roots):
         encoding="utf-8",
         newline="\n",
     )
-    with pytest.raises(InvariantError, match="ghost"):
+    with pytest.raises(IntegrityError, match="mismatch:.*ghost"):
         _open(roots)
+    # a failed open (the ghost coverage mismatch) writes no unseal line even when unseal_reason
+    # was given for what would otherwise be a legitimate single-sealed-subset open
+    with pytest.raises(IntegrityError, match="mismatch:.*ghost"):
+        _open(roots, subsets={"train", "holdout"}, unseal_reason="ghost check", caller="t")
+    assert not paths.unseal_jsonl("fixed-v1").is_file()
 
 
 def test_receipt_is_an_artifact_claimed_at_open(roots):
@@ -177,11 +224,20 @@ def test_receipt_is_an_artifact_claimed_at_open(roots):
     assert [f.name for f in manifest.files] == ["receipt.json"]
     assert loaded.sha256 == manifest.files[0].sha256
     assert manifest.spec.dataset == "tiny" and manifest.spec.plan_id == "fixed-v1"
-    assert manifest.spec.params == {"purpose": "custom"}
+    card_sha = sha256_file(paths.card_yaml)
+    plan_sha = sha256_file(paths.plan_json("fixed-v1"))
+    assert manifest.spec.params == {
+        "purpose": "custom",
+        "card_sha256": card_sha,
+        "plan_sha256": plan_sha,
+    }
+    assert card_sha == receipt.card_sha256 and plan_sha == receipt.plan_sha256
+    # only samples.jsonl (under data_root) is an artifact input -- card.yaml and the plan json
+    # live under configs_root, so recording them here would leak absolute filesystem paths
     inputs = {i.name: i for i in manifest.spec.inputs}
+    assert set(inputs) == {"samples"}
     assert inputs["samples"].sha256 == ds.card.samples_hash
-    assert inputs["plan"].sha256 == sha256_file(paths.plan_json("fixed-v1"))
-    assert inputs["card"].sha256 == sha256_file(paths.card_yaml) == receipt.card_sha256
+    assert all(i.path is None or not Path(i.path).is_absolute() for i in manifest.spec.inputs)
     assert receipt.authorization_sha256 == sha256_json(
         {
             "card_sha256": receipt.card_sha256,
@@ -255,7 +311,13 @@ def test_binding_names_the_receipt_and_is_told_on_commit(roots):
     assert seen[1].subsets == [] and seen[0].purpose == "train"
     assert seen[0].receipt_sha256 == read_receipt(roots.data, "r1-a2-1").sha256
     manifest = store.load_manifest(roots.data, "access_receipt", "r1-a2-1")
-    assert manifest.spec.params == {"purpose": "train", "run": "r1", "attempt": "2"}
+    assert manifest.spec.params == {
+        "purpose": "train",
+        "run": "r1",
+        "attempt": "2",
+        "card_sha256": sha256_file(paths.card_yaml),
+        "plan_sha256": sha256_file(paths.plan_json("fixed-v1")),
+    }
     with _open(roots, purpose="measure", run_id="perfect") as m:
         pass
     assert m.receipt.run_id == "perfect" and m.receipt.attempt is None

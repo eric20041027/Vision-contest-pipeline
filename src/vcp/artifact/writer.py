@@ -89,6 +89,11 @@ class ArtifactWriter:
         self._closed = True
 
     def _record_failure(self, exc: BaseException) -> None:
+        if not (self.dir / store.SPEC).is_file():
+            # The directory was removed from under the job (`clean`, most likely): writing a
+            # lone failure.json here would resurrect it as a foreign directory nothing can clean
+            # or create over.
+            return
         record = FailureRecord(ts=stamp(), exception=type(exc).__name__, message=redact(str(exc)))
         try:
             write_once(self.dir / store.FAILURE, _json_bytes(record.model_dump(mode="json")))
@@ -101,6 +106,17 @@ class ArtifactWriter:
     def _ident(self) -> dict[str, str]:
         return {"kind": self.spec.kind, "id": self.spec.id}
 
+    def _still_claimed(self) -> None:
+        """The directory this writer claimed must still be there: `clean` can remove an open
+        job's partial directory out from under it (spec 16), and silently recreating it via a
+        later `mkdir(parents=True)` would commit a directory missing its earlier files."""
+        if not (self.dir / store.SPEC).is_file():
+            raise ValidationFailed(
+                f"not_found: artifact {self.spec.kind}/{self.spec.id} was removed while the "
+                "job was open (clean?)",
+                fields=self._ident(),
+            )
+
     def _claim(self, name: str) -> Path:
         if self._closed:
             raise ValidationFailed(
@@ -108,6 +124,7 @@ class ArtifactWriter:
                 "open a new id",
                 fields=self._ident(),
             )
+        self._still_claimed()
         try:
             check_file_name(name)
         except ValueError as e:
@@ -216,6 +233,7 @@ class ArtifactWriter:
                 f"closed: artifact {self.spec.kind}/{self.spec.id} is committed or closed",
                 fields=self._ident(),
             )
+        self._still_claimed()
         self._check_reserved()
         self._check_drift()
         supersedes_sha256 = self._check_supersedes()

@@ -1,8 +1,10 @@
 import os
+from datetime import timedelta
 
 import pytest
 
 from vcp.artifact import store
+from vcp.artifact.clean import clean
 from vcp.artifact.schema import ArtifactSpec, FailureRecord, InputRef, SpecRecord
 from vcp.artifact.writer import ArtifactWriter
 from vcp.core import atomic
@@ -184,3 +186,35 @@ def test_manifest_publish_failure_leaves_a_partial(roots, monkeypatch):
             art.commit()
     assert store.is_partial(roots.data, "receipt", "r1") and art.manifest is None
     assert sorted(p.name for p in art.dir.iterdir()) == ["a.txt", "failure.json", "spec.json"]
+
+
+def test_writer_refuses_to_continue_after_clean_removed_its_directory(roots):
+    with ArtifactWriter.create(_spec(), data_root=roots.data) as art:
+        art.write_text("early.txt", "e")
+        clean(roots.data, older_than=timedelta(0), apply=True)  # removes the open job's directory
+        with pytest.raises(
+            ValidationFailed, match="^not_found: .*removed while the job was open"
+        ) as ei:
+            art.write_text("late.txt", "l")
+        assert ei.value.fields == {"kind": "receipt", "id": "r1"}
+        with pytest.raises(ValidationFailed, match="^not_found: .*removed while the job was open"):
+            art.reserve("x.npy")
+        with pytest.raises(ValidationFailed, match="^not_found: .*removed while the job was open"):
+            art.commit()
+    # a normal (non-exceptional) exit must not recreate the directory it was removed from
+    assert not art.dir.exists()
+    assert not store.is_partial(roots.data, "receipt", "r1")
+
+
+def test_failure_record_does_not_resurrect_a_removed_directory(roots):
+    with pytest.raises(RuntimeError, match="boom"):
+        with ArtifactWriter.create(_spec(), data_root=roots.data) as art:
+            art.write_text("early.txt", "e")
+            clean(roots.data, older_than=timedelta(0), apply=True)
+            raise RuntimeError("boom")
+    # writing failure.json alone would resurrect the directory as an uncleanable foreign one
+    assert not art.dir.exists()
+    with ArtifactWriter.create(_spec(), data_root=roots.data) as art2:
+        art2.write_text("a.txt", "a")
+        art2.commit()
+    assert store.load_manifest(roots.data, "receipt", "r1") == art2.manifest

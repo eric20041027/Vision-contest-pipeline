@@ -5,13 +5,19 @@ from pathlib import Path
 
 import pytest
 
+from helpers import det_samples, make_card, write_images
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
+from vcp.core.paths import DatasetPaths
+from vcp.data.access.receipt import read_receipt
+from vcp.data.dataset import Dataset
+from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.train import Session
 from vcp.train import checkpoints as ckptmod
 from vcp.train import session as sessionmod
 from vcp.train.records import load_record, read_events, save_record
 from vcp.train.schema import Attempt, TrainRecord
+from vcp.train.session import SessionBinding
 
 STAMP = "2026-09-05T00:00:00.000Z"
 
@@ -127,3 +133,40 @@ def test_session_from_a_child_process(roots, tmp_path):
     stored = load_record(roots.data, "r1")
     assert stored.checkpoints[0].final and stored.checkpoints[0].sha256 == sha256_file(ckpt)
     assert read_events(roots.data, "r1")[-1]["key"] == "epoch"
+
+
+def _dataset(roots):
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    samples = det_samples(40, seed=0)
+    write_images(roots.data / "raw" / "tiny", samples)
+    ds = Dataset.from_parts(make_card("det", name="tiny", image_root="raw/tiny"), samples)
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    save_plan(plan, paths)
+    return plan
+
+
+def test_session_access_binds_receipts_to_the_current_attempt(roots, monkeypatch):
+    plan = _dataset(roots)
+    _running(roots)  # attempt 2 is running
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    session = Session.current(roots.data)
+    binding = SessionBinding(session)
+    assert (binding.run_id, binding.attempt, binding.next_seq()) == ("r1", 2, 1)
+    assert binding.receipt_id(3) == "r1-a2-3"
+    with session.access(subsets={"train"}) as access:
+        assert access.receipt_id == "r1-a2-1" and access.purpose == "train"
+        list(access.iter("train"))
+    with session.access(roles={"train"}, notes="second") as again:
+        pass
+    assert again.receipt_id == "r1-a2-2"
+    record = load_record(roots.data, "r1")
+    assert [r.artifact_id for r in record.access] == ["r1-a2-1", "r1-a2-2"]
+    assert record.access[0].subsets == ["train"] and record.access[0].binding == "session"
+    assert record.access[0].receipt_sha256 == read_receipt(roots.data, "r1-a2-1").sha256
+    events = [e for e in read_events(roots.data, "r1") if e["event"] == "access"]
+    assert [e["artifact_id"] for e in events] == ["r1-a2-1", "r1-a2-2"]
+    assert events[0]["attempt"] == 2 and events[0]["subsets"] == ["train"]
+    assert events[0]["denied"] == 0 and events[0]["sealed_accessed"] is False
+    receipt = read_receipt(roots.data, "r1-a2-1").receipt
+    assert receipt.run_id == "r1" and receipt.attempt == 2 and receipt.plan_id == plan.plan_id

@@ -69,17 +69,17 @@ def test_reader_iterates_npy_rows_per_view(roots):
 def test_reader_png_resized_and_subset_restriction(roots):
     ds, plan, paths = _image_ds(roots)
     _mat(roots, "tiny", mode="png", resize=4)
-    reader = MaterializedReader(
+    with MaterializedReader(
         "tiny",
         "png-r4",
         plan_id="fixed-v1",
         subset="train",
         data_root=roots.data,
         configs_root=roots.configs,
-    )
-    assert set(reader.ids) == plan.ids_in("train") and len(reader) == len(plan.ids_in("train"))
-    arr = next(iter(reader)).arrays["0"]
-    assert arr.dtype == np.uint8 and max(arr.shape[:2]) == 4
+    ) as reader:
+        assert set(reader.ids) == plan.ids_in("train") and len(reader) == len(plan.ids_in("train"))
+        arr = next(iter(reader)).arrays["0"]
+        assert arr.dtype == np.uint8 and max(arr.shape[:2]) == 4
     with pytest.raises(SealedSubsetError):
         MaterializedReader(
             "tiny",
@@ -89,7 +89,7 @@ def test_reader_png_resized_and_subset_restriction(roots):
             data_root=roots.data,
             configs_root=roots.configs,
         )
-    sealed = MaterializedReader(
+    with MaterializedReader(
         "tiny",
         "png-r4",
         plan_id="fixed-v1",
@@ -98,8 +98,9 @@ def test_reader_png_resized_and_subset_restriction(roots):
         reason="test",
         data_root=roots.data,
         configs_root=roots.configs,
-    )
-    assert len(sealed) == len(plan.ids_in("holdout"))
+    ) as sealed:
+        assert len(sealed) == len(plan.ids_in("holdout"))
+    assert sealed.access.receipt.sealed_accessed is True
     with pytest.raises(ValidationFailed, match="plan_id and subset"):
         MaterializedReader(
             "tiny", "png-r4", subset="train", data_root=roots.data, configs_root=roots.configs
@@ -224,3 +225,31 @@ def test_reader_without_a_plan_keeps_the_full_dataset_outside_a_run(roots):
     reader = MaterializedReader("tiny", "npy", data_root=roots.data, configs_root=roots.configs)
     assert reader.access is None and len(reader) == 8 and reader.card.name == "tiny"
     reader.close()
+
+
+def test_a_construction_failure_after_open_still_commits_a_failed_receipt(roots):
+    """A `MaterializedReader.__init__` that opened its own access and then raises (here: the
+    materialize cache is missing a row for one of the subset's samples) must not abandon the
+    receipt claim -- there must be no directory with a spec.json but no manifest.json/failure.json
+    left behind, and the committed receipt must record the failure."""
+    ds, plan, paths = _image_ds(roots, n=40)
+    assert _mat(roots, "tiny", mode="npy").failed == 0
+    manifest = paths.cache_dir / "materialize" / "npy" / "manifest.jsonl"
+    sid = sorted(plan.ids_in("train"))[0]
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    without = [line for line in lines if f'"{sid}"' not in line]
+    assert len(without) < len(lines)
+    manifest.write_text("\n".join(without) + "\n", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="materialized rows"):
+        MaterializedReader(
+            "tiny",
+            "npy",
+            plan_id="fixed-v1",
+            subset="train",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    receipt_dirs = list((roots.data / "artifacts" / "access_receipt").iterdir())
+    assert len(receipt_dirs) == 1
+    receipt = read_receipt(roots.data, receipt_dirs[0].name).receipt
+    assert receipt.outcome == "failed" and receipt.exception == "ValidationFailed"

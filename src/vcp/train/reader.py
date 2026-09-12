@@ -75,46 +75,60 @@ class MaterializedReader:
         self._owns_access = False
         self.card: DatasetCard
         samples: list[Sample]
-        if plan_id is not None and subset is not None:
-            if access is not None:
-                self.access = access
-            elif under_run:
-                self.access = Session.current(data_root).access(
-                    subsets={subset}, purpose="train", unseal_reason=reason if unseal else None
-                )
-                self._owns_access = True
+        # Everything below can raise after an owned access has already been claimed (and may
+        # already have parsed rows through it): `.iter()` itself, or the "materialized rows
+        # missing" check just below. Without this try, such an exception would abandon the
+        # object mid-construction -- no `self` is ever returned, so neither `close()` nor
+        # `__exit__` could run for it, leaving the receipt claimed but never committed (no
+        # manifest.json, no failure.json). Mirrors the identical hazard in
+        # `vcp/data/access/access.py`'s `DatasetAccess.open` around `append_unseal`.
+        try:
+            if plan_id is not None and subset is not None:
+                if access is not None:
+                    self.access = access
+                elif under_run:
+                    self.access = Session.current(data_root).access(
+                        subsets={subset},
+                        purpose="train",
+                        unseal_reason=reason if unseal else None,
+                    )
+                    self._owns_access = True
+                else:
+                    self.access = DatasetAccess.open(
+                        name,
+                        plan_id,
+                        subsets={subset},
+                        purpose=purpose or "custom",
+                        unseal_reason=reason if unseal else None,
+                        caller="MaterializedReader",
+                        data_root=data_root,
+                        configs_root=configs_root,
+                    )
+                    self._owns_access = True
+                self.card = self.access.card
+                samples = list(self.access.iter(subset))
             else:
-                self.access = DatasetAccess.open(
-                    name,
-                    plan_id,
-                    subsets={subset},
-                    purpose=purpose or "custom",
-                    unseal_reason=reason if unseal else None,
-                    caller="MaterializedReader",
-                    data_root=data_root,
-                    configs_root=configs_root,
+                if under_run:
+                    raise AccessDeniedError(
+                        "denied: a training reader must name plan_id and subset under vcp train run"
+                    )
+                dataset = Dataset.load(name, data_root=data_root, configs_root=configs_root)
+                self.card = dataset.card
+                samples = list(dataset.samples)
+            absent = [s.sample_id for s in samples if s.sample_id not in rows]
+            if absent:
+                raise ValidationFailed(
+                    f"{len(absent)} samples have no materialized rows in {mode_dir!r} "
+                    f"(e.g. {absent[:3]}); run vcp data materialize first",
+                    location=absent[0],
                 )
-                self._owns_access = True
-            self.card = self.access.card
-            samples = list(self.access.iter(subset))
-        else:
-            if under_run:
-                raise AccessDeniedError(
-                    "denied: a training reader must name plan_id and subset under vcp train run"
-                )
-            dataset = Dataset.load(name, data_root=data_root, configs_root=configs_root)
-            self.card = dataset.card
-            samples = list(dataset.samples)
-        absent = [s.sample_id for s in samples if s.sample_id not in rows]
-        if absent:
-            raise ValidationFailed(
-                f"{len(absent)} samples have no materialized rows in {mode_dir!r} "
-                f"(e.g. {absent[:3]}); run vcp data materialize first",
-                location=absent[0],
-            )
-        self._rows = {s.sample_id: rows[s.sample_id] for s in samples}
-        self._samples = {s.sample_id: s for s in samples}
-        self.ids: list[str] = [s.sample_id for s in samples]
+            self._rows = {s.sample_id: rows[s.sample_id] for s in samples}
+            self._samples = {s.sample_id: s for s in samples}
+            self.ids: list[str] = [s.sample_id for s in samples]
+        except BaseException as exc:
+            if self._owns_access and self.access is not None:
+                self.access.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def close(self) -> None:
         """Commit the receipt (only for an access this reader opened itself)."""

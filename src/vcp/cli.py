@@ -337,13 +337,18 @@ def export_cmd(
             "format": fmt,
             "files": res.files,
             "out": str(res.out),
+            "receipt": res.receipt,
         }
         for k, v in res.fields.items():
             fields.setdefault(k, v)
         if res.warnings:
             fields["warnings"] = "; ".join(res.warnings)
         human = [f"exported {res.files} files to {res.out}", *res.warnings]
-        payload = {"manifest": str(res.manifest_path), "warnings": res.warnings}
+        payload = {
+            "manifest": str(res.manifest_path),
+            "warnings": res.warnings,
+            "receipt": res.receipt,
+        }
         return status, fields, payload, human
 
     run_command("export", json_mode, data_root, fn)

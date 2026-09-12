@@ -7,6 +7,7 @@ from vcp.artifact.ledger import (
     SUPERSESSION_LEDGER,
     append_supersession,
     read_supersession,
+    row_for,
     supersession_log,
     supersession_of,
 )
@@ -67,6 +68,22 @@ def test_ledger_round_trip(roots):
     assert b"\r" not in supersession_log(roots.data, "k").read_bytes()
     with pytest.raises(ValidationFailed):
         supersession_log(roots.data, "../k")
+
+
+def test_row_for_builds_the_row_a_superseding_manifest_implies():
+    spec = ArtifactSpec(kind="k", id="new", supersedes="old", supersedes_reason="seed fix")
+    manifest = ArtifactManifest(
+        spec=spec, files=[], created_at=STAMP, vcp_version="t", supersedes_sha256="b" * 64
+    )
+    row = row_for(manifest, SHA)
+    assert row.kind == "k" and row.id == "new" and row.manifest_sha256 == SHA
+    assert row.supersedes_id == "old" and row.supersedes_sha256 == "b" * 64
+    assert row.reason == "seed fix" and row.ts.endswith("Z")
+    plain = ArtifactManifest(
+        spec=ArtifactSpec(kind="k", id="solo"), files=[], created_at=STAMP, vcp_version="t"
+    )
+    with pytest.raises(ValueError, match="supersedes nothing"):
+        row_for(plain, SHA)
 
 
 def test_load_manifest_three_states(roots):

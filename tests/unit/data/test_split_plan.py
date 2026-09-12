@@ -118,8 +118,11 @@ def test_save_and_load_plan(roots):
     assert target == paths.plan_json("p1") and target.is_file()
     assert b"\r\n" not in target.read_bytes()
     assert load_plan(paths, "p1") == plan
+    before = target.read_bytes()
     with pytest.raises(VcpError, match="already exists"):
         save_plan(plan, paths)
+    assert target.read_bytes() == before
+    assert [p.name for p in target.parent.iterdir()] == ["p1.json"]
     with pytest.raises(PlanMismatchError, match="not found"):
         load_plan(paths, "p2")
     target.write_text("{not json", encoding="utf-8")

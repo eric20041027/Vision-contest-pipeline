@@ -20,7 +20,7 @@
 ## 2. 現況
 
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`），工作樹乾淨；沒有未合併的分支。
-- 版本：`0.3.0`（tag `v0.3.0`，2026-09-11）= 稽核 Wave 0（prereg SHA 綁定、foreign 狀態刷新、回歸門檻）；`0.2.0` 是第一個有 tag 的 release（同日）。規則與發版步驟在 `CHANGELOG.md` 表頭。`0.2.0` 之前 240 個 commit 都宣告 `0.1.0` 且無 tag——RSNA 早期產物裡的 `"vcp_version": "0.1.0"` 回推不到單一 commit；0.2.0 起產物記 `版本+g<commit>[.dirty]`。下一步是稽核 Wave 1（provenance substrate；見 `projects/rsna-knee/` 的稽核文件 §11）。
+- 版本：`0.4.0`（tag `v0.4.0`，2026-09-12）= 稽核 Wave 1a（不可變產物層 `vcp artifact` + `core/atomic.write_once`）；`0.3.0` = Wave 0（prereg SHA 綁定、foreign 狀態刷新、回歸門檻）；`0.2.0` 是第一個有 tag 的 release（同日）。規則與發版步驟在 `CHANGELOG.md` 表頭。`0.2.0` 之前 240 個 commit 都宣告 `0.1.0` 且無 tag——RSNA 早期產物裡的 `"vcp_version": "0.1.0"` 回推不到單一 commit；0.2.0 起產物記 `版本+g<commit>[.dirty]`。下一步是 Wave 1b（角色範圍存取與收據，VCP-001/002/003）、1c（程式碼快照與授權，VCP-004/006）；稽核文件副本在 `docs/audits/`。
 - 測試：`uv run pytest --cov=vcp`，覆蓋率約 96.7%；實際最新數字見 RSNA RUNBOOK 驗證紀錄。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
 - 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。
@@ -29,7 +29,7 @@
 
 ```
 src/vcp/core      time（唯一時鐘）errors（VERDICT 狀態）log（VERDICT 行 / jsonl log）paths（DatasetPaths）
-                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact）
+                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact）atomic（write_once 原語）
 src/vcp/data      schema tasks（任務登記表）dataset split（plan、assert_plan_matches）lineage
                   importers/ exporters/ audit/ materialize/ dicomio
 src/vcp/measure   schema runs（run.yaml、FUSE_FRAMEWORK）predictions converters/ metrics/ ingest
@@ -39,7 +39,10 @@ src/vcp/train     schema records（train.yaml + train.log.jsonl）env checkpoint
 src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）timewin guards pairing gate
                   writers/（scores_csv/coco_results/csv_boxes）platforms/（manual/kaggle）stage actions sync final report
 src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
-src/vcp/cli*.py   每層一個 typer app；cli_common.run_command 統一 VERDICT / exit code / --json / context
+src/vcp/artifact  schema（pydantic 模型、check_file_name）ledger（supersession.jsonl 讀寫）store（load/reuse/verify）
+                  writer（ArtifactWriter：claim/write/commit）lineage（chain/successors/head/forks）clean（scan/clean）
+src/vcp/cli*.py   每層一個 typer app（含 cli_artifact.py 的 `vcp artifact` 群：create/show/verify/lineage/status/
+                  relink/clean）；cli_common.run_command 統一 VERDICT / exit code / --json / context
 projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
 tests/            unit/<layer>、integration（真資料）、helpers.py、submit_fixtures.py、backup_fixtures.py
 configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git

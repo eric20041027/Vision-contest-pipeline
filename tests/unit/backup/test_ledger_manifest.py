@@ -115,8 +115,11 @@ def test_manifest_write_load_and_paths(roots):
     text = path.read_text(encoding="utf-8")
     assert '"for": [' in text and "for_" not in text and ("\r" not in path.read_bytes().decode())
     assert load_manifest(paths, m.manifest_id) == m
+    before = path.read_bytes()
     with pytest.raises(ValidationFailed, match="exists"):
         write_manifest(paths, m)
+    assert path.read_bytes() == before
+    assert [p.name for p in path.parent.iterdir()] == [f"{m.manifest_id}.json"]
     with pytest.raises(ValidationFailed, match="not_found"):
         load_manifest(paths, "nope")
     path.write_text("{", encoding="utf-8")

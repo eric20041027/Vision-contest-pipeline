@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from vcp.core.atomic import write_once_text
 from vcp.core.errors import (
     InvariantError,
     PlanMismatchError,
@@ -121,10 +122,9 @@ def save_plan(plan: SplitPlan, paths: DatasetPaths) -> Path:
         raise VcpError(
             f"plan file already exists: {target}; plans are immutable, choose a new plan-id"
         )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(plan.model_dump(mode="json"), f, ensure_ascii=False, indent=1)
-        f.write("\n")
+    write_once_text(
+        target, json.dumps(plan.model_dump(mode="json"), ensure_ascii=False, indent=1) + "\n"
+    )
     return target
 
 

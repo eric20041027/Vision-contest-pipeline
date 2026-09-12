@@ -3,9 +3,11 @@ makes two specs the same job, verification, reuse and the ledger repair."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
-from vcp.artifact.schema import ArtifactManifest, ArtifactSpec, InputRef
+from vcp.artifact.ledger import supersession_of
+from vcp.artifact.schema import RESERVED_NAMES, ArtifactManifest, ArtifactSpec, InputRef
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir, resolve_stored_path, store_path
@@ -94,3 +96,76 @@ def spec_diff(recorded: ArtifactSpec, wanted: ArtifactSpec) -> list[str]:
     ins_b = {i.name: (i.path, i.sha256) for i in wanted.inputs}
     diff += [f"inputs.{n}" for n in sorted(set(ins_a) | set(ins_b)) if ins_a.get(n) != ins_b.get(n)]
     return diff
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    """What ``verify`` found: names of manifest files whose bytes differ / are gone, files the
+    manifest never named (a committed artifact takes no new files; leftover temps count), and
+    whether a superseding artifact lacks its ledger row."""
+
+    mismatch: list[str]
+    missing: list[str]
+    extra: list[str]
+    unlinked: bool
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.mismatch or self.missing or self.extra)
+
+
+def verify(data_root: Path, kind: str, artifact_id: str) -> VerifyResult:
+    manifest = load_manifest(data_root, kind, artifact_id)
+    d = artifact_dir(data_root, kind, artifact_id)
+    mismatch: list[str] = []
+    missing: list[str] = []
+    for entry in manifest.files:
+        path = d / entry.name
+        if not path.is_file():
+            missing.append(entry.name)
+        elif path.stat().st_size != entry.bytes or sha256_file(path) != entry.sha256:
+            mismatch.append(entry.name)
+    named = {f.name for f in manifest.files}
+    extra = sorted(
+        rel
+        for rel in (p.relative_to(d).as_posix() for p in d.rglob("*") if p.is_file())
+        if rel not in named and rel not in RESERVED_NAMES
+    )
+    unlinked = False
+    if manifest.spec.supersedes is not None:
+        row = supersession_of(data_root, kind, artifact_id)
+        if row is None:
+            unlinked = True
+        elif row.manifest_sha256 != sha256_file(d / MANIFEST):
+            mismatch.append(MANIFEST)
+    return VerifyResult(mismatch, missing, extra, unlinked)
+
+
+def reuse(
+    spec: ArtifactSpec, data_root: Path, *, check_files: bool = False
+) -> ArtifactManifest | None:
+    """The artifact this spec would produce, if it is already there: ``None`` when nothing claims
+    the id, ``partial:`` when a job did and never committed, ``spec_mismatch:`` when the committed
+    spec differs in any field but ``notes`` (inputs by their current sha). A directory that exists
+    is not a cache hit; a spec that matches is. Files are re-hashed only with ``check_files``."""
+    resolved = resolve_inputs(spec, data_root)
+    if not artifact_dir(data_root, resolved.kind, resolved.id).is_dir():
+        return None
+    manifest = load_manifest(data_root, resolved.kind, resolved.id)
+    diff = spec_diff(manifest.spec, resolved)
+    if diff:
+        raise IntegrityError(
+            f"spec_mismatch: artifact {resolved.kind}/{resolved.id} was committed from a "
+            f"different spec ({', '.join(diff)}); use a new id or supersede it",
+            fields={**_ident(resolved.kind, resolved.id), "differs": ",".join(diff)},
+        )
+    if check_files:
+        res = verify(data_root, resolved.kind, resolved.id)
+        if res.failed:
+            raise IntegrityError(
+                f"mismatch: artifact {resolved.kind}/{resolved.id} no longer matches its "
+                f"manifest (mismatch={len(res.mismatch)} missing={len(res.missing)} "
+                f"extra={len(res.extra)})",
+                fields=_ident(resolved.kind, resolved.id),
+            )
+    return manifest

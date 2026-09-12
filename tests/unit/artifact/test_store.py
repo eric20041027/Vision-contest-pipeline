@@ -12,6 +12,7 @@ from vcp.artifact.ledger import (
     supersession_of,
 )
 from vcp.artifact.schema import ArtifactManifest, ArtifactSpec, FileEntry, InputRef, SupersessionRow
+from vcp.artifact.writer import ArtifactWriter
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir
@@ -178,3 +179,58 @@ def test_spec_diff_ignores_notes_and_names_inputs():
         }
     )
     assert store.spec_diff(a, b) == ["seed", "params", "inputs.p", "inputs.q"]
+
+
+def _commit(roots, artifact_id="r1", *, files=("a.txt",), **over) -> ArtifactManifest:
+    spec = ArtifactSpec.model_validate({"kind": "receipt", "id": artifact_id, **over})
+    with ArtifactWriter.create(spec, data_root=roots.data) as art:
+        for name in files:
+            art.write_text(name, f"{name}\n")
+        return art.commit()
+
+
+def test_verify_finds_mismatch_missing_and_extra(roots):
+    _commit(roots, files=("a.txt", "b/c.bin"))
+    d = artifact_dir(roots.data, "receipt", "r1")
+    ok = store.verify(roots.data, "receipt", "r1")
+    assert ok == store.VerifyResult([], [], [], False) and not ok.failed
+    (d / "a.txt").write_text("changed\n", encoding="utf-8")
+    (d / "b" / "c.bin").unlink()
+    (d / "extra.txt").write_text("x", encoding="utf-8")
+    (d / ".a.txt.0a1b2c3d.tmp").write_text("x", encoding="utf-8")
+    res = store.verify(roots.data, "receipt", "r1")
+    assert res.mismatch == ["a.txt"] and res.missing == ["b/c.bin"]
+    assert res.extra == [".a.txt.0a1b2c3d.tmp", "extra.txt"] and res.failed
+    assert not res.unlinked
+    with pytest.raises(ValidationFailed, match="^not_found: "):
+        store.verify(roots.data, "receipt", "nope")
+
+
+def test_reuse_requires_the_whole_spec_to_match(roots):
+    plan = roots.data / "plan.json"
+    plan.write_bytes(b"v1")
+    spec = ArtifactSpec(
+        kind="receipt",
+        id="r1",
+        seed=1,
+        inputs=[InputRef(name="plan", path=str(plan))],
+        notes="first",
+    )
+    assert store.reuse(spec, roots.data) is None
+    with ArtifactWriter.create(spec, data_root=roots.data) as art:
+        art.write_text("a.txt", "a")
+        with pytest.raises(ValidationFailed, match="^partial: "):
+            store.reuse(spec, roots.data)
+        manifest = art.commit()
+    assert store.reuse(spec.model_copy(update={"notes": "second"}), roots.data) == manifest
+    with pytest.raises(IntegrityError, match=r"^spec_mismatch: .*\(seed\)") as ei:
+        store.reuse(spec.model_copy(update={"seed": 2}), roots.data)
+    assert ei.value.fields == {"kind": "receipt", "id": "r1", "differs": "seed"}
+    plan.write_bytes(b"v2")
+    with pytest.raises(IntegrityError, match=r"\(inputs\.plan\)"):
+        store.reuse(spec, roots.data)
+    plan.write_bytes(b"v1")
+    (art.dir / "a.txt").write_text("tampered", encoding="utf-8")
+    assert store.reuse(spec, roots.data) == manifest  # files are not re-hashed by default
+    with pytest.raises(IntegrityError, match="^mismatch: artifact receipt/r1 no longer matches"):
+        store.reuse(spec, roots.data, check_files=True)

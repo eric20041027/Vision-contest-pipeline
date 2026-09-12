@@ -11,6 +11,7 @@ from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
+from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.runs import load_run, run_dir
 from vcp.train.records import load_record, read_events, save_record
@@ -78,6 +79,28 @@ Path("weights/last.pt").write_bytes(b"last")
 state.write_text(str(counter + 1))
 """
 
+# Wave 1b-1: a loop that reads its subset through the reader under the run's session.
+ACCESS_FAKE = """
+from pathlib import Path
+from vcp.train import MaterializedReader
+
+with MaterializedReader("tiny", "npy", plan_id="fixed-v1", subset="train") as reader:
+    n = sum(1 for _ in reader)
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best-%d" % n)
+"""
+
+# ... and one that also peeks at valA: the receipt says so, whatever trained_on claims.
+PEEK_FAKE = (
+    ACCESS_FAKE
+    + """
+from vcp.train import Session
+
+with Session.current().access(subsets={"valA"}) as peek:
+    list(peek.iter("valA"))
+"""
+)
+
 
 def _seed(roots, name="tiny", n=40):
     paths = DatasetPaths.resolve(name, data_root=roots.data, configs_root=roots.configs)
@@ -131,29 +154,29 @@ def test_derive_trained_on_from_exports(roots, tmp_path):
     ds, plan, paths = _seed(roots)
     train = _export(roots, "train", tmp_path / "e-train")
     val = _export(roots, "valA", tmp_path / "e-valA")
-    names, refs = derive_trained_on([train, val], [], dataset=ds, plan=plan, data_root=roots.data)
+    names, refs = derive_trained_on([train, val], [], card=ds.card, plan=plan, data_root=roots.data)
     assert names == ["train", "valA"] and [r.subset for r in refs] == ["train", "valA"]
     assert refs[0].format == "yolo" and refs[0].manifest_sha256 == sha256_file(
         train / "manifest.json"
     )
     assert refs[0].sample_count == len(plan.ids_in("train"))
-    assert derive_trained_on([train], ["train"], dataset=ds, plan=plan, data_root=roots.data)[
+    assert derive_trained_on([train], ["train"], card=ds.card, plan=plan, data_root=roots.data)[
         0
     ] == ["train"]
     with pytest.raises(ValidationFailed, match=TRAINED_ON_MISMATCH):
-        derive_trained_on([train], ["valA"], dataset=ds, plan=plan, data_root=roots.data)
+        derive_trained_on([train], ["valA"], card=ds.card, plan=plan, data_root=roots.data)
     with pytest.raises(ValidationFailed, match="trained_on is required"):
-        derive_trained_on([], [], dataset=ds, plan=plan, data_root=roots.data)
+        derive_trained_on([], [], card=ds.card, plan=plan, data_root=roots.data)
     with pytest.raises(PlanMismatchError, match="no subset"):
-        derive_trained_on([], ["nope"], dataset=ds, plan=plan, data_root=roots.data)
+        derive_trained_on([], ["nope"], card=ds.card, plan=plan, data_root=roots.data)
     manifest = train / "manifest.json"
     doc = json.loads(manifest.read_text(encoding="utf-8"))
     manifest.write_text(json.dumps({**doc, "plan_id": "other"}), encoding="utf-8")
     with pytest.raises(PlanMismatchError, match="plan_id") as ei:
-        derive_trained_on([train], [], dataset=ds, plan=plan, data_root=roots.data)
+        derive_trained_on([train], [], card=ds.card, plan=plan, data_root=roots.data)
     assert ei.value.fields == {"export": str(train)}
     with pytest.raises(ValidationFailed, match="manifest.json not found"):
-        derive_trained_on([tmp_path / "nowhere"], [], dataset=ds, plan=plan, data_root=roots.data)
+        derive_trained_on([tmp_path / "nowhere"], [], card=ds.card, plan=plan, data_root=roots.data)
 
 
 def test_config_hash_two_routes(tmp_path):
@@ -544,3 +567,41 @@ def test_train_run_resume_with_changed_weights(roots, work, tmp_path):
     assert {r.name for r in out.records} == {"best.pt", "last.pt"}
 
     assert status_view(roots.data, "r1").unbacked == []
+
+
+def test_train_run_binds_the_childs_receipts_and_warns_on_observed_beyond(roots, work):
+    _seed(roots)
+    res_mat = materialize(
+        MaterializeSpec(name="tiny", mode="npy", data_root=roots.data, configs_root=roots.configs)
+    )
+    assert res_mat.failed == 0
+    (work / "access_train.py").write_text(ACCESS_FAKE, encoding="utf-8")
+    res = train_run(_spec(roots, work, command=[sys.executable, "access_train.py"]))
+    assert res.attempt.status == "finished", res.record
+    assert (res.receipts, res.denied, res.provenance) == (1, 0, "receipt")
+    assert res.observed_beyond == [] and res.receipt_invalid == 0
+    card = load_run(roots.data, "r1")
+    assert [r.artifact_id for r in card.access] == ["r1-a1-1"]
+    assert card.access[0].subsets == ["train"] and card.access == res.record.access
+    assert any(e["event"] == "access" for e in read_events(roots.data, "r1"))
+    (work / "peek_train.py").write_text(PEEK_FAKE, encoding="utf-8")
+    res = train_run(_spec(roots, work, run_id="r2", command=[sys.executable, "peek_train.py"]))
+    assert res.attempt.status == "finished", res.record
+    assert res.receipts == 2 and res.observed_beyond == ["valA"] and res.provenance == "receipt"
+    assert "observed_beyond_trained_on=valA" in res.warnings
+    assert [r.artifact_id for r in load_run(roots.data, "r2").access] == ["r2-a1-1", "r2-a1-2"]
+    # a resume adds attempt-2 receipts next to the attempt-1 ones
+    res = train_run(
+        _spec(roots, work, run_id="r2", command=[sys.executable, "peek_train.py"], resume=True)
+    )
+    ids = [r.artifact_id for r in load_run(roots.data, "r2").access]
+    assert ids == ["r2-a1-1", "r2-a1-2", "r2-a2-1", "r2-a2-2"] and res.receipts == 4
+
+
+def test_train_run_without_receipts_grades_export_or_declared(roots, work, tmp_path):
+    _seed(roots)
+    res = train_run(_spec(roots, work))
+    assert res.receipts == 0 and res.provenance == "declared"
+    export = _export(roots, "train", tmp_path / "yolo-train")
+    res = train_run(_spec(roots, work, run_id="r3", exports=[export], trained_on=[]))
+    assert res.provenance == "export"

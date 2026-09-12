@@ -7,8 +7,11 @@ from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.paths import artifact_dir
 from vcp.data.access.access import DatasetAccess
+from vcp.fuse.build import write_record
+from vcp.fuse.schema import FuseRecord, MemberRecord
 from vcp.measure.provenance import ProvenanceInfo, attach_receipts, provenance
-from vcp.measure.runs import load_run, save_run
+from vcp.measure.runs import FUSE_FRAMEWORK, load_run, save_run
+from vcp.measure.schema import RunCard, RunSource
 
 
 def _receipt(roots, subsets, *, purpose="train", run_id=None):
@@ -121,3 +124,110 @@ def test_sealed_and_multiple_receipts_union_their_observations(roots, tmp_path):
     assert info.observed == ["holdout", "train"] and info.grade == "receipt"
     save_run(roots.data, card)
     assert load_run(roots.data, "noisy").access == card.access  # round-trips through run.yaml
+
+
+def test_a_fused_run_takes_the_weakest_member_grade_and_unions_observations(roots, tmp_path):
+    ds, _, _ = det_with_runs(roots, tmp_path, n=40)
+    perfect = attach_receipts(
+        load_run(roots.data, "perfect"),
+        [_receipt(roots, ["train"], run_id="perfect")],
+        data_root=roots.data,
+    )
+    save_run(roots.data, perfect)
+    noisy_rid = _receipt(roots, ["valA"], purpose="custom")
+    noisy = attach_receipts(load_run(roots.data, "noisy"), [noisy_rid], data_root=roots.data)
+    save_run(roots.data, noisy)
+    # sanity: the two members really do grade differently before they are fused
+    assert provenance(perfect, **_kw(roots)).grade == "receipt"
+    assert provenance(noisy, **_kw(roots)).grade == "declared"
+
+    save_run(
+        roots.data,
+        RunCard(
+            run_id="fused",
+            dataset="tiny",
+            samples_hash=ds.card.samples_hash,
+            plan_id="fixed-v1",
+            trained_on=["train"],
+            source=RunSource(framework=FUSE_FRAMEWORK),
+            created_at="2026-09-12T00:00:00.000Z",
+        ),
+    )
+    write_record(
+        roots.data,
+        "fused",
+        FuseRecord(
+            run_id="fused",
+            recipe_id="r1",
+            recipe_sha256="a" * 64,
+            method="mean",
+            method_version="1",
+            params={},
+            members=[
+                MemberRecord(run="perfect", weight=1.0, trained_on=["train"]),
+                MemberRecord(run="noisy", weight=1.0, trained_on=["train"]),
+            ],
+            vcp_version="0",
+        ),
+    )
+    fused = load_run(roots.data, "fused")
+    info = provenance(fused, **_kw(roots))
+    assert info.grade == "declared" and info.observed == ["train", "valA"] and info.invalid == []
+    assert info.receipts == []
+
+    # tamper the custom receipt on disk: the fused view's invalid/observed react per-member
+    receipt_path = artifact_dir(roots.data, "access_receipt", noisy_rid) / "receipt.json"
+    receipt_path.write_bytes(receipt_path.read_bytes() + b"\n")
+    info = provenance(fused, **_kw(roots))
+    assert info.invalid == [noisy_rid] and info.observed == ["train"]
+
+    # source.framework says fused but there is no fuse.json yet: falls back to the plain path
+    save_run(
+        roots.data,
+        RunCard(
+            run_id="fused-no-record",
+            dataset="tiny",
+            samples_hash=ds.card.samples_hash,
+            plan_id="fixed-v1",
+            trained_on=[],
+            source=RunSource(framework=FUSE_FRAMEWORK),
+            created_at="2026-09-12T00:00:00.000Z",
+        ),
+    )
+    no_record = load_run(roots.data, "fused-no-record")
+    assert provenance(no_record, **_kw(roots)) == ProvenanceInfo(
+        grade="declared", observed=[], invalid=[], receipts=[]
+    )
+
+    # FuseRecord does not require at least one member (unlike Recipe.members): zero members
+    # grades declared with nothing observed or invalid.
+    save_run(
+        roots.data,
+        RunCard(
+            run_id="fused-empty",
+            dataset="tiny",
+            samples_hash=ds.card.samples_hash,
+            plan_id="fixed-v1",
+            trained_on=[],
+            source=RunSource(framework=FUSE_FRAMEWORK),
+            created_at="2026-09-12T00:00:00.000Z",
+        ),
+    )
+    write_record(
+        roots.data,
+        "fused-empty",
+        FuseRecord(
+            run_id="fused-empty",
+            recipe_id="r2",
+            recipe_sha256="a" * 64,
+            method="mean",
+            method_version="1",
+            params={},
+            members=[],
+            vcp_version="0",
+        ),
+    )
+    empty = load_run(roots.data, "fused-empty")
+    assert provenance(empty, **_kw(roots)) == ProvenanceInfo(
+        grade="declared", observed=[], invalid=[], receipts=[]
+    )

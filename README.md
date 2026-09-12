@@ -201,6 +201,40 @@ uv run vcp backup verify --dataset D-test --manifest sub34 --dest gdrive:vcp/bac
 uv run vcp submit verify --dataset D-test --id SUB34                    # 位元級重現候選檔
 ```
 
+## 不可變產物命令 `vcp artifact`
+
+| 命令 | 作用 | 主要選項 |
+|---|---|---|
+| `vcp artifact create` | 把既有檔案封成一個產物：`<data_root>/artifacts/<kind>/<id>/`，`mkdir` 獨佔搶 id，逐檔 `.tmp → fsync → replace`，最後寫 `manifest.json`（有它才是產物）；`--input` 在 open 與 commit 各雜湊一次（變了 → `drift:`）；`--id-pattern` 的具名群組必須等於同名欄位（`seed` / `dataset` / `plan_id` / `--param` 的鍵） | `--kind`、`--id`、`--file PATH\|NAME=PATH`…、`--dataset`、`--plan`、`--seed`、`--param k=v`…、`--input name=PATH`…、`--supersedes OLD --reason R`、`--id-pattern RE`、`--notes` |
+| `vcp artifact show` | 印 manifest：欄位、input、檔案表、`supersedes=` 與 `superseded_by=`（唯讀） | `--kind`、`--id` |
+| `vcp artifact verify` | 逐檔重算 sha（`mismatch=` / `missing=`）、manifest 沒列的檔（`extra=`，含殘留 `.tmp`）、supersession 台帳（缺列 `unlinked=1` → WARN；列與 manifest 不符 → `mismatch`） | `--kind`、`--id` |
+| `vcp artifact lineage` | 根 → id → 接替者；`heads=` 是沒被接替的末端，`forks=` > 0 → WARN（唯讀） | `--kind`、`--id` |
+| `vcp artifact status` | 每個 kind 的 `complete=` / `partial=`（有 `spec.json` 沒 manifest；附 `opened_at` 與 `failure.json` 的例外類別）/ `unlinked=` / `forks=` / `foreign=`（沒有 `spec.json` 的目錄，不碰）（唯讀） | `--kind` |
+| `vcp artifact relink` | manifest 有 `supersedes` 而台帳缺列（manifest 之後、台帳之前崩潰）→ 從 manifest 補一列；冪等 `appended=0\|1` | `--kind`、`--id` |
+| `vcp artifact clean` | 列出（`--apply` 才移除）`opened_at` 早於 `--older-than` 的半途目錄與同樣老的 `.<name>.<nonce>.tmp`；有 manifest 的產物、台帳、外來目錄永不碰；讀不到 `spec.json` 的目錄不列 | `--kind`、`--older-than N{m\|h\|d}`（預設 `24h`，`0` 可）、`--apply` |
+
+程式產生的產物走 Python API：
+
+```python
+from vcp.artifact.schema import ArtifactSpec, InputRef
+from vcp.artifact.writer import ArtifactWriter
+
+spec = ArtifactSpec(
+    kind="selection",
+    id="six-slot-v2-s42",
+    seed=42,
+    id_pattern=r"six-slot-v2-s(?P<seed>\d+)",
+    inputs=[InputRef(name="plan", path="configs/datasets/knee/splits/fixed-v1.json")],
+)
+with ArtifactWriter.create(spec, data_root=root) as art:
+    art.write_json("receipt.json", payload)  # write_text / write_bytes 也有
+    art.add_file("weights.pt", src_path)  # 串流複製並雜湊
+    out = art.reserve("features.npy")  # 回傳最終路徑，自己用 numpy 寫；commit 時雜湊
+    manifest = art.commit()  # 寫 manifest.json = commit；之後任何寫入 → closed:
+```
+
+`vcp.artifact.store.reuse(spec, root)` 只在完整 spec 逐欄相等（含每個 input 現算的 sha，`notes` 除外）才回傳既有 manifest，否則 `spec_mismatch:`——目錄存在不等於可重用。例外離開 `with` 會留下半途目錄與經 redact 的 `failure.json`；同一 id 不能再開，修正一律新 id + `supersedes`（open 查舊產物存在且已 commit，commit 驗逐檔 sha 並記其 manifest sha，之後 append `artifacts/<kind>/supersession.jsonl`）。manifest / `spec.json` / 台帳只含路徑、sha、大小、時戳、build string 與結構化參數——不放憑證。
+
 ## 匯入器與 `rows_read` 的語意
 
 | 匯入器 | 來源 | `rows_read` 數的是 |

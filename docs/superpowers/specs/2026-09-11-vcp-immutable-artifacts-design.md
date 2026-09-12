@@ -213,3 +213,20 @@ manifest / `spec.json` / 台帳只含路徑、sha、大小、時戳、build stri
 ## 15. 不在範圍
 
 per-unit / resume 收據與 `mode="resume"`（VCP-029）；content-addressed blob 與 hardlink / reflink 去重、可達性 GC（VCP-028）；kind 登記表、kind 層級的 schema 與位置宣告、plugin API（VCP-031）；跨程序鎖；把換寫留痕的卡改成不可變；RSNA 原型的遷移（Wave 1 第 5 項）；憑證偵測。以上皆為已預留的擴充點，不是設計缺口。
+
+## 16. 補充決定（實作期，Plan 8）
+
+1. `reuse` 的關鍵字參數叫 `check_files`（`verify=` 會遮蔽同模組的 `verify`）。
+2. `lineage` 回 `Lineage(chain, successors, heads, forks)`：`heads` 是 id 前向閉包的末端，`forks` 數 chain + successors 裡有 >1 接替者的節點；`head()` = `lineage().heads`。
+3. `VerifyResult` 的 `mismatch` / `missing` / `extra` 是檔名清單、`unlinked: bool`；台帳列 sha 不符記成 `mismatch` 裡的 `"manifest.json"`。
+4. `clean` 的 `.tmp` 也套 `--older-than`（mtime）；讀不到 `spec.json` 的半途目錄永不列入；移除每個目錄前再查一次 `manifest.json`；暫存在候選目錄之內時不另列。
+5. 台帳讀寫沿用 `vcp.measure.ledger.append_row` / `read_rows`；`ledger.row_for(manifest, sha)` 是 writer 與 `relink` 共用的列建構。
+6. `load_manifest` 多驗 manifest 裡的 kind / id 等於目錄的（複製來的 manifest → `mismatch:`）。
+7. 保留名只在產物根目錄；`.<name>.<8 hex>.tmp` 形式的檔名也是保留名。
+8. `ArtifactManifest.files` 必須已依 name 排序（validator）。
+9. CLI `--file`：第一個 `=` 之前是名字，沒有就 basename；`--input` 路徑相對 CWD 解析成絕對後才交給 `resolve_inputs`；`create` 搶 id 前先確認每個 `--file` 存在。
+10. `status` 的 VERDICT 欄位是各 kind 加總；明細在 human 與 `--json`。`show` 的 `superseded_by=` 只列直接接替者。
+11. `write_once` 不建立跨程序互斥；Windows 不 fsync 目錄。
+12. 四個既有寫一次點保留各自的存在預檢（訊息、例外類型、`fields` 不變），只換位元組落地方式。
+13. 真資料整合測試只呼叫 `scan()`，並斷言 `artifacts/` 樹不變。
+14. `artifact verify` 以回傳（不是拋例外）報 FAIL，VERDICT 欄位順序是 `kind= id=` 在 `reason=` 之前（`run_command` 先合併 context；`backup verify` 亦同）；VERDICT 欄位以鍵讀取，順序不是契約。

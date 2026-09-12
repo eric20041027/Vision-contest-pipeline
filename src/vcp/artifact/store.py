@@ -100,9 +100,11 @@ def spec_diff(recorded: ArtifactSpec, wanted: ArtifactSpec) -> list[str]:
 
 @dataclass(frozen=True)
 class VerifyResult:
-    """What ``verify`` found: names of manifest files whose bytes differ / are gone, files the
-    manifest never named (a committed artifact takes no new files; leftover temps count), and
-    whether a superseding artifact lacks its ledger row."""
+    """What ``verify`` found: names of manifest files whose bytes differ / are gone (this also
+    covers the superseded artifact's ``manifest.json``, re-read against the ``supersedes_sha256``
+    pin recorded at commit time, and a ledger row that disagrees with the manifest it indexes),
+    files the manifest never named (a committed artifact takes no new files; leftover temps
+    count), and whether a superseding artifact lacks its ledger row."""
 
     mismatch: list[str]
     missing: list[str]
@@ -133,11 +135,20 @@ def verify(data_root: Path, kind: str, artifact_id: str) -> VerifyResult:
     )
     unlinked = False
     if manifest.spec.supersedes is not None:
+        old = manifest.spec.supersedes
+        pinned = manifest_path(data_root, kind, old)
+        if not pinned.is_file():
+            missing.append(f"{old}/manifest.json")
+        elif sha256_file(pinned) != manifest.supersedes_sha256:
+            mismatch.append(f"{old}/manifest.json")
         row = supersession_of(data_root, kind, artifact_id)
         if row is None:
             unlinked = True
-        elif row.manifest_sha256 != sha256_file(d / MANIFEST):
-            mismatch.append(MANIFEST)
+        else:
+            if row.manifest_sha256 != sha256_file(d / MANIFEST):
+                mismatch.append(MANIFEST)
+            if row.supersedes_id != old or row.supersedes_sha256 != manifest.supersedes_sha256:
+                mismatch.append("supersession.jsonl")
     return VerifyResult(mismatch, missing, extra, unlinked)
 
 

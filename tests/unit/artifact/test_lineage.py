@@ -105,3 +105,33 @@ def test_lineage_head_forks_and_relink(roots):
     ArtifactWriter.create(ArtifactSpec(kind="receipt", id="half"), data_root=roots.data)
     with pytest.raises(ValidationFailed, match="^partial: "):
         lineage(roots.data, "receipt", "half")
+
+
+def test_verify_rereads_the_supersedes_pin(roots):
+    """VCP-005's last mile: forging the root artifact's manifest.json must not pass `verify` on
+    the artifact that supersedes it, even though the successor's own bytes never changed."""
+    _commit(roots, "a")
+    _commit(roots, "b", supersedes="a", supersedes_reason="r")
+    assert store.verify(roots.data, "receipt", "b") == store.VerifyResult([], [], [], False)
+    a_manifest = store.manifest_path(roots.data, "receipt", "a")
+    original = a_manifest.read_bytes()
+    forged = original.replace(b'"notes": ""', b'"notes": "forged"')
+    assert forged != original
+    a_manifest.write_bytes(forged)
+    assert store.verify(roots.data, "receipt", "b").mismatch == ["a/manifest.json"]
+    # the point of the finding: verifying the root itself still says nothing is wrong
+    assert store.verify(roots.data, "receipt", "a") == store.VerifyResult([], [], [], False)
+    a_manifest.write_bytes(original)
+    assert store.verify(roots.data, "receipt", "b") == store.VerifyResult([], [], [], False)
+    a_manifest.unlink()
+    assert store.verify(roots.data, "receipt", "b").missing == ["a/manifest.json"]
+    a_manifest.write_bytes(original)
+    assert store.verify(roots.data, "receipt", "b") == store.VerifyResult([], [], [], False)
+    # a ledger row whose supersedes_sha256 disagrees with the manifest it indexes is a mismatch
+    log = supersession_log(roots.data, "receipt")
+    rows = _rows(log)
+    for r in rows:
+        if r["id"] == "b":
+            r["supersedes_sha256"] = "0" * 64
+    _rewrite_log(log, rows)
+    assert "supersession.jsonl" in store.verify(roots.data, "receipt", "b").mismatch

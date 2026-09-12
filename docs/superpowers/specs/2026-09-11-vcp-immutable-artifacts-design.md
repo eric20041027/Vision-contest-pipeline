@@ -148,7 +148,7 @@ with ArtifactWriter.create(spec, data_root=root) as art:
 
 - **`load_manifest(data_root, kind, id)`**：無目錄 → `not_found:`；有目錄無 manifest → `partial:`（訊息分開，consumer 不會把半途當缺席）；manifest 壞 → `ValidationFailed` 帶 `location`。`is_partial(data_root, kind, id) -> bool`。
 - **`reuse(spec, data_root, *, verify=False) -> ArtifactManifest | None`**：`resolve_inputs` 後——無目錄 → `None`；半途 → `partial:`；完整 → `manifest.spec` 與現在的 spec 逐欄相等（除 `notes`）才回傳，否則 `IntegrityError("spec_mismatch: … (seed, inputs.plan)")` 列出不同的欄位；`verify=True` 才重雜湊檔案（跑本節的 `verify`，`mismatch` / `missing` / `extra` 任一 > 0 → `IntegrityError mismatch:`）。
-- **`verify(data_root, kind, id) -> VerifyResult(mismatch, missing, extra, unlinked)`**：manifest 每個檔重算 sha（不符 → `mismatch`，缺 → `missing`）；目錄裡不在 manifest 的檔（保留名除外，殘留的 `.tmp` 也算）→ `extra`（commit 之後不該有人往裡寫，FAIL；`clean` 移除 `.tmp` 後就乾淨）；`supersedes` 給了但台帳無對應列 → `unlinked`（WARN）；台帳列的 `manifest_sha256` 與現在的 `manifest.json` 不符 → `mismatch`。
+- **`verify(data_root, kind, id) -> VerifyResult(mismatch, missing, extra, unlinked)`**：manifest 每個檔重算 sha（不符 → `mismatch`，缺 → `missing`）；目錄裡不在 manifest 的檔（保留名除外，殘留的 `.tmp` 也算）→ `extra`（commit 之後不該有人往裡寫，FAIL；`clean` 移除 `.tmp` 後就乾淨）；`supersedes` 給了還要重讀舊產物現在的 `manifest.json` sha 與 manifest 記的 `supersedes_sha256` 比對（不符 → `mismatch` 裡多 `<old>/manifest.json`，舊 manifest 不在 → `missing`），台帳列的 `supersedes_id` / `supersedes_sha256` 與 manifest 不符 → `mismatch` 裡多 `supersession.jsonl`；`supersedes` 給了但台帳無對應列 → `unlinked`（WARN）；台帳列的 `manifest_sha256` 與現在的 `manifest.json` 不符 → `mismatch`。
 - **`lineage(data_root, kind, id) -> list[ArtifactManifest]`**：從 id 沿 `supersedes` 往回到根，再往前掃同 kind 的 manifest 找接替者；**`head(data_root, kind, id) -> list[str]`**：沒被接替的末端，分叉時多個。
 - **`relink(data_root, kind, id) -> bool`**：manifest 有 `supersedes` 且台帳無列 → 從 manifest 推導一列 append；已有列 → False。
 - **`clean(data_root, kind=None, older_than=timedelta(hours=24), apply=False) -> CleanResult(candidates, removed)`**：候選 = 有 `spec.json`、無 `manifest.json`、`opened_at` 早於門檻的目錄，加上 `artifacts/` 下任何位置的 `.<name>.<nonce>.tmp`（含完整產物內的殘留；只刪 `.tmp`，不碰 manifest 與檔案）；沒有 `spec.json` 的目錄永不列入；`apply=False` 只列。
@@ -230,3 +230,4 @@ per-unit / resume 收據與 `mode="resume"`（VCP-029）；content-addressed blo
 12. 四個既有寫一次點保留各自的存在預檢（訊息、例外類型、`fields` 不變），只換位元組落地方式。
 13. 真資料整合測試只呼叫 `scan()`，並斷言 `artifacts/` 樹不變。
 14. `artifact verify` 以回傳（不是拋例外）報 FAIL，VERDICT 欄位順序是 `kind= id=` 在 `reason=` 之前（`run_command` 先合併 context；`backup verify` 亦同）；VERDICT 欄位以鍵讀取，順序不是契約。
+15. `verify` 重讀 `supersedes_sha256` 所指的舊 manifest（最終審查 Important #1）：接替者的 pin 是根產物唯一的竄改證據，不重讀等於沒有。

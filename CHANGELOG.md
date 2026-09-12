@@ -24,6 +24,7 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
 - **`vcp artifact create|show|verify|lineage|status|relink|clean`**（`cmd=artifact.<name>`；失敗時保留 `kind=` / `id=`）。
 - **`vcp.core.atomic`**：`write_once` / `write_once_text` / `write_once_stream`（同目錄 `.<name>.<nonce>.tmp` → fsync → 目標不存在才 `os.replace`；不是跨程序鎖）。`core/paths.py` 新增 `artifacts_root` / `artifact_dir`，`check_relative_path` 從備份層搬來；`core/config.py` 新增 `dump_yaml_text`。
 - Release 回歸門檻多一列（`wave 1a (VCP-005, VCP-007)`）；真資料整合測試 `tests/integration/test_artifact_status.py`（唯讀）。
+- `vcp artifact verify` 重讀 `supersedes_sha256` 所指的舊產物 `manifest.json`（不在 → `missing` 多 `<old>/manifest.json`，sha 不符 → `mismatch` 多 `<old>/manifest.json`），並比對台帳列的 `supersedes_id` / `supersedes_sha256` 是否與 manifest 相符（不符 → `mismatch` 多 `supersession.jsonl`）：沒有這一步，重寫根產物的 `manifest.json` 對根與接替者兩邊的 `verify` 都會回報乾淨（VCP-005 最終審查 Important #1）。
 
 ### Changed
 - vcp 自己的四個寫一次檔——split plan（`save_plan`）、預登記 yaml（`create_prereg`）、融合配方（`save_recipe`）、backup manifest（`write_manifest`）——改經 `write_once_text`；訊息、例外類型、`fields` 與寫出的位元組不變。

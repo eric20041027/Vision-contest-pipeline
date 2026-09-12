@@ -106,3 +106,25 @@ def test_measure_paths(roots):
     assert p.prereg_log == roots.configs / "datasets" / "ds" / "prereg.log.jsonl"
     with pytest.raises(ValidationFailed):
         p.run_dir("bad/name")
+
+
+def test_artifact_paths(tmp_path):
+    assert paths.artifacts_root(tmp_path) == tmp_path / "artifacts"
+    assert (
+        paths.artifact_dir(tmp_path, "receipt", "r1") == tmp_path / "artifacts" / "receipt" / "r1"
+    )
+    with pytest.raises(ValidationFailed):
+        paths.artifact_dir(tmp_path, "../k", "r1")
+    with pytest.raises(ValidationFailed):
+        paths.artifact_dir(tmp_path, "receipt", "a/b")
+
+
+@pytest.mark.parametrize("bad", ["", "/abs", "C:/x", "a\\b", "a//b", "./a", "a/../b", "a/"])
+def test_check_relative_path_rejects(bad):
+    with pytest.raises(ValueError):
+        paths.check_relative_path(bad)
+
+
+@pytest.mark.parametrize("good", ["a", "a/b.txt", "runs/r1/run.yaml", ".hidden/x"])
+def test_check_relative_path_accepts(good):
+    paths.check_relative_path(good)

@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel
 
-from vcp.core.config import dump_yaml_model, load_yaml_model
+from vcp.core.config import dump_yaml_model, dump_yaml_text, load_yaml_model
 from vcp.core.errors import ValidationFailed
 
 
@@ -39,3 +39,11 @@ def test_yaml_malformed_reports_path(tmp_path):
     with pytest.raises(ValidationFailed, match="invalid YAML") as ei:
         load_yaml_model(p, M)
     assert str(p) in str(ei.value)
+
+
+def test_dump_yaml_text_is_what_dump_yaml_model_writes(tmp_path):
+    m = M(name="中文", n=3, tags=["a"])
+    path = tmp_path / "m.yaml"
+    dump_yaml_model(m, path)
+    assert path.read_text(encoding="utf-8") == dump_yaml_text(m)
+    assert dump_yaml_text(m) == "name: 中文\nn: 3\ntags:\n- a\n"

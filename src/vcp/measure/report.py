@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from vcp.core.config import load_yaml_model
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
 from vcp.measure.anchors import load_anchors
@@ -36,7 +36,10 @@ class StatusResult:
     """What is outstanding for one dataset. ``sigma`` maps ``"<metric>/<method>"`` to the
     newest estimate's value; ``unreadable`` names the run cards that could not be read at all.
     ``provenance`` / ``observed`` map each run id to its grade (spec 7.2) and the subsets its
-    receipts show it read."""
+    receipts show it read; ``provenance_failed`` names the runs (counted in ``runs``, absent
+    from ``provenance`` / ``observed``) whose grade could not be computed at all -- a fused run
+    naming a member that can no longer be read is the case this exists for (a read-only view
+    must survive that the way it survives an unreadable run card)."""
 
     orphans: list[str]
     preregs: int
@@ -47,6 +50,7 @@ class StatusResult:
     unreadable: list[str] = field(default_factory=list)
     provenance: dict[str, str] = field(default_factory=dict)
     observed: dict[str, list[str]] = field(default_factory=dict)
+    provenance_failed: dict[str, str] = field(default_factory=dict)
 
 
 def _runs_for(paths: DatasetPaths) -> tuple[list[RunCard], list[str]]:
@@ -100,8 +104,18 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
     cards, unreadable = _runs_for(paths)
     grades: dict[str, str] = {}
     observed: dict[str, list[str]] = {}
+    provenance_failed: dict[str, str] = {}
     for card in sorted(cards, key=lambda c: c.run_id):
-        info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
+        try:
+            info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
+        except (VcpError, OSError, UnicodeDecodeError) as e:
+            # A fused run's member can go missing or unreadable without the fused card itself
+            # changing at all -- `provenance()` must still FAIL for measure/judge/stage (a
+            # broken fusion cannot silently grade as anything), but a read-only view over every
+            # run must survive it exactly as it survives an unreadable run card (`unreadable`
+            # above): count the run, name what went wrong, and move on.
+            provenance_failed[card.run_id] = f"{type(e).__name__}: {e}"
+            continue
         grades[card.run_id] = info.grade
         observed[card.run_id] = info.observed
     sigma: dict[str, float] = {}
@@ -121,6 +135,7 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
         unreadable=unreadable,
         provenance=grades,
         observed=observed,
+        provenance_failed=provenance_failed,
     )
 
 

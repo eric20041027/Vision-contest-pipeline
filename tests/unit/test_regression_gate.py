@@ -129,6 +129,31 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "wave 1a (VCP-005, VCP-007)",
+        "artifact: an id is claimed at open and never rewritten; a crash before commit leaves no "
+        "manifest; a supersedes target must exist, be committed and verify; clean never reaches "
+        "a committed artifact; an id_pattern group must equal its spec field",
+        {
+            "tests/unit/artifact/test_writer.py": [
+                "test_open_claims_the_id_and_writes_spec_json",
+                "test_manifest_publish_failure_leaves_a_partial",
+            ],
+            "tests/unit/artifact/test_lineage.py": [
+                "test_supersession_is_checked_at_open_and_commit_and_indexed",
+            ],
+            "tests/unit/artifact/test_clean.py": [
+                "test_clean_lists_then_removes_only_old_partials_and_temps",
+                "test_clean_never_touches_what_it_cannot_read_or_what_committed_meanwhile",
+            ],
+            "tests/unit/artifact/test_schema.py": ["test_id_pattern_groups_must_equal_the_fields"],
+            "tests/unit/core/test_atomic.py": [
+                "test_second_write_is_refused_and_the_original_is_untouched",
+                "test_the_four_write_once_sites_use_the_primitive",
+            ],
+            "tests/unit/test_e2e_artifact.py": ["test_selection_job_story"],
+        },
+    ),
 ]
 
 

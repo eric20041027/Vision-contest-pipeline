@@ -9,11 +9,14 @@ before and after -- so there is no concurrent writer.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_data_root, store_path
+from vcp.data.access.access import DatasetAccess
+from vcp.data.access.schema import AccessRef, Purpose
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.records import append_event, current_attempt, has_record, load_record, save_record
 from vcp.train.schema import CheckpointRecord
@@ -73,3 +76,64 @@ class Session:
 
     def note(self, key: str, value: str | int | float | bool) -> None:
         append_event(self.data_root, self.run_id, "note", self._attempt(), key=key, value=value)
+
+    def access(
+        self,
+        *,
+        subsets: Iterable[str] | None = None,
+        roles: Iterable[str] | None = None,
+        purpose: Purpose = "train",
+        unseal_reason: str | None = None,
+        notes: str = "",
+    ) -> DatasetAccess:
+        """A role-scoped access of this run's dataset and plan whose receipt is bound to the
+        running attempt (spec 7.1). ``VCP_CONFIGS_ROOT`` (exported by ``vcp train run``) says
+        where the card and plan are."""
+        record = load_record(self.data_root, self.run_id)
+        return DatasetAccess.open(
+            record.dataset,
+            record.plan_id,
+            subsets=subsets,
+            roles=roles,
+            purpose=purpose,
+            unseal_reason=unseal_reason,
+            caller=f"vcp train run {self.run_id}",
+            binding=SessionBinding(self),
+            notes=notes,
+            data_root=self.data_root,
+        )
+
+
+class SessionBinding:
+    """The training layer's ``ReceiptBinding``: receipts of the running attempt are numbered
+    ``<run_id>-a<attempt>-<seq>`` and land in ``train.yaml`` plus an ``access`` event."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.run_id = session.run_id
+        self.attempt = current_attempt(load_record(session.data_root, session.run_id))
+
+    def receipt_id(self, seq: int) -> str:
+        return f"{self.run_id}-a{self.attempt}-{seq}"
+
+    def next_seq(self) -> int:
+        prefix = f"{self.run_id}-a{self.attempt}-"
+        record = load_record(self.session.data_root, self.run_id)
+        return sum(1 for r in record.access if r.artifact_id.startswith(prefix)) + 1
+
+    def on_commit(self, ref: AccessRef) -> None:
+        record = load_record(self.session.data_root, self.run_id)
+        save_record(
+            self.session.data_root, record.model_copy(update={"access": [*record.access, ref]})
+        )
+        append_event(
+            self.session.data_root,
+            self.run_id,
+            "access",
+            self.attempt,
+            artifact_id=ref.artifact_id,
+            purpose=ref.purpose,
+            subsets=ref.subsets,
+            denied=ref.denied,
+            sealed_accessed=ref.sealed_accessed,
+        )

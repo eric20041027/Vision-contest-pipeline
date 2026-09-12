@@ -2,14 +2,19 @@ import numpy as np
 import pytest
 
 from helpers import det_samples, make_card, write_dicom_study, write_images
-from vcp.core.errors import IntegrityError, SealedSubsetError, ValidationFailed
+from vcp.artifact import store
+from vcp.core.errors import AccessDeniedError, IntegrityError, SealedSubsetError, ValidationFailed
 from vcp.core.paths import DatasetPaths
+from vcp.data.access.access import DatasetAccess
+from vcp.data.access.receipt import read_receipt
 from vcp.data.dataset import Dataset
 from vcp.data.importers import get_importer
 from vcp.data.importers.base import ImportSpec
 from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.train import MaterializedReader, Record
+from vcp.train.records import load_record, save_record
+from vcp.train.schema import Attempt, TrainRecord
 
 
 def _image_ds(roots, name="tiny", n=8):
@@ -135,3 +140,87 @@ def test_reader_failures(roots):
     np.save(target, np.zeros((2, 2), dtype=np.uint8))
     with pytest.raises(IntegrityError):
         reader["s0001"]
+
+
+def test_reader_with_a_subset_reads_only_that_subset_and_leaves_a_receipt(roots):
+    ds, plan, paths = _image_ds(roots, n=40)
+    assert _mat(roots, "tiny", mode="npy").failed == 0
+    with MaterializedReader(
+        "tiny",
+        "npy",
+        plan_id="fixed-v1",
+        subset="train",
+        purpose="custom",
+        data_root=roots.data,
+        configs_root=roots.configs,
+    ) as reader:
+        assert reader.ids == sorted(plan.ids_in("train")) and reader.card.name == "tiny"
+        assert reader.access is not None and reader.access.allowed == frozenset({"train"})
+        with pytest.raises(KeyError):
+            reader[sorted(plan.ids_in("valA"))[0]]  # not even in the reader's index
+        first = reader[reader.ids[0]]
+        assert first.labels is not None and set(first.arrays) == {"0"}
+        rid = reader.access.receipt_id
+        assert store.is_partial(roots.data, "access_receipt", rid)
+    receipt = read_receipt(roots.data, rid).receipt
+    assert receipt.purpose == "custom" and set(receipt.accessed) == {"train"}
+    assert receipt.accessed["train"].ids_count == len(plan.ids_in("train"))
+
+
+def test_reader_under_a_training_session_registers_its_receipt(roots, monkeypatch):
+    ds, plan, paths = _image_ds(roots, n=40)
+    assert _mat(roots, "tiny", mode="npy").failed == 0
+    save_record(
+        roots.data,
+        TrainRecord(
+            run_id="r1",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            trained_on=["train"],
+            config_hash="ab" * 32,
+            cwd="work",
+            command=["python"],
+            attempts=[Attempt(n=1, started_at="2026-09-12T00:00:00.000Z", console="c")],
+        ),
+    )
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.setenv("VCP_DATA_ROOT", str(roots.data))
+    monkeypatch.setenv("VCP_CONFIGS_ROOT", str(roots.configs))
+    with pytest.raises(AccessDeniedError, match="^denied: a training reader must name plan_id"):
+        MaterializedReader("tiny", "npy")
+    with MaterializedReader("tiny", "npy", plan_id="fixed-v1", subset="train") as reader:
+        assert reader.access.receipt_id == "r1-a1-1"
+        for rec in reader:
+            assert rec.sample_id in plan.ids_in("train")
+    record = load_record(roots.data, "r1")
+    assert [r.artifact_id for r in record.access] == ["r1-a1-1"]
+    assert record.access[0].purpose == "train" and record.access[0].subsets == ["train"]
+    # an injected, already-open access is used as-is and NOT closed by the reader
+    with DatasetAccess.open(
+        "tiny",
+        "fixed-v1",
+        subsets={"valA"},
+        purpose="custom",
+        data_root=roots.data,
+        configs_root=roots.configs,
+    ) as access:
+        reader = MaterializedReader(
+            "tiny",
+            "npy",
+            plan_id="fixed-v1",
+            subset="valA",
+            access=access,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+        reader.close()
+        assert access.receipt is None
+    assert access.receipt is not None and set(access.receipt.accessed) == {"valA"}
+
+
+def test_reader_without_a_plan_keeps_the_full_dataset_outside_a_run(roots):
+    ds, plan, paths = _image_ds(roots)
+    assert _mat(roots, "tiny", mode="npy").failed == 0
+    reader = MaterializedReader("tiny", "npy", data_root=roots.data, configs_root=roots.configs)
+    assert reader.access is None and len(reader) == 8 and reader.card.name == "tiny"
+    reader.close()

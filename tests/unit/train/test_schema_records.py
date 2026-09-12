@@ -54,7 +54,7 @@ def test_models_reject_unknown_fields_and_bad_literals():
         UploadRecord(dest="d", kind="ftp", name="a", sha256="x", verified=True, uploaded_at=STAMP)
     with pytest.raises(ValidationError):
         TrainRecord(**{**_record().model_dump(), "extra": 1})
-    assert EVENTS == ("started", "env", "checkpoint", "uploaded", "finished", "note")
+    assert EVENTS == ("started", "env", "checkpoint", "uploaded", "finished", "note", "access")
 
 
 def test_record_defaults():

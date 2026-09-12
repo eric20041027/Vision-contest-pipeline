@@ -232,3 +232,4 @@ per-unit / resume 收據與 `mode="resume"`（VCP-029）；content-addressed blo
 14. `artifact verify` 以回傳（不是拋例外）報 FAIL，VERDICT 欄位順序是 `kind= id=` 在 `reason=` 之前（`run_command` 先合併 context；`backup verify` 亦同）；VERDICT 欄位以鍵讀取，順序不是契約。
 15. `verify` 重讀 `supersedes_sha256` 所指的舊 manifest（最終審查 Important #1）：接替者的 pin 是根產物唯一的竄改證據，不重讀等於沒有。
 16. writer 每次寫入與 commit 前確認自己的 `spec.json` 還在（被 `clean` 移走 → `not_found: … removed while the job was open`），例外離開時目錄已不在就不寫 `failure.json`；`create` 在搶 id 前先驗每個 `--file` 的檔名與重複（最終審查 Important #2 與 minor）。
+17. `InputRef.name` 走 `validate_name` 規則（`a/b` 之類拒絕）——計畫層決定 13，之前漏記。

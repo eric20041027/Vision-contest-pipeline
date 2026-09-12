@@ -7,6 +7,7 @@ from unittest.mock import ANY
 import pytest
 
 from vcp.artifact import clean as cleanmod
+from vcp.artifact import store
 from vcp.artifact.clean import CleanResult, KindStatus, PartialInfo, clean, parse_age, scan
 from vcp.artifact.ledger import supersession_log
 from vcp.artifact.schema import ArtifactSpec
@@ -144,3 +145,17 @@ def test_clean_never_touches_what_it_cannot_read_or_what_committed_meanwhile(roo
     res = clean(roots.data, apply=True)
     assert res.candidates == ["receipt/late"] and res.removed == []
     assert (late / "manifest.json").is_file()
+
+
+def test_clean_never_touches_the_ledger(roots):
+    _commit(roots, "receipt", "r1")
+    _commit(roots, "receipt", "r2", supersedes="r1", supersedes_reason="x")
+    old = _partial(roots, "receipt", "old", fail=True)
+    _age(old / "spec.json", days=2)
+    log = supersession_log(roots.data, "receipt")
+    before = log.read_bytes()
+    res = clean(roots.data, apply=True)
+    assert "receipt/old" in res.removed and not old.exists()
+    assert log.read_bytes() == before
+    assert not store.verify(roots.data, "receipt", "r1").failed
+    assert not store.verify(roots.data, "receipt", "r2").failed

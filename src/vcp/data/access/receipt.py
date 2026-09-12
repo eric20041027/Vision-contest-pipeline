@@ -51,8 +51,14 @@ def receipt_spec(
     plan_id: str,
     samples_hash: str,
     plan_sha256: str,
+    card_sha256: str,
 ) -> ArtifactSpec:
-    params = {"purpose": purpose}
+    # Only samples.jsonl lives under data_root; card.yaml and the plan json live under
+    # configs_root, so recording them as `inputs` would store absolute filesystem paths in
+    # spec.json / manifest.json (the privacy envelope is data-root-relative paths only).
+    # Both shas are already carried by receipt.json's own card_sha256/plan_sha256 fields, so
+    # nothing is lost by keeping them here as opaque params instead of artifact inputs.
+    params = {"purpose": purpose, "card_sha256": card_sha256, "plan_sha256": plan_sha256}
     if run_id is not None:
         params["run"] = run_id
     if attempt is not None:
@@ -64,9 +70,7 @@ def receipt_spec(
         plan_id=plan_id,
         params=params,
         inputs=[
-            InputRef(name="card", path=str(paths.card_yaml)),
             InputRef(name="samples", path=str(paths.samples_jsonl), sha256=samples_hash),
-            InputRef(name="plan", path=str(paths.plan_json(plan_id)), sha256=plan_sha256),
         ],
     )
 

@@ -16,7 +16,6 @@ from vcp.core.build import build_string
 from vcp.core.errors import (
     AccessDeniedError,
     IntegrityError,
-    InvariantError,
     SealedSubsetError,
     ValidationFailed,
 )
@@ -126,6 +125,7 @@ class DatasetAccess:
                 plan_id=plan.plan_id,
                 samples_hash=card.samples_hash,
                 plan_sha256=plan_sha256,
+                card_sha256=card_sha256,
             ),
             paths.data_root,
             binding,
@@ -164,15 +164,22 @@ class DatasetAccess:
         else:
             wanted = set(roles or ())
             allowed = frozenset(s.name for s in plan.subsets if s.role in wanted)
-        unseal_sha: str | None = None
-        for s in sorted(allowed):
-            if plan.subset(s).role != "sealed":
-                continue
-            if not unseal_reason:
-                raise SealedSubsetError(
-                    f"subset {s!r} is sealed; pass unseal_reason to open it (recorded)"
+            if not allowed:
+                raise ValidationFailed(
+                    f"roles: no subset of plan {plan_id!r} has role(s) {sorted(wanted)}",
+                    fields={"plan": plan_id},
                 )
-            unseal_sha = append_unseal(paths, plan, s, unseal_reason, caller or purpose)
+        sealed_names = [s for s in sorted(allowed) if plan.subset(s).role == "sealed"]
+        if len(sealed_names) > 1:
+            raise ValidationFailed(
+                f"sealed: an access may open at most one sealed subset per receipt, got "
+                f"{sorted(sealed_names)}; open them separately"
+            )
+        sealed_name = sealed_names[0] if sealed_names else None
+        if sealed_name is not None and not unseal_reason:
+            raise SealedSubsetError(
+                f"subset {sealed_name!r} is sealed; pass unseal_reason to open it (recorded)"
+            )
         if not paths.samples_jsonl.is_file():
             raise ValidationFailed(f"samples file not found: {paths.samples_jsonl}")
         digest, index = index_samples(paths.samples_jsonl)
@@ -184,11 +191,13 @@ class DatasetAccess:
             )
         unknown = sorted(set(index) - set(plan.assignment))
         if unknown:
-            raise InvariantError(f"assignment does not cover all samples: missing {unknown[:5]}")
+            raise IntegrityError(
+                f"mismatch: assignment does not cover all samples: missing {unknown[:5]}"
+            )
         absent = sorted(set(plan.assignment) - set(index))
         if absent:
-            raise InvariantError(f"assignment has unknown sample ids: {absent[:5]}")
-        return cls(
+            raise IntegrityError(f"mismatch: assignment has unknown sample ids: {absent[:5]}")
+        access = cls(
             card=card,
             plan=plan,
             paths=paths,
@@ -199,10 +208,17 @@ class DatasetAccess:
             index=index,
             card_sha256=sha256_file(paths.card_yaml),
             plan_sha256=sha256_file(paths.plan_json(plan_id)),
-            unseal_event_sha256=unseal_sha,
+            unseal_event_sha256=None,
             binding=binding,
             notes=notes,
         )
+        # The receipt is claimed (above) before this write, and a failed identity/coverage check
+        # above never reaches here: a failed open leaves no unseal line pointing at no receipt.
+        if sealed_name is not None:
+            access._unseal_event_sha256 = append_unseal(
+                paths, plan, sealed_name, unseal_reason, caller or purpose
+            )
+        return access
 
     # -- reads --------------------------------------------------------------------------------
 
@@ -246,6 +262,12 @@ class DatasetAccess:
                     f"bad sample row for {sample_id!r}: {type(e).__name__}",
                     location=f"{self.paths.samples_jsonl}:{sample_id}",
                 ) from e
+            if cached.sample_id != sample_id:
+                raise IntegrityError(
+                    f"mismatch: the row indexed for {sample_id!r} now holds "
+                    f"{cached.sample_id!r}; samples.jsonl changed after open",
+                    fields={"sample": sample_id},
+                )
             self._task.validate(cached, self.card)
             self._cache[sample_id] = cached
             self._parsed[subset] = self._parsed.get(subset, 0) + 1

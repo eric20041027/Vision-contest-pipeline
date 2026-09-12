@@ -22,14 +22,15 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from vcp.core.errors import PlanMismatchError, ValidationFailed
-from vcp.core.paths import DatasetPaths
+from vcp.core.paths import DatasetPaths, resolve_data_root
 from vcp.core.time import stamp
 from vcp.measure.ledger import JUDGEMENTS_LEDGER, READINGS_LEDGER, ReadingsLedger, append_row
 from vcp.measure.measure import load_context
 from vcp.measure.metrics import Metric, effective_params, get_metric, params_key
 from vcp.measure.predictions import predictions_by_id, read_predictions
 from vcp.measure.prereg import load_prereg, prereg_time
-from vcp.measure.runs import verify_prediction
+from vcp.measure.provenance import ProvenanceInfo, provenance
+from vcp.measure.runs import load_run, run_dir, verify_prediction
 from vcp.measure.schema import (
     TUNING_CLASS,
     Judgement,
@@ -52,6 +53,7 @@ T_CAP = 1e9
 
 # The reasons vocabulary, in one place: these strings are the machine-readable half of a
 # judgement row, and anything reading judgements.jsonl matches on them.
+CONTAMINATED = "contaminated"
 MISSING_READINGS = "missing_readings"
 MEASURED_BEFORE_PREREG = "measured_before_prereg"
 TOO_FEW_BASES = "bases_positive"
@@ -319,6 +321,21 @@ def _append_judgement(path: Path, judgement: Judgement) -> None:
     append_row(path, judgement)
 
 
+def _run_provenance(root: Path, run_id: str, configs_root: Path | None) -> ProvenanceInfo:
+    """A run's provenance, or the ungraded default when it has no run.yaml at all.
+
+    A pre-registration may legitimately name a baseline or candidate that has not been created
+    yet -- 3-11 already has ``vcp eval report`` print a judgement with no readings for exactly
+    that run -- so the contamination check must not abort the judge before ``_pairs`` gets the
+    chance to report ``missing_readings`` on its own. A run that DOES exist but is a broken
+    fusion still fails fast: that raise comes from inside ``provenance`` itself, reached only
+    once this function knows the run's own card is there to load.
+    """
+    if not (run_dir(root, run_id) / "run.yaml").is_file():
+        return ProvenanceInfo("declared", [], [], [])
+    return provenance(load_run(root, run_id), data_root=root, configs_root=configs_root)
+
+
 def judge_prereg(spec: JudgeSpec) -> Judgement:
     """Decide one pre-registered claim and append the judgement (spec 6.2, one clause each)."""
     paths = DatasetPaths.resolve(
@@ -336,6 +353,15 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
     params = effective_params(metric, pr.params)
     pk = params_key(params)
     reasons = _Reasons()
+    root = resolve_data_root(spec.data_root)
+    info_b = _run_provenance(root, pr.candidate_run, spec.configs_root)
+    info_a = _run_provenance(root, pr.baseline_run, spec.configs_root)
+    # spec 8: a number measured on a subset the run read is not evidence, on either side.
+    contaminated = [
+        f"{run}/{s}"
+        for run, info in ((pr.candidate_run, info_b), (pr.baseline_run, info_a))
+        for s in sorted(set(pr.subsets) & set(info.observed))
+    ]
     pairs, missing = _pairs(ReadingsLedger(paths.measure_dir / READINGS_LEDGER).rows, pr, pk)
     for reason in missing:  # step 1: no readings, nothing to decide
         reasons.block(reason)
@@ -349,7 +375,11 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
     # 6.2.1 says "any candidate reading" -- but an older, hidden one is unreachable through the
     # CLI: create_prereg already refuses a candidate with ANY reading on a claimed subset,
     # regardless of its prediction sha, before the claim is ever written down).
-    if any(b.ts < logged_at for _, b in pairs.values()):
+    if contaminated:
+        verdict = "INVALID"
+        for c in contaminated:
+            reasons.block(f"{CONTAMINATED}:{c}")
+    elif any(b.ts < logged_at for _, b in pairs.values()):
         verdict = "INVALID"
         reasons.block(MEASURED_BEFORE_PREREG)
     elif not reasons.blocking:  # step 2
@@ -381,6 +411,7 @@ def judge_prereg(spec: JudgeSpec) -> Judgement:
         reasons=reasons.all,
         reading_ids=[r.reading_id for pair in pairs.values() for r in pair],
         bootstrap={"resamples": spec.resamples, "seed": spec.seed},
+        provenance=info_b.grade,
     )
     _append_judgement(paths.measure_dir / JUDGEMENTS_LEDGER, judgement)
     return judgement

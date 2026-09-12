@@ -545,6 +545,7 @@ def judge_cmd(
             "prereg": prereg_id,
             "verdict": j.verdict,
             "bases_positive": j.bases_positive,
+            "provenance": j.provenance or "-",
         }
         if j.sigma_p is not None:
             fields["sigma_p"] = j.sigma_p.value

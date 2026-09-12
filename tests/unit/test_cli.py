@@ -758,6 +758,36 @@ def test_export_empty_subset_is_warn(roots, tmp_path):
     assert "status=WARN" in v and "subset is empty" in v
 
 
+def test_export_verdict_names_its_receipt(roots, tmp_path):
+    assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0
+    assert (
+        runner.invoke(app, ["data", "split", "--name", "tiny", "--plan-id", "fixed-v1"]).exit_code
+        == 0
+    )
+    r = runner.invoke(
+        app,
+        [
+            "data",
+            "export",
+            "--name",
+            "tiny",
+            "--plan",
+            "fixed-v1",
+            "--subset",
+            "train",
+            "--format",
+            "coco",
+            "--out",
+            str(tmp_path / "out"),
+            "--json",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["fields"]["receipt"].startswith("export-tiny-fixed-v1-")
+    assert doc["result"]["receipt"] == doc["fields"]["receipt"]
+
+
 def test_materialize_cli(roots, tmp_path):
     assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0
     r = runner.invoke(

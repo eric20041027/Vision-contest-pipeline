@@ -15,10 +15,10 @@ from vcp.core.hashing import sha256_file
 from vcp.core.log import FieldValue
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.importers.common import count_exif_rotated, rel_posix
 from vcp.data.schema import Sample, View
-from vcp.data.split import load_plan
 
 
 class ExportSpec(BaseModel):
@@ -58,6 +58,7 @@ class ExportResult(BaseModel):
     files: int
     warnings: list[str]
     fields: dict[str, FieldValue] = Field(default_factory=dict)
+    receipt: str
 
 
 class Exporter(Protocol):
@@ -113,22 +114,27 @@ def select_view(sample: Sample, view_opt: str | None) -> tuple[int, View]:
 def export_subset(spec: ExportSpec) -> ExportResult:
     paths = spec.paths()
     exporter = get_exporter(spec.format)
-    dataset = Dataset.load(spec.name, data_root=spec.data_root, configs_root=spec.configs_root)
-    plan = load_plan(paths, spec.plan_id)
-    samples = dataset.subset(
-        spec.subset,
-        plan,
-        unseal=spec.unseal,
-        reason=spec.reason,
+    with DatasetAccess.open(
+        spec.name,
+        spec.plan_id,
+        subsets={spec.subset},
+        purpose="export",
+        unseal_reason=spec.reason if spec.unseal else None,
         caller="vcp data export",
-        paths=paths,
-    )
-    out = spec.out.expanduser().resolve()
-    if out.exists() and any(out.iterdir()):
-        raise ValidationFailed(f"output directory not empty: {out}")
-    out.mkdir(parents=True, exist_ok=True)
-    image_root = paths.resolve_image_root(dataset.card)
-    output = exporter.run(dataset, samples, out, image_root, spec.options)
+        data_root=spec.data_root,
+        configs_root=spec.configs_root,
+    ) as access:
+        samples = list(access.iter(spec.subset))
+        # The exporter registry keeps its signature: it sees a Dataset holding exactly the
+        # authorised samples, never the registry the accessor guards.
+        dataset = Dataset(access.card, samples)
+        out = spec.out.expanduser().resolve()
+        if out.exists() and any(out.iterdir()):
+            raise ValidationFailed(f"output directory not empty: {out}")
+        out.mkdir(parents=True, exist_ok=True)
+        image_root = paths.resolve_image_root(dataset.card)
+        output = exporter.run(dataset, samples, out, image_root, spec.options)
+    receipt_id = access.receipt_id
     files, warnings, fields = list(output.files), list(output.warnings), dict(output.fields)
     if not samples:
         warnings.append("subset is empty")
@@ -143,7 +149,7 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         **output.manifest,
         "dataset": dataset.card.name,
         "samples_hash": dataset.card.samples_hash,
-        "plan_id": plan.plan_id,
+        "plan_id": access.plan.plan_id,
         "subset": spec.subset,
         "format": exporter.name,
         "exporter_version": exporter.version,
@@ -151,6 +157,7 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         "sample_count": len(samples),
         "exif_policy": dataset.card.exif_policy,
         "exif_rotated": rotated,
+        "receipt": receipt_id,
         "files": {rel_posix(f, out): sha256_file(f) for f in sorted(files)},
     }
     manifest_path = out / "manifest.json"
@@ -158,5 +165,10 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         json.dump(manifest, f, ensure_ascii=False, indent=1)
         f.write("\n")
     return ExportResult(
-        out=out, manifest_path=manifest_path, files=len(files), warnings=warnings, fields=fields
+        out=out,
+        manifest_path=manifest_path,
+        files=len(files),
+        warnings=warnings,
+        fields=fields,
+        receipt=receipt_id,
     )

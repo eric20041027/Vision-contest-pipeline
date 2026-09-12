@@ -7,12 +7,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from vcp.core.errors import GuardrailError, ValidationFailed
+from vcp.core.errors import GuardrailError, SealedSubsetError, ValidationFailed
 from vcp.core.paths import DatasetPaths, resolve_data_root
 from vcp.core.time import stamp
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.lineage import clean_eval_subsets
-from vcp.data.schema import Sample
+from vcp.data.schema import DatasetCard, Sample
 from vcp.data.split import SplitPlan, load_plan
 from vcp.measure.anchors import anchor_key, load_anchors
 from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger, reading_id
@@ -24,6 +25,7 @@ from vcp.measure.metrics import (
     params_key,
 )
 from vcp.measure.predictions import predictions_by_id, read_predictions
+from vcp.measure.provenance import ProvenanceInfo, provenance
 from vcp.measure.runs import assert_run_matches, load_run, verify_prediction
 from vcp.measure.schema import Anchor, GuardrailInfo, Prediction, Reading, RunCard
 
@@ -52,6 +54,9 @@ class MeasureResult(BaseModel):
     cached: int
     guardrail: str  # OK | partial | none | cached
     warnings: list[str]
+    provenance: str
+    observed: list[str] = Field(default_factory=list)
+    receipt_invalid: int = 0
 
 
 def load_context(
@@ -68,17 +73,32 @@ def load_context(
     return card, dataset, plan, paths
 
 
-def default_subsets(plan: SplitPlan, card: RunCard, *, unseal: bool) -> list[str]:
+def load_card_context(
+    run_id: str, data_root: Path | None, configs_root: Path | None
+) -> tuple[RunCard, DatasetCard, SplitPlan, DatasetPaths]:
+    """``load_context`` without parsing the samples file: what ``measure_run`` needs before it
+    opens a role-scoped access (spec 6.7). judge / sigma / anchor keep ``load_context``."""
+    card = load_run(resolve_data_root(data_root), run_id)
+    paths = DatasetPaths.resolve(card.dataset, data_root=data_root, configs_root=configs_root)
+    dataset_card = Dataset.load_card(card.dataset, data_root=data_root, configs_root=configs_root)
+    assert_run_matches(card, dataset_card)
+    plan = load_plan(paths, card.plan_id)
+    return card, dataset_card, plan, paths
+
+
+def default_subsets(
+    plan: SplitPlan, card: RunCard, *, unseal: bool, observed: list[str] | tuple[str, ...] = ()
+) -> list[str]:
     """Clean eval subsets for this run; sealed ones only when unsealing.
 
-    With no ``trained_on`` nothing can be contaminated, so every eval subset is clean (spec 6.1).
+    A subset the run's receipts show it read is not clean whatever ``trained_on`` says (spec 8);
+    with nothing trained on and nothing observed, every eval subset is clean (spec 6.1).
     """
-    if card.trained_on:
+    touched = set(card.trained_on) | set(observed)
+    if touched:
         # clean_eval_subsets decorates a sealed subset as "holdout(sealed)"; the marker has to
         # come off before the name is looked up anywhere.
-        names = [
-            n.removesuffix(SEALED_SUFFIX) for n in clean_eval_subsets(plan, set(card.trained_on))
-        ]
+        names = [n.removesuffix(SEALED_SUFFIX) for n in clean_eval_subsets(plan, touched)]
     else:
         names = [s.name for s in plan.subsets if s.role in ("eval", "sealed")]
     roles = {s.name: s.role for s in plan.subsets}
@@ -91,7 +111,7 @@ def _unique(names: list[str]) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def _check_subsets(card: RunCard, subsets: list[str]) -> None:
+def _check_subsets(card: RunCard, subsets: list[str], info: ProvenanceInfo) -> None:
     if not subsets:
         raise ValidationFailed(
             f"run {card.run_id!r} has no clean eval subset to measure "
@@ -101,6 +121,12 @@ def _check_subsets(card: RunCard, subsets: list[str]) -> None:
     for name in subsets:
         if name in card.trained_on:
             raise ValidationFailed(f"subset {name!r} is in the run's trained_on {card.trained_on}")
+        if name in info.observed:
+            receipt = next((r.artifact_id for r in info.receipts if name in r.subsets), "?")
+            raise ValidationFailed(
+                f"contaminated: subset {name!r} was read by the run (receipt {receipt})",
+                fields={"subset": name},
+            )
         if name not in card.predictions:
             raise ValidationFailed(f"run {card.run_id!r} has no predictions for subset {name!r}")
 
@@ -137,11 +163,12 @@ class _Context:
 
     spec: MeasureSpec
     card: RunCard
-    dataset: Dataset
+    dataset_card: DatasetCard
     plan: SplitPlan
     paths: DatasetPaths
     ledger: ReadingsLedger
     anchors: dict[str, Anchor]
+    provenance: str
 
 
 @dataclass(frozen=True)
@@ -175,9 +202,9 @@ def _guardrail(
     # A stale anchor run (its card no longer matching the dataset, e.g. after a re-import) must
     # surface as the PlanMismatchError it is, not a confusing GuardrailError from recomputing a
     # metric against samples the anchor run was never measured on (Minor 4).
-    assert_run_matches(anchor_run, ctx.dataset.card)
+    assert_run_matches(anchor_run, ctx.dataset_card)
     anchor_preds = predictions_by_id(read_predictions(verify_prediction(root, anchor_run, subset)))
-    got = metric.compute(samples, anchor_preds, ctx.dataset.card, params).value
+    got = metric.compute(samples, anchor_preds, ctx.dataset_card, params).value
     if abs(got - anchor.value) > anchor.tolerance:
         raise GuardrailError(
             f"anchor {key!r} (reading_id={anchor.reading_id!r}) expected {anchor.value!r}, "
@@ -211,7 +238,7 @@ def _measure_one(
     if stored is not None:
         # The stored row keeps the guardrail it was written with: ledger rows are never rewritten.
         return _Cell(reading=stored, key=key, anchored=anchor is not None, is_new=False)
-    result = metric.compute(samples, preds, ctx.dataset.card, params)
+    result = metric.compute(samples, preds, ctx.dataset_card, params)
     reading = Reading(
         reading_id=rid,
         ts=stamp(),
@@ -228,6 +255,7 @@ def _measure_one(
         n_samples=result.n,
         prediction_sha=sha,
         guardrail=guard,
+        provenance=ctx.provenance,
     )
     return _Cell(reading=reading, key=key, anchored=anchor is not None, is_new=True)
 
@@ -245,43 +273,63 @@ def _guardrail_state(states: list[str], *, wrote: bool) -> str:
 
 
 def measure_run(spec: MeasureSpec) -> MeasureResult:
-    card, dataset, plan, paths = load_context(spec.run_id, spec.data_root, spec.configs_root)
-    subsets = _unique(spec.subsets or default_subsets(plan, card, unseal=spec.unseal))
-    _check_subsets(card, subsets)
-    metric_names = _unique(_resolve_metrics(dataset.card.task, spec.metrics))
+    card, dataset_card, plan, paths = load_card_context(
+        spec.run_id, spec.data_root, spec.configs_root
+    )
+    info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
+    subsets = _unique(
+        spec.subsets or default_subsets(plan, card, unseal=spec.unseal, observed=info.observed)
+    )
+    _check_subsets(card, subsets, info)
+    metric_names = _unique(_resolve_metrics(dataset_card.task, spec.metrics))
     _check_params(metric_names, spec.params)
     ctx = _Context(
         spec=spec,
         card=card,
-        dataset=dataset,
+        dataset_card=dataset_card,
         plan=plan,
         paths=paths,
         ledger=ReadingsLedger(paths.measure_dir / READINGS_LEDGER),
         anchors=load_anchors(paths),
+        provenance=info.grade,
     )
     readings: list[Reading] = []
     pending: list[Reading] = []
     states: list[str] = []
     warnings: list[str] = []
+    if info.invalid:
+        warnings.append(f"receipt_invalid={len(info.invalid)}")
     cached = 0
-    for subset in subsets:
-        samples = dataset.subset(
-            subset, plan, unseal=spec.unseal, reason=spec.reason, caller=CALLER, paths=paths
-        )
-        path = verify_prediction(paths.data_root, card, subset)
-        preds = predictions_by_id(read_predictions(path))
-        for name in metric_names:
-            cell = _measure_one(ctx, subset, samples, preds, get_metric(name))
-            readings.append(cell.reading)
-            states.append("OK" if cell.anchored else "none")
-            if not cell.anchored:
-                warnings.append(
-                    f"no anchor for {cell.key}; run `vcp eval anchor` once a reference run exists"
-                )
-            if cell.is_new:
-                pending.append(cell.reading)
-            else:
-                cached += 1
+    if spec.unseal and not spec.reason:  # the message Dataset.subset gave before the accessor
+        raise SealedSubsetError("unseal requires a non-empty reason")
+    with DatasetAccess.open(
+        card.dataset,
+        card.plan_id,
+        subsets=set(subsets),
+        purpose="measure",
+        unseal_reason=spec.reason if spec.unseal else None,
+        caller=CALLER,
+        run_id=card.run_id,
+        data_root=paths.data_root,
+        configs_root=paths.configs_root,
+    ) as access:
+        for subset in subsets:
+            samples = list(access.records(subset).values())
+            path = verify_prediction(paths.data_root, card, subset)
+            preds = predictions_by_id(read_predictions(path))
+            for name in metric_names:
+                cell = _measure_one(ctx, subset, samples, preds, get_metric(name))
+                readings.append(cell.reading)
+                states.append("OK" if cell.anchored else "none")
+                if not cell.anchored:
+                    warnings.append(
+                        f"no anchor for {cell.key}; run `vcp eval anchor` once a reference run "
+                        "exists"
+                    )
+                if cell.is_new:
+                    pending.append(cell.reading)
+                else:
+                    cached += 1
     for reading in pending:  # only now that every guardrail has passed (spec 9)
         ctx.ledger.append(reading)
     return MeasureResult(
@@ -292,4 +340,7 @@ def measure_run(spec: MeasureSpec) -> MeasureResult:
         cached=cached,
         guardrail=_guardrail_state(states, wrote=bool(pending)),
         warnings=warnings,
+        provenance=info.grade,
+        observed=info.observed,
+        receipt_invalid=len(info.invalid),
     )

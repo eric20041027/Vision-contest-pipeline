@@ -21,6 +21,7 @@ from vcp.core.errors import (
     SealedSubsetError,
     ValidationFailed,
 )
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
@@ -28,6 +29,7 @@ from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, default_subsets, measure_run
 from vcp.measure.metrics import METRICS, get_metric, register_metric
 from vcp.measure.predictions import write_predictions
+from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, prediction_path, save_run
 from vcp.measure.schema import Anchor, MetricResult
 
@@ -291,3 +293,73 @@ def test_run_with_no_clean_subset_fails(roots, tmp_path):
     )
     with pytest.raises(ValidationFailed, match="no clean eval subset"):
         measure_run(_spec(roots, "alltrain"))
+
+
+def _receipt(roots, subsets, *, purpose, run_id):
+    with DatasetAccess.open(
+        "tiny",
+        "fixed-v1",
+        subsets=set(subsets),
+        purpose=purpose,
+        run_id=run_id,
+        data_root=roots.data,
+        configs_root=roots.configs,
+    ) as access:
+        for s in subsets:
+            list(access.iter(s))
+    return access.receipt_id
+
+
+def test_observed_subsets_are_not_clean_bases(roots, tmp_path):
+    _, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    noisy = load_run(roots.data, "noisy")
+    save_run(
+        roots.data,
+        attach_receipts(
+            noisy,
+            [_receipt(roots, ["valA"], purpose="custom", run_id="noisy")],
+            data_root=roots.data,
+        ),
+    )
+    card = load_run(roots.data, "noisy")
+    assert default_subsets(plan, card, unseal=False, observed=["valA"]) == ["valB"]
+    res = measure_run(_spec(roots, "noisy"))
+    assert {r.subset for r in res.readings} == {"valB"}
+    assert res.provenance == "declared" and res.observed == ["valA"]
+    assert all(r.provenance == "declared" for r in res.readings)
+    with pytest.raises(
+        ValidationFailed, match="^contaminated: subset 'valA' was read by the run"
+    ) as ei:
+        measure_run(_spec(roots, "noisy", subsets=["valA"]))
+    assert ei.value.fields == {"subset": "valA"}
+
+
+def test_readings_carry_the_runs_grade_and_measure_leaves_its_own_receipt(roots, tmp_path):
+    _, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    perfect = load_run(roots.data, "perfect")
+    save_run(
+        roots.data,
+        attach_receipts(
+            perfect,
+            [_receipt(roots, ["train"], purpose="train", run_id="perfect")],
+            data_root=roots.data,
+        ),
+    )
+    res = measure_run(_spec(roots, "perfect"))
+    assert res.provenance == "receipt" and res.observed == ["train"]
+    assert {r.provenance for r in res.readings} == {"receipt"}
+    receipts = sorted(
+        p.name for p in (roots.data / "artifacts" / "access_receipt").iterdir() if p.is_dir()
+    )
+    measure_receipts = [r for r in receipts if r.startswith("measure-tiny-fixed-v1-")]
+    assert len(measure_receipts) == 1
+    from vcp.data.access.receipt import read_receipt
+
+    receipt = read_receipt(roots.data, measure_receipts[0]).receipt
+    assert receipt.run_id == "perfect" and set(receipt.accessed) == {"valA", "valB"}
+    # a stale receipt warns and the grade falls back
+    pj = paths.plan_json("fixed-v1")
+    pj.write_bytes(pj.read_bytes() + b"\n")
+    res = measure_run(_spec(roots, "perfect"))
+    assert res.receipt_invalid == 1 and res.provenance == "declared"
+    assert "receipt_invalid=1" in res.warnings

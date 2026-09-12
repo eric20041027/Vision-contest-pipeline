@@ -117,6 +117,12 @@ def ingest_cmd(
         list[str] | None,
         typer.Option("--opt", help="converter or ingest option key=value, e.g. allow_unknown=true"),
     ] = None,
+    receipt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--receipt", help="access receipt artifact id to bind to the run (repeatable)"
+        ),
+    ] = None,
     plugin: PluginOpt = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
@@ -142,6 +148,7 @@ def ingest_cmd(
             keep_input=keep_input,
             replace=replace,
             options=parse_opts(opt),
+            receipts=list(receipt or []),
             data_root=data_root,
             configs_root=configs_root,
         )
@@ -161,6 +168,8 @@ def ingest_cmd(
             "empty": res.empty,
             "sha": res.sha256[:12],
             "replaced": res.replaced,
+            "receipts": len(res.run.access),
+            "provenance": res.provenance,
         }
         if res.unknown:
             fields["unknown"] = len(res.unknown)
@@ -231,7 +240,12 @@ def measure_cmd(
             "readings": res.new,
             "cached": res.cached,
             "guardrail": res.guardrail,
+            "provenance": res.provenance,
         }
+        if res.observed:
+            fields["observed"] = ",".join(res.observed)
+        if res.receipt_invalid:
+            fields["receipt_invalid"] = res.receipt_invalid
         human = [
             f"{r.subset:>10}  {r.metric:<12} {r.value!r}  n={r.n_samples}" for r in res.readings
         ]
@@ -570,6 +584,9 @@ def status_cmd(
             "preregs": st.preregs,
             "judged": st.judged,
             "anchors": st.anchors,
+            "receipt_runs": sum(1 for g in st.provenance.values() if g == "receipt"),
+            "export_runs": sum(1 for g in st.provenance.values() if g == "export"),
+            "declared_runs": sum(1 for g in st.provenance.values() if g == "declared"),
         }
         if st.unreadable:
             # `runs=` is then a count of what could be read, so say how much was not.
@@ -583,6 +600,10 @@ def status_cmd(
             for p in st.orphans
         ]
         human += [f"unreadable run card (not counted in runs=): {p}" for p in st.unreadable]
+        human += [
+            f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'}"
+            for run, g in st.provenance.items()
+        ]
         # An abandoned claim is the one thing here that wants attention; everything else is a
         # count of what exists -- except a run card nobody can read, which makes that count a
         # partial answer rather than the answer.
@@ -610,7 +631,9 @@ def report_cmd(
         # narrowed to one metric that still listed every judgement would be two reports.
         lvl = last_vs_last(paths, plan_id=plan, metric=metric)
         human = [
-            f"{r['run_id']:<20} {r['subset']:>8} {r['metric']:<12} {r['value']!r}" for r in rows
+            f"{r['run_id']:<20} {r['subset']:>8} {r['metric']:<12} {r['value']!r}"
+            f"  {r['provenance']}"
+            for r in rows
         ]
         human += [_delta_line(r) for r in lvl]
         # `rows=` not `readings=`: `eval measure` already spends `readings=` on the number of

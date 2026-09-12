@@ -8,13 +8,16 @@ import pytest
 from helpers import det_with_runs
 from vcp.core.errors import VcpError
 from vcp.core.time import parse_stamp, stamp
+from vcp.data.access.access import DatasetAccess
 from vcp.measure.judge import JudgeSpec, judge_prereg
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.metrics import METRICS, applicable_metrics
 from vcp.measure.plugins import load_plugins
 from vcp.measure.prereg import create_prereg, prereg_time
+from vcp.measure.provenance import attach_receipts
 from vcp.measure.report import last_vs_last, report_rows, status
+from vcp.measure.runs import load_run, save_run
 from vcp.measure.schema import PreRegistration
 from vcp.measure.sigma import SigmaSpec, estimate_sigma_result
 
@@ -252,3 +255,27 @@ def test_load_plugins(tmp_path, monkeypatch):
         sys.modules.pop(PLUGIN, None)
     assert applicable_metrics("det") == before
     assert not [name for name in sys.modules if name.startswith("myplug_")]
+
+
+def test_status_and_report_show_provenance(roots, tmp_path):
+    _, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    with DatasetAccess.open(
+        "tiny",
+        "fixed-v1",
+        subsets={"train"},
+        purpose="train",
+        run_id="perfect",
+        data_root=roots.data,
+        configs_root=roots.configs,
+    ) as access:
+        list(access.iter("train"))
+    card = attach_receipts(
+        load_run(roots.data, "perfect"), [access.receipt_id], data_root=roots.data
+    )
+    save_run(roots.data, card)
+    measure_run(MeasureSpec(run_id="perfect", data_root=roots.data, configs_root=roots.configs))
+    st = status(paths)
+    assert st.provenance == {"noisy": "declared", "perfect": "receipt"}
+    assert st.observed == {"noisy": [], "perfect": ["train"]}
+    rows = report_rows(paths)
+    assert {r["run_id"]: r["provenance"] for r in rows} == {"perfect": "receipt"}

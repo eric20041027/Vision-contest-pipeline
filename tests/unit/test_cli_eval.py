@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 
 from helpers import (
     det_samples,
+    det_with_runs,
     make_card,
     noisy_predictions,
     perfect_predictions,
@@ -15,6 +16,7 @@ from vcp.cli import app
 from vcp.cli_eval import load_plugins
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Labels, Sample, View
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
@@ -1189,3 +1191,63 @@ def test_eval_status_warns_about_an_orphan_prereg_and_shows_sigma_cli(roots):
     # ... and the same claim is not overdue under the default 48h window
     v = _last_verdict(runner.invoke(app, ["eval", "status", "--dataset", "tiny"]).output)
     assert "status=OK" in v and "orphans=" not in v
+
+
+def _verdict(output: str) -> str:
+    lines = [line for line in output.splitlines() if line.startswith("VERDICT ")]
+    assert lines, output
+    return lines[-1]
+
+
+def test_ingest_receipt_binds_and_refuses_the_wrong_run(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
+
+    def receipt(run_id):
+        with DatasetAccess.open(
+            "tiny",
+            "fixed-v1",
+            subsets={"train"},
+            purpose="train",
+            run_id=run_id,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        ) as access:
+            list(access.iter("train"))
+        return access.receipt_id
+
+    src = tmp_path / "again.jsonl"
+    write_predictions(src, perfect_predictions(ds.subset("valA", plan), ds.card))
+    base = [
+        "eval",
+        "ingest",
+        "--run",
+        "perfect",
+        "--dataset",
+        "tiny",
+        "--plan",
+        "fixed-v1",
+        "--subset",
+        "valA",
+        "--format",
+        "jsonl",
+        "--src",
+        str(src),
+        "--replace",
+    ]
+    r = runner.invoke(app, [*base, "--receipt", receipt("perfect")])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "receipts=1" in v and "provenance=receipt" in v
+    r = runner.invoke(app, [*base, "--receipt", receipt("noisy")])
+    assert r.exit_code == 1 and "mismatch: receipt" in _verdict(r.output)
+    r = runner.invoke(app, ["eval", "measure", "--run", "perfect"])
+    assert (
+        r.exit_code == 0
+        and "provenance=receipt" in _verdict(r.output)
+        and "observed=train" in _verdict(r.output)
+    )
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "receipt_runs=1" in v and "declared_runs=1" in v
+    assert "perfect: provenance=receipt observed=train" in r.output
+    r = runner.invoke(app, ["eval", "report", "--dataset", "tiny"])
+    assert r.exit_code == 0 and "receipt" in r.output

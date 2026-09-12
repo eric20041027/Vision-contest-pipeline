@@ -17,6 +17,7 @@
 - `runs/<id>/train.yaml` 是訓練紀錄的快照（每次事件整份重寫）、`train.log.jsonl` 只增；`train/` 放 console、config 副本、環境快照。checkpoint 不搬動，只記路徑與 sha；`--upload` 的副本另記 sha 與驗證結果。`vcp train run` 開始就寫 `run.yaml`，之後 `eval ingest` 直接接上。
 - 提交治理：`configs/datasets/<test>/submit.yaml`（平台設定，改就改 git）與 `submissions.jsonl`（只 append 的台帳：staged / uploaded / scored / foreign / final / lock / unlock）進 git；輸出檔與 `stage.json` 在 `submit/<test>/<id>/`（寫一次不改）。候選 = (eval run, test run) 配對，身分靠 `weights_hash`；`final` 只看 sealed 讀數。vcp 不碰平台憑證。
 - `configs/datasets/<name>/backup/<manifest_id>.json` 是證據清單（從結論反向生成，寫一次不改，進 git），`backup.log.jsonl` 只增（manifest / push / verify / pull / remote_forgotten）。目的地佈局 `<dest>/data|configs|external/<相對路徑>`；`train upload` 驗過的權重副本記成 `remote_copy`，verify 到原地驗、不重推。`cache/`、`raw/` 永不進清單；push 推台帳的快照，`--forget-remote` 要整份清單驗證通過。
+- `artifacts/<kind>/<id>/` 是不可變產物：`spec.json`（open 時寫）、檔案們、`manifest.json`（commit 點；**有它才是產物**）、`failure.json`（例外離開時）；`artifacts/<kind>/supersession.jsonl` 只增。同 id 不能重開；修正用新 id + `supersedes`。`vcp artifact clean` 只移除超過寬限期的半途目錄與 `.tmp`。vcp 自己的四個寫一次檔（split plan、預登記 yaml、融合配方、backup manifest）與產物的每個檔都經 `vcp.core.atomic.write_once`。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`
@@ -28,6 +29,7 @@
 - `uv run vcp train run --run R --dataset D --plan P --export DIR --venv ENV --seed N --checkpoints "…" --final "…" [--upload DEST] -- <訓練命令>` / `uv run vcp train status --run R`（唯讀）/ `uv run vcp train upload --run R --dest DEST`（冪等）
 - `uv run vcp submit stage --dataset T --id S --eval-run E --test-run R` / `uv run vcp submit upload --dataset T --id S`（Kaggle）或 `record --at "…"`（手動）/ `uv run vcp submit final --dataset T`（決選 + 封槍）/ `uv run vcp submit status --dataset T`（唯讀）
 - `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
+- `uv run vcp artifact create --kind K --id I --file PATH… [--input name=PATH…] [--supersedes OLD --reason R] [--id-pattern RE]` / `uv run vcp artifact verify --kind K --id I` / `uv run vcp artifact lineage --kind K --id I` / `uv run vcp artifact status [--kind K]`（唯讀）/ `uv run vcp artifact clean [--older-than 24h] [--apply]`；程式內用 `vcp.artifact.writer.ArtifactWriter`、重用用 `vcp.artifact.store.reuse`
 
 ## 版本
 - SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1 落地。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。

@@ -16,6 +16,7 @@ from vcp.data.dataset import Dataset
 from vcp.data.split import assert_plan_matches, load_plan
 from vcp.measure.converters import ConvertContext, get_converter
 from vcp.measure.predictions import check_predictions, write_predictions
+from vcp.measure.provenance import attach_receipts, provenance
 from vcp.measure.runs import (
     FUSE_FRAMEWORK,
     append_history,
@@ -48,6 +49,10 @@ class IngestSpec(BaseModel):
     keep_input: bool = False
     replace: bool = False
     options: dict[str, str] = Field(default_factory=dict)
+    # spec 7.2: access receipt artifact ids to bind to the run (`vcp eval ingest --receipt`,
+    # repeatable). Attached before anything else is written, so a receipt naming another run,
+    # dataset or plan fails before a single byte of predictions is touched.
+    receipts: list[str] = Field(default_factory=list)
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -65,6 +70,7 @@ class IngestResult(BaseModel):
     sha256: str
     replaced: bool
     created_run: bool
+    provenance: str
 
 
 def _export_sha(export_dir: Path | None) -> str | None:
@@ -196,6 +202,8 @@ def ingest(spec: IngestSpec) -> IngestResult:
     card, created = _run_card(
         spec, paths.data_root, dataset, {s.name for s in plan.subsets}, export_sha
     )
+    if spec.receipts:
+        card = attach_receipts(card, spec.receipts, data_root=paths.data_root)
     converter = get_converter(spec.format)
     ctx = ConvertContext(dataset, ids, spec.export_dir, dict(spec.options))
     preds = converter.convert(spec.src, ctx)
@@ -242,6 +250,7 @@ def ingest(spec: IngestSpec) -> IngestResult:
     )
     card = card.model_copy(update={"predictions": {**card.predictions, spec.subset: entry}})
     save_run(paths.data_root, card)
+    info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
     return IngestResult(
         run=card,
         subset=spec.subset,
@@ -253,4 +262,5 @@ def ingest(spec: IngestSpec) -> IngestResult:
         sha256=sha,
         replaced=replaced,
         created_run=created,
+        provenance=info.grade,
     )

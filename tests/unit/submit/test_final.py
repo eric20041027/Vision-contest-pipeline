@@ -10,9 +10,13 @@ from submit_fixtures import (
     seed_judgements,
     seed_test_runs,
 )
+from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.time import utc_now
+from vcp.data.access.access import DatasetAccess
 from vcp.measure.measure import MeasureSpec, measure_run
+from vcp.measure.provenance import attach_receipts
+from vcp.measure.runs import load_run, save_run
 from vcp.submit.actions import record, score
 from vcp.submit.final import count_unseals, final, lock, rank_key, unlock
 from vcp.submit.ledger import SubmissionLedger
@@ -209,3 +213,32 @@ def test_rank_key():
         "has_public",
         "no_public",
     ]
+
+
+def test_final_recomputes_provenance_and_drops_candidates_below_the_bar(uploaded):
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+    dump_yaml_model(_profile(require_provenance="receipt"), uploaded.test_paths.submit_yaml)
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    table = {e.submission_id: e for e in res.row.table}
+    assert table["S1"].why == "provenance_required" and table["S1"].provenance == "declared"
+    assert table["S2"].eligible and table["S2"].provenance == "declared"  # baseline: waived
+    assert res.chosen == ["S2"]
+    with DatasetAccess.open(
+        EVAL,
+        "fixed-v1",
+        subsets={"train"},
+        purpose="train",
+        run_id="good",
+        data_root=uploaded.roots.data,
+        configs_root=uploaded.roots.configs,
+    ) as access:
+        list(access.iter("train"))
+    card = attach_receipts(
+        load_run(uploaded.roots.data, "good"), [access.receipt_id], data_root=uploaded.roots.data
+    )
+    save_run(uploaded.roots.data, card)
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    table = {e.submission_id: e for e in res.row.table}
+    assert table["S1"].eligible and table["S1"].provenance == "receipt"
+    assert res.chosen == ["S1"]

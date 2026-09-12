@@ -217,3 +217,9 @@ def test_report_when_a_foreign_upload_comes_first(pair):
     rows = report(TEST, **_kw(pair))
     assert rows[0].submission_id == "foreign:f1" and rows[0].delta is None
     assert rows[1].submission_id == "S1" and rows[1].delta == pytest.approx(0.8 - 0.5)
+
+
+def test_status_lists_each_staged_provenance(pair):
+    _seed(pair, _profile())
+    st = status(TEST, **_kw(pair))
+    assert st.provenance == {"S1": "declared", "S2": "declared"}

@@ -17,6 +17,7 @@ from vcp.submit.guards import QuotaState, quota_state
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
+from vcp.submit.stage import load_staged
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class StatusView:
     locked: LedgerRow | None
     current: str | None
     unscored: list[str]
+    provenance: dict[str, str]
 
 
 def _label(r: LedgerRow) -> str:
@@ -116,6 +118,7 @@ def status(
         newest = max(range(len(uploads)), key=lambda i: (uploads[i].at or "", uploads[i].ts))
         if assigned[newest] is None:
             unscored.append(sid)
+    grades = {sid: (load_staged(paths, sid).provenance or "-") for sid in ledger.ids()}
     return StatusView(
         staged=len(ledger.ids()),
         uploaded=len(ledger.of("uploaded")),
@@ -125,6 +128,7 @@ def status(
         locked=ledger.lock_state(),
         current=current,
         unscored=unscored,
+        provenance=grades,
     )
 
 

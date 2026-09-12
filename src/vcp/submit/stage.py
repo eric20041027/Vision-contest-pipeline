@@ -20,10 +20,14 @@ from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import md5_file, sha256_file
 from vcp.core.paths import DatasetPaths, validate_name
 from vcp.core.time import stamp, utc_now
+from vcp.data.access.access import DatasetAccess
+from vcp.data.access.schema import GRADE_RANK
 from vcp.data.dataset import Dataset
-from vcp.data.split import SplitPlan, load_plan
+from vcp.data.schema import DatasetCard
+from vcp.data.split import load_plan
 from vcp.fuse.build import load_record
 from vcp.measure.predictions import read_predictions
+from vcp.measure.provenance import provenance
 from vcp.measure.runs import assert_run_matches, load_run, verify_prediction
 from vcp.measure.schema import RunCard
 from vcp.submit.gate import admit
@@ -86,9 +90,11 @@ def load_staged(paths: DatasetPaths, submission_id: str) -> Staged:
         raise ValidationFailed(f"bad stage.json: {e}", location=str(path)) from e
 
 
-def _run_on(data_root: Path, run_id: str, dataset: Dataset, plan_id: str, side: str) -> RunCard:
+def _run_on(
+    data_root: Path, run_id: str, dataset_card: DatasetCard, plan_id: str, side: str
+) -> RunCard:
     card = load_run(data_root, run_id)
-    assert_run_matches(card, dataset.card)
+    assert_run_matches(card, dataset_card)
     if card.plan_id != plan_id:
         raise PlanMismatchError(
             f"run {run_id!r} uses plan {card.plan_id!r}; the profile's {side} plan is {plan_id!r}",
@@ -114,17 +120,27 @@ def _render(
     spec: StageSpec,
     profile: PlatformProfile,
     paths: DatasetPaths,
-    test_ds: Dataset,
-    test_plan: SplitPlan,
     test_card: RunCard,
     warnings: list[str],
 ) -> tuple[Artifact, Path]:
     """The submission file, written into a temporary directory that becomes the submission
-    directory only once everything else has succeeded."""
+    directory only once everything else has succeeded. The test subset is read through a
+    role-scoped access whose receipt names the candidate's eval run (spec 6.7)."""
+    with DatasetAccess.open(
+        profile.dataset,
+        profile.test_plan,
+        subsets={profile.test_subset},
+        purpose="submit",
+        caller="vcp submit stage",
+        run_id=spec.eval_run,
+        data_root=paths.data_root,
+        configs_root=paths.configs_root,
+    ) as access:
+        samples = list(access.iter(profile.test_subset))
+        test_ds = Dataset(access.card, samples)
     writer = writer_for(profile.writer or "", test_ds.card.task)
     options = {**profile.writer_opts, **spec.writer_opts}
     preds = read_predictions(verify_prediction(paths.data_root, test_card, profile.test_subset))
-    samples = test_ds.subset(profile.test_subset, test_plan, paths=paths)
     tmp = paths.submit_dir / f".tmp-{spec.submission_id}"
     if tmp.exists():
         shutil.rmtree(tmp)
@@ -186,7 +202,7 @@ def stage(spec: StageSpec) -> StageResult:
     eval_paths = DatasetPaths.resolve(
         profile.eval_dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
-    eval_ds = Dataset.load(
+    eval_dataset_card = Dataset.load_card(
         profile.eval_dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
     eval_plan = load_plan(eval_paths, profile.plan_id)
@@ -196,18 +212,31 @@ def stage(spec: StageSpec) -> StageResult:
             f"sealed_subset: {profile.sealed_subset!r} is not a sealed subset of plan "
             f"{profile.plan_id!r} (subsets: {roles})"
         )
-    eval_card = _run_on(paths.data_root, spec.eval_run, eval_ds, profile.plan_id, "eval")
+    eval_card = _run_on(paths.data_root, spec.eval_run, eval_dataset_card, profile.plan_id, "eval")
     if spec.kind == "candidate" and profile.sealed_subset in eval_card.trained_on:
         raise ValidationFailed(
             f"trained_on_sealed: {spec.eval_run!r} trained on {profile.sealed_subset!r}; it can "
             "never have a clean sealed reading",
             fields={"run": spec.eval_run},
         )
+    info = provenance(eval_card, data_root=paths.data_root, configs_root=paths.configs_root)
+    if spec.kind == "candidate":
+        if profile.sealed_subset in info.observed:
+            raise ValidationFailed(
+                f"observed_sealed: {spec.eval_run!r} read {profile.sealed_subset!r} (access "
+                "receipt); it can never have a clean sealed reading",
+                fields={"run": spec.eval_run},
+            )
+        if GRADE_RANK[info.grade] < GRADE_RANK[profile.require_provenance]:
+            raise ValidationFailed(
+                f"provenance_required: run {spec.eval_run!r} is {info.grade}, profile requires "
+                f"{profile.require_provenance}",
+                fields={"run": spec.eval_run, "provenance": info.grade},
+            )
     warnings: list[str] = []
-    test_ds = Dataset.load(
+    test_dataset_card = Dataset.load_card(
         profile.dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
-    test_plan = load_plan(paths, profile.test_plan)
     test_card: RunCard | None = None
     weights: list[WeightRef] = []
     if profile.submission_kind == "file":
@@ -215,7 +244,9 @@ def stage(spec: StageSpec) -> StageResult:
             raise ValidationFailed(
                 "test_run required: file submissions are rendered from a test-side run"
             )
-        test_card = _run_on(paths.data_root, spec.test_run, test_ds, profile.test_plan, "test")
+        test_card = _run_on(
+            paths.data_root, spec.test_run, test_dataset_card, profile.test_plan, "test"
+        )
         verify_prediction(paths.data_root, test_card, profile.test_subset)
         pairing = _file_pairing(spec, profile, paths.data_root, eval_card, test_card)
     else:
@@ -232,7 +263,7 @@ def stage(spec: StageSpec) -> StageResult:
     gate = admit(paths.data_root, eval_paths, eval_card, fuse, spec.kind, spec.reason)
     final_dir = paths.submission_dir(spec.submission_id)
     if test_card is not None:
-        artifact, tmp = _render(spec, profile, paths, test_ds, test_plan, test_card, warnings)
+        artifact, tmp = _render(spec, profile, paths, test_card, warnings)
         tmp.rename(final_dir)
     else:
         artifact = Artifact(
@@ -256,6 +287,7 @@ def stage(spec: StageSpec) -> StageResult:
             profile_sha256=profile_sha,
             staged_at=stamp(),
             vcp_version=build_string(),
+            provenance=info.grade,
         )
         text = json.dumps(staged.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
         (final_dir / STAGE_FILE).write_text(text, encoding="utf-8", newline="\n")

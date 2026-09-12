@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 from pydantic import TypeAdapter, ValidationError
 
+from vcp.cli_artifact import artifact_app
 from vcp.cli_backup import backup_app
 from vcp.cli_common import (
     CmdResult,
@@ -46,6 +47,7 @@ from vcp.data.split import (
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="vision contest pipeline")
 data_app = typer.Typer(no_args_is_help=True, help="dataset commands")
 app.add_typer(data_app, name="data")
+app.add_typer(artifact_app, name="artifact")
 app.add_typer(backup_app, name="backup")
 app.add_typer(eval_app, name="eval")
 app.add_typer(fuse_app, name="fuse")

@@ -10,7 +10,8 @@ import pytest
 
 from helpers import det_samples, make_card, write_images
 from vcp.artifact import store
-from vcp.artifact.schema import ArtifactSpec
+from vcp.artifact.schema import ArtifactManifest, ArtifactSpec
+from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths, artifact_dir
@@ -40,6 +41,26 @@ def _seed(roots, name="tiny", n=40):
     plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     save_plan(plan, paths)
     return ds, plan, paths
+
+
+def _forge(d, name, data: bytes) -> None:
+    """Overwrite ``d / name`` with ``data`` and make ``manifest.json`` agree (new ``bytes`` /
+    ``sha256`` for that one entry), so ``store.verify`` stays clean and a tamper test reaches
+    the specific ``load_source_audit`` check being exercised, not just the manifest-hash guard."""
+    (d / name).write_bytes(data)
+    manifest = ArtifactManifest.model_validate_json(
+        (d / "manifest.json").read_text(encoding="utf-8")
+    )
+    files = [
+        f.model_copy(update={"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+        if f.name == name
+        else f
+        for f in manifest.files
+    ]
+    forged = manifest.model_copy(update={"files": files})
+    (d / "manifest.json").write_bytes(
+        json.dumps(forged.model_dump(mode="json"), ensure_ascii=False, indent=2).encode("utf-8")
+    )
 
 
 def test_peek_sample_id_reads_only_the_leading_key(tmp_path):
@@ -110,6 +131,24 @@ def test_write_source_audit_refuses_a_file_that_disagrees_with_the_card(roots):
         write_source_audit(paths, ds.card, data_root=roots.data)
 
 
+def test_a_malformed_file_whose_digest_matches_still_fails(roots):
+    """The deferred-error branch: a file whose *whole-file* digest matches the card (so the
+    sha256 identity check never fires) can still carry a line-level defect -- here a duplicate
+    ``sample_id`` -- and ``write_source_audit`` must still fail, via the deferred error rather
+    than silently succeeding or misreporting a digest mismatch that isn't there."""
+    ds, plan, paths = _seed(roots)
+    raw = paths.samples_jsonl.read_bytes()
+    first_line = raw.splitlines(keepends=True)[0]
+    paths.samples_jsonl.write_bytes(raw + first_line)  # s0000 now appears twice
+    digest = sha256_file(paths.samples_jsonl)
+    dump_yaml_model(ds.card.model_copy(update={"samples_hash": digest}), paths.card_yaml)
+    card = Dataset.load_card("tiny", data_root=roots.data, configs_root=roots.configs)
+    with pytest.raises(ValidationFailed, match="duplicate sample_id"):
+        write_source_audit(paths, card, data_root=roots.data)
+    d = artifact_dir(roots.data, KIND, audit_id("tiny", digest))
+    assert (d / "failure.json").is_file() and not (d / "manifest.json").is_file()
+
+
 def test_load_source_audit_matches_index_samples_and_handles_absence(roots):
     ds, plan, paths = _seed(roots)
     assert load_source_audit(paths, ds.card, data_root=roots.data) is None
@@ -147,6 +186,46 @@ def test_load_source_audit_fails_closed_on_tampering(roots):
         load_source_audit(paths, ds.card, data_root=roots.data)
     shutil.rmtree(d)
     assert load_source_audit(paths, ds.card, data_root=roots.data) is None
+
+
+def test_load_source_audit_isolates_each_check(roots):
+    """``test_load_source_audit_fails_closed_on_tampering`` only ever edits bytes that
+    ``manifest.json`` still commits to, so ``store.verify`` fails first and the identity,
+    duplicate-row and line_count branches inside ``load_source_audit`` are never reached. Here
+    ``_forge`` keeps the manifest in lockstep with each edit, so ``store.verify`` stays clean
+    and the failure proves the specific branch fired."""
+    ds, plan, paths = _seed(roots)
+    res = write_source_audit(paths, ds.card, data_root=roots.data)
+    d = artifact_dir(roots.data, KIND, res.artifact_id)
+    audit_bytes = (d / AUDIT_FILE).read_bytes()
+    index_bytes = (d / INDEX_FILE).read_bytes()
+
+    # (a) audit.json names a different dataset: the identity check fires
+    forged = json.loads(audit_bytes)
+    forged["dataset"] = "other"
+    _forge(d, AUDIT_FILE, json.dumps(forged, ensure_ascii=False).encode("utf-8"))
+    assert not store.verify(roots.data, KIND, res.artifact_id).failed
+    with pytest.raises(IntegrityError, match="^mismatch: source audit .* describes"):
+        load_source_audit(paths, ds.card, data_root=roots.data)
+    _forge(d, AUDIT_FILE, audit_bytes)
+
+    # (b) index.jsonl lists one sample_id twice; audit.json is untouched
+    _forge(d, INDEX_FILE, index_bytes + index_bytes.splitlines(keepends=True)[0])
+    assert not store.verify(roots.data, KIND, res.artifact_id).failed
+    with pytest.raises(IntegrityError, match="lists .* twice"):
+        load_source_audit(paths, ds.card, data_root=roots.data)
+    _forge(d, INDEX_FILE, index_bytes)
+
+    # (c) audit.json's line_count disagrees with the index's actual row count
+    forged = json.loads(audit_bytes)
+    forged["line_count"] = 39
+    _forge(d, AUDIT_FILE, json.dumps(forged, ensure_ascii=False).encode("utf-8"))
+    assert not store.verify(roots.data, KIND, res.artifact_id).failed
+    with pytest.raises(IntegrityError, match="indexes 40 rows, audit.json says 39"):
+        load_source_audit(paths, ds.card, data_root=roots.data)
+    _forge(d, AUDIT_FILE, audit_bytes)
+
+    assert load_source_audit(paths, ds.card, data_root=roots.data) is not None
 
 
 def test_models_validate_their_hashes():

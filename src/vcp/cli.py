@@ -35,6 +35,7 @@ from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.importers import ImportSpec, get_importer
 from vcp.data.lineage import clean_eval_subsets
 from vcp.data.materialize import MaterializeSpec, materialize
+from vcp.data.source_audit import write_source_audit
 from vcp.data.split import (
     DEFAULT_SUBSETS,
     build_plan,
@@ -126,6 +127,8 @@ def import_cmd(
             configs_root=configs_root,
         )
         res = get_importer(importer).run(spec)
+        paths = DatasetPaths.resolve(name, data_root=data_root, configs_root=configs_root)
+        audit = write_source_audit(paths, res.dataset.card, data_root=paths.data_root)
         status: Status = (
             "WARN"
             if res.rows_skipped or res.plans_invalidated or res.exif_rotated or res.extra_fields
@@ -137,6 +140,8 @@ def import_cmd(
             "samples": res.samples_written,
             "rows_read": res.rows_read,
             "rows_skipped": res.rows_skipped,
+            "source_audit": audit.artifact_id,
+            "source_audit_state": audit.state,
         }
         if res.skipped_reasons_path is not None:
             fields["skipped_reasons"] = str(res.skipped_reasons_path)
@@ -154,7 +159,11 @@ def import_cmd(
             f"imported {res.samples_written} samples into dataset {name!r} "
             f"(task={res.dataset.card.task})"
         ]
-        return status, fields, {"card": res.dataset.card.model_dump(mode="json")}, human
+        payload = {
+            "card": res.dataset.card.model_dump(mode="json"),
+            "source_audit": audit.artifact_id,
+        }
+        return status, fields, payload, human
 
     run_command("import", json_mode, data_root, fn)
 
@@ -170,15 +179,20 @@ def validate_cmd(
 
     def fn() -> CmdResult:
         ds = Dataset.load(name, data_root=data_root, configs_root=configs_root)
+        paths = DatasetPaths.resolve(name, data_root=data_root, configs_root=configs_root)
+        audit = write_source_audit(paths, ds.card, data_root=paths.data_root)
         short = ds.card.samples_hash[:12]
         fields: dict[str, FieldValue] = {
             "name": name,
             "task": ds.card.task,
             "samples": len(ds.samples),
             "samples_hash": short,
+            "source_audit": audit.artifact_id,
+            "source_audit_state": audit.state,
         }
         human = [f"dataset {name!r}: {len(ds.samples)} samples, task={ds.card.task}, hash={short}"]
-        return "OK", fields, {"card": ds.card.model_dump(mode="json")}, human
+        payload = {"card": ds.card.model_dump(mode="json"), "source_audit": audit.artifact_id}
+        return "OK", fields, payload, human
 
     run_command("validate", json_mode, data_root, fn)
 

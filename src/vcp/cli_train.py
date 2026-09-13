@@ -112,9 +112,16 @@ def run_cmd(
             "verified": res.verified,
             "seed": spec.seed if spec.seed is not None else "none",
             "venv": spec.venv.name if spec.venv is not None else "inherited",
+            "receipts": res.receipts,
+            "denied": res.denied,
+            "provenance": res.provenance,
         }
         if res.skipped:
             fields["skipped"] = res.skipped
+        if res.observed_beyond:
+            fields["observed_beyond_trained_on"] = ",".join(res.observed_beyond)
+        if res.receipt_invalid:
+            fields["receipt_invalid"] = res.receipt_invalid
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":

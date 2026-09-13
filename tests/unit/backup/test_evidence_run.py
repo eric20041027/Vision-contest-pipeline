@@ -5,10 +5,13 @@ import pytest
 from backup_fixtures import make_fusion
 from submit_fixtures import EVAL
 from vcp.backup.evidence import CONCLUSIONS, Collector, external_path, parse_conclusion
+from vcp.backup.schema import CARD_ROLES, ROLES, TIER_OF
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
-from vcp.measure.runs import load_run, run_dir
+from vcp.data.access.access import DatasetAccess
+from vcp.measure.provenance import attach_receipts
+from vcp.measure.runs import load_run, run_dir, save_run
 
 
 def _col(world) -> Collector:
@@ -132,3 +135,32 @@ def test_unlisted_is_counted_once_across_walks(world):
     col.walk_run("good", "run:good")
     col.walk_run("bad", "run:bad")
     assert col.unlisted == [f"configs/datasets/{EVAL}/splits/fixed-v1.json"]
+
+
+def test_walk_run_collects_access_receipts(world):
+    assert ROLES.index("access_receipt") == ROLES.index("run_card") + 1
+    assert TIER_OF["access_receipt"] == 1 and "access_receipt" in CARD_ROLES
+    with DatasetAccess.open(
+        EVAL,
+        "fixed-v1",
+        subsets={"train"},
+        purpose="train",
+        run_id="good",
+        data_root=world.roots.data,
+        configs_root=world.roots.configs,
+    ) as access:
+        list(access.iter("train"))
+    rid = access.receipt_id
+    card = attach_receipts(load_run(world.roots.data, "good"), [rid], data_root=world.roots.data)
+    save_run(world.roots.data, card)
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    roles = _roles(col)
+    assert roles["access_receipt"] == [
+        f"artifacts/access_receipt/{rid}/manifest.json",
+        f"artifacts/access_receipt/{rid}/receipt.json",
+    ]
+    by_key = {e.key: e for e in col.files_of()}
+    entry = by_key[f"data/artifacts/access_receipt/{rid}/receipt.json"]
+    assert entry.sha256 == card.access[0].receipt_sha256 and entry.tier == 1 and entry.present
+    assert col.missing == [] and col.unlisted == []

@@ -154,6 +154,33 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             "tests/unit/test_e2e_artifact.py": ["test_selection_job_story"],
         },
     ),
+    (
+        "wave 1b-1 (VCP-001, VCP-003)",
+        "access: rows outside the allowed subsets are never parsed; a denied read fails closed "
+        "and is counted; the receipt is the accessor's, not the caller's; a run that read a "
+        "subset loses it as a clean base in measure and judge; a profile can require receipts",
+        {
+            "tests/unit/data/test_access.py": [
+                "test_train_only_access_never_parses_other_rows",
+                "test_unauthorized_subsets_fail_closed_and_are_counted",
+                "test_receipt_is_written_even_when_the_job_fails",
+            ],
+            "tests/unit/train/test_run.py": [
+                "test_train_run_binds_the_childs_receipts_and_warns_on_observed_beyond",
+            ],
+            "tests/unit/measure/test_measure.py": ["test_observed_subsets_are_not_clean_bases"],
+            "tests/unit/measure/test_prereg_judge.py": [
+                "test_a_run_that_read_a_claimed_subset_makes_the_judgement_invalid",
+            ],
+            "tests/unit/submit/test_stage.py": [
+                "test_stage_records_provenance_and_the_profile_can_require_it",
+            ],
+            "tests/unit/test_e2e_access.py": [
+                "test_training_receipts_grade_measure_and_judge",
+                "test_a_profile_can_require_receipts_at_the_gate",
+            ],
+        },
+    ),
 ]
 
 

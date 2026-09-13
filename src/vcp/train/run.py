@@ -24,7 +24,9 @@ from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp, utc_now
 from vcp.data.dataset import Dataset
+from vcp.data.schema import DatasetCard
 from vcp.data.split import SplitPlan, assert_plan_matches, load_plan
+from vcp.measure.provenance import provenance
 from vcp.measure.runs import append_history, assert_run_matches, load_run, run_dir, save_run
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train.checkpoints import expand, register, resolve_final
@@ -93,6 +95,11 @@ class RunResult(BaseModel):
     verified: int
     skipped: int
     warnings: list[str]
+    receipts: int = 0
+    denied: int = 0
+    provenance: str = "declared"
+    observed_beyond: list[str] = Field(default_factory=list)
+    receipt_invalid: int = 0
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -109,7 +116,7 @@ def derive_trained_on(
     exports: list[Path],
     explicit: list[str],
     *,
-    dataset: Dataset,
+    card: DatasetCard,
     plan: SplitPlan,
     data_root: Path,
 ) -> tuple[list[str], list[ExportRef]]:
@@ -119,8 +126,8 @@ def derive_trained_on(
     for export_dir in exports:
         m = read_export(export_dir)
         expected = {
-            "dataset": dataset.card.name,
-            "samples_hash": dataset.card.samples_hash,
+            "dataset": card.name,
+            "samples_hash": card.samples_hash,
             "plan_id": plan.plan_id,
         }
         for key, want in expected.items():
@@ -254,7 +261,7 @@ def command_found(token: str, cwd: Path, path: str | None) -> bool:
 
 
 def _existing(
-    spec: RunSpec, data_root: Path, dataset: Dataset, trained_on: list[str], chash: str
+    spec: RunSpec, data_root: Path, dataset_card: DatasetCard, trained_on: list[str], chash: str
 ) -> tuple[RunCard | None, TrainRecord | None]:
     """spec 6.1 step 4: a free id, a resumable training run, or a refusal."""
     has_card = (run_dir(data_root, spec.run_id) / "run.yaml").is_file()
@@ -280,7 +287,7 @@ def _existing(
             "a different config is a new run",
             fields={"run": spec.run_id},
         )
-    assert_run_matches(card, dataset)
+    assert_run_matches(card, dataset_card)
     if card.plan_id != spec.plan_id or card.trained_on != trained_on:
         raise ValidationFailed(
             f"{RUN_EXISTS}: run {spec.run_id!r} was trained on {card.trained_on} under plan "
@@ -294,7 +301,7 @@ def _new(
     spec: RunSpec,
     *,
     data_root: Path,
-    dataset: Dataset,
+    dataset_card: DatasetCard,
     trained_on: list[str],
     refs: list[ExportRef],
     chash: str,
@@ -302,8 +309,8 @@ def _new(
 ) -> tuple[RunCard, TrainRecord]:
     card = RunCard(
         run_id=spec.run_id,
-        dataset=dataset.card.name,
-        samples_hash=dataset.card.samples_hash,
+        dataset=dataset_card.name,
+        samples_hash=dataset_card.samples_hash,
         plan_id=spec.plan_id,
         trained_on=trained_on,
         source=RunSource(
@@ -316,7 +323,7 @@ def _new(
     )
     record = TrainRecord(
         run_id=spec.run_id,
-        dataset=dataset.card.name,
+        dataset=dataset_card.name,
         plan_id=spec.plan_id,
         trained_on=trained_on,
         exports=refs,
@@ -449,9 +456,11 @@ def train_run(spec: RunSpec) -> RunResult:
         spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
     )
     data_root, configs_root = paths.data_root, paths.configs_root
-    dataset = Dataset.load(spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root)
+    dataset_card = Dataset.load_card(
+        spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
+    )
     plan = load_plan(paths, spec.plan_id)
-    assert_plan_matches(plan, dataset.card)
+    assert_plan_matches(plan, dataset_card)
     if not spec.command or spec.command[0].startswith("-"):
         raise ValidationFailed("a training command is required after -- (e.g. -- python train.py)")
     cwd = (spec.cwd or Path.cwd()).resolve()
@@ -461,20 +470,20 @@ def train_run(spec: RunSpec) -> RunResult:
     if not cwd.is_dir():
         raise ValidationFailed(f"not_found: --cwd {cwd} is not a directory")
     trained_on, refs = derive_trained_on(
-        spec.exports, spec.trained_on, dataset=dataset, plan=plan, data_root=data_root
+        spec.exports, spec.trained_on, card=dataset_card, plan=plan, data_root=data_root
     )
     chash = config_hash(spec.config, spec.command)
     python = venv_python(spec.venv) if spec.venv is not None else None
     env = child_env(spec, data_root=data_root, configs_root=configs_root, python=python)
     if not command_found(spec.command[0], cwd, env.get("PATH")):
         raise ValidationFailed(f"command not found: {spec.command[0]!r}")
-    card, record = _existing(spec, data_root, dataset, trained_on, chash)
+    card, record = _existing(spec, data_root, dataset_card, trained_on, chash)
     created = card is None
     if card is None or record is None:
         card, record = _new(
             spec,
             data_root=data_root,
-            dataset=dataset,
+            dataset_card=dataset_card,
             trained_on=trained_on,
             refs=refs,
             chash=chash,
@@ -548,6 +557,18 @@ def train_run(spec: RunSpec) -> RunResult:
         status=status,
         duration_s=attempt.duration_s,
     )
+    # spec 7.1: the receipts the child bound to this attempt become the run's access record.
+    # F5: merged by artifact_id rather than replaced outright -- train.yaml's refs first (in
+    # their own order), then any ref already on the card (e.g. a manual `ingest --receipt`
+    # attached between attempts) that train.yaml does not already know about, so --resume can
+    # no longer make a manually attached receipt vanish from run.yaml.
+    train_ids = {r.artifact_id for r in record.access}
+    merged_access = [
+        *record.access,
+        *(r for r in card.access if r.artifact_id not in train_ids),
+    ]
+    card = card.model_copy(update={"access": merged_access})
+    save_run(data_root, card)
     # steps 8-9
     record, card, final, registered, warnings = _finish_checkpoints(
         spec, record, card, data_root=data_root, cwd=cwd, n=n, status=status
@@ -559,6 +580,12 @@ def train_run(spec: RunSpec) -> RunResult:
         warnings.append("seed=none")
     if spec.venv is None:
         warnings.append("venv=inherited")
+    info = provenance(card, data_root=data_root, configs_root=configs_root)
+    observed_beyond = sorted(set(info.observed) - set(trained_on))
+    if observed_beyond:
+        warnings.append(f"observed_beyond_trained_on={','.join(observed_beyond)}")
+    if info.invalid:
+        warnings.append(f"receipt_invalid={len(info.invalid)}")
     return RunResult(
         record=record,
         card=card,
@@ -569,4 +596,9 @@ def train_run(spec: RunSpec) -> RunResult:
         verified=verified,
         skipped=skipped,
         warnings=warnings,
+        receipts=len(card.access),
+        denied=sum(r.denied for r in card.access),
+        provenance=info.grade,
+        observed_beyond=observed_beyond,
+        receipt_invalid=len(info.invalid),
     )

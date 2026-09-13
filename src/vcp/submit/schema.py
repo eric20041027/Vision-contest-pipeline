@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from vcp.core.time import parse_stamp
+from vcp.data.access.schema import Grade
 
 PlatformName = Literal["manual", "kaggle"]
 SubmissionKind = Literal["file", "kernel"]
@@ -105,6 +106,7 @@ class PlatformProfile(_Strict):
     writer: str | None = None
     writer_opts: dict[str, str] = Field(default_factory=dict)
     kaggle_command: list[str] = Field(default_factory=lambda: ["kaggle"])
+    require_provenance: Grade = "declared"
     created_at: str
 
     @field_validator("display_tz")
@@ -221,6 +223,7 @@ class Staged(_Strict):
     profile_sha256: str
     staged_at: str
     vcp_version: str
+    provenance: Grade | None = None
 
 
 class FinalEntry(_Strict):
@@ -231,6 +234,7 @@ class FinalEntry(_Strict):
     sealed_reading_id: str | None = None
     public: float | None = None
     staged_at: str
+    provenance: Grade | None = None
 
     @model_validator(mode="after")
     def _finite_values(self) -> FinalEntry:

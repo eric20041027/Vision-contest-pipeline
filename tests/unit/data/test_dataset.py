@@ -4,9 +4,15 @@ import pytest
 
 from helpers import det_samples, make_card
 from vcp.core.errors import IntegrityError, InvariantError, RegistryError, ValidationFailed
-from vcp.core.hashing import sha256_file
+from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import DatasetPaths
-from vcp.data.dataset import Dataset, read_samples_jsonl, samples_digest, write_samples_jsonl
+from vcp.data.dataset import (
+    Dataset,
+    append_unseal,
+    read_samples_jsonl,
+    samples_digest,
+    write_samples_jsonl,
+)
 from vcp.data.schema import Box, Labels
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets
 
@@ -128,3 +134,32 @@ def test_subset_rejects_tampered_plan(roots):
     )
     with pytest.raises(InvariantError, match="does not cover"):
         ds.subset("valA", tampered)
+
+
+def test_load_card_reads_only_the_card(roots):
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    ds = Dataset.from_parts(make_card("det", name="tiny", image_root="raw/tiny"), det_samples(4))
+    ds.save(paths)
+    paths.samples_jsonl.unlink()  # a card-only load must not need the samples file
+    card = Dataset.load_card("tiny", data_root=roots.data, configs_root=roots.configs)
+    assert card.name == "tiny" and card.samples_hash == ds.card.samples_hash
+    with pytest.raises(ValidationFailed, match="dataset card not found"):
+        Dataset.load_card("nope", data_root=roots.data, configs_root=roots.configs)
+    with pytest.raises(ValidationFailed, match="samples file not found"):
+        Dataset.load("tiny", data_root=roots.data, configs_root=roots.configs)
+
+
+def test_append_unseal_writes_one_line_and_returns_its_sha(roots):
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    ds = Dataset.from_parts(make_card("det", name="tiny", image_root="raw/tiny"), det_samples(40))
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    sha = append_unseal(paths, plan, "holdout", "final eval", "test")
+    lines = paths.unseal_jsonl("fixed-v1").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and sha == sha256_text(lines[0] + "\n")
+    row = json.loads(lines[0])
+    assert row["subset"] == "holdout" and row["reason"] == "final eval" and row["caller"] == "test"
+    assert row["plan_id"] == "fixed-v1" and row["dataset_hash"] == plan.dataset_hash
+    assert row["ts"].endswith("Z")
+    ds.subset("holdout", plan, unseal=True, reason="again", paths=paths)
+    assert len(paths.unseal_jsonl("fixed-v1").read_text(encoding="utf-8").splitlines()) == 2

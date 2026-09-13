@@ -8,6 +8,7 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from vcp.core.errors import RegistryError, ValidationFailed
+from vcp.data.access.schema import AccessRef, Grade
 from vcp.data.tasks import get_task
 
 PAYLOAD_FIELDS = ("boxes", "masks", "scores", "targets")
@@ -147,6 +148,7 @@ class RunCard(_Strict):
     source: RunSource
     created_at: str
     predictions: dict[str, PredictionFile] = Field(default_factory=dict)
+    access: list[AccessRef] = Field(default_factory=list)
 
 
 class MetricResult(_Strict):
@@ -176,6 +178,7 @@ class Reading(_Strict):
     n_samples: int
     prediction_sha: str
     guardrail: GuardrailInfo | None = None
+    provenance: Grade | None = None
 
 
 class Anchor(_Strict):
@@ -262,6 +265,7 @@ class Judgement(_Strict):
     reasons: list[str]
     reading_ids: list[str]
     bootstrap: dict[str, int]
+    provenance: Grade | None = None
 
 
 class SigmaEstimate(_Strict):

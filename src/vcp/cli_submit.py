@@ -201,6 +201,8 @@ def stage_cmd(
             fields["rows"] = st.artifact.rows or 0
         if st.artifact.kind == "file":
             fields["missing"] = st.artifact.missing or 0
+        if st.provenance:
+            fields["provenance"] = st.provenance
         for check in st.pairing.checks:
             if check.startswith("config_hash="):
                 fields["config_hash"] = check.split("=", 1)[1]
@@ -419,7 +421,7 @@ def final_cmd(
             fields["needs_reupload"] = res.needs_reupload
         human = [
             f"{e.submission_id:>12}  eligible={e.eligible!s:5} sealed={e.sealed_value!r} "
-            f"public={e.public!r} {e.why}"
+            f"public={e.public!r} {e.why} provenance={e.provenance or '-'}"
             for e in (res.row.table or [])
         ]
         human += [f"warning: {w}" for w in res.warnings]
@@ -506,10 +508,12 @@ def status_cmd(
         fields["unscored"] = len(st.unscored)
         warn = warn or st.locked is not None or bool(st.unscored)
         human = [f"unscored: {sid}" for sid in st.unscored]
+        human += [f"provenance: {sid}={g}" for sid, g in st.provenance.items()]
         payload = {
             "quota": None if st.quota is None else st.quota.fields(),
             "current": st.current,
             "unscored": st.unscored,
+            "provenance": st.provenance,
             "locked": None
             if st.locked is None
             else st.locked.model_dump(mode="json", exclude_none=True),

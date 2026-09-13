@@ -70,3 +70,10 @@ class PlatformError(VcpError):
     """An external tool's CLI (kaggle, rclone) ran and failed. The message is already redacted."""
 
     status = "FAIL"
+
+
+class AccessDeniedError(VcpError):
+    """A role-scoped accessor refused a read the caller was not authorised for. Actionable:
+    open the access with the subset in its allowed set, or stop reading it."""
+
+    status = "FAIL"

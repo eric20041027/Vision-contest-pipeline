@@ -14,12 +14,12 @@ uv run pytest --cov=vcp
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp data import` | 原始資料 → `dataset.yaml` + `samples.jsonl` | `--importer`、`--src`、`--name`、`--license`、`--url`、`--downloaded-at`、`--opt k=v`、`--raw-manifest full\|sizes` |
-| `vcp data validate` | 重驗 card、samples 與 hash | `--name` |
+| `vcp data import` | 原始資料 → `dataset.yaml` + `samples.jsonl`；並寫一份 `source_audit`（逐列 sha 索引，VERDICT `source_audit=` `source_audit_state=`） | `--importer`、`--src`、`--name`、`--license`、`--url`、`--downloaded-at`、`--opt k=v`、`--raw-manifest full\|sizes` |
+| `vcp data validate` | 重驗 card、samples 與 hash；產生或重用 `source_audit`（VERDICT `source_audit=` `source_audit_state=created\|reused`） | `--name` |
 | `vcp data audit` | 座標 sanity、近重複與 test 重疊、來源檢查 | `--against`、`--max-bad-boxes`、`--min-box-px`、`--max-aspect`、`--max-cover`、`--hamming`、`--corr` |
 | `vcp data split` | 固定多子集 plan（進 git、不可改） | `--plan-id`、`--subsets`、`--stratify-key`、`--group-key`、`--group-from-audit`、`--strategy` |
 | `vcp data lineage` | 某訓練用了哪些子集 → 哪些驗證集還乾淨 | `--plan`、`--trained-on` |
-| `vcp data export` | 子集 → COCO / YOLO 目錄 + manifest | `--plan`、`--subset`、`--format`、`--out`、`--opt view=`、`--opt copy=true`、`--unseal --reason`；每次匯出留一份 `access_receipt`（manifest 的 `receipt`、VERDICT `receipt=`） |
+| `vcp data export` | 子集 → COCO / YOLO 目錄 + manifest | `--plan`、`--subset`、`--format`、`--out`、`--opt view=`、`--opt copy=true`、`--unseal --reason`；每次匯出留一份 `access_receipt`（manifest 的 `receipt`、VERDICT `receipt=`）；VERDICT `identity=source_audit\|full_hash` |
 | `vcp data materialize` | 每個 view 解碼一次成 npy / png 快取 + manifest | `--mode`、`--resize`、`--stack-seq`、`--window`、`--workers`、`--force`、`--decoder` |
 
 每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。eval / fuse / train / submit / backup 失敗時仍帶命令已知的 dataset / run / recipe / id 等識別欄位；深層錯誤可提供更精確的身分。
@@ -120,6 +120,8 @@ uv run vcp eval measure --run y12x_r2
 ### 收據與 provenance
 
 訓練迴圈用 `with MaterializedReader(name, mode, plan_id=P, subset="train") as reader:`（或 `Session.current().access(subsets={"train"})`）讀資料：只有授權子集的列會被解析，關閉時存取器把它實際讀到的子集、ID 集合 sha、拒絕次數寫成 `artifacts/access_receipt/<run>-a<attempt>-<n>/receipt.json`——呼叫端只能加 `notes`。run 的等級由收據算出、不存：`receipt`（有 `purpose=train` 的有效收據）> `export`（無收據但從 `vcp data export` 目錄訓練）> `declared`（舊 run 或手填）；`vcp eval status` / `report`、`vcp submit status` 都印它。`submit.yaml` 的 `require_provenance: receipt|export|declared`（預設 `declared`）決定 `stage` / `final` 擋不擋候選；讀過 sealed 子集的候選一律 `observed_sealed:`。收據證明的是經 vcp 存取器的讀取；process 自己 `open()` 檔案不在證明範圍。
+
+v0.6.0 起 `vcp data import` / `validate` 會留一份 `artifacts/source_audit/src-<dataset>-<hash16>/`（`audit.json` + 每列一個 sha 的 `index.jsonl`，內容定址、同內容重用）；存取器有它就不再整檔 hash `samples.jsonl`——未授權的列連讀都不讀、讀到的列先比 sha 再解析——收據記 `identity: source_audit`。舊資料集沒稽核照跑（`identity: full_hash`），但 `train run` / `measure` / `export` 會 WARN `source_audit=missing`，重跑 `vcp data validate` 就升級；稽核壞掉是 `mismatch:` FAIL，不退回。
 
 自寫 PyTorch loop 只需要兩個名字：
 

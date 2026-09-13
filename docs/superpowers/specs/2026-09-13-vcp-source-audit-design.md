@@ -178,6 +178,17 @@ coverage 檢查（plan assignment 與索引互相覆蓋）、sealed / roles / un
 
 `0.6.0`（MINOR）：新產物 kind、收據與 ref 新欄位、VERDICT 新欄位與 WARN 字彙。
 
-## 15. 補充決定（實作期）
+## 15. 補充決定（實作期，Plan 10）
 
-由 Plan 10 執行時填寫。
+1. 稽核產物不列 `inputs`（`params={"samples_hash": …}`）：`ArtifactWriter.create` 與 `store.reuse` 會 hash 有 path 的 inputs，列 `samples.jsonl` 會讓 `validate` 掃三趟；§4.1 / §6 的 `inputs=[samples]` 以此為準改掉。
+2. `_LINE` 正規式與 `peek_sample_id()` 住在 `source_audit.py`，`access.py` 從那裡 import；`index_samples` 維持回傳 `(digest, {id: (offset, length)})`，`open` 再補 `None` sha。
+3. `load_source_audit` 對半途目錄（沒有 `manifest.json`）回 `None`（退回路線）；對有 manifest 但驗不過、欄位不符、大小不符的回 `mismatch:`。
+4. 測試 fixture（`det_with_runs`、`dataset_with_perfect_run`、`make_pair`、exporter `det_ds`）在 `save` 之後寫稽核：量測 / 提交 / 匯出的既有測試代表「準備好的資料集」；只有明確測退回路線的測試不寫。
+5. `StageResult.identity: str | None`（kernel 提交 `None`，CLI 不印）；`Staged` 不加欄位。
+6. 備份：`ROLES` 在 `access_receipt` 之後插 `source_audit`、進 `_TIER2`、不進 `CARD_ROLES`；`walk_run` 從 `AccessRef.source_audit` 找稽核。
+7. `measure` 的 `identity` 取自它自己開的存取器；`train run` 的 `source_audit_missing` 數 `card.access` 裡 `identity == "full_hash"` 的 ref。
+8. `MeasureResult.identity` / `ExportResult.identity` 型別 `Identity`；收據產物走稽核時 `params` 多 `samples_hash` 與 `source_audit`。
+9. `index.jsonl` 每行以 `json.dumps(row.model_dump(mode="json"), ensure_ascii=False)` 寫（有空格的分隔符，與 repo 其他 JSON 寫法一致），不是 pydantic 的緊湊 `model_dump_json()`。
+10. `write_source_audit` 每一行都先進 hasher；行格式錯誤或重複 id 的 `ValidationFailed` 延後到整檔 sha 與 card 比對之後才丟——檔案與 card 不符時先報 `mismatch:`，不是「不是 samples.jsonl 的行」。
+11. `vcp eval measure` 退回整檔 hash 時 VERDICT 也帶 `source_audit=missing` 欄位（不只人讀行），與 `train run` / `export` 一致（spec §8 / §9 的 WARN 欄位）。
+12. 真資料整合測試檔名為 `tests/integration/test_audited_access.py`（不是計畫寫的 `test_source_audit.py`）：與 `tests/unit/data/test_source_audit.py` 同名會讓 pytest 整套收集時 import file mismatch，而 `tests/integration/` 刻意沒有 `__init__.py`（其 conftest 以 `from conftest import …` 被引用）。

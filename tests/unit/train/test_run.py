@@ -9,11 +9,13 @@ from helpers import det_samples, det_with_runs, make_card, write_images
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
-from vcp.measure.runs import load_run, run_dir
+from vcp.measure.provenance import attach_receipts
+from vcp.measure.runs import load_run, run_dir, save_run
 from vcp.train.records import load_record, read_events, save_record
 from vcp.train.run import (
     RUN_BOUND_ELSEWHERE,
@@ -605,3 +607,37 @@ def test_train_run_without_receipts_grades_export_or_declared(roots, work, tmp_p
     export = _export(roots, "train", tmp_path / "yolo-train")
     res = train_run(_spec(roots, work, run_id="r3", exports=[export], trained_on=[]))
     assert res.provenance == "export"
+
+
+def test_train_run_resume_keeps_a_manually_attached_receipt(roots, work):
+    """F5 (final review Important #5): --resume used to replace run.yaml's access list wholesale
+    with train.yaml's, dropping a receipt attached by `ingest --receipt` between attempts. It
+    must now merge by artifact_id: train.yaml's own refs first, then any ref already on the card
+    that train.yaml does not know about."""
+    _seed(roots)
+    assert (
+        materialize(
+            MaterializeSpec(
+                name="tiny", mode="npy", data_root=roots.data, configs_root=roots.configs
+            )
+        ).failed
+        == 0
+    )
+    (work / "access_train.py").write_text(ACCESS_FAKE, encoding="utf-8")
+    train_run(_spec(roots, work, command=[sys.executable, "access_train.py"]))
+    with DatasetAccess.open(
+        "tiny",
+        "fixed-v1",
+        subsets={"valA"},
+        purpose="custom",
+        data_root=roots.data,
+        configs_root=roots.configs,
+    ) as access:
+        list(access.iter("valA"))
+    manual_id = access.receipt_id
+    card = attach_receipts(load_run(roots.data, "r1"), [manual_id], data_root=roots.data)
+    save_run(roots.data, card)
+    res = train_run(_spec(roots, work, command=[sys.executable, "access_train.py"], resume=True))
+    ids = [r.artifact_id for r in load_run(roots.data, "r1").access]
+    assert ids == ["r1-a1-1", "r1-a2-1", manual_id]
+    assert res.receipts == 3

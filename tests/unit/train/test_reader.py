@@ -219,6 +219,34 @@ def test_reader_under_a_training_session_registers_its_receipt(roots, monkeypatc
     assert access.receipt is not None and set(access.receipt.accessed) == {"valA"}
 
 
+def test_reader_under_a_run_refuses_a_name_or_plan_mismatch(roots, monkeypatch):
+    """F4 (final review Important #4): under a run, the session binds the receipt to
+    record.dataset/plan_id regardless of what this reader asked for -- a caller passing another
+    plan_id (or dataset name) must be refused, not silently trained on the run's own plan."""
+    ds, plan, paths = _image_ds(roots, n=40)
+    assert _mat(roots, "tiny", mode="npy").failed == 0
+    save_record(
+        roots.data,
+        TrainRecord(
+            run_id="r1",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            trained_on=["train"],
+            config_hash="ab" * 32,
+            cwd="work",
+            command=["python"],
+            attempts=[Attempt(n=1, started_at="2026-09-12T00:00:00.000Z", console="c")],
+        ),
+    )
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.setenv("VCP_DATA_ROOT", str(roots.data))
+    monkeypatch.setenv("VCP_CONFIGS_ROOT", str(roots.configs))
+    with pytest.raises(ValidationFailed, match="^mismatch: reader asked for") as ei:
+        MaterializedReader("tiny", "npy", plan_id="other-v2", subset="train")
+    assert ei.value.fields == {"run": "r1"}
+    assert not (roots.data / "artifacts" / "access_receipt").exists()
+
+
 def test_reader_without_a_plan_keeps_the_full_dataset_outside_a_run(roots):
     ds, plan, paths = _image_ds(roots)
     assert _mat(roots, "tiny", mode="npy").failed == 0

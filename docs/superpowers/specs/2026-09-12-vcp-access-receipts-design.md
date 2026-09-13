@@ -130,7 +130,7 @@ def read_receipt(data_root: Path, artifact_id: str) -> AccessReceipt
 def provenance(card: RunCard, *, data_root: Path, configs_root: Path | None = None) -> ProvenanceInfo
 ```
 
-一份收據**有效**的條件：產物 `verify` 無 mismatch / missing / extra；`receipt.json` 可解析且 sha 等於 `AccessRef.receipt_sha256`；`samples_hash == card.samples_hash`；`plan_id == card.plan_id`；`plan_sha256` 與 `card_sha256` 等於現在 plan 檔與 card 檔的 sha（其一變了，授權就失效——稽核驗收 4）。不符 → 進 `invalid`，不拋例外。等級：有 ≥1 份有效且 `purpose=train` 的收據 → `receipt`；否則 `card.source.export_manifest_sha` 有值 → `export`；否則 `declared`。`observed` 只算有效收據。融合 run（`source.framework == "fuse"`）自己沒有 `access`：等級 = 成員等級的最小值、`observed` = 成員 `observed` 的聯集、`invalid` 取聯集（沿 `fuse.json` 的成員遞迴）。
+一份收據**有效**的條件：產物 `verify` 無 mismatch / missing / extra；`receipt.json` 可解析且 sha 等於 `AccessRef.receipt_sha256`；`dataset == card.dataset`；`samples_hash == card.samples_hash`；`plan_id == card.plan_id`；`plan_sha256` 與 `card_sha256` 等於現在 plan 檔與 card 檔的 sha（其一變了，授權就失效——稽核驗收 4）；`run_id` 為 `None` 或等於 `card.run_id`（否則別的 run 的收據抄進來也能升等級——最終審查 Important #2）。不符 → 進 `invalid`，不拋例外。等級：有 ≥1 份有效且 `purpose=train` 的收據 → `receipt`；否則 `card.source.export_manifest_sha` 有值 → `export`；否則 `declared`。`observed` 取 `card.access` 每個 ref 的 `subsets`（不論該 ref 是否仍有效）與有效收據 `accessed` 的聯集；失效的收據只降等級、不抹掉觀測（最終審查 Important #3）。融合 run（`source.framework == "fuse"`）自己沒有 `access`：等級 = 成員等級的最小值、`observed` = 成員 `observed` 的聯集、`invalid` 取聯集（沿 `fuse.json` 的成員遞迴）。
 
 ## 5. 目錄佈局
 
@@ -331,3 +331,5 @@ class ReceiptBinding(Protocol):
 18. `MaterializedReader` 建構在存取器開啟後失敗（materialize 快取缺列等）會先把自己開的存取器以 `failed` 關閉再拋出；注入的存取器留給擁有者。
 19. `vcp eval status` 對算不出 provenance 的 run（例如融合 run 的成員 `run.yaml` 遺失）記 `provenance_failed=`（WARN，該 run 仍計入 `runs=`）而不中止；`vcp submit status` 對缺 `stage.json` 的提交印 `-`；兩者維持唯讀且不依賴資料根完整。`judge` 對沒有 `run.yaml` 的 run 以 `declared` 計（仍因缺讀數 FAIL）；`measure` / `stage` / `final` 對壞掉的融合 run 維持 fail-fast。
 20. `measure` 的 `--unseal` 無 `--reason` 沿用舊訊息 `SealedSubsetError("unseal requires a non-empty reason")`，在開存取器之前檢查。`assert_run_matches` 的呼叫點實為八處（`measure/measure.py` 三處：`load_context`、`load_card_context`、錨點檢查；其餘 `fuse/build.py`、`fuse/members.py`、`measure/ingest.py`、`submit/stage.py`、`train/run.py` 各一處）。
+21. 收據有效性多驗 `dataset` 與 `run_id`（`run_id` 為 None 或等於該 run）：手動把別的 run 的 train 收據抄進 `run.yaml` 不能升等級（最終審查 Important #2；spec §4.3 原本漏列）。
+22. 失效收據只降等級、不抹掉觀測：`observed` 改為 `card.access` 每個 ref 的 `subsets` 與有效收據 `accessed` 的聯集（最終審查 Important #3：宣告不能蓋掉觀測，失效收據若抹掉觀測會讓被讀過的子集復活成乾淨基底）。

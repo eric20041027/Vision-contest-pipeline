@@ -115,8 +115,8 @@ def _check_subsets(card: RunCard, subsets: list[str], info: ProvenanceInfo) -> N
     if not subsets:
         raise ValidationFailed(
             f"run {card.run_id!r} has no clean eval subset to measure "
-            f"(trained_on={card.trained_on}); name one with --subsets, or --unseal --reason "
-            "to open a sealed one"
+            f"(trained_on={card.trained_on}, observed={info.observed}); name one with "
+            "--subsets, or --unseal --reason to open a sealed one"
         )
     for name in subsets:
         if name in card.trained_on:

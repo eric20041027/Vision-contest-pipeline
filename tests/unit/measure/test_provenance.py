@@ -75,6 +75,22 @@ def test_attach_receipts_refuses_the_wrong_run_dataset_or_plan(roots, tmp_path):
         attach_receipts(other, [rid], data_root=roots.data)
 
 
+def test_a_receipt_from_another_run_does_not_count_even_with_a_correct_sha(roots, tmp_path):
+    """F2 (final review Important #2): `attach_receipts` itself refuses a cross-run receipt, but
+    a ref hand-placed straight into ``run.yaml`` (bypassing that guard) has a correct sha and an
+    otherwise-matching dataset/plan -- ``provenance()`` must still catch the run_id mismatch."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    noisy = attach_receipts(
+        load_run(roots.data, "noisy"),
+        [_receipt(roots, ["train"], run_id="noisy")],
+        data_root=roots.data,
+    )
+    rid = noisy.access[0].artifact_id
+    perfect = load_run(roots.data, "perfect").model_copy(update={"access": [noisy.access[0]]})
+    info = provenance(perfect, **_kw(roots))
+    assert info.invalid == [rid] and info.grade == "declared"
+
+
 def test_a_changed_card_plan_or_receipt_invalidates(roots, tmp_path):
     ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
     card = attach_receipts(
@@ -91,7 +107,9 @@ def test_a_changed_card_plan_or_receipt_invalidates(roots, tmp_path):
         newline="\n",
     )
     info = provenance(card, **_kw(roots))
-    assert info.grade == "declared" and info.invalid == [rid] and info.observed == []
+    # F3 (final review Important #3): the receipt no longer holds, but it still observed
+    # "train" -- an invalidated receipt only lowers the grade, it never un-reads a subset.
+    assert info.grade == "declared" and info.invalid == [rid] and info.observed == ["train"]
     pj.write_bytes(original)
     assert provenance(card, **_kw(roots)).grade == "receipt"
     # card rewritten with a cosmetic change
@@ -102,7 +120,8 @@ def test_a_changed_card_plan_or_receipt_invalidates(roots, tmp_path):
     (artifact_dir(roots.data, "access_receipt", rid) / "receipt.json").write_text(
         "{}", encoding="utf-8"
     )
-    assert provenance(card, **_kw(roots)).invalid == [rid]
+    info = provenance(card, **_kw(roots))
+    assert info.invalid == [rid] and info.observed == ["train"]  # still observed, per F3
     # a ref whose recorded sha does not match a clean receipt
     fresh = attach_receipts(
         load_run(roots.data, "perfect"), [_receipt(roots, ["train"])], data_root=roots.data
@@ -175,11 +194,13 @@ def test_a_fused_run_takes_the_weakest_member_grade_and_unions_observations(root
     assert info.grade == "declared" and info.observed == ["train", "valA"] and info.invalid == []
     assert info.receipts == []
 
-    # tamper the custom receipt on disk: the fused view's invalid/observed react per-member
+    # tamper the custom receipt on disk: the fused view's invalid/observed react per-member.
+    # F3: noisy's own ref.subsets (["valA"]) still counts even though its receipt is now
+    # unreadable, so the union keeps "valA" alongside perfect's still-valid "train".
     receipt_path = artifact_dir(roots.data, "access_receipt", noisy_rid) / "receipt.json"
     receipt_path.write_bytes(receipt_path.read_bytes() + b"\n")
     info = provenance(fused, **_kw(roots))
-    assert info.invalid == [noisy_rid] and info.observed == ["train"]
+    assert info.invalid == [noisy_rid] and info.observed == ["train", "valA"]
 
     # source.framework says fused but there is no fuse.json yet: falls back to the plain path
     save_run(

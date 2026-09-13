@@ -19,7 +19,7 @@
 - `configs/datasets/<name>/backup/<manifest_id>.json` 是證據清單（從結論反向生成，寫一次不改，進 git），`backup.log.jsonl` 只增（manifest / push / verify / pull / remote_forgotten）。目的地佈局 `<dest>/data|configs|external/<相對路徑>`；`train upload` 驗過的權重副本記成 `remote_copy`，verify 到原地驗、不重推。`cache/`、`raw/` 永不進清單；push 推台帳的快照，`--forget-remote` 要整份清單驗證通過。
 - `artifacts/<kind>/<id>/` 是不可變產物：`spec.json`（open 時寫）、檔案們、`manifest.json`（commit 點；**有它才是產物**）、`failure.json`（例外離開時）；`artifacts/<kind>/supersession.jsonl` 只增。同 id 不能重開；修正用新 id + `supersedes`。`vcp artifact clean` 只移除超過寬限期的半途目錄與 `.tmp`。vcp 自己的四個寫一次檔（split plan、預登記 yaml、融合配方、backup manifest）與產物的每個檔都經 `vcp.core.atomic.write_once`。
 - `artifacts/access_receipt/<id>/receipt.json` 是存取器留下的收據（train 下 `<run>-a<attempt>-<n>`，其他 `<purpose>-<dataset>-<plan>-<stamp>-<nonce>`）：只有授權子集的列會被解析，未授權 → `denied:` 並計數；`run.yaml` / `train.yaml` 的 `access` 列出掛上的收據，等級 `receipt > export > declared` 讀取時算出。measure 的乾淨基底 = `trained_on ∪ 觀測`；judge 讀過主張子集 → `INVALID contaminated`；`submit.yaml` 的 `require_provenance` 決定 gate。
-- `artifacts/source_audit/src-<dataset>-<hash16>/`（`audit.json` + `index.jsonl`）是 `vcp data import` / `validate` 留的逐列 sha 索引（內容定址、同內容重用、不做 supersedes）：存取器有它就不掃 `samples.jsonl`、只驗讀到的列；壞掉 → `mismatch:` FAIL；缺席 → 退回整檔 hash 並 WARN `source_audit=missing`；收據 `identity` 記用了哪條路。
+- `artifacts/source_audit/src-<dataset>-<hash16>/`（`audit.json` + `index.jsonl`）是 `vcp data import` / `validate` 留的逐列 sha 索引（內容定址、同內容重用、不做 supersedes）：存取器有它就不掃 `samples.jsonl`、只驗讀到的列；壞掉 → `mismatch:` FAIL；缺席 → 退回整檔 hash 並 WARN `source_audit=missing`；收據 `identity` 記用了哪條路。壞掉的稽核沒有 supersedes：搬走目錄再 `validate` 重建。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`

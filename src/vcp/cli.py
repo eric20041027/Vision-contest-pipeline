@@ -22,6 +22,7 @@ from vcp.cli_common import (
 )
 from vcp.cli_eval import eval_app
 from vcp.cli_fuse import fuse_app
+from vcp.cli_provenance import provenance_app
 from vcp.cli_submit import submit_app
 from vcp.cli_train import train_app
 from vcp.core.build import build_info, build_string
@@ -44,6 +45,8 @@ from vcp.data.split import (
     parse_subsets,
     save_plan,
 )
+from vcp.measure.plugins import load_plugins
+from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="vision contest pipeline")
 data_app = typer.Typer(no_args_is_help=True, help="dataset commands")
@@ -52,6 +55,7 @@ app.add_typer(artifact_app, name="artifact")
 app.add_typer(backup_app, name="backup")
 app.add_typer(eval_app, name="eval")
 app.add_typer(fuse_app, name="fuse")
+app.add_typer(provenance_app, name="provenance")
 app.add_typer(submit_app, name="submit")
 app.add_typer(train_app, name="train")
 
@@ -195,6 +199,78 @@ def validate_cmd(
         return "OK", fields, payload, human
 
     run_command("validate", json_mode, data_root, fn)
+
+
+@data_app.command("diff")
+def diff_cmd(
+    from_dataset: Annotated[str, typer.Option("--from", help="older dataset version")],
+    to_dataset: Annotated[str, typer.Option("--to", help="newer dataset version")],
+    artifact_id: Annotated[
+        str | None, typer.Option("--id", help="immutable diff artifact id (derived by default)")
+    ] = None,
+    plugin: Annotated[
+        list[str] | None,
+        typer.Option("--plugin", help="module that registers impact policies (repeatable)"),
+    ] = None,
+    policy: Annotated[
+        list[str] | None,
+        typer.Option("--policy", help="registered impact policy name (repeatable)"),
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Compare two verified immutable dataset versions and publish a change-set artifact."""
+
+    def fn() -> CmdResult:
+        load_plugins(plugin)
+        result = create_dataset_diff(
+            DatasetDiffSpec(
+                from_dataset=from_dataset,
+                to_dataset=to_dataset,
+                artifact_id=artifact_id,
+                policy_names=tuple(policy or []),
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        )
+        summary = result.summary
+        fields: dict[str, FieldValue] = {
+            "from": from_dataset,
+            "to": to_dataset,
+            "id": result.artifact_id,
+            "added": summary.counts.get("ADDED", 0),
+            "removed": summary.counts.get("REMOVED", 0),
+            "modified": summary.counts.get("MODIFIED", 0),
+            "changes": summary.total_changes,
+            "grade": summary.grade,
+        }
+        status: Status = "WARN" if summary.grade == "fallback" else "OK"
+        human = [
+            f"from={from_dataset}",
+            f"to={to_dataset}",
+            f"added={fields['added']}",
+            f"removed={fields['removed']}",
+            f"modified={fields['modified']}",
+            f"artifact={result.artifact_id}",
+        ]
+        if status == "WARN":
+            human.append("source audit missing on at least one input; used validated full parse")
+        return (
+            status,
+            fields,
+            {
+                "artifact": result.artifact_id,
+                "path": str(result.artifact_dir),
+                "summary": summary.model_dump(mode="json"),
+            },
+            human,
+        )
+
+    context: dict[str, FieldValue] = {"from": from_dataset, "to": to_dataset}
+    if artifact_id is not None:
+        context["id"] = artifact_id
+    run_command("diff", json_mode, data_root, fn, context=context)
 
 
 @data_app.command("split")

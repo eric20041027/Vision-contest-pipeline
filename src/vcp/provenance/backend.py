@@ -47,6 +47,13 @@ class BackendConfig:
 
 @dataclass(frozen=True)
 class MaintenanceResult:
+    """Committed maintenance outcome.
+
+    PostgreSQL counts describe the verified candidate graph and planned semantic
+    closure (including possible reading repair), independently of the selected path.
+    Duplicate artifacts retain their verified event count but have zero dirty work.
+    """
+
     artifact_id: str
     inserted: bool
     backend: str

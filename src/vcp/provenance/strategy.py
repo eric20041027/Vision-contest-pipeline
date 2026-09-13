@@ -52,6 +52,12 @@ class _Strict(BaseModel):
 
 
 class MaintenanceFeatures(_Strict):
+    """Verified candidate sizes before maintenance, including planned reading repair.
+
+    Historical changes count persisted events before this diff. Zero new events can
+    still have a nonzero dirty closure when topology connects existing histories.
+    """
+
     changed_samples: int = Field(ge=0)
     dirty_entities: int = Field(ge=0)
     total_entities: int = Field(ge=0)
@@ -215,7 +221,7 @@ def select_strategy(
     full_ms = policy.full_model.predict(features) if policy is not None else None
     policy_version = policy.policy_version if policy is not None else "safe-fallback-v1"
 
-    if features.changed_samples == 0:
+    if features.changed_samples == 0 and features.dirty_entities == 0:
         selected = SelectedStrategy.NO_OP
         reason = "verified_zero_semantic_changes"
     elif requested_strategy is RequestedStrategy.INCREMENTAL:

@@ -354,6 +354,8 @@ def export_cmd(
             "receipt": res.receipt,
             "identity": res.identity,
         }
+        if res.identity == "full_hash":
+            fields["source_audit"] = "missing"
         for k, v in res.fields.items():
             fields.setdefault(k, v)
         if res.warnings:

@@ -127,8 +127,9 @@ def test_write_source_audit_refuses_a_file_that_disagrees_with_the_card(roots):
         write_source_audit(paths, ds.card, data_root=roots.data)
     d = artifact_dir(roots.data, KIND, audit_id("tiny", ds.card.samples_hash))
     assert (d / "failure.json").is_file() and not (d / "manifest.json").is_file()
-    with pytest.raises(ValidationFailed, match="^partial:"):  # the claim is taken, never committed
+    with pytest.raises(ValidationFailed, match="^partial:") as ei:  # taken, never committed
         write_source_audit(paths, ds.card, data_root=roots.data)
+    assert "vcp artifact clean" in str(ei.value)
 
 
 def test_a_malformed_file_whose_digest_matches_still_fails(roots):
@@ -171,8 +172,9 @@ def test_load_source_audit_fails_closed_on_tampering(roots):
     d = artifact_dir(roots.data, KIND, res.artifact_id)
     index_bytes = (d / INDEX_FILE).read_bytes()
     (d / INDEX_FILE).write_bytes(index_bytes.replace(b'"offset": 0,', b'"offset": 1,', 1))
-    with pytest.raises(IntegrityError, match="^mismatch: source audit"):
+    with pytest.raises(IntegrityError, match="^mismatch: source audit") as ei:
         load_source_audit(paths, ds.card, data_root=roots.data)
+    assert "re-run `vcp data validate`" in str(ei.value)
     (d / INDEX_FILE).write_bytes(index_bytes)
     assert load_source_audit(paths, ds.card, data_root=roots.data) is not None
     audit_bytes = (d / AUDIT_FILE).read_bytes()
@@ -205,8 +207,9 @@ def test_load_source_audit_isolates_each_check(roots):
     forged["dataset"] = "other"
     _forge(d, AUDIT_FILE, json.dumps(forged, ensure_ascii=False).encode("utf-8"))
     assert not store.verify(roots.data, KIND, res.artifact_id).failed
-    with pytest.raises(IntegrityError, match="^mismatch: source audit .* describes"):
+    with pytest.raises(IntegrityError, match="^mismatch: source audit .* describes") as ei:
         load_source_audit(paths, ds.card, data_root=roots.data)
+    assert "re-run `vcp data validate`" in str(ei.value)
     _forge(d, AUDIT_FILE, audit_bytes)
 
     # (b) index.jsonl lists one sample_id twice; audit.json is untouched

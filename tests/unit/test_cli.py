@@ -853,3 +853,33 @@ def test_validate_recreates_a_removed_source_audit(roots, tmp_path):
     assert r.exit_code == 0 and "source_audit_state=created" in _last_verdict(r.output)
     r = runner.invoke(app, ["artifact", "status", "--kind", "source_audit"])
     assert r.exit_code == 0 and "source_audit" in r.output
+
+
+def test_export_verdict_reports_identity_and_missing_audit(roots, tmp_path):
+    import shutil
+
+    assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0  # import wrote the audit
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "fixed-v1", "--seed", "1"]
+    )
+    assert r.exit_code == 0, r.output
+    common = [
+        "data",
+        "export",
+        "--name",
+        "tiny",
+        "--plan",
+        "fixed-v1",
+        "--subset",
+        "train",
+        "--format",
+        "yolo",
+    ]
+    r = runner.invoke(app, [*common, "--out", str(tmp_path / "a")])
+    v = _last_verdict(r.output)
+    assert r.exit_code == 0 and "identity=source_audit" in v and "source_audit=missing" not in v
+    shutil.rmtree(roots.data / "artifacts" / "source_audit")
+    r = runner.invoke(app, [*common, "--out", str(tmp_path / "b")])
+    v = _last_verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v
+    assert "identity=full_hash" in v and "source_audit=missing" in v

@@ -286,10 +286,16 @@ def validate_schema(connection: Any) -> None:
         _require_matching_schema_marker(connection)
 
 
+def validate_schema_in_transaction(connection: Any) -> None:
+    """Validate under an existing writer transaction without opening a savepoint."""
+    _require_matching_schema_marker(connection)
+
+
 __all__ = [
     "POSTGRES_DDL",
     "POSTGRES_SCHEMA_VERSION",
     "SCHEMA_NAME",
     "install_schema",
     "validate_schema",
+    "validate_schema_in_transaction",
 ]

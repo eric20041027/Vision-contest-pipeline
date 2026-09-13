@@ -55,6 +55,8 @@ Dataset provenance 的操作、修復、status 語意與基準命令見
 `docs/superpowers/specs/2026-09-13-vcp-dataset-evolution-provenance-design.md` 與
 `docs/superpowers/plans/2026-09-13-vcp-plan11-dataset-evolution-provenance.md`。真實驗證只在 temporary
 metadata copy 寫 diff/index，live RSNA roots 僅讀取。
+完整實作範圍、review 修正、驗證數字與下一位 agent 的接手清單見
+`docs/handover/DATASET_EVOLUTION_PROVENANCE_HANDOFF.md`。
 
 十二個變異軸都是登記表（任務、匯入器、匯出器、解碼器、切分策略、稽核、轉換器、指標、σ_p 方法、融合器、輸出格式、平台）：加一種形態 = 加一個登記項，不改 schema、不改 CLI；比賽自己的指標 / 格式用 `--plugin projects.<contest>.metrics`。
 

@@ -681,3 +681,207 @@ def test_reading_reason_matches_replay_after_upstream_run_becomes_stale(
         ("tiny", "eval-changed"),
         ("eval-changed", "train-changed"),
     }
+
+
+def _unrelated_history(roots):
+    samples = det_samples(5, seed=77)
+    _dataset(roots, "outside-old", samples)
+    _dataset(
+        roots, "outside-new", [sample.model_copy(update={"group": "outside"}) for sample in samples]
+    )
+    create_dataset_diff(
+        DatasetDiffSpec(
+            from_dataset="outside-old",
+            to_dataset="outside-new",
+            artifact_id="outside-history",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+
+
+def test_fusion_reading_uses_pre_propagation_run_status(fake_postgres, roots, tmp_path):
+    from vcp.fuse.build import BuildSpec, build_run
+    from vcp.fuse.recipes import save_recipe
+    from vcp.fuse.schema import Member, Recipe
+    from vcp.measure.measure import MeasureSpec, measure_run
+
+    first, plan, paths = det_with_runs(roots, tmp_path, n=24)
+    save_recipe(
+        paths,
+        Recipe(
+            recipe_id="fusion",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            method="wbf",
+            params={"iou": "0.5"},
+            members=[Member(run="perfect")],
+            created_at="2026-09-13T00:00:00.000Z",
+        ),
+    )
+    build_run(
+        BuildSpec(
+            dataset="tiny",
+            recipe_id="fusion",
+            subsets=["valA"],
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    reading = measure_run(
+        MeasureSpec(
+            run_id="fuse-fusion",
+            subsets=["valA"],
+            metrics=["coco_map"],
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    ).readings[0]
+    changed = [
+        sample.model_copy(update={"meta": {"unknown": 1}})
+        if plan.assignment[sample.sample_id] == "valB"
+        else sample
+        for sample in first.samples
+    ]
+    _dataset(roots, "fusion-target", changed)
+    _unrelated_history(roots)
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    diff = create_dataset_diff(
+        DatasetDiffSpec(
+            from_dataset="tiny",
+            to_dataset="fusion-target",
+            artifact_id="member-change",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    canonical = build_graph(roots.data, roots.configs)
+    target = next(
+        ident for ident in canonical.entities if ident.startswith("dataset:fusion-target@")
+    )
+    expected = compute_statuses(canonical, target)
+    reading_id = f"reading:{reading.reading_id}"
+    assert expected["run:perfect"].status.value == "REVIEW"
+    assert expected["run:fuse-fusion"].status.value == "REVIEW"
+    assert expected[reading_id].status.value == "VALID"
+    fake_postgres.backend.ingest_diff("member-change", roots.data, roots.configs)
+    assert fake_postgres.backend.statuses(target)[reading_id] == expected[reading_id]
+    _assert_parity(fake_postgres, roots)
+    assert len(fake_postgres.history_reads) == 1
+    assert len(fake_postgres.history_reads[0]) == diff.summary.total_changes
+    assert {(row[5], row[7]) for row in fake_postgres.history_reads[0]} == {
+        ("tiny", "fusion-target")
+    }
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_zero_change_join_recomputes_incompatible_reading_bases(
+    fake_postgres, roots, tmp_path, reverse
+):
+    from vcp.measure.measure import MeasureSpec, measure_run
+
+    first, plan, _ = det_with_runs(roots, tmp_path, n=24)
+    reading = measure_run(
+        MeasureSpec(
+            run_id="perfect",
+            subsets=["valA"],
+            metrics=["coco_map"],
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    ).readings[0]
+    label_samples = [sample.model_copy(deep=True) for sample in first.samples]
+    for sample in label_samples:
+        if plan.assignment[sample.sample_id] == "valA":
+            sample.labels.boxes[0].x += 1
+    unknown_samples = [
+        sample.model_copy(update={"meta": {"unknown": 1}})
+        if plan.assignment[sample.sample_id] == "train"
+        else sample
+        for sample in first.samples
+    ]
+    for name, samples in (
+        ("label-middle", label_samples),
+        ("unknown-middle", unknown_samples),
+        ("source-final", first.samples),
+        ("target-final", first.samples),
+    ):
+        _dataset(roots, name, samples)
+    expected_rows = 0
+    for index, (source, target) in enumerate(
+        (
+            ("tiny", "label-middle"),
+            ("label-middle", "source-final"),
+            ("tiny", "unknown-middle"),
+            ("unknown-middle", "target-final"),
+        )
+    ):
+        diff = create_dataset_diff(
+            DatasetDiffSpec(
+                from_dataset=source,
+                to_dataset=target,
+                artifact_id=f"history-{index}",
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )
+        expected_rows += diff.summary.total_changes
+    _unrelated_history(roots)
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    graph = fake_postgres.backend.load_graph()
+    source = next(ident for ident in graph.entities if ident.startswith("dataset:source-final@"))
+    target = next(ident for ident in graph.entities if ident.startswith("dataset:target-final@"))
+    reading_id = f"reading:{reading.reading_id}"
+    assert fake_postgres.backend.statuses(source)[reading_id].status.value == "STALE"
+    assert fake_postgres.backend.statuses(target)[reading_id].status.value == "REVIEW"
+    source_name, target_name = "source-final", "target-final"
+    if reverse:
+        source, target = target, source
+        source_name, target_name = target_name, source_name
+    diff = create_dataset_diff(
+        DatasetDiffSpec(
+            from_dataset=source_name,
+            to_dataset=target_name,
+            artifact_id="zero-join",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    assert diff.summary.total_changes == 0
+    expected = compute_statuses(build_graph(roots.data, roots.configs), target)[reading_id]
+    assert expected.status.value == "REVIEW"
+    result = fake_postgres.backend.ingest_diff("zero-join", roots.data, roots.configs)
+    assert result.selected_strategy == "NO_OP"
+    assert fake_postgres.backend.statuses(target)[reading_id] == expected
+    _assert_parity(fake_postgres, roots)
+    assert len(fake_postgres.history_reads) == 1
+    assert len(fake_postgres.history_reads[0]) == expected_rows
+    assert all(not row[5].startswith("outside") for row in fake_postgres.history_reads[0])
+
+
+@pytest.mark.parametrize("mutation_point", ["status", "checkpoint"])
+def test_original_log_checkpoint_cannot_be_replaced_by_rewritten_prefix(
+    fake_postgres, roots, monkeypatch, mutation_point
+):
+    _versions(roots)
+    path = roots.data / "logs" / "provenance.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"event":"old"}\n', encoding="utf-8", newline="\n")
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    _diff(roots)
+    assert "data/logs/provenance.jsonl" not in postgres._canonical_snapshot(
+        roots.data, roots.configs
+    )
+    before = fake_postgres.snapshot()
+    helper = "compute_statuses_for_entities" if mutation_point == "status" else "_checkpoint_rows"
+    original = getattr(postgres, helper)
+
+    def mutate(*args, **kwargs):
+        path.write_text('{"event":"new"}\n', encoding="utf-8", newline="\n")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(postgres, helper, mutate)
+    with pytest.raises(IntegrityError, match="prefix_drift"):
+        fake_postgres.backend.ingest_diff("idx-diff", roots.data, roots.configs)
+    assert fake_postgres.snapshot() == before
+    assert fake_postgres.events[-1] == "rollback"

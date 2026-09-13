@@ -176,22 +176,29 @@ def _repair_reading_statuses(
     head: str,
     base: dict[str, StatusRecord],
     selected: dict[str, StatusRecord],
+    *,
+    force: set[str] | None = None,
 ) -> None:
     """Repair the view's non-monotonic reading short-circuit without global replay.
 
     A reading formerly invalidated by evaluation data may instead inherit its run's
     new status. Severity and reason can both decrease; preserving its old base is
-    incorrect. Recompute just those readings and their descendants from the evidence
-    on paths relevant to that closure, keeping all clean predecessor statuses.
+    incorrect. Recompute those readings, their run/fusion predecessors, and their
+    descendants together so the oracle evaluates readings before fusion propagation.
+    Only evidence on paths relevant to that closure is loaded.
     """
     current = {**base, **selected}
-    seeds = set()
+    seeds = set(force or ())
     for ident, record in selected.items():
         entity = graph.entities[ident]
         if entity.entity_type != "reading" or entity.broken_reason:
             continue
         run_id = f"run:{entity.attributes.get('run_id')}"
         run = current.get(run_id)
+        if run_id in graph.entities and graph.entities[run_id].entity_type == "fusion_run":
+            # A materialized fusion status includes the final member-propagation pass;
+            # it is not the direct run status seen by canonical reading evaluation.
+            seeds.add(ident)
         if run is not None and run.status.value != "VALID":
             expected = StatusRecord(
                 entity_id=ident,
@@ -203,6 +210,18 @@ def _repair_reading_statuses(
                 seeds.add(ident)
     if not seeds:
         return
+    runs = [f"run:{graph.entities[ident].attributes.get('run_id')}" for ident in seeds]
+    while runs:
+        run_id = runs.pop()
+        if run_id in seeds or run_id not in graph.entities:
+            continue
+        seeds.add(run_id)
+        if graph.entities[run_id].entity_type == "fusion_run":
+            runs.extend(
+                edge.source_id
+                for edge in graph.incoming(run_id)
+                if graph.entities[edge.source_id].entity_type in {"run", "fusion_run"}
+            )
     repair = _dirty_closure(connection, generation_id, head, seeds, semantic=False)
     exact = ProvenanceGraph(
         entities=dict(graph.entities),
@@ -717,15 +736,16 @@ def _insert_delta(connection: Any, rows: GraphRows) -> ProvenanceGraph:
 
 def _verify_incremental_evidence(
     connection: Any, generation_id: UUID | str, data_root: Path, configs_root: Path
-) -> None:
-    for key, length, digest in connection.execute(
-        f"SELECT source_path, consumed_bytes, prefix_sha256 FROM {SCHEMA_NAME}.ingest_checkpoints "
-        "WHERE generation_id=%s ORDER BY source_path",
-        (generation_id,),
-    ).fetchall():
-        path = _path_for_checkpoint(key, data_root, configs_root)
-        if not path.is_file() or _prefix_hash(path, length) != digest:
-            raise IntegrityError("prefix_drift: PostgreSQL provenance checkpoint changed")
+) -> tuple[tuple[str, int, str], ...]:
+    checkpoints = tuple(
+        connection.execute(
+            "SELECT source_path, consumed_bytes, prefix_sha256 "
+            f"FROM {SCHEMA_NAME}.ingest_checkpoints "
+            "WHERE generation_id=%s ORDER BY source_path",
+            (generation_id,),
+        ).fetchall()
+    )
+    _verify_checkpoint_prefixes(checkpoints, data_root, configs_root)
     for artifact_id, digest in connection.execute(
         f"SELECT artifact_id, manifest_sha256 FROM {SCHEMA_NAME}.ingested_artifacts "
         "WHERE generation_id=%s ORDER BY artifact_id",
@@ -738,6 +758,19 @@ def _verify_incremental_evidence(
             )
         if store.verify(data_root, DIFF_KIND, artifact_id).failed:
             raise IntegrityError("canonical_drift: ingested dataset diff payload changed")
+    return checkpoints
+
+
+def _verify_checkpoint_prefixes(
+    checkpoints: Sequence[tuple[str, int, str]],
+    data_root: Path,
+    configs_root: Path,
+) -> None:
+    """Verify retained consumed prefixes independently of newly written checkpoints."""
+    for key, length, digest in checkpoints:
+        path = _path_for_checkpoint(key, data_root, configs_root)
+        if not path.is_file() or _prefix_hash(path, length) != digest:
+            raise IntegrityError("prefix_drift: PostgreSQL provenance checkpoint changed")
 
 
 def _write_selected_statuses(
@@ -1085,7 +1118,9 @@ class PostgresProvenanceBackend:
                 connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
                 validate_schema_in_transaction(connection)
                 generation_id = _active_generation(connection)
-                _verify_incremental_evidence(connection, generation_id, data_root, configs_root)
+                original_checkpoints = _verify_incremental_evidence(
+                    connection, generation_id, data_root, configs_root
+                )
                 loaded = load_dataset_diff(data_root, artifact_id, verify_inputs=True)
                 manifest_path = store.manifest_path(data_root, DIFF_KIND, artifact_id)
                 manifest_hash = sha256_file(manifest_path)
@@ -1147,6 +1182,7 @@ class PostgresProvenanceBackend:
                     self._recheck_diff(
                         data_root, configs_root, artifact_id, loaded, manifest_hash, before
                     )
+                    _verify_checkpoint_prefixes(original_checkpoints, data_root, configs_root)
                     return result
 
                 source = dataset_version_id(
@@ -1160,6 +1196,9 @@ class PostgresProvenanceBackend:
                 )
                 if (source, target) in graph.transitions:
                     raise IntegrityError(f"transition_conflict: {source} -> {target}")
+                joining_histories = any(
+                    old_target == target for _old, old_target in graph.transitions
+                )
                 before_entities, before_edges = set(graph.entities), set(graph.edges)
                 add_artifact(
                     graph, data_root, store.load_manifest(data_root, DIFF_KIND, artifact_id)
@@ -1201,6 +1240,16 @@ class PostgresProvenanceBackend:
                 dirty = _dirty_closure(
                     connection, generation_id, source, set(delta.entities), semantic=semantic
                 )
+                join_readings = set()
+                if not semantic and joining_histories:
+                    # A zero-event join can change which run status masks historical
+                    # evaluation invalidation, even when no merged row differs yet.
+                    join_readings = {
+                        ident
+                        for ident in _dirty_closure(connection, generation_id, source, set())
+                        if graph.entities[ident].entity_type == "reading"
+                        and graph.entities[ident].broken_reason is None
+                    }
                 for head in sorted(affected_heads):
                     head_base = _status_dict(_read_status_rows(connection, generation_id, head))
                     combined_base = _merge_status_bases(base, head_base)
@@ -1240,9 +1289,6 @@ class PostgresProvenanceBackend:
                         base=combined_base,
                         preserve_selected_base=True,
                     )
-                    _repair_reading_statuses(
-                        connection, generation_id, graph, head, combined_base, selected
-                    )
                     # Copy source-history severities for clean rows too (notably NO_OP),
                     # while retaining a joining target's pre-existing lineage statuses.
                     selected.update(
@@ -1251,6 +1297,17 @@ class PostgresProvenanceBackend:
                             for ident, record in combined_base.items()
                             if ident not in dirty and record != head_base.get(ident)
                         }
+                    )
+                    # Carried NO_OP/join statuses can contain incompatible reading bases;
+                    # repair after collecting them, before writing any selected statuses.
+                    _repair_reading_statuses(
+                        connection,
+                        generation_id,
+                        graph,
+                        head,
+                        combined_base,
+                        selected,
+                        force=join_readings,
                     )
                     _write_selected_statuses(connection, generation_id, head, selected)
                 neutral_graph = ProvenanceGraph(entities=dict(graph.entities))
@@ -1288,6 +1345,7 @@ class PostgresProvenanceBackend:
                     f"UPDATE {SCHEMA_NAME}.metadata SET value=%s WHERE generation_id=%s AND key=%s",
                     (_json(before), generation_id, "canonical_snapshot"),
                 )
+                _verify_checkpoint_prefixes(original_checkpoints, data_root, configs_root)
                 connection.execute(
                     f"DELETE FROM {SCHEMA_NAME}.ingest_checkpoints WHERE generation_id=%s",
                     (generation_id,),
@@ -1313,6 +1371,7 @@ class PostgresProvenanceBackend:
                 self._recheck_diff(
                     data_root, configs_root, artifact_id, loaded, manifest_hash, before
                 )
+                _verify_checkpoint_prefixes(original_checkpoints, data_root, configs_root)
                 return result
         except Exception as error:
             if _is_driver_error(self._psycopg, error):

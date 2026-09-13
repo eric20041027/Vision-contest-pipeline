@@ -240,8 +240,19 @@ class DatasetAccess:
         )
 
     def _authorize(self, subset: str, sample_id: str | None = None) -> None:
+        self._check_open()
         if subset not in self.allowed:
             self._deny(subset, subset if sample_id is None else f"{subset}:{sample_id}")
+
+    def _check_open(self) -> None:
+        """F1: once the receipt is committed, no further read may reach it -- rows would be
+        parsed (or denials counted) into an accumulator nobody writes back, and a generator
+        obtained before close() would silently keep parsing after the receipt is fixed."""
+        if self._closed:
+            raise ValidationFailed(
+                f"closed: access receipt {self.receipt_id!r} is committed; open a new access",
+                fields={"id": self.receipt_id},
+            )
 
     def subset_of(self, sample_id: str) -> str:
         """Which subset the plan assigns an id to. Plan knowledge, not a read."""
@@ -258,6 +269,7 @@ class DatasetAccess:
         return sorted(self.plan.ids_in(subset))
 
     def _read(self, f: BinaryIO, sample_id: str, subset: str) -> Sample:
+        self._check_open()  # F1: a generator opened before close() must not parse after it
         cached = self._cache.get(sample_id)
         if cached is None:
             offset, length = self._index[sample_id]
@@ -346,8 +358,10 @@ class DatasetAccess:
                 f"closed: access receipt {self.receipt_id!r} was not committed; open a new access"
             )
         self._closed = True
-        receipt = self._build_receipt(exc)
+        # T1: building the receipt happens inside the writer's context too, so a pydantic
+        # failure there leaves failure.json (via the writer's __exit__) instead of a bare claim.
         with self._writer as writer:  # a failing commit leaves the artifact partial + failure.json
+            receipt = self._build_receipt(exc)
             writer.write_json(RECEIPT_FILE, receipt.model_dump(mode="json"))
             manifest = writer.commit()
         self.receipt = receipt

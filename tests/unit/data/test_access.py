@@ -118,6 +118,33 @@ def test_unauthorized_subsets_fail_closed_and_are_counted(roots):
     assert set(r.accessed) == set()  # ids() alone is not a read
 
 
+def test_reads_after_close_are_refused(roots):
+    ds, plan, paths = _seed(roots)
+    access = _open(roots, subsets={"train", "valA"})
+    train_id = list(access.iter("train"))[0].sample_id
+    access.close()
+    with pytest.raises(ValidationFailed, match="^closed:") as ei:
+        access.iter("valA")
+    assert ei.value.fields == {"id": access.receipt_id}
+    with pytest.raises(ValidationFailed, match="^closed:"):
+        access.by_id(train_id)
+    with pytest.raises(ValidationFailed, match="^closed:"):
+        access.records("train")
+    with pytest.raises(ValidationFailed, match="^closed:"):
+        access.ids("valA")
+    assert set(access.receipt.accessed) == {"train"}
+
+
+def test_a_generator_consumed_after_close_is_refused(roots):
+    ds, plan, paths = _seed(roots)
+    access = _open(roots)
+    gen = access.iter("train")
+    next(gen)
+    access.close()
+    with pytest.raises(ValidationFailed, match="^closed:"):
+        list(gen)
+
+
 def test_roles_expand_to_subsets_and_sealed_needs_a_reason(roots):
     ds, plan, paths = _seed(roots)
     with _open(roots, roles={"eval"}) as access:

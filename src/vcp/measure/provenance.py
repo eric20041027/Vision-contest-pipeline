@@ -118,6 +118,8 @@ def attach_receipts(card: RunCard, artifact_ids: list[str], *, data_root: Path) 
                 denied=receipt.denied,
                 receipt_sha256=sha,
                 binding="manual" if receipt.run_id is None else "session",
+                identity=receipt.identity,
+                source_audit=receipt.source_audit,
             )
         )
     return card.model_copy(update={"access": refs})

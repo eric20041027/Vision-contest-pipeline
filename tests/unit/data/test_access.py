@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,8 @@ from vcp.data.access.receipt import read_receipt, standalone_receipt_id
 from vcp.data.access.schema import AccessRef
 from vcp.data.dataset import Dataset
 from vcp.data.schema import sample_json_line
+from vcp.data.source_audit import KIND as AUDIT_KIND
+from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 
 SECRET = "fakesecretfakesecretfakesecret1234"
@@ -382,3 +385,118 @@ def test_read_receipt_rejects_a_tampered_or_missing_artifact(roots):
         read_receipt(roots.data, rid)
     with pytest.raises(ValidationFailed, match="^not_found: "):
         read_receipt(roots.data, "nope")
+
+
+def _audit(roots, ds, paths):
+    return write_source_audit(paths, ds.card, data_root=roots.data)
+
+
+def test_an_audited_open_never_hashes_the_whole_file(roots, monkeypatch):
+    ds, plan, paths = _seed(roots)
+    res = _audit(roots, ds, paths)
+    import vcp.data.access.access as access_module
+
+    def no_full_pass(path):
+        raise AssertionError(f"whole-file pass over {path}")
+
+    real_sha = access_module.sha256_file
+
+    def guarded_sha(path):
+        if Path(path).name == "samples.jsonl":
+            raise AssertionError("samples.jsonl was hashed")
+        return real_sha(path)
+
+    monkeypatch.setattr(access_module, "index_samples", no_full_pass)
+    monkeypatch.setattr(access_module, "sha256_file", guarded_sha)
+    with _open(roots) as access:
+        assert access.identity == "source_audit" and access.source_audit_id == res.artifact_id
+        train = list(access.iter("train"))
+    assert [s.sample_id for s in train] == sorted(plan.ids_in("train"))
+    receipt = access.receipt
+    assert receipt.identity == "source_audit" and receipt.source_audit == res.artifact_id
+    assert receipt.source_audit_sha256 == res.manifest_sha256
+    manifest = store.load_manifest(roots.data, "access_receipt", access.receipt_id)
+    assert [i.name for i in manifest.spec.inputs] == ["source_audit"]
+    assert all(not Path(i.path).is_absolute() for i in manifest.spec.inputs if i.path)
+    assert manifest.spec.params["samples_hash"] == ds.card.samples_hash
+
+
+def test_an_unaudited_open_is_full_hash(roots):
+    ds, plan, paths = _seed(roots)
+    with _open(roots) as access:
+        assert access.identity == "full_hash" and access.source_audit_id is None
+        list(access.iter("train"))
+    assert access.receipt.identity == "full_hash" and access.receipt.source_audit is None
+    manifest = store.load_manifest(roots.data, "access_receipt", access.receipt_id)
+    assert [i.name for i in manifest.spec.inputs] == ["samples"]
+
+
+def test_tampering_the_audit_fails_closed(roots):
+    ds, plan, paths = _seed(roots)
+    res = _audit(roots, ds, paths)
+    d = artifact_dir(roots.data, AUDIT_KIND, res.artifact_id)
+    original = (d / "index.jsonl").read_bytes()
+    (d / "index.jsonl").write_bytes(original.replace(b'"length": ', b'"length":  ', 1))
+    with pytest.raises(IntegrityError, match="^mismatch: source audit"):
+        _open(roots)
+    (d / "index.jsonl").write_bytes(original)
+    with _open(roots) as access:  # restored: the audit holds again
+        assert access.identity == "source_audit"
+    paths.samples_jsonl.write_bytes(paths.samples_jsonl.read_bytes() + b"\n")
+    with pytest.raises(IntegrityError, match="^mismatch: samples.jsonl is"):
+        _open(roots)
+
+
+def test_a_tampered_selected_row_is_refused_and_an_unselected_one_is_not(roots):
+    ds, plan, paths = _seed(roots)
+    _audit(roots, ds, paths)
+    raw = paths.samples_jsonl.read_bytes()
+    lines = raw.split(b"\n")
+    by_id = {s.sample_id: i for i, s in enumerate(ds.samples)}
+    train_id = sorted(plan.ids_in("train"))[0]
+    val_id = sorted(plan.ids_in("valA"))[0]
+
+    def flip(line: bytes) -> bytes:  # same length, one byte inside the JSON body changed
+        pos = line.index(b'"views"')
+        return line[:pos] + b'"viewz"' + line[pos + 7 :]
+
+    tampered = list(lines)
+    tampered[by_id[val_id]] = flip(lines[by_id[val_id]])
+    paths.samples_jsonl.write_bytes(b"\n".join(tampered))
+    with _open(roots) as access:  # never reads valA: the tamper is invisible to a train-only job
+        assert len(list(access.iter("train"))) == len(plan.ids_in("train"))
+    assert access.receipt.identity == "source_audit"
+    tampered[by_id[train_id]] = flip(lines[by_id[train_id]])
+    paths.samples_jsonl.write_bytes(b"\n".join(tampered))
+    with pytest.raises(
+        IntegrityError, match=f"^mismatch: row {train_id!r} differs from source audit"
+    ):
+        with _open(roots) as access:
+            access.by_id(train_id)
+    assert access.receipt.outcome == "failed" and access.receipt.exception == "IntegrityError"
+
+
+def test_audited_and_full_hash_reads_are_equivalent(roots):
+    ds, plan, paths = _seed(roots)
+    res = _audit(roots, ds, paths)
+    with _open(roots, subsets={"train", "valA"}) as audited:
+        first = {s: audited.records(s) for s in ("train", "valA")}
+    shutil.rmtree(artifact_dir(roots.data, AUDIT_KIND, res.artifact_id))
+    with _open(roots, subsets={"train", "valA"}) as plain:
+        second = {s: plain.records(s) for s in ("train", "valA")}
+    assert audited.identity == "source_audit" and plain.identity == "full_hash"
+    assert first == second
+    assert audited.receipt.accessed == plain.receipt.accessed
+
+
+def test_two_accesses_share_one_audit(roots):
+    ds, plan, paths = _seed(roots)
+    res = _audit(roots, ds, paths)
+    assert _audit(roots, ds, paths).state == "reused"
+    ids = []
+    for _ in range(2):
+        with _open(roots) as access:
+            list(access.iter("train"))
+        ids.append(access.receipt.source_audit)
+    assert ids == [res.artifact_id, res.artifact_id]
+    assert len([p for p in (roots.data / "artifacts" / AUDIT_KIND).iterdir() if p.is_dir()]) == 1

@@ -17,6 +17,8 @@ from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import utc_now
 from vcp.data.access.schema import AccessReceipt, AccessRef, Purpose
+from vcp.data.source_audit import KIND as SOURCE_AUDIT_KIND
+from vcp.data.source_audit import LoadedAudit
 
 KIND = "access_receipt"
 RECEIPT_FILE = "receipt.json"
@@ -52,6 +54,7 @@ def receipt_spec(
     samples_hash: str,
     plan_sha256: str,
     card_sha256: str,
+    source_audit: LoadedAudit | None = None,
 ) -> ArtifactSpec:
     # Only samples.jsonl lives under data_root; card.yaml and the plan json live under
     # configs_root, so recording them as `inputs` would store absolute filesystem paths in
@@ -63,15 +66,30 @@ def receipt_spec(
         params["run"] = run_id
     if attempt is not None:
         params["attempt"] = str(attempt)
+    if source_audit is None:
+        inputs = [InputRef(name="samples", path=str(paths.samples_jsonl), sha256=samples_hash)]
+    else:
+        # Spec 4.3: with an audit the corpus is never hashed again -- not even by the writer.
+        params["samples_hash"] = samples_hash
+        params["source_audit"] = source_audit.artifact_id
+        inputs = [
+            InputRef(
+                name="source_audit",
+                path=str(
+                    store.manifest_path(
+                        paths.data_root, SOURCE_AUDIT_KIND, source_audit.artifact_id
+                    )
+                ),
+                sha256=source_audit.manifest_sha256,
+            )
+        ]
     return ArtifactSpec(
         kind=KIND,
         id=receipt_id,
         dataset=paths.name,
         plan_id=plan_id,
         params=params,
-        inputs=[
-            InputRef(name="samples", path=str(paths.samples_jsonl), sha256=samples_hash),
-        ],
+        inputs=inputs,
     )
 
 

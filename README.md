@@ -127,23 +127,21 @@ uv run vcp eval measure --run y12x_r2
 # torch 與 NAMES（你的類別名清單）是讀者自己的東西，vcp 不提供也不要求
 from vcp.train import MaterializedReader, Session
 
-reader = MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="train")
+with MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="train") as reader:
 
+    class Knee(torch.utils.data.Dataset):
+        def __len__(self):
+            return len(reader)
 
-class Knee(torch.utils.data.Dataset):
-    def __len__(self):
-        return len(reader)
+        def __getitem__(self, i):
+            rec = reader[reader.ids[i]]  # rec.arrays: {"0": HxW(xC)} 或 {seq_id: SxHxW}
+            x = torch.from_numpy(next(iter(rec.arrays.values())))
+            y = torch.tensor([rec.labels.targets[n] for n in NAMES])
+            return x, y
 
-    def __getitem__(self, i):
-        rec = reader[reader.ids[i]]  # rec.arrays: {"0": HxW(xC)} 或 {seq_id: SxHxW}
-        x = torch.from_numpy(next(iter(rec.arrays.values())))
-        y = torch.tensor([rec.labels.targets[n] for n in NAMES])
-        return x, y
-
-
-s = Session.current()  # 在 vcp train run 底下才有
-s.register_checkpoint("ckpt/best.pt", final=True)
-s.note("val_auc", 0.91)
+    s = Session.current()  # 在 vcp train run 底下才有
+    s.register_checkpoint("ckpt/best.pt", final=True)
+    s.note("val_auc", 0.91)
 ```
 
 ## 提交治理命令 `vcp submit`

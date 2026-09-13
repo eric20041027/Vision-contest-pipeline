@@ -171,7 +171,12 @@ def make_backend(config: BackendConfig, data_root: Path) -> ProvenanceBackend:
     name = parse_backend(config.name)
     if name is BackendName.SQLITE:
         return SQLiteBackend(ProvenanceIndex(provenance_index_path(Path(data_root))))
-    module = import_module("vcp.provenance.postgres")
+    try:
+        module = import_module("vcp.provenance.postgres")
+    except ImportError:
+        raise ValidationFailed(
+            "missing_dependency: install with `uv sync --extra postgres`"
+        ) from None
     return module.PostgresProvenanceBackend(config)
 
 

@@ -56,6 +56,7 @@ class FakePostgres:
     """
 
     def __init__(self):
+        self.info = SimpleNamespace(server_version=170011)
         self.db = sqlite3.connect(":memory:", isolation_level=None)
         self.db.execute("ATTACH DATABASE ':memory:' AS vcp_provenance")
         self.events = []
@@ -480,12 +481,14 @@ def test_fixed_result_and_decision_contract(fake_postgres, roots):
     )
 
 
-@pytest.mark.parametrize("options", [{"requested_strategy": "full"}, {"policy_id": "p"}])
-def test_fixed_ingest_rejects_policy_and_other_strategies(fake_postgres, roots, options):
+@pytest.mark.parametrize("requested", ["FULL", "invalid", None])
+def test_ingest_rejects_invalid_request_before_connection(fake_postgres, roots, requested):
     from vcp.core.errors import ValidationFailed
 
     with pytest.raises(ValidationFailed, match="unsupported"):
-        fake_postgres.backend.ingest_diff("idx-diff", roots.data, roots.configs, **options)
+        fake_postgres.backend.ingest_diff(
+            "idx-diff", roots.data, roots.configs, requested_strategy=requested
+        )
     assert fake_postgres.events == []
 
 
@@ -851,7 +854,8 @@ def test_zero_change_join_recomputes_incompatible_reading_bases(
     expected = compute_statuses(build_graph(roots.data, roots.configs), target)[reading_id]
     assert expected.status.value == "REVIEW"
     result = fake_postgres.backend.ingest_diff("zero-join", roots.data, roots.configs)
-    assert result.selected_strategy == "NO_OP"
+    assert result.selected_strategy == "INCREMENTAL"
+    assert result.changed_samples == 0 and result.dirty_entities > 0
     assert fake_postgres.backend.statuses(target)[reading_id] == expected
     _assert_parity(fake_postgres, roots)
     assert len(fake_postgres.history_reads) == 1

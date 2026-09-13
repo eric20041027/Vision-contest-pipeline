@@ -902,3 +902,30 @@ CLI and experimental methodology; a fresh task-scoped implementer plus database/
 clearer isolation than one long inline batch. Use `executing-plans` only when one agent must retain the same local
 PostgreSQL service and benchmark environment across several consecutive tasks; still stop for review after each
 task and never run Tasks 10–11 in parallel against the same database.
+
+## Task 7 execution rulings (2026-09-13)
+
+- Event count and semantic work are distinct. `NO_OP` requires both `changed_samples == 0` and
+  `dirty_entities == 0`. Late zero-event links that expose descendant history, and terminal zero-event joins
+  that repair incompatible carried reading bases, select the requested/calibrated semantic path. This
+  supersedes Task 5's `NO_OP` label for terminal joins requiring reading recomputation; canonical statuses
+  remain unchanged. Pure topology/evidence/status copies remain `NO_OP`.
+- Features describe the candidate graph before the first database write. Dirty entities include the recursive
+  source/delta closure and reading/run/fusion predecessor/descendant repair components. The incremental path
+  visits that planned semantic closure. `historical_changes` counts all already persisted events, while
+  history payload retrieval stays bounded to affected paths. The frozen Task 6 feature order has no separate
+  affected-history coefficient; calibration/RMSE must account for this modeling limitation.
+- Keep PostgreSQL schema v1. The decision table has no graph-hash column; validate its committed result hash
+  through the associated generation row. The generation hash can subsequently change during incremental
+  maintenance; decision rows are derived telemetry, not immutable per-decision graph-hash receipts.
+- `maintenance_environment(connection)` exposes the live numeric PostgreSQL major and a deterministic hash
+  of an allowlisted runtime descriptor (descriptor version, PostgreSQL major, OS family, machine architecture,
+  Python implementation/version, logical CPU count). No service, host, user, database, password, conninfo,
+  process-environment contents, or machine node identifier is included. Calibration must call the same
+  helper. This descriptor does not claim to distinguish remote server hardware or database tuning.
+- Explicit policy validation supplies all four compatibility dimensions (backend schema, PostgreSQL major,
+  benchmark schema, runtime fingerprint) before any database write and rechecks the immutable policy at the
+  commit boundary. Absent implicit policy uses the selector's safe full fallback. Full publication is reused
+  inside the ingest transaction; no nested writer transaction or second decision insertion is permitted.
+- Task 7 does not add CLI, calibration/fitting, benchmarks, Compose, or integration harness changes. Live
+  PostgreSQL planner/concurrency verification remains for the designated integration task.

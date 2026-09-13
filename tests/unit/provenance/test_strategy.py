@@ -69,9 +69,20 @@ def compatible_policy(tmp_path):
 
 
 def test_zero_change_is_topology_only_no_op(features):
-    decision = select_strategy("auto", features.model_copy(update={"changed_samples": 0}), None)
+    decision = select_strategy(
+        "auto", features.model_copy(update={"changed_samples": 0, "dirty_entities": 0}), None
+    )
     assert decision.selected_strategy == "NO_OP"
     assert decision.reason == "verified_zero_semantic_changes"
+
+
+@pytest.mark.parametrize(
+    ("requested", "selected"),
+    [("incremental", "INCREMENTAL"), ("full", "FULL"), ("auto", "FULL")],
+)
+def test_zero_event_late_link_with_semantic_work_uses_requested_path(features, requested, selected):
+    decision = select_strategy(requested, features.model_copy(update={"changed_samples": 0}), None)
+    assert decision.selected_strategy == selected
 
 
 @pytest.mark.parametrize(

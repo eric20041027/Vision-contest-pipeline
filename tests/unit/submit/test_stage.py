@@ -17,6 +17,9 @@ from vcp.cli import app
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
+from vcp.data.access.access import DatasetAccess
+from vcp.data.access.receipt import read_receipt
+from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, save_run
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile, load_profile
@@ -227,3 +230,58 @@ def test_stage_json_is_plain_json(ready):
     res = stage(_spec(ready, "S1", "good", "good.test"))
     doc = json.loads((res.path / "stage.json").read_text(encoding="utf-8"))
     assert doc["submission_id"] == "S1" and doc["artifact"]["writer"] == "scores_csv"
+
+
+def _bind(pair, run_id, subsets, *, purpose="train"):
+    with DatasetAccess.open(
+        EVAL,
+        "fixed-v1",
+        subsets=set(subsets),
+        purpose=purpose,
+        unseal_reason="test" if "holdout" in subsets else None,
+        data_root=pair.roots.data,
+        configs_root=pair.roots.configs,
+    ) as access:
+        for s in subsets:
+            list(access.iter(s))
+    card = attach_receipts(
+        load_run(pair.roots.data, run_id), [access.receipt_id], data_root=pair.roots.data
+    )
+    save_run(pair.roots.data, card)
+    return access.receipt_id
+
+
+def test_stage_records_provenance_and_the_profile_can_require_it(ready):
+    res = stage(_spec(ready, "S1", "good", "good.test"))
+    assert res.staged.provenance == "declared"
+    dump_yaml_model(_profile(require_provenance="receipt"), ready.test_paths.submit_yaml)
+    with pytest.raises(
+        ValidationFailed, match="^provenance_required: run 'good' is declared"
+    ) as ei:
+        stage(_spec(ready, "S2", "good", "good.test"))
+    assert ei.value.fields == {"run": "good", "provenance": "declared"}
+    assert not ready.test_paths.submission_dir("S2").exists()
+    _bind(ready, "good", ["train"])
+    res = stage(_spec(ready, "S2", "good", "good.test"))
+    assert res.staged.provenance == "receipt"
+    assert load_staged(ready.test_paths, "S2").provenance == "receipt"
+    # a baseline is waived from the requirement; a candidate that read the sealed subset never
+    # passes
+    res = stage(_spec(ready, "S3", "bad", "bad.test", kind="baseline", reason="ref"))
+    assert res.staged.provenance == "declared"
+    _bind(ready, "bad", ["train", "holdout"], purpose="custom")
+    with pytest.raises(ValidationFailed, match="^observed_sealed: 'bad' read 'holdout'"):
+        stage(_spec(ready, "S4", "bad", "bad.test"))
+
+
+def test_stage_reads_the_test_subset_through_a_receipt(ready):
+    res = stage(_spec(ready, "S1", "good", "good.test"))
+    receipts = [
+        p.name
+        for p in (ready.roots.data / "artifacts" / "access_receipt").iterdir()
+        if p.name.startswith(f"submit-{TEST}-all-v1-")
+    ]
+    assert len(receipts) == 1
+    receipt = read_receipt(ready.roots.data, receipts[0]).receipt
+    assert receipt.run_id == "good" and set(receipt.accessed) == {"test"}
+    assert res.staged.artifact.rows == receipt.accessed["test"].ids_count

@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
 from vcp.data.split import load_plan
@@ -17,6 +18,7 @@ from vcp.submit.guards import QuotaState, quota_state
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
+from vcp.submit.stage import load_staged
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class StatusView:
     locked: LedgerRow | None
     current: str | None
     unscored: list[str]
+    provenance: dict[str, str]
 
 
 def _label(r: LedgerRow) -> str:
@@ -87,6 +90,15 @@ def _public(ledger: SubmissionLedger, r: LedgerRow) -> float | None:
     return assigned.public if assigned is not None else None
 
 
+def _grade(paths: DatasetPaths, sid: str) -> str:
+    """The grade stage.json recorded; "-" when it has none or the directory is gone (status
+    is read-only and must not depend on the data root being complete)."""
+    try:
+        return load_staged(paths, sid).provenance or "-"
+    except ValidationFailed:
+        return "-"
+
+
 def status(
     dataset: str, *, data_root: Path | None = None, configs_root: Path | None = None
 ) -> StatusView:
@@ -116,6 +128,7 @@ def status(
         newest = max(range(len(uploads)), key=lambda i: (uploads[i].at or "", uploads[i].ts))
         if assigned[newest] is None:
             unscored.append(sid)
+    grades = {sid: _grade(paths, sid) for sid in ledger.ids()}
     return StatusView(
         staged=len(ledger.ids()),
         uploaded=len(ledger.of("uploaded")),
@@ -125,6 +138,7 @@ def status(
         locked=ledger.lock_state(),
         current=current,
         unscored=unscored,
+        provenance=grades,
     )
 
 

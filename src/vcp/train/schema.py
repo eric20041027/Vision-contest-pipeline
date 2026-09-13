@@ -6,10 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.data.access.schema import AccessRef
+
 AttemptStatus = Literal["running", "finished", "failed", "interrupted"]
 CheckpointSource = Literal["glob", "session"]
 UploadKind = Literal["rclone", "local"]
-EVENTS = ("started", "env", "checkpoint", "uploaded", "finished", "note")
+EVENTS = ("started", "env", "checkpoint", "uploaded", "finished", "note", "access")
 
 
 class _Strict(BaseModel):
@@ -93,6 +95,7 @@ class TrainRecord(_Strict):
     attempts: list[Attempt] = Field(default_factory=list)
     checkpoints: list[CheckpointRecord] = Field(default_factory=list)
     uploads: list[UploadRecord] = Field(default_factory=list)
+    access: list[AccessRef] = Field(default_factory=list)
     notes: str = ""
 
 

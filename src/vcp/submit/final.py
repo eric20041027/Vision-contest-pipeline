@@ -12,9 +12,11 @@ from pathlib import Path
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp, utc_now
+from vcp.data.access.schema import GRADE_RANK, Grade
 from vcp.data.split import load_plan
 from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.metrics import effective_params, get_metric, params_key
+from vcp.measure.provenance import provenance
 from vcp.measure.runs import load_run
 from vcp.measure.schema import Reading, RunCard
 from vcp.submit.guards import assert_unlocked
@@ -140,13 +142,21 @@ def final(
         latest = ledger.latest_score(sid)
         public = latest.public if latest is not None else None
         reading: Reading | None = None
+        grade: Grade | None = None
         if st.kind == "probe":
             why = "probe"
         elif not ledger.uploads(sid):
             why = "not_uploaded"
         else:
             card = load_run(paths.data_root, str(st.eval_run))
+            info = provenance(card, data_root=paths.data_root, configs_root=configs_root)
+            grade = info.grade
             reading, why = sealed_reading(readings, card, profile, params_hash, sealed_size)
+            if why == "" and st.kind == "candidate":
+                if profile.sealed_subset in info.observed:
+                    why = "observed_sealed"
+                elif GRADE_RANK[info.grade] < GRADE_RANK[profile.require_provenance]:
+                    why = "provenance_required"
         entries.append(
             FinalEntry(
                 submission_id=sid,
@@ -156,6 +166,7 @@ def final(
                 sealed_reading_id=reading.reading_id if reading is not None else None,
                 public=public,
                 staged_at=load_staged(paths, sid).staged_at,
+                provenance=grade,
             )
         )
     ranked = sorted((e for e in entries if e.eligible), key=rank_key(sign))

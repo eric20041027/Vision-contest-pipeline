@@ -7,8 +7,10 @@ import yaml
 from PIL import Image
 
 from helpers import CATS, det_samples, make_card, write_exif_image, write_images
+from vcp.artifact import store
 from vcp.core.errors import RegistryError, SealedSubsetError, ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
+from vcp.data.access.receipt import read_receipt
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import EXPORTERS, ExportOutput, get_exporter, register_exporter
 from vcp.data.exporters.base import ExportSpec, export_subset, select_view
@@ -527,3 +529,58 @@ def test_export_manifest_records_exif(roots, tmp_path):
     assert manifest["exif_policy"] == "stored" and manifest["exif_rotated"] == 1
     assert res.fields["exif_rotated"] == 1
     assert any("EXIF" in w for w in res.warnings)
+
+
+def test_export_leaves_a_receipt_for_the_subset_it_read(roots, tmp_path, det_ds):
+    ds, plan, paths = det_ds
+    res = export_subset(
+        ExportSpec(
+            name="tiny",
+            plan_id="fixed-v1",
+            subset="train",
+            format="coco",
+            out=tmp_path / "coco-train",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    manifest = json.loads(res.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["receipt"] == res.receipt and res.receipt.startswith("export-tiny-fixed-v1-")
+    receipt = read_receipt(roots.data, res.receipt).receipt
+    assert receipt.purpose == "export" and receipt.allowed == ["train"]
+    assert set(receipt.accessed) == {"train"}
+    assert receipt.accessed["train"].ids_count == manifest["sample_count"]
+    assert not store.is_partial(roots.data, "access_receipt", res.receipt)
+
+
+def test_export_of_a_sealed_subset_records_the_unseal_and_the_receipt(roots, tmp_path, det_ds):
+    ds, plan, paths = det_ds
+    with pytest.raises(SealedSubsetError):
+        export_subset(
+            ExportSpec(
+                name="tiny",
+                plan_id="fixed-v1",
+                subset="holdout",
+                format="coco",
+                out=tmp_path / "h1",
+                data_root=roots.data,
+                configs_root=roots.configs,
+            )
+        )
+    res = export_subset(
+        ExportSpec(
+            name="tiny",
+            plan_id="fixed-v1",
+            subset="holdout",
+            format="coco",
+            out=tmp_path / "h2",
+            unseal=True,
+            reason="final",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    receipt = read_receipt(roots.data, res.receipt).receipt
+    assert receipt.sealed_accessed and receipt.unseal_event_sha256 is not None
+    rows = paths.unseal_jsonl("fixed-v1").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1 and json.loads(rows[0])["caller"] == "vcp data export"

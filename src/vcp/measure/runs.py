@@ -11,7 +11,7 @@ from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import run_path, validate_name
 from vcp.core.time import stamp
-from vcp.data.dataset import Dataset
+from vcp.data.schema import DatasetCard
 from vcp.measure.schema import RunCard
 
 # The `source.framework` a run card carries when `vcp fuse build` wrote it. Owned here, not by
@@ -44,20 +44,20 @@ def save_run(data_root: Path, card: RunCard) -> Path:
     return path
 
 
-def assert_run_matches(card: RunCard, dataset: Dataset) -> None:
+def assert_run_matches(card: RunCard, dataset_card: DatasetCard) -> None:
     """A run must keep pointing at the dataset (by name and content) it was created on.
 
-    Shared by ``eval ingest`` (Task 5) and ``eval measure`` (Task 9) so this check has exactly
-    one implementation.
+    Takes the card alone so a caller that never parsed the samples file (spec 6.1) can still
+    make the check; one implementation for ingest, measure, fuse, stage and train run.
     """
-    if card.dataset != dataset.card.name:
+    if card.dataset != dataset_card.name:
         raise PlanMismatchError(
-            f"run {card.run_id!r} belongs to dataset {card.dataset!r}, not {dataset.card.name!r}"
+            f"run {card.run_id!r} belongs to dataset {card.dataset!r}, not {dataset_card.name!r}"
         )
-    if card.samples_hash != dataset.card.samples_hash:
+    if card.samples_hash != dataset_card.samples_hash:
         raise PlanMismatchError(
             f"run {card.run_id!r} was created on samples_hash {card.samples_hash[:12]}, "
-            f"dataset now has {dataset.card.samples_hash[:12]}"
+            f"dataset now has {dataset_card.samples_hash[:12]}"
         )
 
 

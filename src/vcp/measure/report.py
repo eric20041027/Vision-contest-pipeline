@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from vcp.core.config import load_yaml_model
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
 from vcp.measure.anchors import load_anchors
@@ -27,13 +27,19 @@ from vcp.measure.ledger import (
 )
 from vcp.measure.metrics import params_key
 from vcp.measure.prereg import list_preregs, prereg_time
+from vcp.measure.provenance import provenance
 from vcp.measure.schema import Judgement, Reading, RunCard, SigmaEstimate, SubsetJudgement
 
 
 @dataclass(frozen=True)
 class StatusResult:
     """What is outstanding for one dataset. ``sigma`` maps ``"<metric>/<method>"`` to the
-    newest estimate's value; ``unreadable`` names the run cards that could not be read at all."""
+    newest estimate's value; ``unreadable`` names the run cards that could not be read at all.
+    ``provenance`` / ``observed`` map each run id to its grade (spec 7.2) and the subsets its
+    receipts show it read; ``provenance_failed`` names the runs (counted in ``runs``, absent
+    from ``provenance`` / ``observed``) whose grade could not be computed at all -- a fused run
+    naming a member that can no longer be read is the case this exists for (a read-only view
+    must survive that the way it survives an unreadable run card)."""
 
     orphans: list[str]
     preregs: int
@@ -42,10 +48,13 @@ class StatusResult:
     runs: int
     sigma: dict[str, float] = field(default_factory=dict)
     unreadable: list[str] = field(default_factory=list)
+    provenance: dict[str, str] = field(default_factory=dict)
+    observed: dict[str, list[str]] = field(default_factory=dict)
+    provenance_failed: dict[str, str] = field(default_factory=dict)
 
 
-def _runs_for(paths: DatasetPaths) -> tuple[int, list[str]]:
-    """Runs of this dataset, and the run cards that could not be read.
+def _runs_for(paths: DatasetPaths) -> tuple[list[RunCard], list[str]]:
+    """Run cards of this dataset, and the run cards that could not be read.
 
     Runs are stored per data root, not per dataset, so this has to open every card under the
     shared ``runs/`` root just to see which ones name this dataset -- and a card belonging to
@@ -55,8 +64,9 @@ def _runs_for(paths: DatasetPaths) -> tuple[int, list[str]]:
     file decide whether this dataset can be looked at.
     """
     if not paths.runs_dir.is_dir():
-        return 0, []
-    runs, unreadable = 0, []
+        return [], []
+    cards: list[RunCard] = []
+    unreadable: list[str] = []
     for p in sorted(paths.runs_dir.glob("*/run.yaml")):
         try:
             card = load_yaml_model(p, RunCard)
@@ -66,8 +76,8 @@ def _runs_for(paths: DatasetPaths) -> tuple[int, list[str]]:
             unreadable.append(str(p))
             continue
         if card.dataset == paths.name:
-            runs += 1
-    return runs, unreadable
+            cards.append(card)
+    return cards, unreadable
 
 
 def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = None) -> StatusResult:
@@ -91,7 +101,23 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
             and current - parse_stamp(ts) > timedelta(hours=max_age_hours)
         ):
             orphans.append(pid)
-    runs, unreadable = _runs_for(paths)
+    cards, unreadable = _runs_for(paths)
+    grades: dict[str, str] = {}
+    observed: dict[str, list[str]] = {}
+    provenance_failed: dict[str, str] = {}
+    for card in sorted(cards, key=lambda c: c.run_id):
+        try:
+            info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
+        except (VcpError, OSError, UnicodeDecodeError) as e:
+            # A fused run's member can go missing or unreadable without the fused card itself
+            # changing at all -- `provenance()` must still FAIL for measure/judge/stage (a
+            # broken fusion cannot silently grade as anything), but a read-only view over every
+            # run must survive it exactly as it survives an unreadable run card (`unreadable`
+            # above): count the run, name what went wrong, and move on.
+            provenance_failed[card.run_id] = f"{type(e).__name__}: {e}"
+            continue
+        grades[card.run_id] = info.grade
+        observed[card.run_id] = info.observed
     sigma: dict[str, float] = {}
     for est in sorted(
         read_rows(paths.measure_dir / SIGMA_LEDGER, SigmaEstimate), key=lambda e: e.ts
@@ -104,9 +130,12 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
         preregs=len(preregs),
         judged=len(judged_ids),
         anchors=len(load_anchors(paths)),
-        runs=runs,
+        runs=len(cards),
         sigma=sigma,
         unreadable=unreadable,
+        provenance=grades,
+        observed=observed,
+        provenance_failed=provenance_failed,
     )
 
 
@@ -133,6 +162,7 @@ def report_rows(
             "value": r.value,
             "ts": r.ts,
             "reading_id": r.reading_id,
+            "provenance": r.provenance or "-",
         }
         for r in sorted(latest.values(), key=lambda r: (r.run_id, r.subset, r.metric))
     ]

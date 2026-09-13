@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 
 from helpers import (
     det_samples,
+    det_with_runs,
     make_card,
     noisy_predictions,
     perfect_predictions,
@@ -15,13 +16,18 @@ from vcp.cli import app
 from vcp.cli_eval import load_plugins
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
+from vcp.core.time import stamp
+from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Labels, Sample, View
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.fuse.build import write_record
+from vcp.fuse.schema import FuseRecord, MemberRecord
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.predictions import write_predictions
-from vcp.measure.runs import load_run
+from vcp.measure.runs import FUSE_FRAMEWORK, load_run, save_run
+from vcp.measure.schema import RunCard, RunSource
 
 runner = CliRunner()
 
@@ -1189,3 +1195,105 @@ def test_eval_status_warns_about_an_orphan_prereg_and_shows_sigma_cli(roots):
     # ... and the same claim is not overdue under the default 48h window
     v = _last_verdict(runner.invoke(app, ["eval", "status", "--dataset", "tiny"]).output)
     assert "status=OK" in v and "orphans=" not in v
+
+
+def _verdict(output: str) -> str:
+    lines = [line for line in output.splitlines() if line.startswith("VERDICT ")]
+    assert lines, output
+    return lines[-1]
+
+
+def test_ingest_receipt_binds_and_refuses_the_wrong_run(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path, n=40)
+
+    def receipt(run_id):
+        with DatasetAccess.open(
+            "tiny",
+            "fixed-v1",
+            subsets={"train"},
+            purpose="train",
+            run_id=run_id,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        ) as access:
+            list(access.iter("train"))
+        return access.receipt_id
+
+    src = tmp_path / "again.jsonl"
+    write_predictions(src, perfect_predictions(ds.subset("valA", plan), ds.card))
+    base = [
+        "eval",
+        "ingest",
+        "--run",
+        "perfect",
+        "--dataset",
+        "tiny",
+        "--plan",
+        "fixed-v1",
+        "--subset",
+        "valA",
+        "--format",
+        "jsonl",
+        "--src",
+        str(src),
+        "--replace",
+    ]
+    r = runner.invoke(app, [*base, "--receipt", receipt("perfect")])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "receipts=1" in v and "provenance=receipt" in v
+    r = runner.invoke(app, [*base, "--receipt", receipt("noisy")])
+    assert r.exit_code == 1 and "mismatch: receipt" in _verdict(r.output)
+    r = runner.invoke(app, ["eval", "measure", "--run", "perfect"])
+    assert (
+        r.exit_code == 0
+        and "provenance=receipt" in _verdict(r.output)
+        and "observed=train" in _verdict(r.output)
+    )
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "receipt_runs=1" in v and "declared_runs=1" in v
+    assert "perfect: provenance=receipt observed=train" in r.output
+    r = runner.invoke(app, ["eval", "report", "--dataset", "tiny"])
+    assert r.exit_code == 0 and "receipt" in r.output
+
+
+def test_eval_status_warns_when_a_fused_runs_member_cannot_be_read(roots, tmp_path):
+    """A fused run naming a member that no longer exists makes `provenance()` raise -- correctly,
+    since measure / judge / stage must still FAIL on a broken fusion. `eval status` is a
+    read-only view over every run in the dataset, so it must survive that one broken fused run
+    the same way it already survives an unreadable run card: WARN and name it, never abort."""
+    ds, _, _ = det_with_runs(roots, tmp_path, n=40)
+    save_run(
+        roots.data,
+        RunCard(
+            run_id="fused",
+            dataset="tiny",
+            samples_hash=ds.card.samples_hash,
+            plan_id="fixed-v1",
+            trained_on=["train"],
+            source=RunSource(framework=FUSE_FRAMEWORK),
+            created_at=stamp(),
+        ),
+    )
+    write_record(
+        roots.data,
+        "fused",
+        FuseRecord(
+            run_id="fused",
+            recipe_id="r1",
+            recipe_sha256="a" * 64,
+            method="mean",
+            method_version="1",
+            params={},
+            members=[
+                MemberRecord(run="perfect", weight=1.0, trained_on=["train"]),
+                MemberRecord(run="gone", weight=1.0, trained_on=["train"]),
+            ],
+            vcp_version="0",
+        ),
+    )
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny"])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "status=WARN" in v and "provenance_failed=1" in v
+    assert "provenance unavailable for run fused:" in r.output

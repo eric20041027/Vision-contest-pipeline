@@ -122,6 +122,8 @@ def run_cmd(
             fields["observed_beyond_trained_on"] = ",".join(res.observed_beyond)
         if res.receipt_invalid:
             fields["receipt_invalid"] = res.receipt_invalid
+        if res.source_audit_missing:
+            fields["source_audit"] = "missing"
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":

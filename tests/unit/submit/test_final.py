@@ -242,3 +242,32 @@ def test_final_recomputes_provenance_and_drops_candidates_below_the_bar(uploaded
     table = {e.submission_id: e for e in res.row.table}
     assert table["S1"].eligible and table["S1"].provenance == "receipt"
     assert res.chosen == ["S1"]
+
+
+def test_final_drops_a_candidate_whose_receipt_read_the_sealed_subset(uploaded):
+    """T3 (Task 10 minor): the `observed_sealed` branch was untested. A candidate whose run
+    peeked at the sealed holdout through a receipt must be dropped even under the default
+    profile (require_provenance declared, which never blocks eligibility on grade alone), and a
+    baseline stays exempt from the check entirely."""
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+    with DatasetAccess.open(
+        EVAL,
+        "fixed-v1",
+        subsets={"holdout"},
+        purpose="custom",
+        run_id="good",
+        unseal_reason="peek",
+        caller="t",
+        data_root=uploaded.roots.data,
+        configs_root=uploaded.roots.configs,
+    ) as access:
+        list(access.iter("holdout"))
+    card = attach_receipts(
+        load_run(uploaded.roots.data, "good"), [access.receipt_id], data_root=uploaded.roots.data
+    )
+    save_run(uploaded.roots.data, card)
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    table = {e.submission_id: e for e in res.row.table}
+    assert table["S1"].why == "observed_sealed" and not table["S1"].eligible
+    assert table["S2"].eligible

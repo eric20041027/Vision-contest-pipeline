@@ -203,6 +203,8 @@ def stage_cmd(
             fields["missing"] = st.artifact.missing or 0
         if st.provenance:
             fields["provenance"] = st.provenance
+        if res.identity:
+            fields["identity"] = res.identity
         for check in st.pairing.checks:
             if check.startswith("config_hash="):
                 fields["config_hash"] = check.split("=", 1)[1]

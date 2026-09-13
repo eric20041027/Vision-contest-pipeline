@@ -13,6 +13,7 @@ from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.materialize import MaterializeSpec, materialize
+from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, run_dir, save_run
@@ -641,3 +642,24 @@ def test_train_run_resume_keeps_a_manually_attached_receipt(roots, work):
     ids = [r.artifact_id for r in load_run(roots.data, "r1").access]
     assert ids == ["r1-a1-1", "r1-a2-1", manual_id]
     assert res.receipts == 3
+
+
+def test_train_run_warns_when_the_dataset_has_no_source_audit(roots, work):
+    ds, plan, paths = _seed(roots)
+    assert (
+        materialize(
+            MaterializeSpec(
+                name="tiny", mode="npy", data_root=roots.data, configs_root=roots.configs
+            )
+        ).failed
+        == 0
+    )
+    (work / "access_train.py").write_text(ACCESS_FAKE, encoding="utf-8")
+    res = train_run(_spec(roots, work, command=[sys.executable, "access_train.py"]))
+    assert res.source_audit_missing == 1 and "source_audit=missing" in res.warnings
+    assert load_run(roots.data, "r1").access[0].identity == "full_hash"
+    write_source_audit(paths, ds.card, data_root=roots.data)
+    res = train_run(_spec(roots, work, run_id="r2", command=[sys.executable, "access_train.py"]))
+    assert res.source_audit_missing == 0 and "source_audit=missing" not in res.warnings
+    ref = load_run(roots.data, "r2").access[0]
+    assert ref.identity == "source_audit" and ref.source_audit is not None

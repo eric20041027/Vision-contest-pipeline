@@ -83,9 +83,11 @@ def test_import_validate_split_lineage_flow(roots, tmp_path):
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert v.startswith("VERDICT cmd=import status=OK") and "samples=60" in v
+    assert "source_audit=src-tiny-" in v and "source_audit_state=created" in v
 
     r = runner.invoke(app, ["data", "validate", "--name", "tiny"])
-    assert r.exit_code == 0 and "status=OK" in _last_verdict(r.output)
+    v = _last_verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "source_audit_state=reused" in v
 
     r = runner.invoke(
         app, ["data", "split", "--name", "tiny", "--plan-id", "fixed-v1", "--seed", "1"]
@@ -120,6 +122,10 @@ def test_json_mode_puts_result_on_stdout(roots, tmp_path):
     doc = json.loads(json_line)
     assert doc["cmd"] == "validate" and doc["status"] == "OK"
     assert doc["fields"]["samples"] == 60 and doc["result"]["card"]["task"] == "det"
+    assert (
+        doc["fields"]["source_audit"].startswith("src-tiny-")
+        and doc["result"]["source_audit"] == doc["fields"]["source_audit"]
+    )
     assert "VERDICT" not in r.stdout
     assert "VERDICT cmd=validate status=OK" in r.stderr
 
@@ -836,3 +842,44 @@ def test_materialize_cli(roots, tmp_path):
     assert r.exit_code == 0, r.output
     v = _last_verdict(r.output)
     assert "materialized=6" in v and "orphans_removed=2" in v
+
+
+def test_validate_recreates_a_removed_source_audit(roots, tmp_path):
+    import shutil
+
+    assert _import_tiny(roots, tmp_path).exit_code == 0
+    shutil.rmtree(roots.data / "artifacts" / "source_audit")
+    r = runner.invoke(app, ["data", "validate", "--name", "tiny"])
+    assert r.exit_code == 0 and "source_audit_state=created" in _last_verdict(r.output)
+    r = runner.invoke(app, ["artifact", "status", "--kind", "source_audit"])
+    assert r.exit_code == 0 and "source_audit" in r.output
+
+
+def test_export_verdict_reports_identity_and_missing_audit(roots, tmp_path):
+    import shutil
+
+    assert _import_tiny(roots, tmp_path, with_images=True).exit_code == 0  # import wrote the audit
+    r = runner.invoke(
+        app, ["data", "split", "--name", "tiny", "--plan-id", "fixed-v1", "--seed", "1"]
+    )
+    assert r.exit_code == 0, r.output
+    common = [
+        "data",
+        "export",
+        "--name",
+        "tiny",
+        "--plan",
+        "fixed-v1",
+        "--subset",
+        "train",
+        "--format",
+        "yolo",
+    ]
+    r = runner.invoke(app, [*common, "--out", str(tmp_path / "a")])
+    v = _last_verdict(r.output)
+    assert r.exit_code == 0 and "identity=source_audit" in v and "source_audit=missing" not in v
+    shutil.rmtree(roots.data / "artifacts" / "source_audit")
+    r = runner.invoke(app, [*common, "--out", str(tmp_path / "b")])
+    v = _last_verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v
+    assert "identity=full_hash" in v and "source_audit=missing" in v

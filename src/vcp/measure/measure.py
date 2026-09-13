@@ -11,6 +11,7 @@ from vcp.core.errors import GuardrailError, SealedSubsetError, ValidationFailed
 from vcp.core.paths import DatasetPaths, resolve_data_root
 from vcp.core.time import stamp
 from vcp.data.access.access import DatasetAccess
+from vcp.data.access.schema import Identity
 from vcp.data.dataset import Dataset
 from vcp.data.lineage import clean_eval_subsets
 from vcp.data.schema import DatasetCard, Sample
@@ -57,6 +58,7 @@ class MeasureResult(BaseModel):
     provenance: str
     observed: list[str] = Field(default_factory=list)
     receipt_invalid: int = 0
+    identity: Identity = "full_hash"
 
 
 def load_context(
@@ -330,6 +332,9 @@ def measure_run(spec: MeasureSpec) -> MeasureResult:
                     pending.append(cell.reading)
                 else:
                     cached += 1
+    identity = access.identity
+    if identity == "full_hash":
+        warnings.append("source_audit=missing")
     for reading in pending:  # only now that every guardrail has passed (spec 9)
         ctx.ledger.append(reading)
     return MeasureResult(
@@ -343,4 +348,5 @@ def measure_run(spec: MeasureSpec) -> MeasureResult:
         provenance=info.grade,
         observed=info.observed,
         receipt_invalid=len(info.invalid),
+        identity=identity,
     )

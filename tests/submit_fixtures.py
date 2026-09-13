@@ -18,6 +18,7 @@ from helpers import (
 )
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
+from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
@@ -55,6 +56,7 @@ def make_pair(roots, tmp_path) -> SimpleNamespace:
         make_card("cls", name=EVAL, image_root=f"raw/{EVAL}"), eval_samples
     )
     eval_ds.save(eval_paths)
+    write_source_audit(eval_paths, eval_ds.card, data_root=roots.data)
     eval_plan = build_plan(
         eval_ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0
     )
@@ -66,6 +68,7 @@ def make_pair(roots, tmp_path) -> SimpleNamespace:
         make_card("cls", name=TEST, image_root=f"raw/{TEST}"), test_samples
     )
     test_ds.save(test_paths)
+    write_source_audit(test_paths, test_ds.card, data_root=roots.data)
     weights = {}
     for name in ("good", "bad"):
         p = tmp_path / f"{name}.pt"

@@ -241,7 +241,10 @@ def measure_cmd(
             "cached": res.cached,
             "guardrail": res.guardrail,
             "provenance": res.provenance,
+            "identity": res.identity,
         }
+        if res.identity == "full_hash":
+            fields["source_audit"] = "missing"
         if res.observed:
             fields["observed"] = ",".join(res.observed)
         if res.receipt_invalid:

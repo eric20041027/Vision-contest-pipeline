@@ -181,6 +181,27 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "wave 1b-2 (VCP-002)",
+        "source audit: an audited open never hashes the whole file; a tampered audit or a "
+        "tampered selected row fails closed while an unselected row is never read; audited and "
+        "full-hash reads are equivalent; consumers record identity and warn without an audit",
+        {
+            "tests/unit/data/test_source_audit.py": [
+                "test_write_source_audit_creates_then_reuses",
+                "test_load_source_audit_fails_closed_on_tampering",
+            ],
+            "tests/unit/data/test_access.py": [
+                "test_an_audited_open_never_hashes_the_whole_file",
+                "test_a_tampered_selected_row_is_refused_and_an_unselected_one_is_not",
+                "test_audited_and_full_hash_reads_are_equivalent",
+            ],
+            "tests/unit/train/test_run.py": [
+                "test_train_run_warns_when_the_dataset_has_no_source_audit",
+            ],
+            "tests/unit/test_e2e_source_audit.py": ["test_source_audit_flow"],
+        },
+    ),
 ]
 
 

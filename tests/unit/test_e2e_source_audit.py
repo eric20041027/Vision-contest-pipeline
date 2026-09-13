@@ -130,10 +130,7 @@ def test_source_audit_flow(roots, tmp_path):
     r = _run("eval", "measure", "--run", "good")
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v
-    # `measure_cmd` (unlike `export_cmd`) folds `res.warnings` into `human` only, not into the
-    # VERDICT `fields`, so "source_audit=missing" prints as its own line above the VERDICT
-    # rather than inside it; check the full captured output for the warning instead.
-    assert _field(v, "identity") == "full_hash" and "source_audit=missing" in r.output
+    assert _field(v, "identity") == "full_hash" and "source_audit=missing" in v
     # 5. validate brings it back under the same id, and the artifact layer can verify it
     r = _run("data", "validate", "--name", "flow")
     v = _verdict(r.output)

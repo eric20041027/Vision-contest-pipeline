@@ -283,9 +283,22 @@ def _policy_sha256(policy: AdaptivePolicy) -> str:
     return sha256_text(text)
 
 
+def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
 def _read_calibration(path: Path, *, committed: bool = False) -> CalibrationEvidence:
     try:
-        return CalibrationEvidence.model_validate_json(path.read_text(encoding="utf-8"))
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_object_without_duplicate_keys,
+        )
+        return CalibrationEvidence.model_validate(payload)
     except (OSError, ValueError):
         if committed:
             raise IntegrityError("mismatch: provenance policy calibration evidence") from None

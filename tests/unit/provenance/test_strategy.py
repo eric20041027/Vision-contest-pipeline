@@ -253,6 +253,40 @@ def test_calibration_evidence_rejects_invalid_correspondence_before_claim(roots,
     assert not artifact_dir(roots.data, "provenance_policy", policy.id).exists()
 
 
+@pytest.mark.parametrize(
+    ("raw", "marker"),
+    [
+        (
+            '{"scenario_ids":["DUPLICATE_SECRET_MARKER"],'
+            '"scenario_ids":["cal-1"],"scenario_hashes":["' + "a" * 64 + '"]}\n',
+            "DUPLICATE_SECRET_MARKER",
+        ),
+        (
+            '{"scenario_ids":["cal-1"],"scenario_hashes":["'
+            + "a" * 64
+            + '"],"nested":{"PGHOST":"NESTED_DUPLICATE_MARKER","PGHOST":"safe"}}\n',
+            "NESTED_DUPLICATE_MARKER",
+        ),
+        (
+            '{"scenario_ids":[{"inner":"DEEP_DUPLICATE_MARKER","inner":"safe"}],'
+            '"scenario_ids":["cal-1"],"scenario_hashes":["' + "a" * 64 + '"]}\n',
+            "DEEP_DUPLICATE_MARKER",
+        ),
+    ],
+)
+def test_calibration_evidence_rejects_duplicate_keys_before_claim(roots, raw, marker):
+    calibration = roots.data / "inputs" / "duplicate-key-calibration.json"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text(raw, encoding="utf-8", newline="\n")
+    policy = _policy(sha256_file(calibration))
+
+    with pytest.raises(ValidationFailed, match="bad calibration evidence") as error:
+        write_policy_artifact(roots.data, policy, calibration)
+
+    _assert_marker_absent(error, marker)
+    assert not artifact_dir(roots.data, "provenance_policy", policy.id).exists()
+
+
 def test_policy_artifact_is_manifest_last_pinned_and_idempotent(roots):
     calibration, policy, policy_id = _publish(roots)
     expected = f"postgres-adaptive-v1-{sha256_file(calibration)[:12]}"

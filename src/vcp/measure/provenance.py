@@ -55,7 +55,11 @@ def provenance(
     card_sha = sha256_file(paths.card_yaml) if paths.card_yaml.is_file() else None
     valid: list[AccessRef] = []
     invalid: list[str] = []
-    observed: set[str] = set()
+    # F3 (final review Important #3): declaration must not erase observation. Every ref's own
+    # `subsets` counts toward `observed` whether or not its receipt still holds -- an invalid
+    # receipt (plan/card edited, tampered, missing) only lowers the grade, it never revives the
+    # subset it read as part of a clean base. Valid receipts' actual `accessed` can only add.
+    observed: set[str] = {s for ref in card.access for s in ref.subsets}
     for ref in card.access:
         try:
             receipt, sha = read_receipt(data_root, ref.artifact_id)
@@ -64,10 +68,12 @@ def provenance(
             continue
         holds = (
             sha == ref.receipt_sha256
+            and receipt.dataset == card.dataset
             and receipt.samples_hash == card.samples_hash
             and receipt.plan_id == card.plan_id
             and receipt.plan_sha256 == plan_sha
             and receipt.card_sha256 == card_sha
+            and receipt.run_id in (None, card.run_id)
         )
         if not holds:
             invalid.append(ref.artifact_id)

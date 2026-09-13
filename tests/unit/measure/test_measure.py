@@ -29,7 +29,7 @@ from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, default_subsets, measure_run
 from vcp.measure.metrics import METRICS, get_metric, register_metric
 from vcp.measure.predictions import write_predictions
-from vcp.measure.provenance import attach_receipts
+from vcp.measure.provenance import attach_receipts, provenance
 from vcp.measure.runs import load_run, prediction_path, save_run
 from vcp.measure.schema import Anchor, MetricResult
 
@@ -334,6 +334,29 @@ def test_observed_subsets_are_not_clean_bases(roots, tmp_path):
     assert ei.value.fields == {"subset": "valA"}
 
 
+def test_an_invalidated_receipts_subset_still_stays_out_of_the_clean_base(roots, tmp_path):
+    """F3 (final review Important #3): declaration must not undo observation. Once the receipt
+    that read "valA" is invalidated (here: the plan file rewritten), `provenance().observed`
+    must still carry "valA" -- otherwise `default_subsets` would revive it as a clean base."""
+    _, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    noisy = load_run(roots.data, "noisy")
+    save_run(
+        roots.data,
+        attach_receipts(
+            noisy,
+            [_receipt(roots, ["valA"], purpose="custom", run_id="noisy")],
+            data_root=roots.data,
+        ),
+    )
+    card = load_run(roots.data, "noisy")
+    rid = card.access[0].artifact_id
+    pj = paths.plan_json("fixed-v1")
+    pj.write_bytes(pj.read_bytes() + b"\n")
+    info = provenance(card, data_root=roots.data, configs_root=roots.configs)
+    assert info.invalid == [rid] and info.observed == ["valA"]
+    assert default_subsets(plan, card, unseal=False, observed=info.observed) == ["valB"]
+
+
 def test_readings_carry_the_runs_grade_and_measure_leaves_its_own_receipt(roots, tmp_path):
     _, plan, paths = det_with_runs(roots, tmp_path, n=40)
     perfect = load_run(roots.data, "perfect")
@@ -357,9 +380,10 @@ def test_readings_carry_the_runs_grade_and_measure_leaves_its_own_receipt(roots,
 
     receipt = read_receipt(roots.data, measure_receipts[0]).receipt
     assert receipt.run_id == "perfect" and set(receipt.accessed) == {"valA", "valB"}
-    # a stale receipt warns and the grade falls back
+    # a stale receipt warns and the grade falls back, but F3 says it must not un-observe "train"
     pj = paths.plan_json("fixed-v1")
     pj.write_bytes(pj.read_bytes() + b"\n")
     res = measure_run(_spec(roots, "perfect"))
     assert res.receipt_invalid == 1 and res.provenance == "declared"
+    assert res.observed == ["train"]
     assert "receipt_invalid=1" in res.warnings

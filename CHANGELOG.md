@@ -15,6 +15,24 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.5.0] - 2026-09-12
+
+稽核 **Wave 1b-1**：角色範圍存取與收據——VCP-001（`Dataset.load()` 無法證明 train-only 存取）、VCP-003（access flags 是自我宣告）。MINOR 的理由：新產物 kind `access_receipt`、`run.yaml` / `train.yaml` 的 `access`、三本台帳與 `stage.json` 的 `provenance`、`submit.yaml` 的 `require_provenance`、新 VERDICT 欄位與字彙（`denied:`、`contaminated:`、`observed_sealed:`、`provenance_required:`）、`MaterializedReader.dataset` 移除。
+
+### Added
+- **`DatasetAccess`**（`vcp.data.access`）：card-only 載入 + 按 plan 角色授權的列讀取；open 時整檔 hash 身分並只 peek 行首 `sample_id` 建索引，未授權的列永不解析；未授權存取 `AccessDeniedError`（`denied:`）並計數；sealed 沿用 unseal 留痕。關閉時（含例外）存取器把 `AccessReceipt` 寫成 `artifacts/access_receipt/<id>/receipt.json`（v0.4.0 的 `ArtifactWriter`），呼叫端只能加 `notes`。
+- **收據綁定**：`Session.access()` / `MaterializedReader`（現在是 context manager）在 `vcp train run` 下把收據登記進 `train.yaml`（`access` 事件），`train run` 結束抄進 `run.yaml`；`vcp eval ingest --receipt` 掛外部收據。
+- **provenance**（`vcp.measure.provenance`）：`receipt > export > declared` 讀取時算出；`Reading` / `Judgement` / `Staged` / `FinalEntry` 記等級；`vcp eval status` / `report`、`vcp submit status` 印它。
+- **強制點**：`measure` 的乾淨基底 = `trained_on ∪ 收據觀測`（點名被讀過的子集 → `contaminated:`）；`judge` 候選或基準讀過主張子集 → `INVALID contaminated:<run>/<subset>`；`submit stage` / `final` 的 `observed_sealed:` 與 `submit.yaml` `require_provenance`（預設 `declared`）；`train run` WARN `observed_beyond_trained_on=` / `receipt_invalid=`。
+- `vcp eval status` 多 `provenance_failed=`（算不出 provenance 的 run，WARN；run 仍計入 `runs=`）與每個 run 一行 `provenance=… observed=…`；`vcp submit status` 印每筆提交的 `provenance: <id>=<grade>`（缺 `stage.json` → `-`）。
+- 備份證據圖收 run 的收據（角色 `access_receipt`）；`vcp data export` 每次留收據並記進 manifest；回歸門檻多一列；真資料唯讀整合測試。
+
+### Changed
+- `Dataset.load_card`、`append_unseal`；`assert_run_matches` 收 card；`train run` 父程序不再解析 `samples.jsonl`。
+- `MaterializedReader`：`reader.dataset` 移除（改 `card` / `access` / `sample()`），在 `VCP_RUN_ID` 下必須給 `plan_id` / `subset`。
+- 存取器字彙：`roles:`（角色沒對到子集）、`sealed:`（一次多於一個 sealed 子集）為 `ValidationFailed`；`mismatch:`（身分、覆蓋、列在 open 後被改寫）為 `IntegrityError`；`InvariantError` 不再用於資料層的輸入錯誤。
+- README、AGENTS.md / CLAUDE.md、交接文件；spec §16 補充決定。
+
 ## [0.4.0] - 2026-09-12
 
 稽核（2026-09-11）的 **Wave 1a**：不可變產物層——VCP-005（產物路徑可被覆寫，破壞不可變證據）與 VCP-007（ID、seed、輸出缺少共同 contract）。MINOR 的理由：新命令群 `vcp artifact`、新產物形態 `artifacts/<kind>/<id>/manifest.json` 與 `supersession.jsonl`、新 `reason=` 字彙（`partial:`、`unsafe_path:`、`reserved_name:`、`closed:`、`drift:`、`spec_mismatch:`）。

@@ -308,3 +308,26 @@ class ReceiptBinding(Protocol):
 ## 15. 不在範圍
 
 `SourceAudit` 與選取列陣列存取器（1b-2）；`CodeSnapshot`、授權綁定 benchmark（1c）；子程序 I/O 稽核 hook（C 路線）；`fields` 欄位過濾；`vcp audit lineage`（Wave 2）；repo 外 RSNA 原型遷移；跨程序鎖；VERDICT JSON schema（VCP-032）。以上皆為已預留的擴充點，不是設計缺口。
+
+## 16. 補充決定（實作期，Plan 9）
+
+1. `read_receipt` 放 `data/access/receipt.py`（收據格式是資料層的），`measure/provenance.py` import 它。
+2. `DatasetAccess.open` 多 `run_id=None`：無 binding 的收據（measure、stage）用它填 `run_id`；有 binding 時 binding 優先。
+3. `ingest`、`fuse build/ablate`、`submit profile`、`submit verify` 維持 `Dataset.load`（各自要 eval / 全部 rows 或只是重渲染驗檔，不是訓練讀）；`stage` 的 eval 側 `load_card`、test 側走存取器（`purpose=submit`，`run_id` 填候選 eval run）；`judge` / `sigma` / `anchor` 沿用 `load_context`，`measure_run` 用 `load_card_context`。
+4. `assert_run_matches(card, dataset_card)` 第二個參數改收 card。
+5. unseal 留痕抽成 `data/dataset.append_unseal`，存取器與 `Dataset.subset` 共用。
+6. `MaterializedReader` 建構時迭代授權子集；`reader.dataset` 移除，改 `card` / `access` / `sample(id)`；不在 run 下且無 plan / subset 維持 `Dataset.load`。
+7. `train run` 用 `provenance()` 算等級，`RunResult` 多 `receipts / denied / provenance / observed_beyond / receipt_invalid`。
+8. 融合 run 的 provenance 遞迴用 lazy import 避免 measure ↔ fuse 循環。
+9. `FinalEntry.provenance`；`submit status` 只在 human / payload 印每筆等級；`eval status` 多 `receipt_runs=` `export_runs=` `declared_runs=`。
+10. judge 的 contaminated 檢查在 measured-before-prereg 之前，INVALID 後不跑 bootstrap。
+11. 索引時只 `json.loads` `sample_id` 那個字串，整行不解析；`iter()` 立刻授權（不是 generator）。
+12. `data/access/__init__.py` 不 import 任何東西、`schema.py` 只 import core——避免 measure.schema ↔ access 的 import 環。
+13. 存取器一次只開一個 sealed 子集（多於一個 → `ValidationFailed("sealed: an access may open at most one sealed subset per receipt …; open them separately")`），`unseal_event_sha256` 維持單值；unseal 留痕是 open 的最後一步（身分與覆蓋檢查、產物 claim 之後），留痕本身失敗時收據以 `outcome=failed` 結案而不留孤兒 claim。
+14. `roles=` 展開後必須至少對到一個子集，否則 `ValidationFailed("roles: no subset of plan … has role(s) …")`。
+15. 身分（`samples_hash`）與覆蓋（plan 的 id 不在 `samples.jsonl` 裡）失敗都丟 `IntegrityError("mismatch: …")`（FAIL），不是 `InvariantError`（ABORT）。
+16. `_read` 解析後驗 `sample_id` 與索引一致（`samples.jsonl` 在 open 後被改寫 → `mismatch:`），不只靠 close 時的 drift 檢查。
+17. 收據產物的 `inputs` 只列 `samples.jsonl`（在 data root 下，manifest 記相對路徑）；`card_sha256` / `plan_sha256` 進產物 `params`——configs root 在 data root 之外，列成 input 會把絕對路徑寫進 manifest，違反 §11。
+18. `MaterializedReader` 建構在存取器開啟後失敗（materialize 快取缺列等）會先把自己開的存取器以 `failed` 關閉再拋出；注入的存取器留給擁有者。
+19. `vcp eval status` 對算不出 provenance 的 run（例如融合 run 的成員 `run.yaml` 遺失）記 `provenance_failed=`（WARN，該 run 仍計入 `runs=`）而不中止；`vcp submit status` 對缺 `stage.json` 的提交印 `-`；兩者維持唯讀且不依賴資料根完整。`judge` 對沒有 `run.yaml` 的 run 以 `declared` 計（仍因缺讀數 FAIL）；`measure` / `stage` / `final` 對壞掉的融合 run 維持 fail-fast。
+20. `measure` 的 `--unseal` 無 `--reason` 沿用舊訊息 `SealedSubsetError("unseal requires a non-empty reason")`，在開存取器之前檢查。`assert_run_matches` 的呼叫點實為七處（含 `fuse/build.py`）。

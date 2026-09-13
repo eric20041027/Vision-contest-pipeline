@@ -1,4 +1,5 @@
 import json
+import shutil
 
 import pytest
 from typer.testing import CliRunner
@@ -1303,3 +1304,8 @@ def test_measure_verdict_prints_identity(roots, tmp_path):
     det_with_runs(roots, tmp_path, n=40)
     r = runner.invoke(app, ["eval", "measure", "--run", "perfect"])
     assert r.exit_code == 0 and "identity=source_audit" in _verdict(r.output)
+    shutil.rmtree(roots.data / "artifacts" / "source_audit")
+    r = runner.invoke(app, ["eval", "measure", "--run", "perfect"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v
+    assert "identity=full_hash" in v and "source_audit=missing" in v

@@ -147,7 +147,7 @@ POSTGRES_DDL = (
             REFERENCES {SCHEMA_NAME}.generations(generation_id) ON DELETE CASCADE,
         source_id text NOT NULL,
         target_id text NOT NULL,
-        change_id char(64) NOT NULL,
+        change_id char(64) NOT NULL CHECK ({_hash_check("change_id")}),
         PRIMARY KEY (generation_id, source_id, target_id, change_id),
         FOREIGN KEY (generation_id, source_id, target_id)
             REFERENCES {SCHEMA_NAME}.dataset_edges(generation_id, source_id, target_id)
@@ -156,6 +156,8 @@ POSTGRES_DDL = (
             REFERENCES {SCHEMA_NAME}.sample_changes(generation_id, change_id)
             DEFERRABLE INITIALLY DEFERRED
     )""",
+    f"""CREATE INDEX IF NOT EXISTS dataset_edge_changes_change
+        ON {SCHEMA_NAME}.dataset_edge_changes(generation_id, change_id)""",
     f"""CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.entity_status (
         generation_id uuid NOT NULL
             REFERENCES {SCHEMA_NAME}.generations(generation_id) ON DELETE CASCADE,
@@ -179,6 +181,9 @@ POSTGRES_DDL = (
         ON {SCHEMA_NAME}.entity_status(generation_id, head_id, status, entity_id)""",
     f"""CREATE INDEX IF NOT EXISTS status_entity_head
         ON {SCHEMA_NAME}.entity_status(generation_id, entity_id, head_id)""",
+    f"""CREATE INDEX IF NOT EXISTS status_predecessor
+        ON {SCHEMA_NAME}.entity_status(generation_id, predecessor_id)
+        WHERE predecessor_id IS NOT NULL""",
     f"""CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.ingest_checkpoints (
         generation_id uuid NOT NULL
             REFERENCES {SCHEMA_NAME}.generations(generation_id) ON DELETE CASCADE,
@@ -229,7 +234,8 @@ POSTGRES_DDL = (
     f"COMMENT ON SCHEMA {SCHEMA_NAME} IS '{_SCHEMA_VERSION_COMMENT}'",
 )
 
-_VERSION_QUERY = """SELECT obj_description(%s::regnamespace, 'pg_namespace')"""
+_SCHEMA_EXISTS_QUERY = "SELECT to_regnamespace(%s)"
+_VERSION_QUERY = "SELECT obj_description(to_regnamespace(%s), 'pg_namespace')"
 
 
 @contextmanager
@@ -243,23 +249,41 @@ def _transaction(connection: Any) -> Iterator[None]:
         yield
 
 
+def _scalar(row: Any) -> Any:
+    if isinstance(row, Mapping):
+        return next(iter(row.values()), None)
+    return row[0] if row is not None else None
+
+
+def _schema_marker(connection: Any) -> Any:
+    row = connection.execute(_VERSION_QUERY, (SCHEMA_NAME,)).fetchone()
+    return _scalar(row)
+
+
+def _require_matching_schema_marker(connection: Any) -> None:
+    if _schema_marker(connection) != _SCHEMA_VERSION_COMMENT:
+        raise IntegrityError("mismatch: PostgreSQL provenance schema version")
+
+
 def install_schema(connection: Any) -> None:
     """Install the fixed v1 layout atomically without applying a migration."""
     with _transaction(connection):
-        for statement in POSTGRES_DDL:
+        existing_schema = _scalar(
+            connection.execute(_SCHEMA_EXISTS_QUERY, (SCHEMA_NAME,)).fetchone()
+        )
+        if existing_schema is not None:
+            _require_matching_schema_marker(connection)
+            statements = POSTGRES_DDL[1:-1]
+        else:
+            statements = POSTGRES_DDL
+        for statement in statements:
             connection.execute(statement)
 
 
 def validate_schema(connection: Any) -> None:
     """Reject an absent or incompatible PostgreSQL provenance schema."""
     with _transaction(connection):
-        row = connection.execute(_VERSION_QUERY, (SCHEMA_NAME,)).fetchone()
-    if isinstance(row, Mapping):
-        value = next(iter(row.values()), None)
-    else:
-        value = row[0] if row is not None else None
-    if value != _SCHEMA_VERSION_COMMENT:
-        raise IntegrityError("mismatch: PostgreSQL provenance schema version")
+        _require_matching_schema_marker(connection)
 
 
 __all__ = [

@@ -15,6 +15,20 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.6.0] - 2026-09-13
+
+稽核 **Wave 1b-2**：來源稽核與選取列存取——VCP-002（大型來源每個 job 都整檔 hash，與 train-only 列存取衝突）。MINOR 的理由：新產物 kind `source_audit`、收據與 `run.yaml` / `train.yaml` 的 `AccessRef` 多 `identity` / `source_audit`、`import` / `validate` / `measure` / `export` / `stage` / `train run` 的新 VERDICT 欄位與 WARN 字彙 `source_audit=missing`、備份角色 `source_audit`。
+
+### Added
+- **`source_audit` 產物**（`vcp.data.source_audit`）：`vcp data import` / `validate` 結束時一趟讀 `samples.jsonl`，寫 `audit.json`（`samples_hash`、大小、行數）與 `index.jsonl`（每列 `sample_id` / offset / length / 該列 bytes 的 sha256），id `src-<dataset>-<samples_hash 前 16 碼>`，同內容 `store.reuse` 不重算；VERDICT `source_audit=` `source_audit_state=created|reused`。
+- **存取器走稽核**：`DatasetAccess.open` 有稽核就不再掃 `samples.jsonl`，只 seek 授權的列；每列先比稽核的 sha 再比 `sample_id` 再解析（同長度篡改也會 `mismatch:`）；稽核壞掉 `mismatch:` FAIL；缺席退回整檔 hash。收據多 `identity: source_audit|full_hash`、`source_audit`、`source_audit_sha256`；`AccessRef` 多 `identity` / `source_audit`；走稽核時收據產物的 `inputs` 列稽核的 `manifest.json`。
+- **消費者**：`vcp train run` 任一收據退回整檔 hash → WARN `source_audit=missing`；`vcp eval measure` / `vcp data export` 印 `identity=` 並在退回時 WARN `source_audit=missing`（VERDICT 欄位）；`vcp submit stage` 印 `identity=`。
+- 備份證據圖收收據背後的稽核（角色 `source_audit`，tier 2）；回歸門檻多一列 `wave 1b-2 (VCP-002)`；真資料唯讀整合測試。
+
+### Changed
+- `_LINE` / `peek_sample_id` 移到 `vcp.data.source_audit`；`index_samples` 介面不變。
+- README、AGENTS.md / CLAUDE.md、交接文件、RSNA RUNBOOK；spec §15 補充決定。
+
 ## [0.5.0] - 2026-09-12
 
 稽核 **Wave 1b-1**：角色範圍存取與收據——VCP-001（`Dataset.load()` 無法證明 train-only 存取）、VCP-003（access flags 是自我宣告）。MINOR 的理由：新產物 kind `access_receipt`、`run.yaml` / `train.yaml` 的 `access`、三本台帳與 `stage.json` 的 `provenance`、`submit.yaml` 的 `require_provenance`、新 VERDICT 欄位與字彙（`denied:`、`contaminated:`、`observed_sealed:`、`provenance_required:`）、`MaterializedReader.dataset` 移除。

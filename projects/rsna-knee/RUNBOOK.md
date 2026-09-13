@@ -64,6 +64,7 @@ uv pip freeze --python $trainPython
 
 ```powershell
 uv run vcp data validate --name rsna-knee
+# v0.6.0 起 validate 同時寫 artifacts/source_audit/<id>（VERDICT source_audit=… source_audit_state=…）；之後訓練 / 量測不再整檔 hash samples.jsonl
 uv run vcp data split --name rsna-knee --plan-id fixed-v1 --subsets train:train:0.4,valA:eval:0.2,valB:eval:0.2,holdout:sealed:0.2 --seed 42 --group-key auto
 uv run vcp data materialize --name rsna-knee --mode png --resize 256 --workers 4
 uv run python projects/rsna-knee/prepare.py export --out C:/vcp-data/exports/rsna-knee/fixed-v1/train

@@ -285,3 +285,4 @@ def test_stage_reads_the_test_subset_through_a_receipt(ready):
     receipt = read_receipt(ready.roots.data, receipts[0]).receipt
     assert receipt.run_id == "good" and set(receipt.accessed) == {"test"}
     assert res.staged.artifact.rows == receipt.accessed["test"].ids_count
+    assert res.identity == "source_audit" and receipt.identity == "source_audit"

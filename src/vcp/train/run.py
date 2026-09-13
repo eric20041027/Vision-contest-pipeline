@@ -100,6 +100,7 @@ class RunResult(BaseModel):
     provenance: str = "declared"
     observed_beyond: list[str] = Field(default_factory=list)
     receipt_invalid: int = 0
+    source_audit_missing: int = 0
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -586,6 +587,9 @@ def train_run(spec: RunSpec) -> RunResult:
         warnings.append(f"observed_beyond_trained_on={','.join(observed_beyond)}")
     if info.invalid:
         warnings.append(f"receipt_invalid={len(info.invalid)}")
+    source_audit_missing = sum(1 for r in card.access if r.identity == "full_hash")
+    if source_audit_missing:
+        warnings.append("source_audit=missing")
     return RunResult(
         record=record,
         card=card,
@@ -601,4 +605,5 @@ def train_run(spec: RunSpec) -> RunResult:
         provenance=info.grade,
         observed_beyond=observed_beyond,
         receipt_invalid=len(info.invalid),
+        source_audit_missing=source_audit_missing,
     )

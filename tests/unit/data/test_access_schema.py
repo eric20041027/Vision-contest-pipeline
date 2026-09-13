@@ -143,3 +143,67 @@ def test_sha_format_validation_on_all_fields():
     # Test that unseal_event_sha256=None still validates
     ok = _receipt(unseal_event_sha256=None)
     assert ok.unseal_event_sha256 is None
+
+
+def test_identity_fields_are_consistent():
+    from vcp.data.access.schema import AccessReceipt, AccessRef
+
+    base = dict(
+        dataset="tiny",
+        samples_hash=SHA,
+        card_sha256=SHA,
+        plan_id="p",
+        plan_sha256=SHA,
+        authorization_sha256=SHA,
+        purpose="custom",
+        allowed=["train"],
+        roles={"train": "train"},
+        accessed={},
+        outcome="completed",
+        started_at="2026-09-13T00:00:00.000Z",
+        finished_at="2026-09-13T00:00:01.000Z",
+        vcp_version="0.6.0",
+    )
+    receipt = AccessReceipt(**base)
+    assert receipt.identity == "full_hash" and receipt.source_audit is None
+    audited = AccessReceipt(
+        **base,
+        identity="source_audit",
+        source_audit="src-tiny-" + "a" * 16,
+        source_audit_sha256=SHA,
+    )
+    assert audited.identity == "source_audit"
+    with pytest.raises(ValidationError, match="go together"):
+        AccessReceipt(**base, identity="source_audit", source_audit="src-tiny-" + "a" * 16)
+    with pytest.raises(ValidationError, match="identity=source_audit needs source_audit"):
+        AccessReceipt(**base, identity="source_audit")
+    with pytest.raises(ValidationError, match="identity=source_audit needs source_audit"):
+        AccessReceipt(**base, source_audit="src-tiny-" + "a" * 16, source_audit_sha256=SHA)
+    with pytest.raises(ValidationError, match="source_audit_sha256 must be 64 hex"):
+        AccessReceipt(
+            **base,
+            identity="source_audit",
+            source_audit="src-tiny-" + "a" * 16,
+            source_audit_sha256="x",
+        )
+    ref = AccessRef(
+        artifact_id="r1-a1-1",
+        purpose="train",
+        subsets=["train"],
+        sealed_accessed=False,
+        denied=0,
+        receipt_sha256=SHA,
+        binding="session",
+    )
+    assert ref.identity == "full_hash" and ref.source_audit is None
+    with pytest.raises(ValidationError, match="identity=source_audit needs source_audit"):
+        AccessRef(
+            artifact_id="r1-a1-1",
+            purpose="train",
+            subsets=["train"],
+            sealed_accessed=False,
+            denied=0,
+            receipt_sha256=SHA,
+            binding="session",
+            identity="source_audit",
+        )

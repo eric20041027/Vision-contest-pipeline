@@ -14,6 +14,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.schema import Box, Category, DatasetCard, Labels, Mask, Sample, SourceInfo, View
+from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, SplitPlan, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.predictions import write_predictions
@@ -378,6 +379,7 @@ def det_with_runs(
     write_images(roots.data / "raw" / "tiny", samples)
     ds = Dataset.from_parts(make_card("det", image_root="raw/tiny"), samples)
     ds.save(paths)
+    write_source_audit(paths, ds.card, data_root=roots.data)
     plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     save_plan(plan, paths)
     for run_id, maker in (("perfect", perfect_predictions), ("noisy", noisy_predictions)):
@@ -426,6 +428,7 @@ def dataset_with_perfect_run(
     card = make_card(task, name=name, categories=categories, image_root=f"raw/{name}")
     ds = Dataset.from_parts(card, samples)
     ds.save(paths)
+    write_source_audit(paths, ds.card, data_root=roots.data)
     plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     save_plan(plan, paths)
     for subset in subsets:

@@ -175,6 +175,10 @@ class Collector:
             adir = artifact_dir(self.data_root, "access_receipt", ref.artifact_id)
             self.add(adir / "manifest.json", "access_receipt", conclusion)
             self.add(adir / "receipt.json", "access_receipt", conclusion, sha256=ref.receipt_sha256)
+            if ref.source_audit is not None:  # 1b-2: the audit the receipt verified rows against
+                sdir = artifact_dir(self.data_root, "source_audit", ref.source_audit)
+                for name in ("manifest.json", "audit.json", "index.jsonl"):
+                    self.add(sdir / name, "source_audit", conclusion)
         if (rdir / HISTORY).is_file():
             self.add(rdir / HISTORY, "history", conclusion)
         for entry in card.predictions.values():

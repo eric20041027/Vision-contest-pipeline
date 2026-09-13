@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from helpers import (
@@ -23,6 +25,7 @@ from vcp.core.errors import (
 )
 from vcp.data.access.access import DatasetAccess
 from vcp.data.dataset import Dataset
+from vcp.data.source_audit import KIND as AUDIT_KIND
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.ledger import ReadingsLedger
@@ -387,3 +390,12 @@ def test_readings_carry_the_runs_grade_and_measure_leaves_its_own_receipt(roots,
     assert res.receipt_invalid == 1 and res.provenance == "declared"
     assert res.observed == ["train"]
     assert "receipt_invalid=1" in res.warnings
+
+
+def test_measure_reports_its_identity_and_warns_without_an_audit(roots, tmp_path):
+    _, plan, paths = det_with_runs(roots, tmp_path, n=40)
+    res = measure_run(_spec(roots, "perfect"))
+    assert res.identity == "source_audit" and "source_audit=missing" not in res.warnings
+    shutil.rmtree(roots.data / "artifacts" / AUDIT_KIND)
+    res = measure_run(_spec(roots, "perfect"))
+    assert res.identity == "full_hash" and "source_audit=missing" in res.warnings

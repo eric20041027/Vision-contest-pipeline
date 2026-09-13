@@ -27,6 +27,18 @@ class BackendName(StrEnum):
     POSTGRESQL = "postgresql"
 
 
+class RequestedStrategy(StrEnum):
+    INCREMENTAL = "incremental"
+    FULL = "full"
+    AUTO = "auto"
+
+
+class SelectedStrategy(StrEnum):
+    NO_OP = "NO_OP"
+    INCREMENTAL = "INCREMENTAL"
+    FULL = "FULL"
+
+
 @dataclass(frozen=True)
 class BackendConfig:
     name: BackendName = BackendName.SQLITE
@@ -38,8 +50,8 @@ class MaintenanceResult:
     artifact_id: str
     inserted: bool
     backend: str
-    requested_strategy: str
-    selected_strategy: str
+    requested_strategy: RequestedStrategy
+    selected_strategy: SelectedStrategy
     strategy_reason: str
     changed_samples: int
     dirty_entities: int
@@ -50,6 +62,10 @@ class MaintenanceResult:
     policy_version: str
     elapsed_ms: float
     graph_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "requested_strategy", RequestedStrategy(self.requested_strategy))
+        object.__setattr__(self, "selected_strategy", SelectedStrategy(self.selected_strategy))
 
 
 class ProvenanceBackend(Protocol):
@@ -66,7 +82,7 @@ class ProvenanceBackend(Protocol):
         data_root: Path,
         configs_root: Path,
         *,
-        requested_strategy: str = "incremental",
+        requested_strategy: RequestedStrategy | str = RequestedStrategy.INCREMENTAL,
         policy_id: str | None = None,
     ) -> MaintenanceResult: ...
 
@@ -102,7 +118,7 @@ class SQLiteBackend:
         data_root: Path,
         configs_root: Path,
         *,
-        requested_strategy: str = "incremental",
+        requested_strategy: RequestedStrategy | str = RequestedStrategy.INCREMENTAL,
         policy_id: str | None = None,
     ) -> MaintenanceResult:
         del policy_id
@@ -116,19 +132,19 @@ class SQLiteBackend:
         total_entities = len(self.index.load_graph().entities)
         dirty_ratio = result.dirty_entities / total_entities if total_entities else 0.0
         if not result.inserted:
-            selected = "NO_OP"
+            selected = SelectedStrategy.NO_OP
             reason = "duplicate_artifact_no_op"
         elif changed_samples == 0:
-            selected = "NO_OP"
+            selected = SelectedStrategy.NO_OP
             reason = "verified_zero_semantic_changes"
         else:
-            selected = "INCREMENTAL"
+            selected = SelectedStrategy.INCREMENTAL
             reason = "requested_incremental"
         return MaintenanceResult(
             artifact_id=result.artifact_id,
             inserted=result.inserted,
             backend=self.name.value,
-            requested_strategy=requested_strategy,
+            requested_strategy=RequestedStrategy.INCREMENTAL,
             selected_strategy=selected,
             strategy_reason=reason,
             changed_samples=changed_samples,
@@ -185,8 +201,10 @@ __all__ = [
     "BackendName",
     "MaintenanceResult",
     "ProvenanceBackend",
+    "RequestedStrategy",
     "RebuildResult",
     "SQLiteBackend",
+    "SelectedStrategy",
     "VerifyIndexResult",
     "make_backend",
     "parse_backend",

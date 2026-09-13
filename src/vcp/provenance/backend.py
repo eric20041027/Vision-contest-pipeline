@@ -185,7 +185,9 @@ __all__ = [
     "BackendName",
     "MaintenanceResult",
     "ProvenanceBackend",
+    "RebuildResult",
     "SQLiteBackend",
+    "VerifyIndexResult",
     "make_backend",
     "parse_backend",
 ]

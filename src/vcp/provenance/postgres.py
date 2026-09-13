@@ -8,6 +8,7 @@ from typing import Any
 
 from vcp.core.errors import ValidationFailed
 from vcp.provenance.backend import BackendConfig, BackendName
+from vcp.provenance.postgres_schema import install_schema, validate_schema
 
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _SQLSTATE = re.compile(r"[0-9A-Z]{5}")
@@ -79,5 +80,7 @@ __all__ = [
     "_connect",
     "_load_psycopg",
     "raise_redacted_database_error",
+    "install_schema",
     "validate_pg_service",
+    "validate_schema",
 ]

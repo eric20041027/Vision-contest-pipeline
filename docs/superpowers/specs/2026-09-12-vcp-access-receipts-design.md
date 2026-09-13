@@ -330,4 +330,4 @@ class ReceiptBinding(Protocol):
 17. 收據產物的 `inputs` 只列 `samples.jsonl`（在 data root 下，manifest 記相對路徑）；`card_sha256` / `plan_sha256` 進產物 `params`——configs root 在 data root 之外，列成 input 會把絕對路徑寫進 manifest，違反 §11。
 18. `MaterializedReader` 建構在存取器開啟後失敗（materialize 快取缺列等）會先把自己開的存取器以 `failed` 關閉再拋出；注入的存取器留給擁有者。
 19. `vcp eval status` 對算不出 provenance 的 run（例如融合 run 的成員 `run.yaml` 遺失）記 `provenance_failed=`（WARN，該 run 仍計入 `runs=`）而不中止；`vcp submit status` 對缺 `stage.json` 的提交印 `-`；兩者維持唯讀且不依賴資料根完整。`judge` 對沒有 `run.yaml` 的 run 以 `declared` 計（仍因缺讀數 FAIL）；`measure` / `stage` / `final` 對壞掉的融合 run 維持 fail-fast。
-20. `measure` 的 `--unseal` 無 `--reason` 沿用舊訊息 `SealedSubsetError("unseal requires a non-empty reason")`，在開存取器之前檢查。`assert_run_matches` 的呼叫點實為七處（含 `fuse/build.py`）。
+20. `measure` 的 `--unseal` 無 `--reason` 沿用舊訊息 `SealedSubsetError("unseal requires a non-empty reason")`，在開存取器之前檢查。`assert_run_matches` 的呼叫點實為八處（`measure/measure.py` 三處：`load_context`、`load_card_context`、錨點檢查；其餘 `fuse/build.py`、`fuse/members.py`、`measure/ingest.py`、`submit/stage.py`、`train/run.py` 各一處）。

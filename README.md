@@ -28,7 +28,7 @@ uv run pytest --cov=vcp
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true`、--receipt ID（可重複；把 `vcp train run` 之外產生的收據掛上 run） |
+| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true`、`--receipt ID`（可重複；把 `vcp train run` 之外產生的收據掛上 run） |
 | `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數；乾淨 = `trained_on ∪` 收據觀測到的子集都不含；`--subsets` 點到被讀過的子集 → `contaminated:` | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
 | `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
 | `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method`（已登記的 σ_p 估法；內建 `splithalf` / `bootstrap` / `prior`，其餘以 `--plugin` 登記）、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |

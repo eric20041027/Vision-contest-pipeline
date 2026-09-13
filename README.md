@@ -19,7 +19,7 @@ uv run pytest --cov=vcp
 | `vcp data audit` | 座標 sanity、近重複與 test 重疊、來源檢查 | `--against`、`--max-bad-boxes`、`--min-box-px`、`--max-aspect`、`--max-cover`、`--hamming`、`--corr` |
 | `vcp data split` | 固定多子集 plan（進 git、不可改） | `--plan-id`、`--subsets`、`--stratify-key`、`--group-key`、`--group-from-audit`、`--strategy` |
 | `vcp data lineage` | 某訓練用了哪些子集 → 哪些驗證集還乾淨 | `--plan`、`--trained-on` |
-| `vcp data export` | 子集 → COCO / YOLO 目錄 + manifest | `--plan`、`--subset`、`--format`、`--out`、`--opt view=`、`--opt copy=true`、`--unseal --reason` |
+| `vcp data export` | 子集 → COCO / YOLO 目錄 + manifest | `--plan`、`--subset`、`--format`、`--out`、`--opt view=`、`--opt copy=true`、`--unseal --reason`；每次匯出留一份 `access_receipt`（manifest 的 `receipt`、VERDICT `receipt=`） |
 | `vcp data materialize` | 每個 view 解碼一次成 npy / png 快取 + manifest | `--mode`、`--resize`、`--stack-seq`、`--window`、`--workers`、`--force`、`--decoder` |
 
 每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。eval / fuse / train / submit / backup 失敗時仍帶命令已知的 dataset / run / recipe / id 等識別欄位；深層錯誤可提供更精確的身分。
@@ -28,12 +28,12 @@ uv run pytest --cov=vcp
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true` |
-| `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數 | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
+| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true`、--receipt ID（可重複；把 `vcp train run` 之外產生的收據掛上 run） |
+| `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數；乾淨 = `trained_on ∪` 收據觀測到的子集都不含；`--subsets` 點到被讀過的子集 → `contaminated:` | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
 | `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
 | `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method`（已登記的 σ_p 估法；內建 `splithalf` / `bootstrap` / `prior`，其餘以 `--plugin` 登記）、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
 | `vcp eval preregister` | 量候選之前先把主張寫死（進 git） | `--dataset`、`--id`、`--claim`、`--component`、`--class model\|tuning`、`--baseline-run`、`--candidate-run`、`--metric`、`--params`、`--subsets`、`--t-min`、`--min-bases`、`--sigma-method`、`--sigma-ratio` |
-| `vcp eval judge` | 配對 bootstrap → Δ、se、t、基底數、σ_p 條件 → 判決 | `--dataset`、`--prereg`、`--resamples`、`--seed`、`--strict`、`--unseal --reason` |
+| `vcp eval judge` | 配對 bootstrap → Δ、se、t、基底數、σ_p 條件 → 判決；候選或基準讀過主張的子集 → `INVALID contaminated:<run>/<subset>`；判決記候選的 provenance | `--dataset`、`--prereg`、`--resamples`、`--seed`、`--strict`、`--unseal --reason` |
 | `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p | `--dataset`、`--max-age-hours` |
 | `vcp eval report` | 全部 run × subset 讀數（全精度）+ 每個判決的 last-vs-last | `--dataset`、`--metric`、`--plan` |
 
@@ -98,7 +98,7 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證 | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
+| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
 | `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等 | `--run`、`--dest`、`--only final` |
 | `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令）；`backed=` / `unbacked=`（目前的 bytes 沒副本，會 WARN）/ `superseded=`（同路徑已被後來的登記取代、又從沒上傳過的舊 bytes，只報不 WARN——它們的副本再也不會出現） | `--run`、`--verify`（重算 sha） |
 
@@ -116,6 +116,10 @@ uv run vcp train status --run y12x_r2                    # unbacked=0 才算有�
 uv run vcp eval ingest --run y12x_r2 --dataset D --plan fixed-v1 --subset valA --format yolo_txt --src ... --export-manifest exports/D-valA
 uv run vcp eval measure --run y12x_r2
 ```
+
+### 收據與 provenance
+
+訓練迴圈用 `with MaterializedReader(name, mode, plan_id=P, subset="train") as reader:`（或 `Session.current().access(subsets={"train"})`）讀資料：只有授權子集的列會被解析，關閉時存取器把它實際讀到的子集、ID 集合 sha、拒絕次數寫成 `artifacts/access_receipt/<run>-a<attempt>-<n>/receipt.json`——呼叫端只能加 `notes`。run 的等級由收據算出、不存：`receipt`（有 `purpose=train` 的有效收據）> `export`（無收據但從 `vcp data export` 目錄訓練）> `declared`（舊 run 或手填）；`vcp eval status` / `report`、`vcp submit status` 都印它。`submit.yaml` 的 `require_provenance: receipt|export|declared`（預設 `declared`）決定 `stage` / `final` 擋不擋候選；讀過 sealed 子集的候選一律 `observed_sealed:`。收據證明的是經 vcp 存取器的讀取；process 自己 `open()` 檔案不在證明範圍。
 
 自寫 PyTorch loop 只需要兩個名字：
 
@@ -147,7 +151,7 @@ s.note("val_auc", 0.91)
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
 | `vcp submit init` | 寫 `configs/datasets/<test>/submit.yaml`（平台、配額與時區、截止、決選指標、輸出格式），並替 test dataset 建單子集 plan `all-v1` | `--dataset`（test dataset）、`--eval-dataset`、`--plan`、`--sealed`、`--platform manual\|kaggle`、`--competition`、`--kind file\|kernel`、`--board-rule last\|best`、`--quota N --day-tz TZ`、`--display-tz`、`--deadline`、`--metric`、`--writer`、`--writer-opt k=v`、`--kaggle-command` |
-| `vcp submit stage` | 四道門（封槍 / 截止、eval-test 配對核對、準入判決、產檔）全過才寫 `submit/<test>/<id>/` 與台帳 `staged` 列 | `--id`、`--eval-run`、`--test-run`、`--kind candidate\|baseline\|probe`、`--reason`、kernel 類 `--kernel --version --weights RUN[:sha]`、`--writer-opt`、`--plugin` |
+| `vcp submit stage` | 四道門（封槍 / 截止、eval-test 配對核對、準入判決、產檔）全過才寫 `submit/<test>/<id>/` 與台帳 `staged` 列；`Staged.provenance` 記候選等級，低於 `require_provenance` → `provenance_required:` | `--id`、`--eval-run`、`--test-run`、`--kind candidate\|baseline\|probe`、`--reason`、kernel 類 `--kernel --version --weights RUN[:sha]`、`--writer-opt`、`--plugin` |
 | `vcp submit upload` | Kaggle：再驗 sha → 配額 → `kaggle competitions submit` → `uploaded` 列 | `--id`、`--message` |
 | `vcp submit record` | 手動平台：你在網頁上傳後回填，平台顯示時間換成 UTC | `--id`、`--at "YYYY-MM-DD HH:MM"`、`--tz platform\|utc`、`--platform-ref` |
 | `vcp submit score` / `sync` | 回填 public / private；Kaggle 以 `competitions submissions` 回讀、配對、把別人的發記成 `foreign`（照數配額）。同一個 foreign ref 的狀態或分數變了（PENDING → COMPLETE 等）就多記一筆快照，VERDICT `refreshed=`；配額與到達仍每個 ref 算一次 | `--public`、`--private` |

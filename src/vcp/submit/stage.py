@@ -74,6 +74,7 @@ class StageResult:
     staged: Staged
     path: Path
     warnings: list[str]
+    identity: str | None = None
 
 
 def stage_json(paths: DatasetPaths, submission_id: str) -> Path:
@@ -122,7 +123,7 @@ def _render(
     paths: DatasetPaths,
     test_card: RunCard,
     warnings: list[str],
-) -> tuple[Artifact, Path]:
+) -> tuple[Artifact, Path, str]:
     """The submission file, written into a temporary directory that becomes the submission
     directory only once everything else has succeeded. The test subset is read through a
     role-scoped access whose receipt names the candidate's eval run (spec 6.7)."""
@@ -138,6 +139,7 @@ def _render(
     ) as access:
         samples = list(access.iter(profile.test_subset))
         test_ds = Dataset(access.card, samples)
+        identity = access.identity
     writer = writer_for(profile.writer or "", test_ds.card.task)
     options = {**profile.writer_opts, **spec.writer_opts}
     preds = read_predictions(verify_prediction(paths.data_root, test_card, profile.test_subset))
@@ -166,7 +168,7 @@ def _render(
         samples=res.samples,
         missing=len(res.missing),
     )
-    return artifact, tmp
+    return artifact, tmp, identity
 
 
 def stage(spec: StageSpec) -> StageResult:
@@ -262,10 +264,12 @@ def stage(spec: StageSpec) -> StageResult:
     )
     gate = admit(paths.data_root, eval_paths, eval_card, fuse, spec.kind, spec.reason)
     final_dir = paths.submission_dir(spec.submission_id)
+    identity: str | None
     if test_card is not None:
-        artifact, tmp = _render(spec, profile, paths, test_card, warnings)
+        artifact, tmp, identity = _render(spec, profile, paths, test_card, warnings)
         tmp.rename(final_dir)
     else:
+        identity = None
         artifact = Artifact(
             kind="kernel",
             kernel=spec.kernel,
@@ -308,7 +312,7 @@ def stage(spec: StageSpec) -> StageResult:
     except BaseException:
         shutil.rmtree(final_dir, ignore_errors=True)
         raise
-    return StageResult(staged, final_dir, warnings)
+    return StageResult(staged, final_dir, warnings, identity)
 
 
 def verify(

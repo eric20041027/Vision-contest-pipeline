@@ -16,6 +16,7 @@ from vcp.core.log import FieldValue
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.access.access import DatasetAccess
+from vcp.data.access.schema import Identity
 from vcp.data.dataset import Dataset
 from vcp.data.importers.common import count_exif_rotated, rel_posix
 from vcp.data.schema import Sample, View
@@ -59,6 +60,7 @@ class ExportResult(BaseModel):
     warnings: list[str]
     fields: dict[str, FieldValue] = Field(default_factory=dict)
     receipt: str
+    identity: Identity
 
 
 class Exporter(Protocol):
@@ -135,6 +137,7 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         image_root = paths.resolve_image_root(dataset.card)
         output = exporter.run(dataset, samples, out, image_root, spec.options)
     receipt_id = access.receipt_id
+    identity = access.identity
     files, warnings, fields = list(output.files), list(output.warnings), dict(output.fields)
     if not samples:
         warnings.append("subset is empty")
@@ -145,6 +148,8 @@ def export_subset(spec: ExportSpec) -> ExportResult:
             f"{rotated} views carry an EXIF orientation != 1 (policy {dataset.card.exif_policy}); "
             "verify the label space before training"
         )
+    if identity == "full_hash":
+        warnings.append("source_audit=missing")
     manifest = {
         **output.manifest,
         "dataset": dataset.card.name,
@@ -171,4 +176,5 @@ def export_subset(spec: ExportSpec) -> ExportResult:
         warnings=warnings,
         fields=fields,
         receipt=receipt_id,
+        identity=identity,
     )

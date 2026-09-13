@@ -1,5 +1,6 @@
 import errno
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,8 @@ from vcp.data.exporters import EXPORTERS, ExportOutput, get_exporter, register_e
 from vcp.data.exporters.base import ExportSpec, export_subset, select_view
 from vcp.data.exporters.yolo import _place_image
 from vcp.data.schema import Labels, Mask, Sample, View
+from vcp.data.source_audit import KIND as AUDIT_KIND
+from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 
 
@@ -27,6 +30,7 @@ def det_ds(roots):
     write_images(image_root, samples)
     ds = Dataset.from_parts(make_card("det", image_root="raw/tiny"), samples)
     ds.save(paths)
+    write_source_audit(paths, ds.card, data_root=roots.data)
     plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     save_plan(plan, paths)
     return ds, plan, paths
@@ -400,6 +404,7 @@ def test_export_empty_subset_warns(roots, tmp_path):
     write_images(roots.data / "raw" / "few", samples)
     ds = Dataset.from_parts(make_card("det", name="few", image_root="raw/few"), samples)
     ds.save(paths)
+    write_source_audit(paths, ds.card, data_root=roots.data)
     plan = build_plan(
         ds, plan_id="p", subsets=parse_subsets("train:train:0.0,valA:eval:1.0"), seed=0
     )
@@ -584,3 +589,11 @@ def test_export_of_a_sealed_subset_records_the_unseal_and_the_receipt(roots, tmp
     assert receipt.sealed_accessed and receipt.unseal_event_sha256 is not None
     rows = paths.unseal_jsonl("fixed-v1").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 1 and json.loads(rows[0])["caller"] == "vcp data export"
+
+
+def test_export_reports_identity_and_warns_without_an_audit(roots, tmp_path, det_ds):
+    res = export_subset(_spec(roots, "coco", tmp_path / "a", subset="train"))
+    assert res.identity == "source_audit" and "source_audit=missing" not in res.warnings
+    shutil.rmtree(roots.data / "artifacts" / AUDIT_KIND)
+    res = export_subset(_spec(roots, "coco", tmp_path / "b", subset="train"))
+    assert res.identity == "full_hash" and "source_audit=missing" in res.warnings

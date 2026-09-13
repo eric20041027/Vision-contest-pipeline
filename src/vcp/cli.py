@@ -352,6 +352,7 @@ def export_cmd(
             "files": res.files,
             "out": str(res.out),
             "receipt": res.receipt,
+            "identity": res.identity,
         }
         for k, v in res.fields.items():
             fields.setdefault(k, v)

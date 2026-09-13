@@ -1297,3 +1297,9 @@ def test_eval_status_warns_when_a_fused_runs_member_cannot_be_read(roots, tmp_pa
     v = _verdict(r.output)
     assert "status=WARN" in v and "provenance_failed=1" in v
     assert "provenance unavailable for run fused:" in r.output
+
+
+def test_measure_verdict_prints_identity(roots, tmp_path):
+    det_with_runs(roots, tmp_path, n=40)
+    r = runner.invoke(app, ["eval", "measure", "--run", "perfect"])
+    assert r.exit_code == 0 and "identity=source_audit" in _verdict(r.output)

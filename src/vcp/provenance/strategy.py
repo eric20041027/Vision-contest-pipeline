@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+import re
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from vcp.artifact import store
 from vcp.artifact.schema import ArtifactSpec, InputRef, SpecRecord
 from vcp.artifact.writer import ArtifactWriter
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import artifact_dir, resolve_stored_path
 from vcp.provenance.backend import BackendName, RequestedStrategy, SelectedStrategy
@@ -39,24 +38,8 @@ FULL_FEATURE_ORDER = (
     "head_count",
 )
 _FEATURE_NAMES = frozenset((*INCREMENTAL_FEATURE_ORDER, *FULL_FEATURE_ORDER))
-_SENSITIVE_KEYS = frozenset(
-    {
-        "connection",
-        "connection_string",
-        "credential",
-        "database",
-        "dsn",
-        "host",
-        "password",
-        "pg_service",
-        "port",
-        "secret",
-        "service",
-        "token",
-        "user",
-        "username",
-    }
-)
+_SCENARIO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _derived_policy_id(calibration_sha256: str) -> str:
@@ -81,6 +64,37 @@ class MaintenanceFeatures(_Strict):
     def _valid_counts(self) -> MaintenanceFeatures:
         if self.dirty_entities > self.total_entities:
             raise ValueError("dirty_entities must not exceed total_entities")
+        return self
+
+
+class CalibrationEvidence(_Strict):
+    """The complete permitted immutable evidence from a calibration run."""
+
+    scenario_ids: tuple[str, ...] = Field(min_length=1)
+    scenario_hashes: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("scenario_ids")
+    @classmethod
+    def _valid_scenario_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not _SCENARIO_ID.fullmatch(item) for item in value):
+            raise ValueError("scenario_ids contain an invalid identifier")
+        if len(set(value)) != len(value):
+            raise ValueError("scenario_ids must be unique")
+        return value
+
+    @field_validator("scenario_hashes")
+    @classmethod
+    def _valid_scenario_hashes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not _LOWER_SHA256.fullmatch(item) for item in value):
+            raise ValueError("scenario_hashes must be lowercase sha256 values")
+        if len(set(value)) != len(value):
+            raise ValueError("scenario_hashes must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def _corresponding_entries(self) -> CalibrationEvidence:
+        if len(self.scenario_ids) != len(self.scenario_hashes):
+            raise ValueError("scenario_ids and scenario_hashes must have equal length")
         return self
 
 
@@ -269,32 +283,21 @@ def _policy_sha256(policy: AdaptivePolicy) -> str:
     return sha256_text(text)
 
 
-def _check_sensitive_keys(value: Any) -> None:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            normalized = str(key).lower().replace("-", "_")
-            if normalized in _SENSITIVE_KEYS:
-                raise ValidationFailed(
-                    f"unsafe_calibration: connection or credential field {key!r} is not allowed"
-                )
-            _check_sensitive_keys(child)
-    elif isinstance(value, list):
-        for child in value:
-            _check_sensitive_keys(child)
-
-
-def _read_calibration(path: Path) -> Any:
+def _read_calibration(path: Path, *, committed: bool = False) -> CalibrationEvidence:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValidationFailed(f"bad calibration result: {type(exc).__name__}") from exc
-    _check_sensitive_keys(payload)
-    return payload
+        return CalibrationEvidence.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        if committed:
+            raise IntegrityError("mismatch: provenance policy calibration evidence") from None
+        raise ValidationFailed("bad calibration evidence") from None
 
 
 def write_policy_artifact(data_root: Path, policy: AdaptivePolicy, calibration_path: Path) -> str:
     """Publish or idempotently reuse a policy derived from one pinned calibration JSON."""
-    policy = AdaptivePolicy.model_validate(policy.model_dump(mode="json"))
+    try:
+        policy = AdaptivePolicy.model_validate(policy.model_dump(mode="json"))
+    except (TypeError, ValueError):
+        raise ValidationFailed("bad provenance policy payload") from None
     if (
         policy.policy_version != POLICY_VERSION
         or policy.backend is not BackendName.POSTGRESQL
@@ -344,58 +347,65 @@ def load_policy_artifact(
 ) -> AdaptivePolicy:
     """Verify a committed policy, its source pin, and caller-supplied compatibility context."""
     data_root = Path(data_root)
-    directory = artifact_dir(data_root, POLICY_KIND, policy_id)
+    try:
+        directory = artifact_dir(data_root, POLICY_KIND, policy_id)
+    except (ValueError, VcpError):
+        raise ValidationFailed("invalid: provenance policy id") from None
     if not directory.is_dir():
-        raise ValidationFailed(f"not_found: provenance policy {policy_id!r}")
-    result = store.verify(data_root, POLICY_KIND, policy_id)
+        raise ValidationFailed("not_found: provenance policy")
+    try:
+        result = store.verify(data_root, POLICY_KIND, policy_id)
+        manifest = store.load_manifest(data_root, POLICY_KIND, policy_id)
+    except (OSError, ValueError, VcpError):
+        raise IntegrityError("mismatch: provenance policy manifest") from None
     if result.failed:
-        raise IntegrityError(
-            f"mismatch: provenance policy {policy_id!r} fails manifest verification"
-        )
-    manifest = store.load_manifest(data_root, POLICY_KIND, policy_id)
+        raise IntegrityError("mismatch: provenance policy manifest")
     if {entry.name for entry in manifest.files} != {POLICY_FILE, CALIBRATION_FILE}:
-        raise IntegrityError(f"mismatch: provenance policy manifest for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy manifest")
     try:
         record = SpecRecord.model_validate_json(
             (directory / store.SPEC).read_text(encoding="utf-8")
         )
+    except (OSError, ValidationError, ValueError):
+        raise IntegrityError("mismatch: provenance policy spec") from None
+    try:
         policy = AdaptivePolicy.model_validate_json(
             (directory / POLICY_FILE).read_text(encoding="utf-8")
         )
-    except (OSError, ValidationError, ValueError) as exc:
-        raise ValidationFailed(f"bad provenance policy: {type(exc).__name__}") from exc
+    except (OSError, ValidationError, ValueError):
+        raise IntegrityError("mismatch: provenance policy payload") from None
     if record.spec != manifest.spec:
-        raise IntegrityError(f"mismatch: provenance policy manifest for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy manifest")
     if policy.id != policy_id or manifest.spec.id != policy_id:
-        raise IntegrityError(f"mismatch: provenance policy identity for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy identity")
     if len(manifest.spec.inputs) != 1:
-        raise IntegrityError(f"mismatch: provenance policy calibration pin for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy calibration pin")
     calibration_ref = manifest.spec.inputs[0]
     if (
         calibration_ref.name != "calibration_result"
         or calibration_ref.path is None
         or calibration_ref.sha256 != policy.calibration_sha256
     ):
-        raise IntegrityError(f"mismatch: provenance policy calibration pin for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy calibration pin")
     expected_params = _policy_spec(
         policy, resolve_stored_path(calibration_ref.path, data_root)
     ).params
     if manifest.spec.params != expected_params:
-        raise IntegrityError(f"mismatch: provenance policy manifest for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy manifest")
     if sha256_file(directory / POLICY_FILE) != manifest.spec.params["policy_sha256"]:
-        raise IntegrityError(f"mismatch: provenance policy payload for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy payload")
     copied_calibration = directory / CALIBRATION_FILE
+    _read_calibration(copied_calibration, committed=True)
     if sha256_file(copied_calibration) != policy.calibration_sha256:
-        raise IntegrityError(f"mismatch: provenance policy calibration copy for {policy_id!r}")
+        raise IntegrityError("mismatch: provenance policy calibration copy")
     source = resolve_stored_path(calibration_ref.path, data_root)
     if not source.is_file() or sha256_file(source) != policy.calibration_sha256:
-        raise IntegrityError(f"mismatch: provenance policy calibration input for {policy_id!r}")
-    _read_calibration(copied_calibration)
+        raise IntegrityError("mismatch: provenance policy calibration input")
 
     try:
         expected_backend = backend if isinstance(backend, BackendName) else BackendName(backend)
-    except ValueError as exc:
-        raise _compatibility_error("backend") from exc
+    except (TypeError, ValueError):
+        raise _compatibility_error("backend") from None
     checks = {
         "policy version": policy.policy_version == POLICY_VERSION,
         "backend": policy.backend is expected_backend,
@@ -418,6 +428,7 @@ __all__ = [
     "POLICY_KIND",
     "POLICY_VERSION",
     "AdaptivePolicy",
+    "CalibrationEvidence",
     "CostModel",
     "MaintenanceFeatures",
     "RequestedStrategy",

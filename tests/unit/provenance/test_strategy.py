@@ -1,4 +1,5 @@
 import json
+import traceback
 
 import pytest
 from pydantic import ValidationError
@@ -199,6 +200,59 @@ def _load(roots, policy_id, **updates):
     return load_policy_artifact(roots.data, policy_id, **compatibility)
 
 
+def _assert_marker_absent(error, marker):
+    assert marker not in str(error.value)
+    assert marker not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"scenario_ids": ["cal-1"], "scenario_hashes": ["a" * 64], "PGPASSWORD": "PW_MARKER"},
+        {"scenario_ids": ["cal-1"], "scenario_hashes": ["a" * 64], "PGHOST": "HOST_MARKER"},
+        {"scenario_ids": ["cal-1"], "scenario_hashes": ["a" * 64], "arbitrary": "EXTRA_MARKER"},
+        {
+            "scenario_ids": [{"PGHOST": "NESTED_MARKER"}],
+            "scenario_hashes": ["a" * 64],
+        },
+    ],
+)
+def test_calibration_evidence_rejects_unpermitted_fields_before_claim(roots, payload):
+    marker = next(value for value in str(payload).split("'") if value.endswith("_MARKER"))
+    calibration = roots.data / "inputs" / "untrusted-calibration.json"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text(json.dumps(payload) + "\n", encoding="utf-8", newline="\n")
+    policy = _policy(sha256_file(calibration))
+
+    with pytest.raises(ValidationFailed, match="bad calibration evidence") as error:
+        write_policy_artifact(roots.data, policy, calibration)
+
+    _assert_marker_absent(error, marker)
+    assert not artifact_dir(roots.data, "provenance_policy", policy.id).exists()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"scenario_ids": [], "scenario_hashes": []},
+        {"scenario_ids": ["cal-1"], "scenario_hashes": []},
+        {"scenario_ids": ["cal-1", "cal-1"], "scenario_hashes": ["a" * 64, "b" * 64]},
+        {"scenario_ids": ["cal-1", "cal-2"], "scenario_hashes": ["a" * 64, "a" * 64]},
+        {"scenario_ids": ["cal-1"], "scenario_hashes": ["A" * 64]},
+    ],
+)
+def test_calibration_evidence_rejects_invalid_correspondence_before_claim(roots, payload):
+    calibration = roots.data / "inputs" / "invalid-calibration.json"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_text(json.dumps(payload) + "\n", encoding="utf-8", newline="\n")
+    policy = _policy(sha256_file(calibration))
+
+    with pytest.raises(ValidationFailed, match="bad calibration evidence"):
+        write_policy_artifact(roots.data, policy, calibration)
+
+    assert not artifact_dir(roots.data, "provenance_policy", policy.id).exists()
+
+
 def test_policy_artifact_is_manifest_last_pinned_and_idempotent(roots):
     calibration, policy, policy_id = _publish(roots)
     expected = f"postgres-adaptive-v1-{sha256_file(calibration)[:12]}"
@@ -242,6 +296,16 @@ def test_loader_rejects_incompatible_policy(roots, field, value):
         _load(roots, policy_id, **{field: value})
 
 
+def test_compatibility_parse_error_and_traceback_do_not_leak_values(roots):
+    _, _, policy_id = _publish(roots)
+    marker = "PGPASSWORD_COMPATIBILITY_MARKER"
+
+    with pytest.raises(ValidationFailed, match="incompatible_policy") as error:
+        _load(roots, policy_id, backend=marker)
+
+    _assert_marker_absent(error, marker)
+
+
 def test_loader_rejects_manifest_mutation(roots):
     _, _, policy_id = _publish(roots)
     manifest_path = artifact_dir(roots.data, "provenance_policy", policy_id) / "manifest.json"
@@ -250,6 +314,53 @@ def test_loader_rejects_manifest_mutation(roots):
     manifest_path.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8", newline="\n")
     with pytest.raises(IntegrityError, match="mismatch: provenance policy manifest"):
         _load(roots, policy_id)
+
+
+def test_malformed_manifest_error_and_traceback_do_not_leak_values(roots):
+    _, _, policy_id = _publish(roots)
+    marker = "MANIFEST_PASSWORD_MARKER"
+    manifest_path = artifact_dir(roots.data, "provenance_policy", policy_id) / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({"PGPASSWORD": marker}) + "\n", encoding="utf-8", newline="\n"
+    )
+
+    with pytest.raises(IntegrityError, match="mismatch: provenance policy manifest") as error:
+        _load(roots, policy_id)
+
+    _assert_marker_absent(error, marker)
+
+
+def test_malformed_spec_error_and_traceback_do_not_leak_values(roots):
+    _, _, policy_id = _publish(roots)
+    marker = "SPEC_PASSWORD_MARKER"
+    spec_path = artifact_dir(roots.data, "provenance_policy", policy_id) / "spec.json"
+    spec_path.write_text(json.dumps({"PGPASSWORD": marker}) + "\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(IntegrityError, match="mismatch: provenance policy spec") as error:
+        _load(roots, policy_id)
+
+    _assert_marker_absent(error, marker)
+
+
+def test_malformed_policy_error_and_traceback_do_not_leak_values(roots):
+    _, _, policy_id = _publish(roots)
+    marker = "POLICY_PASSWORD_MARKER"
+    directory = artifact_dir(roots.data, "provenance_policy", policy_id)
+    policy_path = directory / "policy.json"
+    policy_path.write_text(
+        json.dumps({"PGPASSWORD": marker}) + "\n", encoding="utf-8", newline="\n"
+    )
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entry = next(item for item in manifest["files"] if item["name"] == "policy.json")
+    entry["bytes"] = policy_path.stat().st_size
+    entry["sha256"] = sha256_file(policy_path)
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(IntegrityError, match="mismatch: provenance policy payload") as error:
+        _load(roots, policy_id)
+
+    _assert_marker_absent(error, marker)
 
 
 def test_loader_rechecks_pinned_calibration_input(roots):

@@ -149,6 +149,10 @@ class MaterializedReader:
         for sid in self.ids:
             yield self[sid]
 
+    def sample(self, sample_id: str) -> Sample:
+        """The sample record without loading its arrays."""
+        return self._samples[sample_id]
+
     def rows(self, sample_id: str) -> list[ManifestRow]:
         return list(self._rows[sample_id])
 

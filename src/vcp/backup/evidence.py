@@ -19,7 +19,13 @@ from vcp.core.build import build_string
 from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
-from vcp.core.paths import DatasetPaths, logs_dir, resolve_stored_path, validate_name
+from vcp.core.paths import (
+    DatasetPaths,
+    artifact_dir,
+    logs_dir,
+    resolve_stored_path,
+    validate_name,
+)
 from vcp.core.time import stamp
 from vcp.fuse.build import load_record, record_path
 from vcp.fuse.recipes import recipe_path
@@ -165,6 +171,10 @@ class Collector:
         self._seen.add((run_id, conclusion))
         card = load_run(self.data_root, run_id)
         self.add(rdir / "run.yaml", "run_card", conclusion)
+        for ref in card.access:  # spec 8: the receipts are the evidence of what it trained on
+            adir = artifact_dir(self.data_root, "access_receipt", ref.artifact_id)
+            self.add(adir / "manifest.json", "access_receipt", conclusion)
+            self.add(adir / "receipt.json", "access_receipt", conclusion, sha256=ref.receipt_sha256)
         if (rdir / HISTORY).is_file():
             self.add(rdir / HISTORY, "history", conclusion)
         for entry in card.predictions.values():

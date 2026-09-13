@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,16 +18,26 @@ from vcp.core.build import build_string
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.time import utc_now
-from vcp.provenance.backend import BackendConfig, BackendName
+from vcp.provenance.backend import BackendConfig, BackendName, MaintenanceResult
 from vcp.provenance.diff import KIND as DIFF_KIND
-from vcp.provenance.graph import ProvenanceGraph, build_graph, dataset_version_id
+from vcp.provenance.diff import load_dataset_diff
+from vcp.provenance.graph import (
+    ProvenanceGraph,
+    add_artifact,
+    add_dataset_diff_transition,
+    build_graph,
+    dataset_version_id,
+)
 from vcp.provenance.index import (
     RebuildResult,
     VerifyIndexResult,
     _canonical_snapshot,
     _checkpoint_files,
     _fingerprint,
+    _fingerprint_hash,
     _last_event_id,
+    _path_for_checkpoint,
+    _prefix_hash,
     dataset_heads,
     graph_hash,
 )
@@ -35,9 +46,10 @@ from vcp.provenance.postgres_schema import (
     SCHEMA_NAME,
     install_schema,
     validate_schema,
+    validate_schema_in_transaction,
 )
 from vcp.provenance.schema import ProvenanceEdge, ProvenanceEntity, SampleChange, StatusRecord
-from vcp.provenance.views import compute_statuses
+from vcp.provenance.views import compute_statuses, compute_statuses_for_entities
 
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _SQLSTATE = re.compile(r"[0-9A-Z]{5}")
@@ -53,6 +65,184 @@ _TABLES = (
     "ingest_checkpoints",
     "ingested_artifacts",
 )
+
+DATASET_ANCESTORS_SQL = f"""WITH RECURSIVE ancestors(entity_id) AS (
+    SELECT %s::text
+    UNION
+    SELECT edge.source_id FROM {SCHEMA_NAME}.dataset_edges AS edge
+    JOIN ancestors ON edge.target_id=ancestors.entity_id
+    WHERE edge.generation_id=%s
+) SELECT entity_id FROM ancestors ORDER BY entity_id"""
+
+DIRTY_CLOSURE_SQL = f"""WITH RECURSIVE ancestors(entity_id) AS (
+    SELECT %s::text
+    UNION
+    SELECT edge.source_id FROM {SCHEMA_NAME}.dataset_edges AS edge
+    JOIN ancestors ON edge.target_id=ancestors.entity_id
+    WHERE edge.generation_id=%s
+), roots(entity_id) AS (
+    SELECT entity_id FROM ancestors WHERE %s
+    UNION
+    SELECT unnest(%s::text[])
+), dirty(entity_id) AS (
+    SELECT entity_id FROM roots
+    UNION
+    SELECT edge.target_id FROM {SCHEMA_NAME}.provenance_edges AS edge
+    JOIN dirty ON edge.source_id=dirty.entity_id
+    WHERE edge.generation_id=%s
+) SELECT entity_id FROM dirty ORDER BY entity_id"""
+
+DATASET_DESCENDANTS_SQL = f"""WITH RECURSIVE descendants(entity_id) AS (
+    SELECT %s::text
+    UNION
+    SELECT edge.target_id FROM {SCHEMA_NAME}.dataset_edges AS edge
+    JOIN descendants ON edge.source_id=descendants.entity_id
+    WHERE edge.generation_id=%s
+) SELECT entity_id FROM descendants ORDER BY entity_id"""
+
+AFFECTED_PATH_CHANGES_SQL = f"""WITH RECURSIVE descendants(entity_id) AS (
+    SELECT %s::text
+    UNION
+    SELECT edge.target_id FROM {SCHEMA_NAME}.dataset_edges AS edge
+    JOIN descendants ON edge.source_id=descendants.entity_id
+    WHERE edge.generation_id=%s
+), ancestors(entity_id) AS (
+    SELECT %s::text
+    UNION
+    SELECT edge.source_id FROM {SCHEMA_NAME}.dataset_edges AS edge
+    JOIN ancestors ON edge.target_id=ancestors.entity_id
+    WHERE edge.generation_id=%s
+)
+SELECT DISTINCT change.generation_id, change.change_id, change.schema_version,
+    change.source_id, change.target_id, change.from_dataset, change.from_samples_hash,
+    change.to_dataset, change.to_samples_hash, change.sample_id, change.change_type,
+    change.changed_domains, change.changed_fields, change.semantic_effects,
+    change.before_row_hash, change.after_row_hash
+FROM {SCHEMA_NAME}.dataset_edge_changes AS link
+JOIN descendants ON link.source_id=descendants.entity_id
+JOIN ancestors ON link.target_id=ancestors.entity_id
+JOIN {SCHEMA_NAME}.sample_changes AS change
+    ON change.generation_id=link.generation_id AND change.change_id=link.change_id
+WHERE link.generation_id=%s ORDER BY change.change_id"""
+
+
+def _changes_on_paths(
+    connection: Any,
+    generation_id: UUID | str,
+    source: str,
+    target: str,
+) -> dict[str, SampleChange]:
+    rows = tuple(
+        connection.execute(
+            AFFECTED_PATH_CHANGES_SQL,
+            (source, generation_id, target, generation_id, generation_id),
+        ).fetchall()
+    )
+    return deserialize_graph(
+        GraphRows(
+            generation_id=generation_id,
+            gaps=(),
+            entities=(),
+            provenance_edges=(),
+            sample_changes=rows,
+            dataset_edges=(),
+            dataset_edge_changes=(),
+        )
+    ).changes
+
+
+def _merge_status_bases(
+    source: dict[str, StatusRecord],
+    target: dict[str, StatusRecord],
+) -> dict[str, StatusRecord]:
+    """Union materialized path severities using the shared view's deterministic tie order."""
+    priorities = {"VALID": 0, "REVIEW": 1, "STALE": 2, "BROKEN": 3}
+    merged = dict(target)
+    for ident, record in source.items():
+        previous = merged.get(ident)
+        if previous is None or (
+            -priorities[record.status.value],
+            record.reason,
+            record.predecessor_id or "",
+        ) < (-priorities[previous.status.value], previous.reason, previous.predecessor_id or ""):
+            merged[ident] = record
+    return merged
+
+
+def _repair_reading_statuses(
+    connection: Any,
+    generation_id: UUID | str,
+    graph: ProvenanceGraph,
+    head: str,
+    base: dict[str, StatusRecord],
+    selected: dict[str, StatusRecord],
+) -> None:
+    """Repair the view's non-monotonic reading short-circuit without global replay.
+
+    A reading formerly invalidated by evaluation data may instead inherit its run's
+    new status. Severity and reason can both decrease; preserving its old base is
+    incorrect. Recompute just those readings and their descendants from the evidence
+    on paths relevant to that closure, keeping all clean predecessor statuses.
+    """
+    current = {**base, **selected}
+    seeds = set()
+    for ident, record in selected.items():
+        entity = graph.entities[ident]
+        if entity.entity_type != "reading" or entity.broken_reason:
+            continue
+        run_id = f"run:{entity.attributes.get('run_id')}"
+        run = current.get(run_id)
+        if run is not None and run.status.value != "VALID":
+            expected = StatusRecord(
+                entity_id=ident,
+                status=run.status,
+                reason=f"upstream {run_id} is {run.status.value}",
+                predecessor_id=run_id,
+            )
+            if record != expected:
+                seeds.add(ident)
+    if not seeds:
+        return
+    repair = _dirty_closure(connection, generation_id, head, seeds, semantic=False)
+    exact = ProvenanceGraph(
+        entities=dict(graph.entities),
+        transitions={transition: [] for transition in graph.transitions},
+    )
+    for edge in graph.edges.values():
+        exact.add_existing_edge(edge)
+    datasets = {graph.entities[ident].dataset_version_id for ident in repair}
+    for dataset in sorted(item for item in datasets if item is not None):
+        exact.changes.update(_changes_on_paths(connection, generation_id, dataset, head))
+    for change in exact.changes.values():
+        transition = (
+            dataset_version_id(change.from_dataset, change.from_samples_hash),
+            dataset_version_id(change.to_dataset, change.to_samples_hash),
+        )
+        exact.transitions[transition].append(change.change_id)
+    selected.update(compute_statuses_for_entities(exact, head, repair, base=current))
+
+
+def _dataset_ancestors(connection: Any, generation_id: UUID | str, source: str) -> set[str]:
+    return {
+        row[0]
+        for row in connection.execute(DATASET_ANCESTORS_SQL, (source, generation_id)).fetchall()
+    }
+
+
+def _dirty_closure(
+    connection: Any,
+    generation_id: UUID | str,
+    source: str,
+    delta_ids: set[str],
+    *,
+    semantic: bool = True,
+) -> set[str]:
+    return {
+        row[0]
+        for row in connection.execute(
+            DIRTY_CLOSURE_SQL, (source, generation_id, semantic, sorted(delta_ids), generation_id)
+        ).fetchall()
+    }
 
 
 @dataclass(frozen=True)
@@ -302,7 +492,7 @@ def _generation_fingerprint(graph: ProvenanceGraph) -> tuple[int, str]:
 
 def _status_rows(graph: ProvenanceGraph, generation_id: UUID | str) -> tuple[tuple[Any, ...], ...]:
     rows = []
-    for head in dataset_heads(graph):
+    for head in _status_heads(graph):
         statuses = compute_statuses(graph, head)
         rows.extend(
             (
@@ -316,6 +506,13 @@ def _status_rows(graph: ProvenanceGraph, generation_id: UUID | str) -> tuple[tup
             for ident, record in sorted(statuses.items())
         )
     return tuple(rows)
+
+
+def _status_heads(graph: ProvenanceGraph) -> list[str]:
+    """SQLite materializes every dataset version, including historical sources."""
+    return sorted(
+        ident for ident, entity in graph.entities.items() if entity.entity_type == "dataset"
+    )
 
 
 def _checkpoint_rows(
@@ -401,7 +598,9 @@ def _write_graph_rows(connection: Any, rows: GraphRows) -> None:
     )
 
 
-def _load_graph_rows(connection: Any, generation_id: UUID | str) -> GraphRows:
+def _load_graph_rows(
+    connection: Any, generation_id: UUID | str, *, topology_only: bool = False
+) -> GraphRows:
     gaps_row = connection.execute(
         f"SELECT value FROM {SCHEMA_NAME}.metadata WHERE generation_id=%s AND key=%s",
         (generation_id, "graph_gaps"),
@@ -444,10 +643,119 @@ def _load_graph_rows(connection: Any, generation_id: UUID | str) -> GraphRows:
         ),
     )
     loaded = {
-        name: tuple(connection.execute(query, (generation_id,)).fetchall())
+        name: (
+            ()
+            if topology_only and name in {"sample_changes", "dataset_edge_changes"}
+            else tuple(connection.execute(query, (generation_id,)).fetchall())
+        )
         for name, query in queries
     }
     return GraphRows(generation_id=generation_id, gaps=gaps, **loaded)
+
+
+# These identifiers and columns are fixed module constants, never caller input.
+_DELTA_TABLES = {
+    "entities": (
+        "generation_id entity_id entity_type key_value dataset_version_id attributes broken_reason",
+        2,
+        {5},
+    ),
+    "provenance_edges": ("generation_id edge_id source_id target_id edge_type attributes", 2, {5}),
+    "sample_changes": (
+        "generation_id change_id schema_version source_id target_id from_dataset "
+        "from_samples_hash to_dataset to_samples_hash sample_id change_type changed_domains "
+        "changed_fields semantic_effects before_row_hash after_row_hash",
+        2,
+        set(),
+    ),
+    "dataset_edges": ("generation_id source_id target_id artifact_id", 3, set()),
+    "dataset_edge_changes": ("generation_id source_id target_id change_id", 4, set()),
+    "ingested_artifacts": ("generation_id artifact_id manifest_sha256", 2, set()),
+}
+
+
+def _insert_immutable(connection: Any, table: str, row: Sequence[Any]) -> bool:
+    columns_text, key_count, json_columns = _DELTA_TABLES[table]
+    columns = columns_text.split()
+    placeholders = ["%s::jsonb" if index in json_columns else "%s" for index in range(len(row))]
+    inserted = connection.execute(
+        f"INSERT INTO {SCHEMA_NAME}.{table} ({', '.join(columns)}) "
+        f"VALUES ({', '.join(placeholders)}) ON CONFLICT DO NOTHING RETURNING generation_id",
+        tuple(row),
+    ).fetchone()
+    if inserted is not None:
+        return True
+    existing = connection.execute(
+        f"SELECT {', '.join(columns)} FROM {SCHEMA_NAME}.{table} WHERE "
+        + " AND ".join(f"{column}=%s" for column in columns[:key_count]),
+        tuple(row[:key_count]),
+    ).fetchone()
+    if existing is None or any(
+        (_json_object(existing[i]) != _json_object(value))
+        if i in json_columns
+        else existing[i] != value
+        for i, value in enumerate(row)
+    ):
+        raise IntegrityError(f"{table}_conflict: immutable PostgreSQL row")
+    return False
+
+
+def _insert_delta(connection: Any, rows: GraphRows) -> ProvenanceGraph:
+    inserted = {}
+    for table in (
+        "entities",
+        "provenance_edges",
+        "sample_changes",
+        "dataset_edges",
+        "dataset_edge_changes",
+    ):
+        inserted[table] = tuple(
+            row for row in getattr(rows, table) if _insert_immutable(connection, table, row)
+        )
+    return deserialize_graph(GraphRows(generation_id=rows.generation_id, gaps=(), **inserted))
+
+
+def _verify_incremental_evidence(
+    connection: Any, generation_id: UUID | str, data_root: Path, configs_root: Path
+) -> None:
+    for key, length, digest in connection.execute(
+        f"SELECT source_path, consumed_bytes, prefix_sha256 FROM {SCHEMA_NAME}.ingest_checkpoints "
+        "WHERE generation_id=%s ORDER BY source_path",
+        (generation_id,),
+    ).fetchall():
+        path = _path_for_checkpoint(key, data_root, configs_root)
+        if not path.is_file() or _prefix_hash(path, length) != digest:
+            raise IntegrityError("prefix_drift: PostgreSQL provenance checkpoint changed")
+    for artifact_id, digest in connection.execute(
+        f"SELECT artifact_id, manifest_sha256 FROM {SCHEMA_NAME}.ingested_artifacts "
+        "WHERE generation_id=%s ORDER BY artifact_id",
+        (generation_id,),
+    ).fetchall():
+        path = store.manifest_path(data_root, DIFF_KIND, artifact_id)
+        if not path.is_file() or sha256_file(path) != digest:
+            raise IntegrityError(
+                "canonical_drift: ingested dataset diff manifest changed or missing"
+            )
+        if store.verify(data_root, DIFF_KIND, artifact_id).failed:
+            raise IntegrityError("canonical_drift: ingested dataset diff payload changed")
+
+
+def _write_selected_statuses(
+    connection: Any, generation_id: UUID | str, head: str, statuses: dict[str, StatusRecord]
+) -> None:
+    _execute_many(
+        connection,
+        f"""INSERT INTO {SCHEMA_NAME}.entity_status
+            (generation_id, head_id, entity_id, status, reason, predecessor_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (generation_id, head_id, entity_id) DO UPDATE SET
+            status=EXCLUDED.status, reason=EXCLUDED.reason,
+            predecessor_id=EXCLUDED.predecessor_id""",
+        [
+            (generation_id, head, ident, record.status.value, record.reason, record.predecessor_id)
+            for ident, record in sorted(statuses.items())
+        ],
+    )
 
 
 def _read_status_rows(
@@ -500,6 +808,94 @@ def _read_transaction(config: BackendConfig, driver: Any) -> Iterator[tuple[Any,
         raise
     finally:
         connection.close()
+
+
+def _record_fixed_decision(
+    connection: Any,
+    generation_id: UUID | str,
+    artifact_id: str,
+    *,
+    inserted: bool,
+    changed_samples: int,
+    dirty_entities: int,
+    historical_changes: int,
+    digest: str,
+    started: int,
+    semantic_work: bool = False,
+) -> MaintenanceResult:
+    counts = {
+        table: _scalar(
+            connection.execute(
+                f"SELECT COUNT(*) FROM {SCHEMA_NAME}.{table} WHERE generation_id=%s",
+                (generation_id,),
+            ).fetchone()
+        )
+        for table in ("entities", "provenance_edges")
+    }
+    head_count = _scalar(
+        connection.execute(
+            f"""SELECT COUNT(*) FROM {SCHEMA_NAME}.entities AS entity
+            WHERE entity.generation_id=%s AND entity.entity_type=%s AND NOT EXISTS (
+                SELECT 1 FROM {SCHEMA_NAME}.dataset_edges AS edge
+                WHERE edge.generation_id=entity.generation_id AND edge.source_id=entity.entity_id
+            )""",
+            (generation_id, "dataset"),
+        ).fetchone()
+    )
+    selected = "INCREMENTAL" if inserted and (changed_samples or semantic_work) else "NO_OP"
+    reason = (
+        "duplicate_artifact_no_op"
+        if not inserted
+        else "requested_incremental"
+        if selected == "INCREMENTAL"
+        else "verified_zero_semantic_changes"
+    )
+    result = MaintenanceResult(
+        artifact_id=artifact_id,
+        inserted=inserted,
+        backend=BackendName.POSTGRESQL.value,
+        requested_strategy="incremental",
+        selected_strategy=selected,
+        strategy_reason=reason,
+        changed_samples=changed_samples,
+        dirty_entities=dirty_entities,
+        total_entities=counts["entities"],
+        dirty_ratio=dirty_entities / counts["entities"] if counts["entities"] else 0.0,
+        estimated_incremental_ms=None,
+        estimated_full_ms=None,
+        policy_version="fixed-v1",
+        elapsed_ms=(perf_counter_ns() - started) / 1_000_000,
+        graph_hash=digest,
+    )
+    connection.execute(
+        f"""INSERT INTO {SCHEMA_NAME}.maintenance_decisions (
+            generation_id, decision_id, artifact_id, requested_strategy, selected_strategy,
+            reason_code, changed_samples, dirty_entities, total_entities, dirty_ratio,
+            total_edges, historical_changes, head_count, estimated_incremental_ms,
+            estimated_full_ms, policy_version, elapsed_ms, decided_at
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (
+            generation_id,
+            uuid4(),
+            artifact_id,
+            result.requested_strategy,
+            selected,
+            reason,
+            changed_samples,
+            dirty_entities,
+            result.total_entities,
+            result.dirty_ratio,
+            counts["provenance_edges"],
+            historical_changes,
+            head_count,
+            None,
+            None,
+            result.policy_version,
+            result.elapsed_ms,
+            utc_now(),
+        ),
+    )
+    return result
 
 
 class PostgresProvenanceBackend:
@@ -563,6 +959,7 @@ class PostgresProvenanceBackend:
                         (generation_id, "backend_schema_version", str(POSTGRES_SCHEMA_VERSION)),
                         (generation_id, "build_string", build_string()),
                         (generation_id, "graph_gaps", _json(graph_rows.gaps)),
+                        (generation_id, "canonical_snapshot", _json(before)),
                     ),
                 )
                 _write_graph_rows(connection, graph_rows)
@@ -655,7 +1052,7 @@ class PostgresProvenanceBackend:
                 (generation_id,),
             ).fetchall()
         }
-        expected_heads = set(dataset_heads(canonical))
+        expected_heads = set(_status_heads(canonical))
         if actual_heads != expected_heads:
             raise IntegrityError("mismatch: rebuilt PostgreSQL dataset heads")
         for head in sorted(expected_heads):
@@ -666,6 +1063,281 @@ class PostgresProvenanceBackend:
     def sync(self, data_root: Path, configs_root: Path) -> RebuildResult:
         """PostgreSQL v1 sync deliberately uses the same atomic full publication path."""
         return self.rebuild(data_root, configs_root)
+
+    def ingest_diff(
+        self,
+        artifact_id: str,
+        data_root: Path,
+        configs_root: Path,
+        *,
+        requested_strategy: str = "incremental",
+        policy_id: str | None = None,
+    ) -> MaintenanceResult:
+        """Apply a verified diff in one locked transaction, hashing only graph delta rows."""
+        if requested_strategy != "incremental" or policy_id is not None:
+            raise ValidationFailed("unsupported_strategy: fixed PostgreSQL incremental ingest only")
+        started = perf_counter_ns()
+        data_root = Path(data_root).resolve()
+        configs_root = Path(configs_root).resolve()
+        connection = _connect(self.config)
+        try:
+            with connection.transaction():
+                connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
+                validate_schema_in_transaction(connection)
+                generation_id = _active_generation(connection)
+                _verify_incremental_evidence(connection, generation_id, data_root, configs_root)
+                loaded = load_dataset_diff(data_root, artifact_id, verify_inputs=True)
+                manifest_path = store.manifest_path(data_root, DIFF_KIND, artifact_id)
+                manifest_hash = sha256_file(manifest_path)
+                before = _canonical_snapshot(data_root, configs_root)
+                generation = connection.execute(
+                    f"SELECT state, graph_hash, graph_record_count, graph_record_sum "
+                    f"FROM {SCHEMA_NAME}.generations WHERE generation_id=%s",
+                    (generation_id,),
+                ).fetchone()
+                if generation is None or generation[0] != "ready":
+                    raise IntegrityError("mismatch: active PostgreSQL generation is not ready")
+                prior = connection.execute(
+                    f"SELECT manifest_sha256 FROM {SCHEMA_NAME}.ingested_artifacts "
+                    "WHERE generation_id=%s AND artifact_id=%s",
+                    (generation_id, artifact_id),
+                ).fetchone()
+                snapshot_row = connection.execute(
+                    f"SELECT value FROM {SCHEMA_NAME}.metadata WHERE generation_id=%s AND key=%s",
+                    (generation_id, "canonical_snapshot"),
+                ).fetchone()
+                if snapshot_row is None:
+                    raise IntegrityError("mismatch: canonical snapshot missing; rebuild required")
+                previous_snapshot = _json_object(_scalar(snapshot_row))
+                if any(before.get(key) != tuple(value) for key, value in previous_snapshot.items()):
+                    raise IntegrityError(
+                        "canonical_drift: indexed evidence changed; rebuild required"
+                    )
+                artifact_prefix = f"data/artifacts/{DIFF_KIND}/{artifact_id}/"
+                if any(
+                    not key.startswith(artifact_prefix)
+                    for key in before.keys() - previous_snapshot.keys()
+                ):
+                    raise IntegrityError(
+                        "canonical_drift: unindexed evidence; run sync before ingest"
+                    )
+                if prior is not None:
+                    if prior[0] != manifest_hash:
+                        raise IntegrityError(
+                            "canonical_drift: duplicate dataset diff manifest changed"
+                        )
+                    historical_changes = _scalar(
+                        connection.execute(
+                            f"SELECT COUNT(*) FROM {SCHEMA_NAME}.sample_changes "
+                            "WHERE generation_id=%s",
+                            (generation_id,),
+                        ).fetchone()
+                    )
+                    result = _record_fixed_decision(
+                        connection,
+                        generation_id,
+                        artifact_id,
+                        inserted=False,
+                        changed_samples=len(loaded.changes),
+                        dirty_entities=0,
+                        historical_changes=historical_changes,
+                        digest=generation[1],
+                        started=started,
+                    )
+                    self._recheck_diff(
+                        data_root, configs_root, artifact_id, loaded, manifest_hash, before
+                    )
+                    return result
+
+                source = dataset_version_id(
+                    loaded.summary.from_dataset, loaded.summary.from_samples_hash
+                )
+                target = dataset_version_id(
+                    loaded.summary.to_dataset, loaded.summary.to_samples_hash
+                )
+                graph = deserialize_graph(
+                    _load_graph_rows(connection, generation_id, topology_only=True)
+                )
+                if (source, target) in graph.transitions:
+                    raise IntegrityError(f"transition_conflict: {source} -> {target}")
+                before_entities, before_edges = set(graph.entities), set(graph.edges)
+                add_artifact(
+                    graph, data_root, store.load_manifest(data_root, DIFF_KIND, artifact_id)
+                )
+                add_dataset_diff_transition(graph, data_root, artifact_id)
+                delta = ProvenanceGraph(
+                    entities={
+                        ident: graph.entities[ident]
+                        for ident in graph.entities.keys() - before_entities
+                    },
+                    changes={change.change_id: change for change in loaded.changes},
+                    transitions={(source, target): [change.change_id for change in loaded.changes]},
+                )
+                for ident in graph.edges.keys() - before_edges:
+                    delta.add_existing_edge(graph.edges[ident])
+                # serialize_graph needs the transition's DERIVED_FROM edge, present in delta.
+                base = _status_dict(_read_status_rows(connection, generation_id, source))
+                if set(base) != before_entities:
+                    raise IntegrityError(
+                        "mismatch: source status materialization; rebuild required"
+                    )
+                historical_changes = _scalar(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {SCHEMA_NAME}.sample_changes WHERE generation_id=%s",
+                        (generation_id,),
+                    ).fetchone()
+                )
+                inserted_delta = _insert_delta(
+                    connection, serialize_graph(delta, generation_id=generation_id)
+                )
+                ancestors = _dataset_ancestors(connection, generation_id, source)
+                affected_heads = {
+                    row[0]
+                    for row in connection.execute(
+                        DATASET_DESCENDANTS_SQL, (target, generation_id)
+                    ).fetchall()
+                }
+                semantic = loaded.summary.total_changes > 0 or affected_heads != {target}
+                dirty = _dirty_closure(
+                    connection, generation_id, source, set(delta.entities), semantic=semantic
+                )
+                for head in sorted(affected_heads):
+                    head_base = _status_dict(_read_status_rows(connection, generation_id, head))
+                    combined_base = _merge_status_bases(base, head_base)
+                    # A late connecting edge exposes existing downstream changes to newly
+                    # connected ancestors. Only rows on target -> head paths are needed;
+                    # unrelated history and source-side history remain materialized bases.
+                    history = (
+                        _changes_on_paths(connection, generation_id, target, head)
+                        if head != target
+                        else {}
+                    )
+                    status_graph = ProvenanceGraph(
+                        entities=dict(graph.entities),
+                        changes={**history, **delta.changes},
+                    )
+                    for edge in graph.edges.values():
+                        status_graph.add_existing_edge(edge)
+                    status_graph.transitions = (
+                        {(old, head): list(status_graph.changes) for old in ancestors}
+                        if semantic
+                        else {}
+                    )
+                    if head == target:
+                        connection.execute(
+                            f"""INSERT INTO {SCHEMA_NAME}.entity_status
+                                (generation_id, head_id, entity_id, status, reason, predecessor_id)
+                                SELECT generation_id, %s, entity_id, status, reason, predecessor_id
+                                FROM {SCHEMA_NAME}.entity_status
+                                WHERE generation_id=%s AND head_id=%s
+                                ON CONFLICT (generation_id, head_id, entity_id) DO NOTHING""",
+                            (target, generation_id, source),
+                        )
+                    selected = compute_statuses_for_entities(
+                        status_graph,
+                        head,
+                        dirty,
+                        base=combined_base,
+                        preserve_selected_base=True,
+                    )
+                    _repair_reading_statuses(
+                        connection, generation_id, graph, head, combined_base, selected
+                    )
+                    # Copy source-history severities for clean rows too (notably NO_OP),
+                    # while retaining a joining target's pre-existing lineage statuses.
+                    selected.update(
+                        {
+                            ident: record
+                            for ident, record in combined_base.items()
+                            if ident not in dirty and record != head_base.get(ident)
+                        }
+                    )
+                    _write_selected_statuses(connection, generation_id, head, selected)
+                neutral_graph = ProvenanceGraph(entities=dict(graph.entities))
+                for edge in graph.edges.values():
+                    neutral_graph.add_existing_edge(edge)
+                delta_dirty = _dirty_closure(
+                    connection, generation_id, source, set(delta.entities), semantic=False
+                )
+                for head in _status_heads(graph):
+                    if head in affected_heads:
+                        continue
+                    head_base = _status_dict(_read_status_rows(connection, generation_id, head))
+                    selected = compute_statuses_for_entities(
+                        neutral_graph,
+                        head,
+                        delta_dirty,
+                        base=head_base,
+                        preserve_selected_base=True,
+                    )
+                    _write_selected_statuses(connection, generation_id, head, selected)
+
+                delta_count, delta_sum = _fingerprint(inserted_delta)
+                count = generation[2] + delta_count
+                total = (int(generation[3], 16) + delta_sum) % _FINGERPRINT_MODULUS
+                digest = _fingerprint_hash(count, total)
+                _insert_immutable(
+                    connection, "ingested_artifacts", (generation_id, artifact_id, manifest_hash)
+                )
+                connection.execute(
+                    f"UPDATE {SCHEMA_NAME}.generations SET graph_hash=%s, graph_record_count=%s, "
+                    "graph_record_sum=%s, canonical_snapshot_hash=%s WHERE generation_id=%s",
+                    (digest, count, f"{total:064x}", _snapshot_hash(before), generation_id),
+                )
+                connection.execute(
+                    f"UPDATE {SCHEMA_NAME}.metadata SET value=%s WHERE generation_id=%s AND key=%s",
+                    (_json(before), generation_id, "canonical_snapshot"),
+                )
+                connection.execute(
+                    f"DELETE FROM {SCHEMA_NAME}.ingest_checkpoints WHERE generation_id=%s",
+                    (generation_id,),
+                )
+                _execute_many(
+                    connection,
+                    f"INSERT INTO {SCHEMA_NAME}.ingest_checkpoints VALUES (%s, %s, %s, %s, %s)",
+                    _checkpoint_rows(generation_id, data_root, configs_root, before),
+                )
+                result = _record_fixed_decision(
+                    connection,
+                    generation_id,
+                    artifact_id,
+                    inserted=True,
+                    changed_samples=len(loaded.changes),
+                    dirty_entities=len(dirty) if semantic else 0,
+                    historical_changes=historical_changes,
+                    digest=digest,
+                    started=started,
+                    semantic_work=semantic,
+                )
+                _verify_incremental_evidence(connection, generation_id, data_root, configs_root)
+                self._recheck_diff(
+                    data_root, configs_root, artifact_id, loaded, manifest_hash, before
+                )
+                return result
+        except Exception as error:
+            if _is_driver_error(self._psycopg, error):
+                raise_redacted_database_error(error)
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _recheck_diff(
+        data_root: Path,
+        configs_root: Path,
+        artifact_id: str,
+        loaded: Any,
+        manifest_hash: str,
+        before: dict[str, tuple[int, str]],
+    ) -> None:
+        if (
+            load_dataset_diff(data_root, artifact_id, verify_inputs=True) != loaded
+            or sha256_file(store.manifest_path(data_root, DIFF_KIND, artifact_id)) != manifest_hash
+            or _canonical_snapshot(data_root, configs_root) != before
+        ):
+            raise IntegrityError(
+                "canonical_drift: dataset diff or its inputs changed during ingest"
+            )
 
     def load_graph(self) -> ProvenanceGraph:
         with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
@@ -767,7 +1439,7 @@ class PostgresProvenanceBackend:
                     (generation_id,),
                 ).fetchall()
             }
-            expected_heads = set(dataset_heads(canonical))
+            expected_heads = set(_status_heads(canonical))
             if actual_heads != expected_heads:
                 issues.append("dataset heads differ")
             for head in sorted(expected_heads):

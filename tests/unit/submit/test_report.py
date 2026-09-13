@@ -1,3 +1,4 @@
+import shutil
 from datetime import timedelta
 
 import pytest
@@ -223,3 +224,10 @@ def test_status_lists_each_staged_provenance(pair):
     _seed(pair, _profile())
     st = status(TEST, **_kw(pair))
     assert st.provenance == {"S1": "declared", "S2": "declared"}
+
+
+def test_status_survives_a_missing_stage_json(pair):
+    _seed(pair, _profile())
+    shutil.rmtree(pair.test_paths.submission_dir("S1"))
+    st = status(TEST, **_kw(pair))
+    assert st.provenance == {"S1": "-", "S2": "declared"}

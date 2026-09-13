@@ -1,13 +1,14 @@
 """``DatasetAccess`` (spec 6): a role-scoped view of one dataset under one plan. Rows outside
 the allowed subsets are never parsed -- the open pass hashes every byte for identity and only
 peeks the leading ``sample_id`` of each line to build an offset index. What was read is
-accumulated here and becomes the receipt at close."""
+accumulated here and becomes the receipt at close.
+
+With a ``source_audit`` (spec 7) the open pass is skipped entirely and every row read is checked
+against its audited sha."""
 
 from __future__ import annotations
 
 import hashlib
-import json
-import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import BinaryIO
@@ -34,14 +35,14 @@ from vcp.data.access.schema import (
     AccessedSubset,
     AccessReceipt,
     AccessRef,
+    Identity,
     Purpose,
 )
 from vcp.data.dataset import Dataset, append_unseal
 from vcp.data.schema import DatasetCard, Sample
+from vcp.data.source_audit import LoadedAudit, load_source_audit, peek_sample_id
 from vcp.data.split import SplitPlan, assert_plan_matches, load_plan
 from vcp.data.tasks import get_task
-
-_LINE = re.compile(rb'^\{"sample_id":\s*"((?:[^"\\]|\\.)*)"')
 
 
 def index_samples(path: Path) -> tuple[str, dict[str, tuple[int, int]]]:
@@ -53,10 +54,7 @@ def index_samples(path: Path) -> tuple[str, dict[str, tuple[int, int]]]:
     with path.open("rb") as f:
         for lineno, raw in enumerate(iter(f.readline, b""), start=1):
             digest.update(raw)
-            m = _LINE.match(raw)
-            if m is None:
-                raise ValidationFailed("not a samples.jsonl line", location=f"{path}:{lineno}")
-            sample_id = json.loads(b'"' + m.group(1) + b'"')
+            sample_id = peek_sample_id(raw, path, lineno)
             if sample_id in index:
                 raise ValidationFailed(
                     f"duplicate sample_id {sample_id!r}", location=f"{path}:{lineno}"
@@ -77,7 +75,8 @@ class DatasetAccess:
         purpose: Purpose,
         run_id: str | None,
         attempt: int | None,
-        index: dict[str, tuple[int, int]],
+        index: dict[str, tuple[int, int, str | None]],
+        source_audit: LoadedAudit | None,
         card_sha256: str,
         plan_sha256: str,
         unseal_event_sha256: str | None,
@@ -115,6 +114,11 @@ class DatasetAccess:
         self._denied = 0
         self._denied_first: list[str] = []
         self._closed = False
+        self.identity: Identity = "source_audit" if source_audit is not None else "full_hash"
+        self.source_audit_id = source_audit.artifact_id if source_audit is not None else None
+        self._source_audit_sha256 = (
+            source_audit.manifest_sha256 if source_audit is not None else None
+        )
         self._writer = claim_receipt(
             receipt_spec(
                 receipt_id=standalone_receipt_id(purpose, card.name, plan.plan_id),
@@ -126,6 +130,7 @@ class DatasetAccess:
                 samples_hash=card.samples_hash,
                 plan_sha256=plan_sha256,
                 card_sha256=card_sha256,
+                source_audit=source_audit,
             ),
             paths.data_root,
             binding,
@@ -182,13 +187,19 @@ class DatasetAccess:
             )
         if not paths.samples_jsonl.is_file():
             raise ValidationFailed(f"samples file not found: {paths.samples_jsonl}")
-        digest, index = index_samples(paths.samples_jsonl)
-        if digest != card.samples_hash:
-            raise IntegrityError(
-                f"mismatch: samples.jsonl sha256 {digest[:12]} != card samples_hash "
-                f"{card.samples_hash[:12]}",
-                location=str(paths.samples_jsonl),
-            )
+        loaded = load_source_audit(paths, card, data_root=paths.data_root)
+        index: dict[str, tuple[int, int, str | None]]
+        if loaded is not None:
+            index = dict(loaded.index)  # spec 7.1: no pass over samples.jsonl at all
+        else:
+            digest, plain = index_samples(paths.samples_jsonl)
+            if digest != card.samples_hash:
+                raise IntegrityError(
+                    f"mismatch: samples.jsonl sha256 {digest[:12]} != card samples_hash "
+                    f"{card.samples_hash[:12]}",
+                    location=str(paths.samples_jsonl),
+                )
+            index = {k: (o, n, None) for k, (o, n) in plain.items()}
         unknown = sorted(set(index) - set(plan.assignment))
         if unknown:
             raise IntegrityError(
@@ -206,6 +217,7 @@ class DatasetAccess:
             run_id=binding.run_id if binding is not None else run_id,
             attempt=binding.attempt if binding is not None else None,
             index=index,
+            source_audit=loaded,
             card_sha256=sha256_file(paths.card_yaml),
             plan_sha256=sha256_file(paths.plan_json(plan_id)),
             unseal_event_sha256=None,
@@ -272,9 +284,16 @@ class DatasetAccess:
         self._check_open()  # F1: a generator opened before close() must not parse after it
         cached = self._cache.get(sample_id)
         if cached is None:
-            offset, length = self._index[sample_id]
+            offset, length, expected = self._index[sample_id]
             f.seek(offset)
-            raw = f.read(length).rstrip(b"\r\n")
+            raw = f.read(length)
+            if expected is not None and hashlib.sha256(raw).hexdigest() != expected:
+                raise IntegrityError(
+                    f"mismatch: row {sample_id!r} differs from source audit "
+                    f"{self.source_audit_id!r}; samples.jsonl changed after the audit",
+                    fields={"sample": sample_id},
+                )
+            raw = raw.rstrip(b"\r\n")
             try:
                 cached = Sample.model_validate_json(raw.decode("utf-8"))
             except ValueError as e:
@@ -342,6 +361,9 @@ class DatasetAccess:
             denied_first=list(self._denied_first),
             sealed_accessed=any(a.role == "sealed" for a in accessed.values()),
             unseal_event_sha256=self._unseal_event_sha256,
+            identity=self.identity,
+            source_audit=self.source_audit_id,
+            source_audit_sha256=self._source_audit_sha256,
             outcome="failed" if exc is not None else "completed",
             exception=type(exc).__name__ if exc is not None else None,
             started_at=self._started_at,
@@ -377,6 +399,8 @@ class DatasetAccess:
                     denied=receipt.denied,
                     receipt_sha256=entry.sha256,
                     binding="session",
+                    identity=self.identity,
+                    source_audit=self.source_audit_id,
                 )
             )
         return receipt

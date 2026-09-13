@@ -61,6 +61,9 @@ class AccessReceipt(_Strict):
     denied_first: list[str] = Field(default_factory=list)
     sealed_accessed: bool = False
     unseal_event_sha256: str | None = None
+    identity: Identity = "full_hash"
+    source_audit: str | None = None
+    source_audit_sha256: str | None = None
     outcome: Outcome
     exception: str | None = None
     started_at: str
@@ -94,6 +97,12 @@ class AccessReceipt(_Strict):
         if self.unseal_event_sha256 is not None:
             if not _SHA.fullmatch(self.unseal_event_sha256):
                 raise ValueError("unseal_event_sha256 must be 64 hex characters")
+        if (self.source_audit is None) != (self.source_audit_sha256 is None):
+            raise ValueError("source_audit and source_audit_sha256 go together")
+        if (self.identity == "source_audit") != (self.source_audit is not None):
+            raise ValueError("identity=source_audit needs source_audit (and vice versa)")
+        if self.source_audit_sha256 is not None and not _SHA.fullmatch(self.source_audit_sha256):
+            raise ValueError("source_audit_sha256 must be 64 hex characters")
         return self
 
 
@@ -107,9 +116,13 @@ class AccessRef(_Strict):
     denied: int = Field(ge=0)
     receipt_sha256: str
     binding: Binding
+    identity: Identity = "full_hash"
+    source_audit: str | None = None
 
     @model_validator(mode="after")
     def _validate_hashes(self) -> AccessRef:
         if not _SHA.fullmatch(self.receipt_sha256):
             raise ValueError("receipt_sha256 must be 64 hex characters")
+        if (self.identity == "source_audit") != (self.source_audit is not None):
+            raise ValueError("identity=source_audit needs source_audit (and vice versa)")
         return self

@@ -13,6 +13,7 @@ Binding = Literal["session", "manual"]
 Grade = Literal["receipt", "export", "declared"]
 Role = Literal["train", "eval", "sealed"]
 Outcome = Literal["completed", "failed"]
+Identity = Literal["source_audit", "full_hash"]
 GRADE_RANK: dict[str, int] = {"declared": 0, "export": 1, "receipt": 2}
 MAX_DENIED_FIRST = 5
 _SHA = re.compile(r"^[0-9a-f]{64}$")

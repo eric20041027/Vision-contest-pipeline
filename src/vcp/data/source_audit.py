@@ -116,7 +116,22 @@ def write_source_audit(
     """Spec 6: reuse the audit this samples.jsonl already has, else build it in one pass.
     Preparation-time only: the whole file is read, and its sha must equal the card's."""
     spec = audit_spec(paths, card)
-    if store.reuse(spec, data_root, check_files=True) is not None:
+    try:
+        existing = store.reuse(spec, data_root, check_files=True)
+    except IntegrityError as e:
+        raise IntegrityError(
+            f"{e}; move artifacts/source_audit/{spec.id}/ aside and re-run `vcp data validate` "
+            "to rebuild it (content-addressed: the id stays the same)",
+            fields=e.fields,
+        ) from e
+    except ValidationFailed as e:
+        if not str(e).startswith("partial:"):
+            raise
+        raise ValidationFailed(
+            f"{e}; run `vcp artifact clean --older-than 0 --apply` then re-run `vcp data validate`",
+            fields=e.fields,
+        ) from e
+    if existing is not None:
         return SourceAuditResult(
             spec.id, "reused", sha256_file(store.manifest_path(data_root, KIND, spec.id))
         )
@@ -196,7 +211,8 @@ def load_source_audit(
     if res.failed:
         raise IntegrityError(
             f"mismatch: source audit {artifact_id!r} no longer matches its manifest "
-            f"(mismatch={len(res.mismatch)} missing={len(res.missing)} extra={len(res.extra)})",
+            f"(mismatch={len(res.mismatch)} missing={len(res.missing)} extra={len(res.extra)}); "
+            f"move artifacts/source_audit/{artifact_id}/ aside and re-run `vcp data validate`",
             fields={"audit": artifact_id},
         )
     try:
@@ -206,7 +222,8 @@ def load_source_audit(
     if audit.dataset != card.name or audit.samples_hash != card.samples_hash:
         raise IntegrityError(
             f"mismatch: source audit {artifact_id!r} describes {audit.dataset}/"
-            f"{audit.samples_hash[:12]}, not {card.name}/{card.samples_hash[:12]}",
+            f"{audit.samples_hash[:12]}, not {card.name}/{card.samples_hash[:12]}; "
+            f"move artifacts/source_audit/{artifact_id}/ aside and re-run `vcp data validate`",
             fields={"audit": artifact_id},
         )
     size = paths.samples_jsonl.stat().st_size
@@ -228,14 +245,17 @@ def load_source_audit(
                 ) from e
             if row.sample_id in index:
                 raise IntegrityError(
-                    f"mismatch: source audit {artifact_id!r} lists {row.sample_id!r} twice",
+                    f"mismatch: source audit {artifact_id!r} lists {row.sample_id!r} twice; "
+                    f"move artifacts/source_audit/{artifact_id}/ aside and re-run "
+                    "`vcp data validate`",
                     fields={"audit": artifact_id},
                 )
             index[row.sample_id] = (row.offset, row.length, row.sha256)
     if len(index) != audit.line_count:
         raise IntegrityError(
             f"mismatch: source audit {artifact_id!r} indexes {len(index)} rows, audit.json says "
-            f"{audit.line_count}",
+            f"{audit.line_count}; move artifacts/source_audit/{artifact_id}/ aside and re-run "
+            "`vcp data validate`",
             fields={"audit": artifact_id},
         )
     return LoadedAudit(artifact_id, sha256_file(d / store.MANIFEST), audit, index)

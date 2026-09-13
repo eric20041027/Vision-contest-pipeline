@@ -26,6 +26,7 @@ from vcp.data.access.schema import Purpose
 from vcp.data.dataset import Dataset
 from vcp.data.materialize.manifest import ManifestRow, read_manifest
 from vcp.data.schema import DatasetCard, Labels, Sample
+from vcp.train.records import load_record
 from vcp.train.session import Session
 
 
@@ -87,7 +88,18 @@ class MaterializedReader:
                 if access is not None:
                     self.access = access
                 elif under_run:
-                    self.access = Session.current(data_root).access(
+                    session = Session.current(data_root)
+                    record = load_record(session.data_root, session.run_id)
+                    # F4: the session binds a receipt to record.dataset/plan_id regardless of
+                    # what this reader asked for -- a mismatched name/plan_id would otherwise
+                    # train silently on the run's own plan with no signal.
+                    if record.dataset != name or record.plan_id != plan_id:
+                        raise ValidationFailed(
+                            f"mismatch: reader asked for {name!r}/{plan_id!r} but vcp train run "
+                            f"bound {record.dataset!r}/{record.plan_id!r}",
+                            fields={"run": record.run_id},
+                        )
+                    self.access = session.access(
                         subsets={subset},
                         purpose="train",
                         unseal_reason=reason if unseal else None,

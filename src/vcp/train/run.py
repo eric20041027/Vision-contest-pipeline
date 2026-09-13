@@ -558,7 +558,16 @@ def train_run(spec: RunSpec) -> RunResult:
         duration_s=attempt.duration_s,
     )
     # spec 7.1: the receipts the child bound to this attempt become the run's access record.
-    card = card.model_copy(update={"access": list(record.access)})
+    # F5: merged by artifact_id rather than replaced outright -- train.yaml's refs first (in
+    # their own order), then any ref already on the card (e.g. a manual `ingest --receipt`
+    # attached between attempts) that train.yaml does not already know about, so --resume can
+    # no longer make a manually attached receipt vanish from run.yaml.
+    train_ids = {r.artifact_id for r in record.access}
+    merged_access = [
+        *record.access,
+        *(r for r in card.access if r.artifact_id not in train_ids),
+    ]
+    card = card.model_copy(update={"access": merged_access})
     save_run(data_root, card)
     # steps 8-9
     record, card, final, registered, warnings = _finish_checkpoints(

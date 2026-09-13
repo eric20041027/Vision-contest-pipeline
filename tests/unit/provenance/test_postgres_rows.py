@@ -7,10 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.hashing import sha256_file
 from vcp.provenance.backend import BackendConfig, BackendName
 from vcp.provenance.graph import ProvenanceGraph, dataset_version_id
+from vcp.provenance.index import _canonical_snapshot
 from vcp.provenance.postgres import (
     PostgresProvenanceBackend,
+    _checkpoint_rows,
     deserialize_graph,
     serialize_graph,
 )
@@ -103,6 +106,35 @@ def test_graph_rows_normalize_dataset_edge_change_ids(tiny_graph):
 
     assert [row[-1] for row in rows.dataset_edge_changes] == sorted(tiny_graph.changes)
     assert deserialize_graph(rows).transitions[transition] == sorted(tiny_graph.changes)
+
+
+def test_graph_rows_accept_equivalent_artifacts_for_one_transition(tiny_graph):
+    source, target = next(iter(tiny_graph.transitions))
+    tiny_graph.add_edge(
+        source,
+        target,
+        "DERIVED_FROM",
+        {"artifact": "another-diff", "total_changes": 1},
+    )
+
+    rows = serialize_graph(tiny_graph, generation_id=GENERATION)
+
+    assert rows.dataset_edges[0][-1] == "another-diff"
+    assert deserialize_graph(rows).normalized() == tiny_graph.normalized()
+
+
+def test_checkpoint_rows_hash_log_outside_canonical_snapshot(roots):
+    log = roots.data / "logs" / "provenance.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text('{"event":"cli"}\n', encoding="utf-8", newline="\n")
+    snapshot = _canonical_snapshot(roots.data, roots.configs)
+
+    rows = _checkpoint_rows(GENERATION, roots.data, roots.configs, snapshot)
+
+    checkpoint = next(row for row in rows if row[1] == "data/logs/provenance.jsonl")
+    assert checkpoint[2] == log.stat().st_size
+    assert checkpoint[3] == sha256_file(log)
+    assert checkpoint[4] is not None
 
 
 class _Cursor:

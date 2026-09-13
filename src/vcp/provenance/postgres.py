@@ -92,9 +92,9 @@ def _transition_artifact(graph: ProvenanceGraph, source: str, target: str) -> st
         and edge.target_id == target
         and "artifact" in edge.attributes
     }
-    if len(artifacts) != 1:
+    if not artifacts:
         raise IntegrityError(f"mismatch: transition artifact {source} -> {target}")
-    return artifacts.pop()
+    return min(artifacts)
 
 
 def serialize_graph(graph: ProvenanceGraph, *, generation_id: UUID | str) -> GraphRows:
@@ -326,7 +326,9 @@ def _checkpoint_rows(
 ) -> tuple[tuple[Any, ...], ...]:
     rows = []
     for key, path in _checkpoint_files(data_root, configs_root):
-        size, digest = snapshot[key]
+        size, digest = (
+            snapshot[key] if key in snapshot else (path.stat().st_size, sha256_file(path))
+        )
         last_event_id = _last_event_id(path) if size == path.stat().st_size else None
         rows.append((generation_id, key, size, digest, last_event_id))
     return tuple(rows)

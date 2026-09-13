@@ -192,3 +192,4 @@ coverage 檢查（plan assignment 與索引互相覆蓋）、sealed / roles / un
 10. `write_source_audit` 每一行都先進 hasher；行格式錯誤或重複 id 的 `ValidationFailed` 延後到整檔 sha 與 card 比對之後才丟——檔案與 card 不符時先報 `mismatch:`，不是「不是 samples.jsonl 的行」。
 11. `vcp eval measure` 退回整檔 hash 時 VERDICT 也帶 `source_audit=missing` 欄位（不只人讀行），與 `train run` / `export` 一致（spec §8 / §9 的 WARN 欄位）。
 12. 真資料整合測試檔名為 `tests/integration/test_audited_access.py`（不是計畫寫的 `test_source_audit.py`）：與 `tests/unit/data/test_source_audit.py` 同名會讓 pytest 整套收集時 import file mismatch，而 `tests/integration/` 刻意沒有 `__init__.py`（其 conftest 以 `from conftest import …` 被引用）。
+13. 已 commit 但驗不過的稽核沒有 `supersedes` 路徑（§3 決定不做鏈、id 內容定址）：`mismatch:` 訊息直接說「把 `artifacts/source_audit/<id>/` 搬走再跑 `vcp data validate`」，半途目錄的 `partial:` 訊息提示 `vcp artifact clean`。要不要讓 `source_audit` 走 `supersedes` 或加 `vcp artifact quarantine`，留給後續 wave（最終審查 Important #2）。

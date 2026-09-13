@@ -121,7 +121,7 @@ uv run vcp eval measure --run y12x_r2
 
 訓練迴圈用 `with MaterializedReader(name, mode, plan_id=P, subset="train") as reader:`（或 `Session.current().access(subsets={"train"})`）讀資料：只有授權子集的列會被解析，關閉時存取器把它實際讀到的子集、ID 集合 sha、拒絕次數寫成 `artifacts/access_receipt/<run>-a<attempt>-<n>/receipt.json`——呼叫端只能加 `notes`。run 的等級由收據算出、不存：`receipt`（有 `purpose=train` 的有效收據）> `export`（無收據但從 `vcp data export` 目錄訓練）> `declared`（舊 run 或手填）；`vcp eval status` / `report`、`vcp submit status` 都印它。`submit.yaml` 的 `require_provenance: receipt|export|declared`（預設 `declared`）決定 `stage` / `final` 擋不擋候選；讀過 sealed 子集的候選一律 `observed_sealed:`。收據證明的是經 vcp 存取器的讀取；process 自己 `open()` 檔案不在證明範圍。
 
-v0.6.0 起 `vcp data import` / `validate` 會留一份 `artifacts/source_audit/src-<dataset>-<hash16>/`（`audit.json` + 每列一個 sha 的 `index.jsonl`，內容定址、同內容重用）；存取器有它就不再整檔 hash `samples.jsonl`——未授權的列連讀都不讀、讀到的列先比 sha 再解析——收據記 `identity: source_audit`。舊資料集沒稽核照跑（`identity: full_hash`），但 `train run` / `measure` / `export` 會 WARN `source_audit=missing`，重跑 `vcp data validate` 就升級；稽核壞掉是 `mismatch:` FAIL，不退回。
+v0.6.0 起 `vcp data import` / `validate` 會留一份 `artifacts/source_audit/src-<dataset>-<hash16>/`（`audit.json` + 每列一個 sha 的 `index.jsonl`，內容定址、同內容重用）；存取器有它就不再整檔 hash `samples.jsonl`——未授權的列連讀都不讀、讀到的列先比 sha 再解析——收據記 `identity: source_audit`。舊資料集沒稽核照跑（`identity: full_hash`），但 `train run` / `measure` / `export` 會 WARN `source_audit=missing`，重跑 `vcp data validate` 就升級；稽核壞掉是 `mismatch:` FAIL，不退回。稽核產物本身壞掉（`vcp artifact verify --kind source_audit` 不過）時所有讀取都 `mismatch:` FAIL；把 `artifacts/source_audit/<id>/` 搬走再跑 `vcp data validate` 重建（內容定址，id 不變）。
 
 自寫 PyTorch loop 只需要兩個名字：
 

@@ -30,6 +30,7 @@ ROLES: tuple[str, ...] = (
     "recipe",
     "run_card",
     "access_receipt",
+    "source_audit",
     "history",
     "fuse_record",
     "train_record",
@@ -45,7 +46,7 @@ ROLES: tuple[str, ...] = (
     "checkpoint_final",
     "checkpoint",
 )
-_TIER2 = ("prediction", "samples", "raw_manifest", "train_dir", "logs")
+_TIER2 = ("source_audit", "prediction", "samples", "raw_manifest", "train_dir", "logs")
 TIER_OF: dict[str, int] = {
     role: 3 if role.startswith("checkpoint") else (2 if role in _TIER2 else 1) for role in ROLES
 }

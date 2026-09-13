@@ -164,3 +164,36 @@ def test_walk_run_collects_access_receipts(world):
     entry = by_key[f"data/artifacts/access_receipt/{rid}/receipt.json"]
     assert entry.sha256 == card.access[0].receipt_sha256 and entry.tier == 1 and entry.present
     assert col.missing == [] and col.unlisted == []
+
+
+def test_walk_run_collects_the_source_audit_behind_a_receipt(world):
+    assert ROLES.index("source_audit") == ROLES.index("access_receipt") + 1
+    assert TIER_OF["source_audit"] == 2 and "source_audit" not in CARD_ROLES
+    with DatasetAccess.open(
+        EVAL,
+        "fixed-v1",
+        subsets={"train"},
+        purpose="train",
+        run_id="good",
+        data_root=world.roots.data,
+        configs_root=world.roots.configs,
+    ) as access:
+        list(access.iter("train"))
+    card = attach_receipts(
+        load_run(world.roots.data, "good"), [access.receipt_id], data_root=world.roots.data
+    )
+    save_run(world.roots.data, card)
+    aid = card.access[0].source_audit
+    assert card.access[0].identity == "source_audit" and aid is not None
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    roles = _roles(col)
+    assert roles["source_audit"] == [
+        f"artifacts/source_audit/{aid}/audit.json",
+        f"artifacts/source_audit/{aid}/index.jsonl",
+        f"artifacts/source_audit/{aid}/manifest.json",
+    ]
+    by_key = {e.key: e for e in col.files_of()}
+    entry = by_key[f"data/artifacts/source_audit/{aid}/index.jsonl"]
+    assert entry.tier == 2 and entry.present and entry.for_ == ["run:good"]
+    assert col.missing == [] and col.unlisted == []

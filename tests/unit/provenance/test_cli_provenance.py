@@ -145,3 +145,14 @@ def test_provenance_missing_index_fails_with_command_context(roots):
     assert result.exit_code == 1
     assert "VERDICT cmd=provenance.ingest status=FAIL" in result.output
     assert "artifact=missing" in result.output
+
+
+def test_no_backend_option_still_uses_sqlite(roots):
+    _setup(roots)
+    rebuilt = runner.invoke(app, ["provenance", "rebuild", *_roots_args(roots)])
+    assert rebuilt.exit_code == 0
+
+    result = runner.invoke(app, ["provenance", "status", "--json", *_roots_args(roots)])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["fields"]["backend"] == "sqlite"

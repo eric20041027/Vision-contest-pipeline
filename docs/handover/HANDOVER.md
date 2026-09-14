@@ -20,9 +20,9 @@
 
 ## 2. 現況
 
-- 分支：本文件目前描述 local implementation branch `codex/dataset-evolution-provenance`，基底為 `main@09af0cc`；尚未宣稱 merge、push、tag 或 PR。原 `codex/vcp-visual-guide` 工作樹的使用者文件變更未被碰觸。
-- 版本：branch candidate `0.7.0` = Dataset Evolution 與 Incremental Impact Provenance；`0.6.0`（tag `v0.6.0`）= source audit。0.7 新增 immutable `dataset_diff`、canonical graph、disposable SQLite index、8 個 provenance CLI 與 Real+Scaled benchmark。release/tag 步驟仍以 `CHANGELOG.md` 為準，沒有 tag 前不得稱為已發版。
-- 測試：本 branch `uv run pytest --cov=vcp` 為 1,202 passed / 16 skipped、coverage 95.05%。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
+- 分支：本文件目前描述 local implementation branch `codex/postgresql-adaptive-provenance`，Task 12 的 implementation base 是 `f82fea4`；尚未宣稱 merge、push、tag 或 PR。原 `codex/vcp-visual-guide` 工作樹的使用者文件變更未被碰觸。
+- 版本：`0.8.0` 是 PostgreSQL Adaptive Provenance candidate，不是 released version；`0.7.0` = Dataset Evolution 與 Incremental Impact Provenance；`0.6.0`（tag `v0.6.0`）= source audit。未給 `--backend` 仍是 SQLite，PostgreSQL 是 optional、noncanonical、可重建的 derived index。release/tag 步驟仍以 `CHANGELOG.md` 為準，沒有 tag 前不得稱為已發版。
+- 測試：Task 12 的 current-commit complete gates 見 `docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md` 和其 ignored Task 12 report；不要把 Task 9–11 的 focused/offline counts當成本次全套結果。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
 - 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。
 
@@ -42,7 +42,7 @@ src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）ti
 src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
 src/vcp/artifact  schema（pydantic 模型、check_file_name）ledger（supersession.jsonl 讀寫）store（load/reuse/verify）
                   writer（ArtifactWriter：claim/write/commit）lineage（chain/successors/head/forks）clean（scan/clean）
-src/vcp/provenance schema/policy/diff（dataset_diff artifact）graph/views（full oracle）index（SQLite cache）
+src/vcp/provenance schema/policy/diff（dataset_diff artifact）graph/views（full oracle）backend（SQLite adapter / optional PostgreSQL）postgres（v1 normalized derived index）strategy（immutable adaptive policy）index（SQLite cache）
 src/vcp/cli*.py   每層一個 typer app（含 cli_artifact.py 的 `vcp artifact` 群：create/show/verify/lineage/status/
                   relink/clean）；cli_common.run_command 統一 VERDICT / exit code / --json / context
 projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
@@ -57,6 +57,13 @@ Dataset provenance 的操作、修復、status 語意與基準命令見
 metadata copy 寫 diff/index，live RSNA roots 僅讀取。
 完整實作範圍、review 修正、驗證數字與下一位 agent 的接手清單見
 `docs/handover/DATASET_EVOLUTION_PROVENANCE_HANDOFF.md`。
+
+PostgreSQL provenance 的 optional install、libpq service 安全設定、all flags、repair、opt-in harness 與
+benchmark/calibration/held-out命令見 `docs/guides/POSTGRESQL_PROVENANCE.md`；pending evidence record 見
+`docs/benchmarks/postgres-provenance-v1.md`，完整實作/交接界線見
+`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。本機尚無 Docker/PostgreSQL runtime；43 個
+unconfigured integration skips 不是 PostgreSQL passes，沒有 live PostgreSQL、large-scale、calibration、
+held-out、policy ID/hash 或 RSNA six-method 結果。
 
 十二個變異軸都是登記表（任務、匯入器、匯出器、解碼器、切分策略、稽核、轉換器、指標、σ_p 方法、融合器、輸出格式、平台）：加一種形態 = 加一個登記項，不改 schema、不改 CLI；比賽自己的指標 / 格式用 `--plugin projects.<contest>.metrics`。
 
@@ -88,6 +95,7 @@ metadata copy 寫 diff/index，live RSNA roots 僅讀取。
 5. **RSNA Knee 已實跑本機基準**：200 study 固定切分、PNG256、兩個種子訓練、預登記 / macro AUC / judge、平均融合消融、test profile、離線 bundle 已完成；讀數與命令見 `projects/rsna-knee/RUNBOOK.md`。seed 43 與融合均未準入，第一個 seed 42 是 baseline。**尚未完成外部里程碑**：指定私有 Kaggle dataset 上傳待核准，notebook 執行 / 提交 / scored / sealed final 未發生；備份目的地未提供。不要把手冊中待執行命令當成已完成，也不要先解封 holdout。
 6. **Windows 命令解析**：裸 `python` 可啟動到 venv 以外，即使 `--venv` 探針正確；專案已用絕對 interpreter 完成訓練，通用解析修復另列 Plan 5 §10，與效能回合分開。
 7. **本機證據已備份**：`knee-local-v1` 結論 `all`、51 項驗證成功；兩份權重、notebook bundle、Git source bundle 均已存 `C:/vcp-backup/rsna-knee`。這是同機副本；異機撤離仍待目的地，先將權重 upload 到該遠端後再產新清單，勿把指著 C 槽的 remote_copy 當異機證據。
+8. **PostgreSQL Adaptive Provenance 外部驗收待續**：先在 disposable Docker Compose host 跑 opt-in runner，再跑 six-method 1K/10K/100K/1M與 real track，最後 calibration-only 與不同 process 的 frozen held-out。保存 machine-readable outputs、PostgreSQL numeric server version、policy ID/精確 policy SHA、parity與 honest p50/p95 gate結果；不得用 skips、offline doubles或held-out refit替代。Task 12 專項與全分支 review仍由 controller 完成；沒有另行授權前不可 push、PR、merge、tag或release。
 
 ## 7. 開發流程（這個 repo 一直這樣做）
 

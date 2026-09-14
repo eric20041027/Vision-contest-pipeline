@@ -434,19 +434,24 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
             raise ValueError
     except (OSError, ValueError, VcpError, StopIteration):
         raise ValidationFailed("invalid_calibration_artifact") from None
-    # Check both identities before seed validation, so leakage has a precise failure.
-    ids, hashes = set(evidence.scenario_ids), set(evidence.scenario_hashes)
-    workloads = {row.workload_hash for row in evidence.observations}
-    if any(
-        isinstance(row, dict)
-        and (
-            row.get("scenario_id") in ids
-            or row.get("scenario_hash") in hashes
-            or row.get("workload_hash") in workloads
-        )
-        for row in heldout_rows
-    ):
-        raise ValidationFailed("workload_leakage")
+    # Use complete verified coverage, including NO_OP scenarios excluded from fit.
+    # Count distinct calibration scenarios, not repeated methods or identity aliases.
+    identities = {
+        "scenario_id": dict(zip(evidence.scenario_ids, evidence.scenario_hashes, strict=True)),
+        "scenario_hash": {value: value for value in evidence.scenario_hashes},
+        "workload_hash": dict(
+            zip(evidence.scenario_workload_hashes, evidence.scenario_hashes, strict=True)
+        ),
+    }
+    overlaps = set()
+    for row in heldout_rows:
+        if isinstance(row, dict):
+            for field, lookup in identities.items():
+                value = row.get(field)
+                if isinstance(value, str) and value in lookup:
+                    overlaps.add(lookup[value])
+    if overlaps:
+        raise ValidationFailed("workload_leakage", fields={"overlap_count": len(overlaps)})
     groups = validate_rows(heldout_rows, seeds=HELDOUT_SEEDS, methods=EVALUATION_METHODS)
     ratios50, ratios95, reports = [], [], []
     pooled = {method: [] for method in EVALUATION_METHODS}

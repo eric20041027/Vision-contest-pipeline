@@ -825,3 +825,34 @@ def test_exact_eligible_set_is_derived_without_building_fixtures(monkeypatch):
     assert len(scenarios) == 144 and len(eligible) == 124
     assert evaluation.scenario_counts(Scenario(1000, 0.001, "chain", 20260913)) == (326, 0)
     assert evaluation.scenario_counts(Scenario(1000000, 1.0, "chain", 20260913)) == (333326, 333326)
+
+
+def test_heldout_cannot_reuse_excluded_calibration_noop_workload(tmp_path):
+    path = tmp_path / "complete.json"
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    _, evidence = evaluation.load_calibration(path)
+    fitted = {row.workload_hash for row in evidence.observations}
+    excluded = set(evidence.scenario_workload_hashes) - fitted
+    assert len(excluded) == 20
+    leaked_hash = sorted(excluded)[0]
+    heldout = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
+    identity = heldout[0]["scenario_hash"]
+    group = [row for row in heldout if row["scenario_hash"] == identity]
+    assert len(group) == 3
+    assert identity not in evidence.scenario_hashes
+    assert group[0]["scenario_id"] not in evidence.scenario_ids
+    for row in group:
+        row["workload_hash"] = leaked_hash
+    # This remains a complete, internally matched held-out matrix. Only cross-split
+    # workload leakage invalidates it; it must never report overlap_count=0/pass.
+    assert (
+        len(
+            evaluation.validate_rows(
+                heldout, seeds=strategy.HELDOUT_SEEDS, methods=evaluation.EVALUATION_METHODS
+            )
+        )
+        == 144
+    )
+    with pytest.raises(ValidationFailed, match="workload_leakage") as error:
+        evaluation.evaluate_policy(path, heldout)
+    assert error.value.fields["overlap_count"] == 1

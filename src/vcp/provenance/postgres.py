@@ -535,7 +535,11 @@ def _driver_diagnostics() -> Iterator[None]:
             previous = logging.getLogRecordFactory()
 
             def factory(name, level, path, line, message, args, exc_info, func=None, sinfo=None):
-                if _DIAGNOSTIC_SCOPE.get() and (name == "psycopg" or name.startswith("psycopg.")):
+                if (
+                    _DIAGNOSTIC_SCOPE.get()
+                    and isinstance(name, str)
+                    and (name == "psycopg" or name.startswith("psycopg."))
+                ):
                     message, args, exc_info, sinfo = (
                         "PostgreSQL driver diagnostic redacted",
                         (),

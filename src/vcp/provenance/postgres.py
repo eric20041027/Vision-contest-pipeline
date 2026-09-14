@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
+from threading import RLock
 from time import perf_counter_ns
 from typing import Any
 from uuid import UUID, uuid4
@@ -72,6 +75,11 @@ from vcp.provenance.views import compute_statuses, compute_statuses_for_entities
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _SQLSTATE = re.compile(r"[0-9A-Z]{5}")
 _MISSING_DEPENDENCY = "missing_dependency: install with `uv sync --extra postgres`"
+_DIAGNOSTIC_SCOPE = ContextVar("vcp_postgres_diagnostics", default=False)
+_DIAGNOSTIC_LOCK = RLock()
+_diagnostic_users = 0
+_diagnostic_factory = None
+_previous_record_factory = None
 _ADVISORY_LOCK_KEY = WRITER_LOCK_KEY
 _FINGERPRINT_MODULUS = 1 << 256
 _TABLES = (
@@ -511,16 +519,99 @@ def _is_driver_error(driver: Any, error: BaseException) -> bool:
     return isinstance(error, error_type)
 
 
+@contextmanager
+def _driver_diagnostics() -> Iterator[None]:
+    """Redact Psycopg records before host factories, handlers or stderr see them.
+
+    Psycopg logs conninfo and rollback exceptions before returning control to us.
+    A context-local flag covers nested calls and concurrent VCP operations without
+    suppressing another thread's diagnostics. The lock covers registration only,
+    never database work. No connection metadata is inspected or retained here.
+    """
+    global _diagnostic_users, _diagnostic_factory, _previous_record_factory
+    token = _DIAGNOSTIC_SCOPE.set(True)
+    with _DIAGNOSTIC_LOCK:
+        if _diagnostic_users == 0:
+            previous = logging.getLogRecordFactory()
+
+            def factory(name, level, path, line, message, args, exc_info, func=None, sinfo=None):
+                if _DIAGNOSTIC_SCOPE.get() and (name == "psycopg" or name.startswith("psycopg.")):
+                    message, args, exc_info, sinfo = (
+                        "PostgreSQL driver diagnostic redacted",
+                        (),
+                        None,
+                        None,
+                    )
+                return previous(name, level, path, line, message, args, exc_info, func, sinfo)
+
+            _previous_record_factory = previous
+            _diagnostic_factory = factory
+            logging.setLogRecordFactory(factory)
+        _diagnostic_users += 1
+    try:
+        yield
+    finally:
+        _DIAGNOSTIC_SCOPE.reset(token)
+        with _DIAGNOSTIC_LOCK:
+            _diagnostic_users -= 1
+            if _diagnostic_users == 0:
+                # Do not overwrite a logging reconfiguration made by the host.
+                if logging.getLogRecordFactory() is _diagnostic_factory:
+                    logging.setLogRecordFactory(_previous_record_factory)
+                _diagnostic_factory = _previous_record_factory = None
+
+
+@contextmanager
+def _database_operation(driver: Any, cleanup: Callable[[], None]) -> Iterator[None]:
+    """Keep operation/rollback failures primary; redact a standalone cleanup failure."""
+    with _driver_diagnostics():
+        failed = False
+        try:
+            yield
+        except BaseException as error:
+            failed = True
+            if _is_driver_error(driver, error):
+                raise_redacted_database_error(error)
+            raise
+        finally:
+            try:
+                cleanup()
+            except BaseException as error:
+                if not failed:
+                    if isinstance(error, Exception):
+                        raise_redacted_database_error(error)
+                    raise
+
+
+@contextmanager
+def connection_lifecycle(open_connection: Callable[[], Any], driver: Any) -> Iterator[Any]:
+    """Own one autocommit connection from connect through its last close attempt."""
+    with _driver_diagnostics():
+        try:
+            connection = open_connection()
+        except ValidationFailed:
+            raise
+        except Exception as error:
+            raise_redacted_database_error(error)
+        with _database_operation(driver, connection.close):
+            yield connection
+
+
+def _connection(config: BackendConfig, driver: Any):
+    return connection_lifecycle(lambda: _connect(config), driver)
+
+
 def _connect(config: BackendConfig) -> Any:
     """Open one autocommit connection through libpq's standard resolution."""
     service = validate_pg_service(config.pg_service)
     psycopg = _load_psycopg()
-    try:
-        if service is None:
-            return psycopg.connect(autocommit=True)
-        return psycopg.connect(service=service, autocommit=True)
-    except Exception as error:
-        raise_redacted_database_error(error)
+    with _driver_diagnostics():
+        try:
+            if service is None:
+                return psycopg.connect(autocommit=True)
+            return psycopg.connect(service=service, autocommit=True)
+        except Exception as error:
+            raise_redacted_database_error(error)
 
 
 def _scalar(row: Sequence[Any] | Mapping[str, Any] | None) -> Any:
@@ -859,19 +950,12 @@ def _active_generation(connection: Any) -> UUID | str:
 
 @contextmanager
 def _read_transaction(config: BackendConfig, driver: Any) -> Iterator[tuple[Any, UUID | str]]:
-    connection = _connect(config)
-    try:
+    with _connection(config, driver) as connection:
         validate_schema(connection)
         with connection.transaction():
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             generation_id = _active_generation(connection)
             yield connection, generation_id
-    except Exception as error:
-        if _is_driver_error(driver, error):
-            raise_redacted_database_error(error)
-        raise
-    finally:
-        connection.close()
 
 
 def maintenance_environment(connection: Any) -> tuple[int, str]:
@@ -1033,8 +1117,7 @@ class PostgresProvenanceBackend:
         status_rows = _status_rows(canonical, generation_id)
         checkpoint_rows = _checkpoint_rows(generation_id, data_root, configs_root, before)
         artifact_rows = _ingested_artifact_rows(generation_id, canonical, data_root)
-        connection = _connect(self.config)
-        try:
+        with _connection(self.config, self._psycopg) as connection:
             with connection.transaction():
                 connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
                 install_schema_in_transaction(connection)
@@ -1061,12 +1144,6 @@ class PostgresProvenanceBackend:
                     checkpoint_rows,
                     artifact_rows,
                 )
-        except Exception as error:
-            if _is_driver_error(self._psycopg, error):
-                raise_redacted_database_error(error)
-            raise
-        finally:
-            connection.close()
         return RebuildResult(
             entities=len(canonical.entities),
             edges=len(canonical.edges),
@@ -1226,8 +1303,7 @@ class PostgresProvenanceBackend:
         started = perf_counter_ns()
         data_root = Path(data_root).resolve()
         configs_root = Path(configs_root).resolve()
-        connection = _connect(self.config)
-        try:
+        with _connection(self.config, self._psycopg) as connection:
             with connection.transaction():
                 connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
                 validate_schema_in_transaction(connection)
@@ -1593,12 +1669,6 @@ class PostgresProvenanceBackend:
                 if load_policy() != policy:
                     raise IntegrityError("mismatch: provenance policy changed during ingest")
                 return result
-        except Exception as error:
-            if _is_driver_error(self._psycopg, error):
-                raise_redacted_database_error(error)
-            raise
-        finally:
-            connection.close()
 
     @staticmethod
     def _recheck_diff(

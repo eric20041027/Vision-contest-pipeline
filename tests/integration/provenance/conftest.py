@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import pytest
 
+from vcp.core.errors import ValidationFailed
 from vcp.provenance import postgres
 from vcp.provenance.backend import BackendConfig, BackendName
 
@@ -173,21 +174,16 @@ class HarnessFactory:
         self.driver, self.service = driver, service
         self.clones = []
 
+    @contextmanager
     def connect(self, database=None):
         kwargs = {"service": self.service, "autocommit": True, "connect_timeout": 5}
         if database is not None:
             kwargs["dbname"] = database
-        connection = None
-        try:
-            connection = self.driver.connect(**kwargs)
+        with postgres.connection_lifecycle(
+            lambda: self.driver.connect(**kwargs), self.driver
+        ) as connection:
             connection.execute("SET statement_timeout='15s'")
-            return connection
-        except self.driver.Error:
-            if connection is not None:
-                connection.close()
-            pytest.fail(
-                "PostgreSQL integration connection failed (details redacted)", pytrace=False
-            )
+            yield connection
 
     def create(self):
         database = "vcp_test_" + uuid4().hex
@@ -197,8 +193,8 @@ class HarnessFactory:
                     self.driver.sql.Identifier(database)
                 )
             )
-        # Register ownership immediately, even if backend construction subsequently fails.
-        self.clones.append((database, None))
+            # Own the created database even if connection close subsequently fails.
+            self.clones.append((database, None))
         harness = PostgresHarness(self, database)
         self.clones[-1] = (database, harness)
         return harness
@@ -213,7 +209,7 @@ class HarnessFactory:
                             self.driver.sql.Identifier(database)
                         )
                     )
-            except (self.driver.Error, pytest.fail.Exception):
+            except (ValidationFailed, pytest.fail.Exception):
                 failures.append(database)
         if failures:
             pytest.fail("PostgreSQL integration database cleanup failed", pytrace=False)
@@ -223,15 +219,19 @@ class HarnessFactory:
 def postgres_harness(monkeypatch):
     driver, service = configured_driver()
     factory = HarnessFactory(driver, service)
-    original = postgres._connect
+    original = postgres._connection
 
-    def connect(config):
+    @contextmanager
+    def connect(config, driver):
         for _, clone in factory.clones:
             if clone is not None and config is clone.backend.config:
-                return ObservedConnection(clone.connect(), clone)
-        return original(config)
+                with clone.connect() as connection:
+                    yield ObservedConnection(connection, clone)
+                return
+        with original(config, driver) as connection:
+            yield connection
 
-    monkeypatch.setattr(postgres, "_connect", connect)
+    monkeypatch.setattr(postgres, "_connection", connect)
     try:
         yield factory.create()
     finally:

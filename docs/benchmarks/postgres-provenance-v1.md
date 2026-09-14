@@ -42,8 +42,10 @@ Real track 的來源必須唯讀複製到 temporary metadata root；它不修改
 
 ## 可重跑命令
 
-先依 `docs/guides/POSTGRESQL_PROVENANCE.md` 配置 disposable service；benchmark service需允許建立
-fresh databases。命令本身不得包含 connection material。
+先依 `docs/guides/POSTGRESQL_PROVENANCE.md` 完成 benchmark/calibration/held-out 的 separate opt-in
+preflight：全部設定 `VCP_TEST_PG_SERVICE`、`PGSERVICEFILE`、`PGPASSFILE`，後兩者使用權限受限的
+absolute temporary file paths。這不是 ordinary VCP/libpq defaults；disposable service 必須有
+`CREATE DATABASE` privilege。命令本身不得包含 connection material 或任何檔案內容。
 
 ```powershell
 uv run python tests/performance/provenance/adaptive_benchmark.py `

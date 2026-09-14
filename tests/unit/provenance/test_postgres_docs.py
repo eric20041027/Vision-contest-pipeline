@@ -51,3 +51,24 @@ def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
     assert "0.8.0" in handoff and "candidate" in handoff
     for unpublished in ("push", "PR", "merge", "tag", "release"):
         assert unpublished in handoff
+
+
+def test_benchmark_reproduction_has_its_own_secret_safe_opt_in_preflight():
+    text = GUIDE.read_text(encoding="utf-8")
+    for contract in (
+        "VCP_TEST_PG_SERVICE",
+        "PGSERVICEFILE",
+        "PGPASSFILE",
+        "absolute temporary file paths",
+        "separate opt-in preflight",
+        "CREATE DATABASE",
+    ):
+        assert contract in text
+
+
+def test_handoff_pins_docs_and_evidence_commits_without_current_head_lookup():
+    text = HANDOFF.read_text(encoding="utf-8")
+    assert "e505c3e61dc4be9937c5af204a61732a64ed48b9" in text
+    assert "015fd70fb0858db3e00f88f8d5096ce919e66b94" in text
+    assert "915073588a26fd468c626fc4874b315ac770d631" in text
+    assert "git log -1 --format=%H" not in text

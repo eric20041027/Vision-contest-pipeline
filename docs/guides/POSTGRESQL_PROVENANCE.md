@@ -138,6 +138,14 @@ runtime 時固定 exit 1；直接跑未配置的 marked tests會明確 skip，sk
 
 ## Benchmark、calibration 與 held-out reproduction
 
+這三個 experiment runners 有自己的 **separate opt-in preflight**，不是一般 VCP command 或 libpq
+defaults 的替代。執行 benchmark、calibration 或 held-out 前，operator 必須設定全部三個：
+`VCP_TEST_PG_SERVICE`（disposable service name）、`PGSERVICEFILE` 與 `PGPASSFILE`；後兩者必須是
+operator 建立、權限受限的 **absolute temporary file paths**。不要在命令列、repo、result JSON、log 或
+本文件寫入其內容。這個 disposable service 必須允許 benchmark runner 建立 fresh databases，也就是有
+`CREATE DATABASE` privilege；普通 VCP/libpq CLI 仍可依自己的 service/default resolution 運作，不能假定
+它已滿足此 experiment preflight。
+
 六方法 scaled matrix 比較 canonical full、SQLite full/incremental、PostgreSQL full/incremental/adaptive：
 
 ```powershell

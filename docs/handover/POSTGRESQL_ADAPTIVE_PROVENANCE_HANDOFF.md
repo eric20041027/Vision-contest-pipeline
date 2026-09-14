@@ -87,8 +87,12 @@ ed7230c perf(provenance): calibrate and evaluate adaptive policy
 f82fea4 fix(provenance): reject calibration no-op workload leakage
 ```
 
-Task 12 是包含本文件的 `docs(provenance): document postgres adaptive backend` commit；精確 hash 請以
-`git log -1 --format=%H` 回讀，避免文件對自身 commit hash 的循環引用。
+Task 12 implementation document commit 是
+`e505c3e61dc4be9937c5af204a61732a64ed48b9`（`docs(provenance): document postgres adaptive backend`）；
+full-regression evidence refresh commit 是
+`015fd70fb0858db3e00f88f8d5096ce919e66b94`（`docs(provenance): refresh postgres regression evidence`）。
+不要以 `git log -1` 或 current HEAD 代替這兩個 attribution。`915073588a26fd468c626fc4874b315ac770d631`
+只歸屬 full-suite execution，並非 Task 12 文件 commit，也不是 current HEAD 的宣告。
 
 ## 5. Current-commit evidence
 
@@ -152,6 +156,8 @@ Tasks 1–11 的 reviews已清 finding。仍缺：
 
 先讀 `AGENTS.md`、本文件、`docs/guides/POSTGRESQL_PROVENANCE.md` 與
 `docs/benchmarks/postgres-provenance-v1.md`。核對 branch/HEAD/status，不讀或抄出 operator credential
-material。若只有 review權限就保持 read-only。取得 disposable PostgreSQL service後，依操作指南的
-integration → six-method → calibration → held-out順序執行；任何 failed row或 gate必須保留並如實報告，
-不得用 held-out refit。
+material。若只有 review權限就保持 read-only。Benchmark/calibration/held-out 前須完成其 separate opt-in
+preflight：`VCP_TEST_PG_SERVICE`、`PGSERVICEFILE`、`PGPASSFILE` 全部存在，後兩者為權限受限的 absolute
+temporary file paths，且 disposable service 有 `CREATE DATABASE` privilege；這不能由 ordinary VCP/libpq
+defaults 推定。再依操作指南的 integration → six-method → calibration → held-out順序執行；任何 failed
+row或 gate必須保留並如實報告，不得用 held-out refit。

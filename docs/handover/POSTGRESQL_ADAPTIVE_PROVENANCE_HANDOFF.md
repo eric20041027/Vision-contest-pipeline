@@ -15,9 +15,9 @@ adaptive selector、CLI wiring、opt-in integration harness、六方法 benchmar
 runners。SQLite 仍是未指定 backend 時的 default；兩種 database 都只是 derived、noncanonical index，
 canonical evidence 和 status semantics 沒有搬進 PostgreSQL。
 
-Tasks 1–11 每一輪 task-scoped independent review 的 finding 已修正並 re-review clean。這不等於 final
-whole-branch acceptance：Task 12 的 scoped review、安全/database review彙整與 final whole-branch review
-由 controller 執行，目前仍 pending。
+Tasks 1–11 每一輪 task-scoped independent review 的 finding 已修正並 re-review clean。Final database、
+security 與 whole-branch reviews 在 code head `7eaef001c987af4f341ec8533ca33b4d9e00fed9` 均為 code-clean。
+這是 source-level review 結論，不等於完整 spec acceptance 或 external evidence completion。
 
 外部證據沒有完成：本機沒有 Docker/PostgreSQL runtime，沒有 live database execution、完整
 large-scale matrix、calibration、held-out、policy artifact、live RSNA run 或效能 gate裁決。沒有 push、
@@ -92,9 +92,9 @@ Task 12 implementation document commit 是
 full-regression evidence refresh commit 是
 `015fd70fb0858db3e00f88f8d5096ce919e66b94`（`docs(provenance): refresh postgres regression evidence`）。
 不要以 `git log -1` 或 current HEAD 代替這兩個 attribution。`915073588a26fd468c626fc4874b315ac770d631`
-只歸屬 full-suite execution，並非 Task 12 文件 commit，也不是 current HEAD 的宣告。
+只歸屬 historical full-suite execution，並非 Task 12 文件 commit，也不是 current HEAD 的宣告。
 
-## 5. Current-commit evidence
+## 5. Code-head regression evidence
 
 Task 12 local gates are recorded here. Earlier task evidence remains distinct and is not a substitute for the
 current full regression:
@@ -113,9 +113,11 @@ current full regression:
 - Historical Task 12 evidence at `e505c3e` recorded a collection block from a duplicate `conftest` module name.
   That originating integration-harness defect was independently corrected and reviewed in `9150735`; it is no
   longer a full-suite limitation of this branch.
-- Current full regression executed at `915073588a26fd468c626fc4874b315ac770d631`:
-  `uv run pytest --cov=vcp` → 1,498 passed, 59 skipped, 94.73% total coverage, exit 0 (384.40s). The skips,
-  including unconfigured PostgreSQL cases, remain skips rather than live database passes.
+- Historical full regression executed at `915073588a26fd468c626fc4874b315ac770d631`:
+  `uv run pytest --cov=vcp` → 1,498 passed, 59 skipped, 94.73% total coverage, exit 0 (384.40s).
+- Current code-head full regression executed at `7eaef001c987af4f341ec8533ca33b4d9e00fed9`:
+  `uv run pytest --cov=vcp` → 1,539 passed, 59 skipped, 94.86% total coverage, exit 0 (464.94s). In both runs,
+  skips, including unconfigured PostgreSQL cases, remain skips rather than live database passes.
 - Task 12 continuation static gates passed: `uv run ruff check .`, `uv run ruff format --check .` (348 files),
   and `git diff --check`.
 - Task 12 integration runner was re-run and failed at its fixed missing-runtime preflight with exit 1; no Docker,
@@ -141,16 +143,15 @@ execution是 Task 10 small offline SQLite/canonical smoke，不含 PostgreSQL。
 ## 7. 驗收與尚缺項目
 
 目前不能宣稱完整 spec acceptance。Acceptance criteria 1–12與15主要有 unit/offline contract evidence；
-Tasks 1–11 的 reviews已清 finding。仍缺：
+database、security 與 whole-branch reviews 在 `7eaef001c987af4f341ec8533ca33b4d9e00fed9` code-clean，
+但 immutable plan未改且仍缺：
 
 1. 在可用 Docker Compose host 跑 `tests/integration/postgres/run.ps1`，取得 PostgreSQL 17.11真實
    SQL/constraint/rollback/concurrency/MVCC及 Linux CI evidence。
 2. 跑完整 six-method 1K/10K/100K/1M matrix與 real track，保存 machine-readable output與hash。
 3. 先跑 calibration-only，再於不同 process跑 frozen held-out；記 policy ID、精確 policy file hash、
    environment/version、完整 scenario/sample counts、zero leakage、parity與 honest p50/p95 gate結果。
-4. 由 controller完成 Task 12 specialist review與 final whole-branch review；修完任何 finding後重跑受影響
-   tests和完整 gates。
-5. 只有另行授權後才能 push/open PR/merge/tag/release；`0.8.0` 在此前始終只是 candidate。
+4. 只有另行授權後才能 push/open PR/merge/tag/release；`0.8.0` 在此前始終只是 candidate。
 
 ## 8. 下一位 operator
 

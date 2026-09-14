@@ -14,6 +14,8 @@ from performance.provenance import calibrate_adaptive as calibration
 from performance.provenance import evaluate_adaptive as evaluation
 from performance.provenance.workloads import Scenario, build_scenario, scenario_matrix
 from vcp.core.errors import ValidationFailed
+from vcp.core.hashing import sha256_file
+from vcp.core.paths import artifact_dir
 from vcp.provenance import strategy
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import graph_hash
@@ -79,12 +81,12 @@ def test_fit_rejects_invalid_observations(mutation):
 
 def test_bundle_verifies_exact_embedded_policy_and_immutable_output(tmp_path):
     path = tmp_path / "result.json"
-    policy = calibration.publish_calibration(observations(), path)
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     loaded, evidence = evaluation.load_calibration(path)
     assert loaded == policy
     assert len(evidence.observations) == policy.training_row_count
     with pytest.raises(ValidationFailed):
-        calibration.publish_calibration(observations(), path)
+        calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     payload = json.loads(path.read_text())
     payload["policy"]["full_rmse_ms"] += 1
     path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
@@ -106,13 +108,15 @@ def test_runners_fail_without_pg_and_do_not_emit_json(tmp_path, monkeypatch, cap
 def benchmark_rows(seeds, policy=None):
     """Clearly synthetic Task 10-shaped rows, never saved as research output."""
     rows = []
-    for seed in seeds:
-        scenario = Scenario(1000, 0.1, "chain", seed)
+    for scenario in scenario_matrix(seeds=seeds):
+        seed = scenario.seed
+        sample_entities = (scenario.entities - 20) // 3
+        changed = round(sample_entities * scenario.change_ratio)
         features = strategy.MaintenanceFeatures(
-            changed_samples=10,
-            dirty_entities=20,
+            changed_samples=changed,
+            dirty_entities=20 if changed else 0,
             total_entities=1100,
-            dirty_ratio=20 / 1100,
+            dirty_ratio=20 / 1100 if changed else 0,
             total_edges=2000,
             historical_changes=600,
             head_count=1,
@@ -145,7 +149,7 @@ def benchmark_rows(seeds, policy=None):
                 policy_version=decision.policy_version,
                 estimated_incremental_ms=decision.estimated_incremental_ms,
                 estimated_full_ms=decision.estimated_full_ms,
-                dirty_entities=20,
+                dirty_entities=features.dirty_entities,
             )
             row = {
                 key: value
@@ -161,16 +165,16 @@ def benchmark_rows(seeds, policy=None):
                 method=method,
                 scenario_id=scenario.scenario_id,
                 scenario_hash=scenario.scenario_hash,
-                workload_hash=f"{seed:064x}",
+                workload_hash=scenario.scenario_hash,
                 track="scaled",
                 seed=seed,
-                topology="chain",
-                entities=1000,
-                change_ratio=0.1,
-                realized_change_ratio=0.1,
-                sample_entities=100,
+                topology=scenario.topology,
+                entities=scenario.entities,
+                change_ratio=float(scenario.change_ratio),
+                realized_change_ratio=changed / sample_entities,
+                sample_entities=sample_entities,
                 **features.model_dump(),
-                total_changes=610,
+                total_changes=600 + changed,
                 environment=dict(
                     system="Windows",
                     machine="AMD64",
@@ -186,8 +190,8 @@ def benchmark_rows(seeds, policy=None):
                 ),
                 status="ok",
                 failure=None,
-                samples=[sample],
-                repetitions=1,
+                samples=[copy.deepcopy(sample) for _ in range(scenario.repetitions)],
+                repetitions=scenario.repetitions,
                 parity_rate=1.0,
                 explain_analyze=[{"Plan": {"Node Type": "ModifyTable"}}],
                 instrumentation=(
@@ -198,7 +202,7 @@ def benchmark_rows(seeds, policy=None):
                 warmup=(
                     "baseline rebuilt before each sample; no timed warmup; OS caches may be warm"
                 ),
-                throughput_samples_per_second=10 / (latency / 1000),
+                throughput_samples_per_second=changed / (latency / 1000),
             )
             for operation in ("maintenance", "status", "impact", "explain"):
                 row[operation + "_p50_ms"] = sample[operation + "_ms"]
@@ -210,7 +214,7 @@ def benchmark_rows(seeds, policy=None):
 def test_task10_rows_fit_and_heldout_never_refits(tmp_path, monkeypatch):
     path = tmp_path / "result.json"
     rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
-    policy = calibration.publish_calibration(evaluation.paired_observations(rows), path)
+    policy = calibration.publish_calibration(rows, path)
 
     def forbidden(*args, **kwargs):
         pytest.fail("held-out called fitting")
@@ -304,7 +308,7 @@ def test_task10_input_validation_is_complete_and_secret_safe(mutation):
 @pytest.mark.parametrize("mutation", ["decision", "estimate", "environment", "slow"])
 def test_heldout_compatibility_identity_and_honest_performance(tmp_path, mutation):
     path = tmp_path / "result.json"
-    policy = calibration.publish_calibration(observations(), path)
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     rows = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
     for row in rows:
         if mutation == "environment":
@@ -314,9 +318,12 @@ def test_heldout_compatibility_identity_and_honest_performance(tmp_path, mutatio
         if mutation in {"decision", "estimate"}:
             key = "strategy_reason" if mutation == "decision" else "estimated_full_ms"
             value = "fallback_policy_absent_full" if mutation == "decision" else 999.0
-            row[key] = row["samples"][0][key] = value
+            row[key] = value
+            for sample in row["samples"]:
+                sample[key] = value
         if mutation == "slow":
-            row["samples"][0]["maintenance_ms"] = 100.0
+            for sample in row["samples"]:
+                sample["maintenance_ms"] = 100.0
             row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = 100.0
             row["throughput_samples_per_second"] = 100.0
     if mutation == "slow":
@@ -329,7 +336,7 @@ def test_heldout_compatibility_identity_and_honest_performance(tmp_path, mutatio
 
 def test_prepare_policy_recomputes_oracle_before_measured_baseline(tmp_path):
     path = tmp_path / "result.json"
-    policy = calibration.publish_calibration(observations(), path)
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     _, evidence = evaluation.load_calibration(path)
     workload = build_scenario(tmp_path / "fixture", Scenario(40, 0.5, "chain", 20261001))
     prepared = evaluation.prepare_workload(workload, policy, evidence)
@@ -345,7 +352,7 @@ def test_prepare_policy_recomputes_oracle_before_measured_baseline(tmp_path):
 
 def test_recursive_duplicate_bundle_keys_fail_secret_safe(tmp_path):
     path = tmp_path / "result.json"
-    calibration.publish_calibration(observations(), path)
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     raw = path.read_text(encoding="utf-8")
     raw = raw.replace('"seed": 20260913', '"seed": "PRIVATE_MARKER", "seed": 20260913', 1)
     path.write_text(raw, encoding="utf-8", newline="\n")
@@ -363,7 +370,7 @@ def test_calibration_and_holdout_matrix_hashes_are_disjoint():
 
 def test_relative_output_path_is_loadable(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    calibration.publish_calibration(observations(), "relative.json")
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), "relative.json")
     assert evaluation.load_calibration("relative.json")[0]
 
 
@@ -410,7 +417,7 @@ def test_cli_failed_rows_never_publish(tmp_path, monkeypatch, capsys):
 
 def test_spec_gates_pool_samples_and_keep_stricter_scenario_diagnostic(tmp_path):
     path = tmp_path / "result.json"
-    policy = calibration.publish_calibration(observations(), path)
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     rows = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
     for row in rows:
         latency = (
@@ -418,7 +425,8 @@ def test_spec_gates_pool_samples_and_keep_stricter_scenario_diagnostic(tmp_path)
             if row["seed"] == 20261002
             else (12.0 if row["method"] == "postgres_adaptive" else 10.0)
         )
-        row["samples"][0]["maintenance_ms"] = latency
+        for sample in row["samples"]:
+            sample["maintenance_ms"] = latency
         row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = latency
         row["throughput_samples_per_second"] = 10 / (latency / 1000)
     result = evaluation.evaluate_policy(path, rows)
@@ -429,9 +437,7 @@ def test_spec_gates_pool_samples_and_keep_stricter_scenario_diagnostic(tmp_path)
 
 def test_policy_json_must_match_exactly_before_model_normalization(tmp_path):
     path = tmp_path / "result.json"
-    policy = calibration.publish_calibration(
-        evaluation.paired_observations(benchmark_rows(strategy.CALIBRATION_SEEDS)), path
-    )
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     assert all(value == 0 for value in policy.full_model.coefficients.values())
     document = json.loads(path.read_text())
     document["policy"]["full_model"]["coefficients"]["total_entities"] = -1
@@ -442,7 +448,7 @@ def test_policy_json_must_match_exactly_before_model_normalization(tmp_path):
 
 def test_heldout_executes_in_separate_process_without_fitting_import(tmp_path):
     path = tmp_path / "unit-policy.json"
-    policy = calibration.publish_calibration(observations(), path)
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     rows = tmp_path / "unit-rows.json"
     rows.write_text(
         json.dumps(benchmark_rows(strategy.HELDOUT_SEEDS, policy)), encoding="utf-8", newline="\n"
@@ -491,13 +497,14 @@ def test_clipped_intercept_rmse_uses_published_predictions():
 @pytest.mark.parametrize("slow", [False, True])
 def test_heldout_cli_publishes_honest_gates_on_unit_data(tmp_path, monkeypatch, capsys, slow):
     path = tmp_path / "unit-policy.json"
-    policy = calibration.publish_calibration(observations(), path)
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
     rows = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
     if slow:
         for row in rows:
             if row["method"] == "postgres_adaptive":
                 row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = 100.0
-                row["samples"][0]["maintenance_ms"] = 100.0
+                for sample in row["samples"]:
+                    sample["maintenance_ms"] = 100.0
                 row["throughput_samples_per_second"] = 100.0
     monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: object())
 
@@ -515,11 +522,11 @@ def test_heldout_cli_publishes_honest_gates_on_unit_data(tmp_path, monkeypatch, 
     assert "status=" + ("FAIL" if slow else "OK") in capsys.readouterr().err
 
 
-def test_real_task10_serialization_is_consumed_without_interface_changes(tmp_path):
+def test_task10_rows_parse_but_small_smoke_cannot_be_normative(tmp_path):
     rows = []
     for seed in strategy.CALIBRATION_SEEDS:
         workload = build_scenario(tmp_path / str(seed), Scenario(40, 0.5, "chain", seed))
-        for template in benchmark_rows((seed,)):
+        for template in benchmark_rows((seed,))[:2]:
             sample = copy.deepcopy(template["samples"][0])
             sample["dirty_entities"] = 2
             result = evaluation.benchmark.ScenarioResult(
@@ -529,7 +536,107 @@ def test_real_task10_serialization_is_consumed_without_interface_changes(tmp_pat
                 samples=[sample],
                 plans=template["explain_analyze"],
             )
-            rows.append(result.to_dict())
-    pairs = evaluation.paired_observations(rows)
-    assert len(pairs) == 2
-    assert {row["seed"] for row in pairs} == set(strategy.CALIBRATION_SEEDS)
+            row = result.to_dict()
+            assert evaluation.BenchmarkRow.model_validate(row)
+            rows.append(row)
+    with pytest.raises(ValidationFailed, match="invalid_benchmark_rows"):
+        evaluation.paired_observations(rows)
+
+
+@pytest.mark.parametrize("mutation", ["omission", "extra", "short", "long"])
+@pytest.mark.parametrize(
+    "seeds,methods",
+    [
+        (strategy.CALIBRATION_SEEDS, evaluation.FIXED_METHODS),
+        (strategy.HELDOUT_SEEDS, evaluation.EVALUATION_METHODS),
+    ],
+)
+def test_exact_manifest_and_sample_counts_cannot_be_reduced(mutation, seeds, methods):
+    policy = strategy.fit_policy(observations()) if "postgres_adaptive" in methods else None
+    rows = benchmark_rows(seeds, policy)
+    ident = rows[0]["scenario_hash"]
+    if mutation == "omission":
+        rows = [r for r in rows if r["scenario_hash"] != ident]
+    elif mutation == "extra":
+        extras = [copy.deepcopy(r) for r in rows if r["scenario_hash"] == ident]
+        for row in extras:
+            scenario = Scenario(2000, row["change_ratio"], row["topology"], row["seed"])
+            row.update(
+                entities=2000,
+                scenario_id=scenario.scenario_id,
+                scenario_hash=scenario.scenario_hash,
+                workload_hash=scenario.scenario_hash,
+            )
+        rows.extend(extras)
+    else:
+        for row in rows:
+            if row["scenario_hash"] != ident:
+                continue
+            if mutation == "short":
+                row["samples"].pop()
+            else:
+                row["samples"].append(copy.deepcopy(row["samples"][0]))
+            row["repetitions"] = len(row["samples"])
+    with pytest.raises(ValidationFailed, match="invalid_benchmark_rows"):
+        evaluation.validate_rows(rows, seeds=seeds, methods=methods)
+
+
+def test_no_op_latency_cannot_change_fitted_policy_or_identity(tmp_path):
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    first = calibration.publish_calibration(rows, tmp_path / "first.json")
+    changed = copy.deepcopy(rows)
+    for row in changed:
+        if row["selected_strategy"] == "NO_OP":
+            row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = 123456.0
+            for sample in row["samples"]:
+                sample["maintenance_ms"] = 123456.0
+    second = calibration.publish_calibration(changed, tmp_path / "second.json")
+    assert first.model_dump() == second.model_dump()
+    _, evidence = evaluation.load_calibration(tmp_path / "first.json")
+    assert len(evidence.scenario_ids) == 144
+    assert len(evidence.scenario_repetitions) == 144
+    assert sum(evidence.scenario_repetitions) == 720
+    assert first.training_row_count == 124
+    assert first.training_row_count == sum(
+        r["changed_samples"] > 0 and r["method"] == "postgres_full" for r in rows
+    )
+    assert all(row.changed_samples > 0 for row in evidence.observations)
+
+
+def test_publication_cannot_bypass_manifest_with_compact_or_missing_noop_rows(tmp_path):
+    with pytest.raises(ValidationFailed, match="calibration_publication_failed"):
+        calibration.publish_calibration(observations(), tmp_path / "compact.json")
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    rows = [row for row in rows if row["selected_strategy"] != "NO_OP"]
+    with pytest.raises(ValidationFailed, match="calibration_publication_failed"):
+        calibration.publish_calibration(rows, tmp_path / "missing-noop.json")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_normative_evaluation_rejects_omitted_whole_scenario(tmp_path):
+    path = tmp_path / "result.json"
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    rows = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
+    missing = rows[0]["scenario_hash"]
+    with pytest.raises(ValidationFailed, match="invalid_benchmark_rows"):
+        evaluation.evaluate_policy(path, [r for r in rows if r["scenario_hash"] != missing])
+
+
+def test_fit_rejects_noop_and_insufficient_algorithm_observations():
+    rows = observations()
+    rows[0]["changed_samples"] = rows[0]["dirty_entities"] = 0
+    rows[0]["dirty_ratio"] = 0
+    with pytest.raises(ValidationFailed, match="invalid_calibration_rows"):
+        strategy.fit_policy(rows)
+    with pytest.raises(ValidationFailed, match="invalid_calibration_rows"):
+        strategy.fit_policy([observations()[0], observations()[8]])
+
+
+def test_reported_policy_hash_is_exact_verified_file_hash(tmp_path):
+    path = tmp_path / "result.json"
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    result = evaluation.evaluate_policy(path, benchmark_rows(strategy.HELDOUT_SEEDS, policy))
+    directory = artifact_dir(tmp_path / "result-artifacts", "provenance_policy", policy.id)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    entry = next(entry for entry in manifest["files"] if entry["name"] == "policy.json")
+    assert result.policy_sha256 == entry["sha256"] == sha256_file(directory / "policy.json")

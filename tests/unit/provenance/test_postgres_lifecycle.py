@@ -424,3 +424,51 @@ def test_host_logging_reconfiguration_is_preserved(monkeypatch):
     with postgres._driver_diagnostics():
         logging.setLogRecordFactory(replacement)
     assert logging.getLogRecordFactory() is replacement
+
+
+def test_make_log_record_inside_diagnostic_scope_preserves_host_record():
+    previous = logging.getLogRecordFactory()
+    record = {"name": "host.application", "msg": "host record %s", "args": ("copied",)}
+    with postgres._driver_diagnostics():
+        # makeLogRecord first calls the active factory with name=None, then
+        # populates the returned record from this mapping.
+        copied = logging.makeLogRecord(record)
+    assert copied.name == "host.application"
+    assert copied.getMessage() == "host record copied"
+    assert logging.getLogRecordFactory() is previous
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_cloning_host_handler_preserves_connection_lifecycle(offline_driver, diagnostics, failed):
+    copied = []
+
+    class CloningHandler(logging.Handler):
+        def emit(self, record):
+            copied.append(logging.makeLogRecord(record.__dict__))
+
+    handler = CloningHandler()
+    root = logging.getLogger()
+    previous = logging.getLogRecordFactory()
+    root.addHandler(handler)
+    connection = offline_driver.connection
+    try:
+        try:
+            with postgres.connection_lifecycle(lambda: connection, psycopg):
+                logging.getLogger("host.application").warning("host operation started")
+                logging.getLogger("psycopg.transaction").warning("driver detail %s", SECRET)
+                if failed:
+                    raise driver_error("operation")
+        except ValidationFailed as error:
+            assert failed
+            assert error.fields == {"backend": "postgresql", "sqlstate": "40001"}
+        else:
+            assert not failed
+    finally:
+        root.removeHandler(handler)
+    assert connection.closed_count == 1
+    assert [(record.name, record.getMessage()) for record in copied] == [
+        ("host.application", "host operation started"),
+        ("psycopg.transaction", "PostgreSQL driver diagnostic redacted"),
+    ]
+    assert logging.getLogRecordFactory() is previous
+    assert_redacted(diagnostics())

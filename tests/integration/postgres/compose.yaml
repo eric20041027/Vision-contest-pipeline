@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17.11-bookworm
+    environment:
+      POSTGRES_PASSWORD: "${VCP_TEST_PG_PASSWORD:?set VCP_TEST_PG_PASSWORD}"
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:${VCP_TEST_PG_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:

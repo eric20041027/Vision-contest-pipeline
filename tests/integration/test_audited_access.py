@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from conftest import load_real
+from integration_helpers import load_real
 from vcp.core.paths import DatasetPaths
 from vcp.data.access import access as access_module
 from vcp.data.access.access import DatasetAccess

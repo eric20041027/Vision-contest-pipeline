@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from conftest import load_real
+from integration_helpers import load_real
 from vcp.core.errors import AccessDeniedError
 from vcp.core.hashing import sha256_text
 from vcp.core.paths import DatasetPaths

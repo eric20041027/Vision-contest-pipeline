@@ -25,6 +25,7 @@ if __package__:
         SafeArgumentParser,
         collect_rows,
         paired_observations,
+        validate_calibration_manifest,
         validate_rows,
     )
     from .workloads import scenario_matrix
@@ -35,6 +36,7 @@ else:
         SafeArgumentParser,
         collect_rows,
         paired_observations,
+        validate_calibration_manifest,
         validate_rows,
     )
     from workloads import scenario_matrix
@@ -58,8 +60,10 @@ def publish_calibration(rows, output):
             scenario_ids=tuple(row.scenario_id for row in coverage),
             scenario_hashes=tuple(row.scenario_hash for row in coverage),
             scenario_repetitions=tuple(row.repetitions for row in coverage),
+            scenario_workload_hashes=tuple(row.workload_hash for row in coverage),
             observations=selected.observations,
         )
+        validate_calibration_manifest(evidence)
         policy = fit_policy(evidence)
         root = output.parent / (output.stem + "-artifacts")
         source = root / "inputs" / "calibration.json"

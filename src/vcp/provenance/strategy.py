@@ -106,6 +106,7 @@ class CalibrationEvidence(_Strict):
     scenario_hashes: tuple[str, ...] = Field(min_length=1)
     observations: tuple[CalibrationObservation, ...] | None = None
     scenario_repetitions: tuple[int, ...] | None = None
+    scenario_workload_hashes: tuple[str, ...] | None = None
 
     @field_validator("scenario_ids")
     @classmethod
@@ -125,10 +126,24 @@ class CalibrationEvidence(_Strict):
             raise ValueError("scenario_hashes must be unique")
         return value
 
+    @field_validator("scenario_workload_hashes")
+    @classmethod
+    def _valid_workload_hashes(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is not None and (
+            any(not _LOWER_SHA256.fullmatch(item) for item in value)
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError("invalid scenario workload hashes")
+        return value
+
     @model_validator(mode="after")
     def _corresponding_entries(self) -> CalibrationEvidence:
         if len(self.scenario_ids) != len(self.scenario_hashes):
             raise ValueError("scenario_ids and scenario_hashes must have equal length")
+        if self.scenario_workload_hashes is not None and (
+            len(self.scenario_workload_hashes) != len(self.scenario_ids)
+        ):
+            raise ValueError("scenario workload hashes must cover every scenario")
         if self.scenario_repetitions is not None and (
             len(self.scenario_repetitions) != len(self.scenario_ids)
             or any(count not in (3, 7) for count in self.scenario_repetitions)

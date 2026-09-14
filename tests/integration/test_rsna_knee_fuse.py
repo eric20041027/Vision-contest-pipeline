@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import load_real
+from integration_helpers import load_real
 from vcp.fuse.fusers import FuseContext, MemberPredictions, get_fuser
 from vcp.measure.metrics import get_metric
 from vcp.measure.predictions import predictions_by_id

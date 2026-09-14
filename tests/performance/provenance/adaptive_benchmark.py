@@ -121,33 +121,42 @@ def fresh_backend(method: str, data: Path, *, pg_runtime=None):
     driver, service = pg_runtime if pg_runtime is not None else postgres_preflight()
     database = "vcp_bench_" + uuid4().hex
 
+    @contextmanager
     def connect(*, admin=False):
         kwargs = {"service": service, "autocommit": True, "connect_timeout": 5}
         if not admin:
             kwargs["dbname"] = database
-        try:
-            return driver.connect(**kwargs)
-        except Exception:
-            raise RuntimeError("PostgreSQL benchmark connection failed") from None
+        with postgres.connection_lifecycle(lambda: driver.connect(**kwargs), driver) as connection:
+            yield connection
 
     owned = False
-    try:
+
+    def cleanup():
+        if owned:
+            with connect(admin=True) as connection:
+                connection.execute(
+                    driver.sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                        driver.sql.Identifier(database)
+                    )
+                )
+
+    with postgres._database_operation(driver, cleanup):
         with connect(admin=True) as connection:
             connection.execute(
                 driver.sql.SQL("CREATE DATABASE {}").format(driver.sql.Identifier(database))
             )
             owned = True
         backend = postgres.PostgresProvenanceBackend(BackendConfig(BackendName.POSTGRESQL, service))
-        original = postgres._connect
+        original = postgres._connection
         with connect() as connection:
             major, fingerprint = postgres.maintenance_environment(connection)
             version = connection.info.server_version
+
         # This test-only scope routes only this backend's identity to its owned database.
-        with patch.object(
-            postgres,
-            "_connect",
-            lambda config: connect() if config is backend.config else original(config),
-        ):
+        def backend_connection(config, driver):
+            return connect() if config is backend.config else original(config, driver)
+
+        with patch.object(postgres, "_connection", backend_connection):
             yield BackendState(
                 backend,
                 connect,
@@ -158,17 +167,6 @@ def fresh_backend(method: str, data: Path, *, pg_runtime=None):
                     "backend_schema_version": postgres.POSTGRES_SCHEMA_VERSION,
                 },
             )
-    finally:
-        if owned:
-            try:
-                with connect(admin=True) as connection:
-                    connection.execute(
-                        driver.sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
-                            driver.sql.Identifier(database)
-                        )
-                    )
-            except Exception:
-                raise RuntimeError("PostgreSQL benchmark database cleanup failed") from None
 
 
 # Retain plan measurements, but never expressions, literals, object aliases or query text.
@@ -309,15 +307,15 @@ def capture_explain_rollback(connection, method: str, action: Callable) -> list[
     """
     if method not in METHODS or not method.startswith("postgres_"):
         raise ValueError("EXPLAIN instrumentation requires a PostgreSQL method")
+    from vcp.provenance import postgres
+
     observed = _ExplainConnection(connection)
-    connection.execute("BEGIN")
-    try:
+    with postgres._database_operation(postgres._load_psycopg(), connection.rollback):
+        connection.execute("BEGIN")
         action(observed)
         if not observed.plans:
             raise RuntimeError("PostgreSQL maintenance produced no instrumentation plans")
         return observed.plans
-    finally:
-        connection.rollback()
 
 
 def _timed(action):
@@ -571,7 +569,13 @@ def run_method(
                     from vcp.provenance import postgres
 
                     def instrument(observed):
-                        with patch.object(postgres, "_connect", lambda config: observed):
+                        with patch.object(
+                            postgres,
+                            "_connection",
+                            lambda config, driver: postgres.connection_lifecycle(
+                                lambda: observed, driver
+                            ),
+                        ):
                             _maintain(state, method, workload, data, configs, policy_id)
 
                     with state.connect() as connection:

@@ -357,11 +357,8 @@ def test_postgres_fresh_database_ownership_and_cleanup(monkeypatch, tmp_path, fa
     class Connection:
         info = SimpleNamespace(server_version=170011)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
+        def close(self):
+            pass
 
         def execute(self, query):
             events.append(query)

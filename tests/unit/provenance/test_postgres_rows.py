@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import copy
+import json
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
+from typer.testing import CliRunner
 
+from vcp.cli import app
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.provenance.backend import BackendConfig, BackendName
@@ -285,7 +290,9 @@ def fake_postgres(monkeypatch):
     driver = SimpleNamespace()
     monkeypatch.setattr("vcp.provenance.postgres._load_psycopg", lambda: driver)
     monkeypatch.setattr("vcp.provenance.postgres._connect", lambda _config: connection)
-    monkeypatch.setattr("vcp.provenance.postgres.install_schema", lambda _connection: None)
+    monkeypatch.setattr(
+        "vcp.provenance.postgres.install_schema_in_transaction", lambda _connection: None
+    )
     monkeypatch.setattr("vcp.provenance.postgres.validate_schema", lambda _connection: None)
     return connection
 
@@ -313,6 +320,106 @@ def test_rebuild_publishes_active_generation_last(fake_postgres, roots, tiny_gra
     )
     assert fake_postgres.events.index("publish_active") < fake_postgres.events.index("commit")
     assert fake_postgres.events[-1] == "commit"
+
+
+def test_concurrent_empty_bootstrap_holds_writer_lock_through_publication(
+    roots, tiny_graph, monkeypatch
+):
+    """Model READ COMMITTED catalogs and transaction-scoped advisory lock ownership."""
+    from vcp.provenance import postgres_schema
+
+    writer_lock = Lock()
+    first_in_ddl = Event()
+    second_at_lock = Event()
+    catalog = {"exists": False}
+    connections = []
+
+    class BootstrapConnection:
+        def __init__(self):
+            self.events = []
+            self.locked = False
+            self.pending_schema = False
+            self.in_transaction = False
+
+        @contextmanager
+        def transaction(self):
+            assert not self.in_transaction, "bootstrap must not use a separate transaction"
+            self.in_transaction = True
+            self.events.append("begin")
+            try:
+                yield
+                if self.pending_schema:
+                    catalog["exists"] = True
+                self.events.append("commit")
+            finally:
+                self.in_transaction = False
+                if self.locked:
+                    self.locked = False
+                    writer_lock.release()
+
+        def execute(self, query, params=()):
+            if "pg_advisory_xact_lock" in query:
+                assert self.in_transaction
+                assert params == (0x56435050524F5631,)
+                if first_in_ddl.is_set():
+                    second_at_lock.set()
+                writer_lock.acquire()
+                self.locked = True
+                self.events.append("lock")
+            elif query == "SELECT to_regnamespace(%s)":
+                assert self.locked, "catalog existence checked before writer lock"
+                self.events.append(("exists", catalog["exists"]))
+                return _Cursor([("vcp_provenance" if catalog["exists"] else None,)])
+            elif "obj_description" in query:
+                return _Cursor([("vcp_provenance_schema_version=1",)])
+            elif query.startswith("CREATE SCHEMA"):
+                assert self.locked
+                self.pending_schema = True
+                first_in_ddl.set()
+                assert second_at_lock.wait(5), "second bootstrap never attempted writer lock"
+                self.events.append("ddl")
+            elif query.startswith("SELECT generation_id"):
+                return _Cursor()
+            else:
+                assert self.locked
+            return _Cursor()
+
+        def close(self):
+            self.events.append("close")
+
+    def connect(_config):
+        connection = BootstrapConnection()
+        connections.append(connection)
+        return connection
+
+    def publish(_backend, connection, *_args):
+        assert connection.locked
+        assert "commit" not in connection.events, "DDL committed separately before publication"
+        connection.events.append("publish")
+
+    _patch_canonical(monkeypatch, tiny_graph)
+    monkeypatch.setattr("vcp.provenance.postgres._load_psycopg", lambda: SimpleNamespace())
+    monkeypatch.setattr("vcp.provenance.postgres._connect", connect)
+    monkeypatch.setattr("vcp.provenance.postgres.install_schema", postgres_schema.install_schema)
+    monkeypatch.setattr(PostgresProvenanceBackend, "_publish_generation", publish)
+    backend = PostgresProvenanceBackend(BackendConfig(BackendName.POSTGRESQL))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(backend.rebuild, roots.data, roots.configs)
+        # A missing lock fails immediately; do not obscure that RED with a timeout.
+        if first_in_ddl.wait(1):
+            second = executor.submit(backend.rebuild, roots.data, roots.configs)
+            second.result(timeout=10)
+        first.result(timeout=10)
+    assert len(connections) == 2
+    assert catalog["exists"] is True
+    assert [event for item in connections for event in item.events if isinstance(event, tuple)] == [
+        ("exists", False),
+        ("exists", True),
+    ]
+    for connection in connections:
+        assert connection.events[:2] == ["begin", "lock"]
+        assert connection.events[-3:] == ["publish", "commit", "close"]
+        assert connection.events.count("begin") == 1
 
 
 def test_failure_before_publish_rolls_back_to_previous_generation(
@@ -367,6 +474,94 @@ def test_read_query_and_verify_match_canonical(fake_postgres, roots, tiny_graph,
         index for index, event in enumerate(fake_postgres.events) if event == "repeatable_read"
     )
     assert fake_postgres.events[last_repeatable_read + 1] == "read_active"
+
+
+@pytest.mark.parametrize("command", ["stale", "status"])
+def test_compound_cli_keeps_snapshot_when_generation_publishes_between_subcalls(
+    command, fake_postgres, roots, tiny_graph, monkeypatch
+):
+    from vcp import cli_provenance
+
+    head = dataset_version_id("new", NEW_HASH)
+    tiny_graph.add_entity(
+        ProvenanceEntity(entity_id="run:old", entity_type="run", key="old", dataset_version_id=head)
+    )
+    _patch_canonical(monkeypatch, tiny_graph)
+    backend = PostgresProvenanceBackend(BackendConfig(BackendName.POSTGRESQL))
+    old_result = backend.rebuild(roots.data, roots.configs)
+    old = copy.deepcopy((fake_postgres.active, fake_postgres.generations, fake_postgres.tables))
+    newer = copy.deepcopy(tiny_graph)
+    newer.entities.pop("run:old")
+    for ident in ("run:new", "run:extra"):
+        newer.add_entity(
+            ProvenanceEntity(entity_id=ident, entity_type="run", key=ident, dataset_version_id=head)
+        )
+    _patch_canonical(monkeypatch, newer)
+    backend.rebuild(roots.data, roots.configs)
+    published = copy.deepcopy(
+        (fake_postgres.active, fake_postgres.generations, fake_postgres.tables)
+    )
+    fake_postgres.active, fake_postgres.generations, fake_postgres.tables = old
+    publications = []
+    readers = []
+
+    def publish():
+        publications.append(True)
+        fake_postgres.active, fake_postgres.generations, fake_postgres.tables = published
+
+    class SnapshotConnection(_FakeConnection):
+        def execute(self, query, params=()):
+            if query == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY":
+                self.active, self.generations, self.tables = copy.deepcopy(
+                    (fake_postgres.active, fake_postgres.generations, fake_postgres.tables)
+                )
+            result = super().execute(query, params)
+            if command == "status" and "pg_database_size" in query:
+                publish()
+            return result
+
+    def connect(_config):
+        connection = SnapshotConnection()
+        readers.append(connection)
+        return connection
+
+    if command == "stale":
+        resolve = cli_provenance._dataset_id
+
+        def resolve_then_publish(graph, value):
+            resolved = resolve(graph, value)
+            publish()
+            return resolved
+
+        monkeypatch.setattr(cli_provenance, "_dataset_id", resolve_then_publish)
+    monkeypatch.setattr("vcp.provenance.postgres._connect", connect)
+    monkeypatch.setattr(cli_provenance, "make_backend", lambda *_args: backend)
+    result = CliRunner().invoke(
+        app,
+        [
+            "provenance",
+            command,
+            "--backend",
+            "postgresql",
+            "--json",
+            "--data-root",
+            str(roots.data),
+            "--configs-root",
+            str(roots.configs),
+            *(["--head", head] if command == "stale" else []),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)["result"]
+    assert publications == [True]
+    if command == "stale":
+        assert [row["entity_id"] for row in payload["runs"]] == ["run:old"]
+    else:
+        assert payload["entities"] == len(tiny_graph.entities)
+        assert payload["graph_hash"] == old_result.graph_hash
+        assert payload["synchronized"] is False
+        assert "graph differs from canonical replay" in payload["issues"]
+    assert sum(reader.events.count("read_active") for reader in readers) == 1
 
 
 def test_verify_reports_recorded_generation_mismatch(fake_postgres, roots, tiny_graph, monkeypatch):

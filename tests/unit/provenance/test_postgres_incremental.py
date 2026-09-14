@@ -195,7 +195,7 @@ def fake_postgres(monkeypatch):
     connection = FakePostgres()
     monkeypatch.setattr(postgres, "_load_psycopg", lambda: SimpleNamespace())
     monkeypatch.setattr(postgres, "_connect", lambda _config: connection)
-    monkeypatch.setattr(postgres, "install_schema", lambda _connection: None)
+    monkeypatch.setattr(postgres, "install_schema_in_transaction", lambda _connection: None)
     monkeypatch.setattr(postgres, "validate_schema", lambda _connection: None)
     connection.backend = postgres.PostgresProvenanceBackend(BackendConfig(BackendName.POSTGRESQL))
     return connection

@@ -24,6 +24,7 @@ from vcp.provenance.backend import (
     BackendConfig,
     BackendName,
     MaintenanceResult,
+    ProvenanceReader,
     RequestedStrategy,
     SelectedStrategy,
 )
@@ -52,7 +53,9 @@ from vcp.provenance.index import (
 from vcp.provenance.postgres_schema import (
     POSTGRES_SCHEMA_VERSION,
     SCHEMA_NAME,
+    WRITER_LOCK_KEY,
     install_schema,
+    install_schema_in_transaction,
     validate_schema,
     validate_schema_in_transaction,
 )
@@ -69,7 +72,7 @@ from vcp.provenance.views import compute_statuses, compute_statuses_for_entities
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 _SQLSTATE = re.compile(r"[0-9A-Z]{5}")
 _MISSING_DEPENDENCY = "missing_dependency: install with `uv sync --extra postgres`"
-_ADVISORY_LOCK_KEY = 0x56435050524F5631
+_ADVISORY_LOCK_KEY = WRITER_LOCK_KEY
 _FINGERPRINT_MODULUS = 1 << 256
 _TABLES = (
     "entities",
@@ -1032,9 +1035,9 @@ class PostgresProvenanceBackend:
         artifact_rows = _ingested_artifact_rows(generation_id, canonical, data_root)
         connection = _connect(self.config)
         try:
-            install_schema(connection)
             with connection.transaction():
                 connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
+                install_schema_in_transaction(connection)
                 previous = _scalar(
                     connection.execute(
                         f"SELECT generation_id FROM {SCHEMA_NAME}.active_generation "
@@ -1615,16 +1618,54 @@ class PostgresProvenanceBackend:
                 "canonical_drift: dataset diff or its inputs changed during ingest"
             )
 
-    def load_graph(self) -> ProvenanceGraph:
+    @contextmanager
+    def read_snapshot(self) -> Iterator[ProvenanceReader]:
+        """Pin one generation and MVCC snapshot for all reads in this context."""
         with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
+            yield _PostgresReader(connection, generation_id)
+
+    def load_graph(self) -> ProvenanceGraph:
+        with self.read_snapshot() as reader:
+            return reader.load_graph()
+
+    def statuses(self, head_id: str) -> dict[str, StatusRecord]:
+        with self.read_snapshot() as reader:
+            return reader.statuses(head_id)
+
+    def normalized(self) -> dict[str, Any]:
+        with self.read_snapshot() as reader:
+            return reader.normalized()
+
+    def stats(self) -> dict[str, Any]:
+        with self.read_snapshot() as reader:
+            return reader.stats()
+
+    def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult:
+        with self.read_snapshot() as reader:
+            return reader.verify(data_root, configs_root)
+
+
+class _PostgresReader:
+    """Read-only view borrowing a connection for its surrounding snapshot context."""
+
+    def __init__(self, connection: Any, generation_id: UUID | str) -> None:
+        self.connection = connection
+        self.generation_id = generation_id
+
+    @contextmanager
+    def _read(self) -> Iterator[tuple[Any, UUID | str]]:
+        yield self.connection, self.generation_id
+
+    def load_graph(self) -> ProvenanceGraph:
+        with self._read() as (connection, generation_id):
             return deserialize_graph(_load_graph_rows(connection, generation_id))
 
     def statuses(self, head_id: str) -> dict[str, StatusRecord]:
-        with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
+        with self._read() as (connection, generation_id):
             return _status_dict(_read_status_rows(connection, generation_id, head_id))
 
     def normalized(self) -> dict[str, Any]:
-        with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
+        with self._read() as (connection, generation_id):
             graph = deserialize_graph(_load_graph_rows(connection, generation_id)).normalized()
             statuses = [
                 {
@@ -1639,7 +1680,7 @@ class PostgresProvenanceBackend:
             return {"graph": graph, "statuses": statuses}
 
     def stats(self) -> dict[str, Any]:
-        with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
+        with self._read() as (connection, generation_id):
             counts = {
                 table: _scalar(
                     connection.execute(
@@ -1683,7 +1724,7 @@ class PostgresProvenanceBackend:
         canonical_snapshot = _canonical_snapshot(data_root, configs_root)
         canonical = build_graph(data_root, configs_root)
         issues: list[str] = []
-        with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
+        with self._read() as (connection, generation_id):
             indexed = deserialize_graph(_load_graph_rows(connection, generation_id))
             if indexed.normalized() != canonical.normalized():
                 issues.append("graph differs from canonical replay")

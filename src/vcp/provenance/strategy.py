@@ -6,6 +6,7 @@ import json
 import math
 import re
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -40,6 +41,8 @@ FULL_FEATURE_ORDER = (
 _FEATURE_NAMES = frozenset((*INCREMENTAL_FEATURE_ORDER, *FULL_FEATURE_ORDER))
 _SCENARIO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+CALIBRATION_SEEDS = (20260913, 20260914)
+HELDOUT_SEEDS = (20261001, 20261002)
 
 
 def _derived_policy_id(calibration_sha256: str) -> str:
@@ -73,11 +76,34 @@ class MaintenanceFeatures(_Strict):
         return self
 
 
+class CalibrationObservation(MaintenanceFeatures):
+    """Allowlisted paired PostgreSQL measurements; no arbitrary runtime metadata."""
+
+    scenario_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    scenario_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed: Literal[20260913, 20260914]
+    incremental_p50_ms: float = Field(gt=0)
+    full_p50_ms: float = Field(gt=0)
+    environment_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    backend_schema_version: Literal[1]
+    postgresql_major: Literal[17]
+    benchmark_schema_version: Literal[1]
+
+    @model_validator(mode="after")
+    def _ratio_matches(self) -> CalibrationObservation:
+        expected = self.dirty_entities / self.total_entities if self.total_entities else 0
+        if self.dirty_ratio != expected:
+            raise ValueError("dirty ratio disagrees with counts")
+        return self
+
+
 class CalibrationEvidence(_Strict):
     """The complete permitted immutable evidence from a calibration run."""
 
     scenario_ids: tuple[str, ...] = Field(min_length=1)
     scenario_hashes: tuple[str, ...] = Field(min_length=1)
+    observations: tuple[CalibrationObservation, ...] | None = None
 
     @field_validator("scenario_ids")
     @classmethod
@@ -101,7 +127,52 @@ class CalibrationEvidence(_Strict):
     def _corresponding_entries(self) -> CalibrationEvidence:
         if len(self.scenario_ids) != len(self.scenario_hashes):
             raise ValueError("scenario_ids and scenario_hashes must have equal length")
+        if self.observations is not None:
+            rows = self.observations
+            if (
+                tuple(row.scenario_id for row in rows) != self.scenario_ids
+                or tuple(row.scenario_hash for row in rows) != self.scenario_hashes
+                or self.scenario_hashes != tuple(sorted(self.scenario_hashes))
+                or {row.seed for row in rows} != set(CALIBRATION_SEEDS)
+                or len({row.workload_hash for row in rows}) != len(rows)
+                or len({row.environment_fingerprint for row in rows}) != 1
+            ):
+                raise ValueError("invalid calibration observations")
         return self
+
+
+def calibration_evidence(calibration_rows) -> CalibrationEvidence:
+    """Normalize test or live paired rows before hashing, without fitting anything."""
+    try:
+        rows = tuple(
+            sorted(
+                (
+                    CalibrationObservation.model_validate(
+                        row.model_dump() if isinstance(row, CalibrationObservation) else row
+                    )
+                    for row in calibration_rows
+                ),
+                key=lambda row: row.scenario_hash,
+            )
+        )
+        return CalibrationEvidence(
+            scenario_ids=tuple(row.scenario_id for row in rows),
+            scenario_hashes=tuple(row.scenario_hash for row in rows),
+            observations=rows,
+        )
+    except (TypeError, ValueError):
+        raise ValidationFailed("invalid_calibration_rows") from None
+
+
+def calibration_text(evidence: CalibrationEvidence) -> str:
+    return (
+        json.dumps(
+            evidence.model_dump(mode="json", exclude_none=True),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
 
 
 class CostModel(_Strict):
@@ -199,6 +270,50 @@ class StrategyDecision(_Strict):
     estimated_full_ms: float | None = Field(default=None, ge=0.0)
     policy_version: str
     reason: str
+
+
+def fit_policy(calibration_rows) -> AdaptivePolicy:
+    """Fit nonnegative models on calibration observations only, in frozen order.
+
+    The numerical dependency is imported only when fitting. Held-out runners use
+    artifact loading and selection, and never invoke this API.
+    """
+    evidence = calibration_evidence(calibration_rows)
+    from sklearn.linear_model import LinearRegression
+
+    rows = evidence.observations
+    assert rows
+
+    def fit(order, target):
+        matrix = [[float(getattr(row, feature)) for feature in order] for row in rows]
+        values = [getattr(row, target) for row in rows]
+        fitted = LinearRegression(positive=True).fit(matrix, values)
+        model = CostModel(
+            feature_order=order,
+            coefficients=dict(zip(order, fitted.coef_, strict=True)),
+            intercept_ms=float(fitted.intercept_),
+        )
+        rmse = math.sqrt(
+            sum((model.predict(row) - value) ** 2 for row, value in zip(rows, values, strict=True))
+            / len(rows)
+        )
+        return model, rmse
+
+    incremental, incremental_rmse = fit(INCREMENTAL_FEATURE_ORDER, "incremental_p50_ms")
+    full, full_rmse = fit(FULL_FEATURE_ORDER, "full_p50_ms")
+    first = rows[0]
+    return AdaptivePolicy(
+        backend_schema_version=first.backend_schema_version,
+        postgresql_major=first.postgresql_major,
+        benchmark_schema_version=first.benchmark_schema_version,
+        environment_fingerprint=first.environment_fingerprint,
+        calibration_sha256=sha256_text(calibration_text(evidence)),
+        incremental_model=incremental,
+        full_model=full,
+        incremental_rmse_ms=incremental_rmse,
+        full_rmse_ms=full_rmse,
+        training_row_count=len(rows),
+    )
 
 
 def _requested(value: RequestedStrategy | str) -> RequestedStrategy:
@@ -311,6 +426,20 @@ def _read_calibration(path: Path, *, committed: bool = False) -> CalibrationEvid
         raise ValidationFailed("bad calibration evidence") from None
 
 
+def _check_calibration_policy(evidence: CalibrationEvidence, policy: AdaptivePolicy) -> None:
+    if evidence.observations is None:
+        return  # Task 6's original two-field manifest remains supported.
+    first = evidence.observations[0]
+    if (
+        policy.training_row_count != len(evidence.observations)
+        or policy.environment_fingerprint != first.environment_fingerprint
+        or policy.postgresql_major != first.postgresql_major
+        or policy.backend_schema_version != first.backend_schema_version
+        or policy.benchmark_schema_version != first.benchmark_schema_version
+    ):
+        raise ValidationFailed("incompatible_policy: calibration metadata")
+
+
 def write_policy_artifact(data_root: Path, policy: AdaptivePolicy, calibration_path: Path) -> str:
     """Publish or idempotently reuse a policy derived from one pinned calibration JSON."""
     try:
@@ -325,7 +454,7 @@ def write_policy_artifact(data_root: Path, policy: AdaptivePolicy, calibration_p
     ):
         raise _compatibility_error("publication metadata")
     calibration_path = Path(calibration_path)
-    _read_calibration(calibration_path)
+    _check_calibration_policy(_read_calibration(calibration_path), policy)
     actual_sha256 = sha256_file(calibration_path)
     if actual_sha256 != policy.calibration_sha256:
         raise IntegrityError("mismatch: provenance policy calibration hash")
@@ -414,7 +543,7 @@ def load_policy_artifact(
     if sha256_file(directory / POLICY_FILE) != manifest.spec.params["policy_sha256"]:
         raise IntegrityError("mismatch: provenance policy payload")
     copied_calibration = directory / CALIBRATION_FILE
-    _read_calibration(copied_calibration, committed=True)
+    _check_calibration_policy(_read_calibration(copied_calibration, committed=True), policy)
     if sha256_file(copied_calibration) != policy.calibration_sha256:
         raise IntegrityError("mismatch: provenance policy calibration copy")
     source = resolve_stored_path(calibration_ref.path, data_root)
@@ -442,17 +571,23 @@ def load_policy_artifact(
 
 __all__ = [
     "BENCHMARK_SCHEMA_VERSION",
+    "CALIBRATION_SEEDS",
     "FULL_FEATURE_ORDER",
     "INCREMENTAL_FEATURE_ORDER",
+    "HELDOUT_SEEDS",
     "POLICY_KIND",
     "POLICY_VERSION",
     "AdaptivePolicy",
     "CalibrationEvidence",
+    "CalibrationObservation",
     "CostModel",
     "MaintenanceFeatures",
     "RequestedStrategy",
     "SelectedStrategy",
     "StrategyDecision",
+    "calibration_evidence",
+    "calibration_text",
+    "fit_policy",
     "load_policy_artifact",
     "select_strategy",
     "write_policy_artifact",

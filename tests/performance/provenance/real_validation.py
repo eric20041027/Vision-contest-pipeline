@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import provenance_index_path
 from vcp.core.time import stamp
@@ -114,13 +115,34 @@ def build_real_scenario(
     return finish_workload(root, scenario, before, after, sample_entities=samples)
 
 
-def validate(source_data: Path, source_configs: Path, *, six_method=False) -> dict[str, object]:
+def validate(
+    source_data: Path,
+    source_configs: Path,
+    *,
+    six_method=False,
+    policy_from: Path | None = None,
+) -> dict[str, object]:
     if six_method:
         if __package__:
-            from .adaptive_benchmark import METHODS, postgres_preflight, run_method
+            from .adaptive_benchmark import (
+                METHODS,
+                empirical_crossover,
+                load_frozen_policy,
+                postgres_preflight,
+                run_method,
+            )
         else:
-            from adaptive_benchmark import METHODS, postgres_preflight, run_method
+            from adaptive_benchmark import (
+                METHODS,
+                empirical_crossover,
+                load_frozen_policy,
+                postgres_preflight,
+                run_method,
+            )
+        if policy_from is None:
+            raise ValueError("six-method validation requires a frozen policy")
         runtime = postgres_preflight()
+        policy, evidence, policy_sha256 = load_frozen_policy(policy_from)
     with tempfile.TemporaryDirectory(prefix="vcp-real-provenance-") as directory:
         root = Path(directory)
         data = root / "data"
@@ -194,9 +216,35 @@ def validate(source_data: Path, source_configs: Path, *, six_method=False) -> di
                 workload = build_real_scenario(
                     root / f"real-{transition}", source_data, source_configs, transition
                 )
+                if __package__:
+                    from .adaptive_benchmark import prepare_policy_workload
+                else:
+                    from adaptive_benchmark import prepare_policy_workload
+                workload = prepare_policy_workload(workload, policy, evidence)
                 for method in METHODS:
-                    rows.append(run_method(workload, method, pg_runtime=runtime).to_dict())
+                    rows.append(
+                        run_method(
+                            workload,
+                            method,
+                            pg_runtime=runtime,
+                            policy_id=policy.id if method == "postgres_adaptive" else None,
+                            policy_sha256=(
+                                policy_sha256 if method == "postgres_adaptive" else None
+                            ),
+                        ).to_dict()
+                    )
             document["six_method_benchmark"] = rows
+            document["policy_id"] = policy.id
+            document["policy_sha256"] = policy_sha256
+            document["empirical_crossover"] = empirical_crossover(evidence)
+            document["postgresql_environment"] = next(
+                (
+                    row["environment"]
+                    for row in rows
+                    if row.get("method", "").startswith("postgres_") and row["status"] == "ok"
+                ),
+                None,
+            )
         return document
 
 
@@ -206,15 +254,24 @@ def main() -> int:
     parser.add_argument("--configs-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--six-method", action="store_true")
+    parser.add_argument("--policy-from", type=Path)
     args = parser.parse_args()
+    if args.output.exists():
+        raise ValueError("real validation output is write-once")
     result = validate(
-        args.data_root.resolve(), args.configs_root.resolve(), six_method=args.six_method
+        args.data_root.resolve(),
+        args.configs_root.resolve(),
+        six_method=args.six_method,
+        policy_from=args.policy_from,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
+    if __package__:
+        from .adaptive_benchmark import validate_publication_explain
+    else:
+        from adaptive_benchmark import validate_publication_explain
+    validate_publication_explain(result)
+    write_once_text(
+        args.output,
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
     )
     return int(any(row["status"] != "ok" for row in result.get("six_method_benchmark", [])))
 

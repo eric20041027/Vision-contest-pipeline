@@ -22,6 +22,7 @@ from time import perf_counter_ns
 
 from vcp.artifact.schema import ArtifactSpec, InputRef
 from vcp.artifact.writer import ArtifactWriter
+from vcp.core.atomic import write_once_text
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.time import stamp
 from vcp.provenance.diff import CHANGES_FILE, KIND, SUMMARY_FILE
@@ -382,15 +383,31 @@ def main() -> int:
         action="store_true",
         help="add the entity-count adaptive matrix; requires the disposable test service",
     )
+    parser.add_argument("--policy-from", type=Path)
     args = parser.parse_args()
+    if args.output.exists():
+        raise ValueError("benchmark output is write-once")
     if args.six_method:
         if __package__:
-            from .adaptive_benchmark import postgres_preflight, run_matrix
+            from .adaptive_benchmark import (
+                empirical_crossover,
+                load_frozen_policy,
+                postgres_preflight,
+                run_matrix,
+            )
             from .workloads import scenario_matrix
         else:
-            from adaptive_benchmark import postgres_preflight, run_matrix
+            from adaptive_benchmark import (
+                empirical_crossover,
+                load_frozen_policy,
+                postgres_preflight,
+                run_matrix,
+            )
             from workloads import scenario_matrix
         runtime = postgres_preflight()
+        if args.policy_from is None:
+            raise ValueError("six-method benchmark requires a frozen policy")
+        policy, evidence, policy_sha256 = load_frozen_policy(args.policy_from)
     with tempfile.TemporaryDirectory(prefix="vcp-production-provenance-") as temporary:
         root = Path(temporary)
         scales = [run_scale(root, count) for count in args.scales]
@@ -409,10 +426,30 @@ def main() -> int:
     if args.six_method:
         with tempfile.TemporaryDirectory(prefix="vcp-production-six-method-") as temporary:
             result["six_method_benchmark"] = run_matrix(
-                Path(temporary), scenario_matrix(entities=args.scales), pg_runtime=runtime
+                Path(temporary),
+                scenario_matrix(entities=args.scales),
+                pg_runtime=runtime,
+                policy=policy,
+                evidence=evidence,
+                policy_sha256=policy_sha256,
             )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8", newline="\n")
+        result["policy_id"] = policy.id
+        result["policy_sha256"] = policy_sha256
+        result["empirical_crossover"] = empirical_crossover(evidence)
+        result["postgresql_environment"] = next(
+            (
+                row["environment"]
+                for row in result["six_method_benchmark"]
+                if row.get("method", "").startswith("postgres_") and row["status"] == "ok"
+            ),
+            None,
+        )
+    if __package__:
+        from .adaptive_benchmark import validate_publication_explain
+    else:
+        from adaptive_benchmark import validate_publication_explain
+    validate_publication_explain(result)
+    write_once_text(args.output, json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
     return int(any(row["status"] != "ok" for row in result.get("six_method_benchmark", [])))
 

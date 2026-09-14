@@ -24,6 +24,7 @@ if __package__:
         FIXED_METHODS,
         SafeArgumentParser,
         collect_rows,
+        empirical_crossover,
         paired_observations,
         validate_calibration_manifest,
         validate_rows,
@@ -35,6 +36,7 @@ else:
         FIXED_METHODS,
         SafeArgumentParser,
         collect_rows,
+        empirical_crossover,
         paired_observations,
         validate_calibration_manifest,
         validate_rows,
@@ -69,18 +71,14 @@ def publish_calibration(rows, output):
         source = root / "inputs" / "calibration.json"
         write_once_text(source, calibration_text(evidence))
         write_policy_artifact(root, policy, source)
-        write_once_text(
-            output,
-            json.dumps(
-                {
-                    "kind": "postgres-provenance-calibration-v1",
-                    "policy": policy.model_dump(mode="json"),
-                    "calibration": evidence.model_dump(mode="json"),
-                },
-                indent=2,
-            )
-            + "\n",
-        )
+        document = {
+            "kind": "postgres-provenance-calibration-v1",
+            "policy": policy.model_dump(mode="json"),
+            "calibration": evidence.model_dump(mode="json"),
+            "empirical_crossover": empirical_crossover(evidence),
+        }
+        benchmark.validate_publication_explain(document)
+        write_once_text(output, json.dumps(document, indent=2) + "\n")
         return policy
     except (OSError, TypeError, ValueError, VcpError):
         raise ValidationFailed("calibration_publication_failed") from None
@@ -91,6 +89,8 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     try:
         args = parser.parse_args(argv)
+        if args.output.exists():
+            raise ValidationFailed("calibration_output_exists")
         pg_runtime = benchmark.postgres_preflight()
         with tempfile.TemporaryDirectory(prefix="vcp-calibration-") as temporary:
             rows = collect_rows(

@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from vcp.artifact import store
 from vcp.core.atomic import write_once_text
@@ -48,7 +48,7 @@ else:
 
 FIXED_METHODS = ("postgres_full", "postgres_incremental")
 EVALUATION_METHODS = (*FIXED_METHODS, "postgres_adaptive")
-_STORAGE = "sum pg_total_relation_size of vcp_provenance tables (includes indexes/TOAST)"
+_STORAGE = "PostgreSQL pg_database_size plus vcp_provenance total relation and index bytes"
 
 
 class SafeArgumentParser(argparse.ArgumentParser):
@@ -66,12 +66,43 @@ class _Environment(_Strict):
     python_version: str = Field(pattern=r"^3\.12\.\d+$")
     python_implementation: Literal["CPython"]
     cpu_count: int = Field(gt=0)
+    cpu_model: str = Field(min_length=1)
+    physical_cpu_cores: int = Field(gt=0)
+    logical_cpu_count: int = Field(gt=0)
+    ram_bytes: int = Field(gt=0)
+    disk_path: str = Field(min_length=1)
+    disk_total_bytes: int = Field(gt=0)
+    disk_free_bytes: int = Field(ge=0)
     sqlite_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     vcp_commit: str = Field(pattern=r"^(?:[0-9a-f]{40}|unavailable)$")
     postgresql_major: Literal[17]
     postgresql_version: int = Field(ge=170000, lt=180000)
+    postgresql_server_version: str = Field(min_length=1)
+    deployment_kind: Literal["native_portable", "container"]
+    image_digest: None
+    image_digest_source: Literal["not_applicable", "unavailable"]
+    operator_declared_image_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    operator_declared_image_digest_source: Literal["operator_declared_unverified"] | None
     environment_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     backend_schema_version: Literal[1]
+
+    @model_validator(mode="after")
+    def _deployment_provenance(self):
+        declared = self.operator_declared_image_digest is not None
+        if self.deployment_kind == "native_portable":
+            if (
+                self.image_digest_source != "not_applicable"
+                or declared
+                or self.operator_declared_image_digest_source is not None
+            ):
+                raise ValueError("invalid native deployment evidence")
+        elif self.image_digest_source != "unavailable" or declared != (
+            self.operator_declared_image_digest_source is not None
+        ):
+            raise ValueError("invalid container deployment evidence")
+        return self
 
 
 class _Sample(_Strict):
@@ -85,6 +116,8 @@ class _Sample(_Strict):
     head_parity: Literal[True]
     graph_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     database_bytes: int = Field(ge=0)
+    provenance_total_relation_bytes: int = Field(ge=0)
+    index_bytes: int = Field(ge=0)
     storage_measurement: Literal[_STORAGE]
     requested_strategy: Literal["full", "incremental", "auto"]
     selected_strategy: Literal["FULL", "INCREMENTAL", "NO_OP"]
@@ -112,6 +145,8 @@ class BenchmarkRow(_Sample):
     explain_ms: float = Field(default=0.0, exclude=True)
     schema_version: Literal[1]
     method: Literal["postgres_full", "postgres_incremental", "postgres_adaptive"]
+    policy_id: str | None = None
+    policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     scenario_id: str = Field(pattern=r"^scaled-\d+-\d+-[0-9a-f]{16}$")
     scenario_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     workload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -135,6 +170,8 @@ class BenchmarkRow(_Sample):
     repetitions: int = Field(gt=0)
     parity_rate: Literal[1.0]
     explain_analyze: list[dict] = Field(min_length=1)
+    explain_analyze_sanitized: list[dict] = Field(min_length=1)
+    explain_scope: Literal["first executed DML row for each SQL statement shape"]
     instrumentation: Literal[
         "separate fresh state; first DML row per SQL shape; rollback; excluded from timings"
     ]
@@ -193,7 +230,8 @@ def validate_rows(rows, *, seeds, methods):
                 or row.dirty_ratio != row.dirty_entities / row.total_entities
                 or row.realized_change_ratio != row.changed_samples / row.sample_entities
                 or row.total_changes != row.historical_changes + row.changed_samples
-                or benchmark.sanitize_explain(row.explain_analyze) != row.explain_analyze
+                or benchmark.sanitize_explain(row.explain_analyze) != row.explain_analyze_sanitized
+                or not _safe_raw_explain(row.explain_analyze)
                 or not any(plan for plan in row.explain_analyze)
             ):
                 raise ValueError
@@ -215,6 +253,11 @@ def validate_rows(rows, *, seeds, methods):
                 "postgres_adaptive": "auto",
             }[row.method]
             if row.requested_strategy != expected_requested:
+                raise ValueError
+            if row.method == "postgres_adaptive":
+                if row.policy_id is None or row.policy_sha256 is None:
+                    raise ValueError
+            elif row.policy_id is not None or row.policy_sha256 is not None:
                 raise ValueError
             if row.method in FIXED_METHODS:
                 decision = select_strategy(expected_requested, row.features(), None)
@@ -252,6 +295,15 @@ def validate_rows(rows, *, seeds, methods):
         return {key: groups[key] for key in sorted(groups)}
     except (TypeError, ValueError, KeyError, AttributeError):
         raise ValidationFailed("invalid_benchmark_rows") from None
+
+
+def _safe_raw_explain(value) -> bool:
+    """Raw plan evidence may retain PostgreSQL fields but never sensitive content."""
+    try:
+        benchmark.validate_raw_explain(value)
+        return True
+    except ValueError:
+        return False
 
 
 def expected_scenarios(seeds):
@@ -332,7 +384,7 @@ def load_calibration(path: Path):
         document = json.loads(
             path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicate_keys
         )
-        if set(document) != {"kind", "policy", "calibration"}:
+        if set(document) != {"kind", "policy", "calibration", "empirical_crossover"}:
             raise ValueError
         if document["kind"] != "postgres-provenance-calibration-v1":
             raise ValueError
@@ -353,11 +405,97 @@ def load_calibration(path: Path):
             or document["policy"] != verified.model_dump(mode="json")
             or sha256_text(calibration_text(evidence)) != policy.calibration_sha256
             or len(evidence.observations) != policy.training_row_count
+            or document["empirical_crossover"] != empirical_crossover(evidence)
         ):
             raise ValueError
         return verified, evidence
     except (OSError, TypeError, ValueError, VcpError):
         raise ValidationFailed("invalid_calibration_artifact") from None
+
+
+def policy_file_sha256(policy_from: Path, policy: AdaptivePolicy) -> str:
+    """Return the verified immutable policy payload hash, not the wrapper hash."""
+    try:
+        policy_from = Path(policy_from)
+        manifest = store.load_manifest(
+            policy_from.parent / (policy_from.stem + "-artifacts"),
+            "provenance_policy",
+            policy.id,
+        )
+        digest = next(entry.sha256 for entry in manifest.files if entry.name == "policy.json")
+        if digest != _policy_sha256(policy):
+            raise ValueError
+        return digest
+    except (OSError, ValueError, VcpError, StopIteration):
+        raise ValidationFailed("invalid_calibration_artifact") from None
+
+
+def empirical_crossover(evidence: CalibrationEvidence) -> dict[str, object]:
+    """Report observed p50 preference changes within fixed multivariate slices.
+
+    This intentionally does not collapse a multivariate model into a global scalar
+    threshold. It reports only measured ratios and does not interpolate.
+    """
+    scenarios = expected_scenarios(CALIBRATION_SEEDS)
+    grouped: dict[tuple[str, int, int], list[dict[str, object]]] = {}
+    for observation in evidence.observations or ():
+        scenario = scenarios[observation.scenario_hash]
+        grouped.setdefault((scenario.topology, scenario.entities, scenario.seed), []).append(
+            {
+                "change_ratio": float(scenario.change_ratio),
+                "realized_change_ratio": observation.changed_samples / scenario_counts(scenario)[0],
+                "incremental_p50_ms": observation.incremental_p50_ms,
+                "full_p50_ms": observation.full_p50_ms,
+                "preferred_method": (
+                    "postgres_full"
+                    if observation.full_p50_ms <= observation.incremental_p50_ms
+                    else "postgres_incremental"
+                ),
+            }
+        )
+    slices = []
+    for (topology, entities, seed), rows in sorted(grouped.items()):
+        rows.sort(key=lambda row: row["change_ratio"])
+        full_position = next(
+            (index for index, row in enumerate(rows) if row["preferred_method"] == "postgres_full"),
+            None,
+        )
+        if full_position is None:
+            crossover = {
+                "status": "not_observed",
+                "last_incremental_preferred_ratio": (rows[-1]["change_ratio"] if rows else None),
+                "first_full_preferred_ratio": None,
+            }
+        else:
+            crossover = {
+                "status": "observed",
+                "last_incremental_preferred_ratio": (
+                    rows[full_position - 1]["change_ratio"] if full_position else None
+                ),
+                "first_full_preferred_ratio": rows[full_position]["change_ratio"],
+            }
+        slices.append(
+            {
+                "topology": topology,
+                "entities": entities,
+                "seed": seed,
+                "observations": rows,
+                "crossover": crossover,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "kind": "empirical-feature-slice-crossovers",
+        "algorithm": (
+            "within each fixed topology/entities/seed slice, sort measured nonzero "
+            "change ratios and report the first postgres_full p50 <= postgres_incremental "
+            "p50 observation; no interpolation; retain all observations"
+        ),
+        "global_threshold": None,
+        "fixed_feature_dimensions": ["topology", "entities", "seed"],
+        "varied_feature": "change_ratio",
+        "slices": slices,
+    }
 
 
 def prepare_workload(workload, policy, evidence):
@@ -399,6 +537,11 @@ def collect_rows(root, scenarios, *, methods, pg_runtime, policy=None, evidence=
                         method,
                         pg_runtime=pg_runtime,
                         policy_id=policy.id if policy and method == "postgres_adaptive" else None,
+                        policy_sha256=(
+                            _policy_sha256(policy)
+                            if policy and method == "postgres_adaptive"
+                            else None
+                        ),
                     ).to_dict()
                 )
     return rows
@@ -418,22 +561,13 @@ class EvaluationResult(_Strict):
     every_scenario_pass: bool
     aggregate_maintenance_ms: dict[str, dict[str, float]]
     scenarios: list[dict]
+    empirical_crossover: dict[str, object]
 
 
 def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
     policy, evidence = load_calibration(policy_from)
     policy_from = Path(policy_from)
-    try:
-        manifest = store.load_manifest(
-            policy_from.parent / (policy_from.stem + "-artifacts"), "provenance_policy", policy.id
-        )
-        policy_sha256 = next(
-            entry.sha256 for entry in manifest.files if entry.name == "policy.json"
-        )
-        if policy_sha256 != _policy_sha256(policy):
-            raise ValueError
-    except (OSError, ValueError, VcpError, StopIteration):
-        raise ValidationFailed("invalid_calibration_artifact") from None
+    policy_sha256 = policy_file_sha256(policy_from, policy)
     # Use complete verified coverage, including NO_OP scenarios excluded from fit.
     # Count distinct calibration scenarios, not repeated methods or identity aliases.
     identities = {
@@ -467,7 +601,9 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
             raise ValidationFailed("incompatible_policy")
         decision = select_strategy("auto", adaptive.features(), policy)
         if (
-            adaptive.selected_strategy != decision.selected_strategy.value
+            adaptive.policy_id != policy.id
+            or adaptive.policy_sha256 != policy_sha256
+            or adaptive.selected_strategy != decision.selected_strategy.value
             or adaptive.strategy_reason != decision.reason
             or adaptive.policy_version != POLICY_VERSION
             or adaptive.estimated_incremental_ms != decision.estimated_incremental_ms
@@ -518,6 +654,7 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
         and all(ratio <= 1.10 for ratio in ratios95),
         aggregate_maintenance_ms=aggregates,
         scenarios=reports,
+        empirical_crossover=empirical_crossover(evidence),
     )
 
 
@@ -527,6 +664,8 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     try:
         args = parser.parse_args(argv)
+        if args.output.exists():
+            raise ValidationFailed("heldout_output_exists")
         policy, evidence = load_calibration(args.policy_from)
         pg_runtime = benchmark.postgres_preflight()
         with tempfile.TemporaryDirectory(prefix="vcp-heldout-") as temporary:
@@ -539,18 +678,13 @@ def main(argv=None) -> int:
                 evidence=evidence,
             )
         result = evaluate_policy(args.policy_from, rows)
-        write_once_text(
-            args.output,
-            json.dumps(
-                {
-                    "kind": "postgres-provenance-heldout-v1",
-                    "evaluation": result.model_dump(),
-                    "results": rows,
-                },
-                indent=2,
-            )
-            + "\n",
-        )
+        document = {
+            "kind": "postgres-provenance-heldout-v1",
+            "evaluation": result.model_dump(),
+            "results": rows,
+        }
+        benchmark.validate_publication_explain(document)
+        write_once_text(args.output, json.dumps(document, indent=2) + "\n")
         status = "OK" if result.performance_pass else "FAIL"
         print(f"VERDICT cmd=provenance.evaluate status={status}", file=sys.stderr)
         return 0 if result.performance_pass else 1

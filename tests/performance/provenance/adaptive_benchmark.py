@@ -1,7 +1,8 @@
 """Explicit six-method benchmark; requires a disposable PostgreSQL test service.
 
 All methods replay identical canonical metadata on fresh state per repetition.
-No connection data, raw exception, SQL text or SQL expression is serialized.
+No connection data, raw exception, credentials, or SQL query text is serialized.
+Raw PostgreSQL EXPLAIN JSON is retained alongside a redacted allowlisted view.
 The service must allow CREATE DATABASE; only newly created databases are dropped.
 """
 
@@ -12,6 +13,8 @@ import json
 import math
 import os
 import platform
+import re
+import shutil
 import sqlite3
 import statistics
 import subprocess
@@ -20,7 +23,7 @@ import tempfile
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from importlib import import_module
 from pathlib import Path
 from time import perf_counter_ns
@@ -28,6 +31,7 @@ from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
+from vcp.core.atomic import write_once_text
 from vcp.core.time import stamp
 from vcp.provenance.backend import BackendConfig, BackendName, SQLiteBackend
 from vcp.provenance.graph import build_graph
@@ -59,21 +63,246 @@ DECISION_FIELDS = (
     "estimated_full_ms",
 )
 NOT_CONFIGURED = "PostgreSQL benchmark service is not configured"
+_SENSITIVE_TEXT = (
+    "password",
+    "secret",
+    "token",
+    "conninfo",
+    "credential",
+    "pgpass",
+    "authorization",
+)
+_SENSITIVE_KEY_PARTS = frozenset(
+    {"password", "passwd", "secret", "token", "credential", "authorization"}
+)
+_SENSITIVE_KEYS = frozenset(
+    {
+        "api_key",
+        "access_key",
+        "private_key",
+        "query_text",
+        "connection",
+        "connection_string",
+        "connection_uri",
+        "conninfo",
+        "dsn",
+        "host",
+        "hostaddr",
+        "port",
+        "dbname",
+        "user",
+        "passfile",
+        "service",
+        "sslcert",
+        "sslkey",
+        "sslrootcert",
+    }
+)
+_CONNECTION_URI = re.compile(r"[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+_LIBPQ_KEYWORD = re.compile(
+    r"(?:^|\s)(?:host|hostaddr|port|dbname|user|password|passfile|service|"
+    r"sslmode|sslcert|sslkey|sslrootcert)\s*=\s*(?:'[^']*'|\"[^\"]*\"|\S+)",
+    re.IGNORECASE,
+)
+_BEARER = re.compile(r"(?:^|\s)bearer\s+\S+", re.IGNORECASE)
+_SECRET_KEY_VALUE = re.compile(
+    r"(?:^|[^A-Za-z0-9])(?:sk|rk|pk)[_-][A-Za-z0-9_-]{8,}", re.IGNORECASE
+)
 
 
-def runtime_environment() -> dict[str, Any]:
+def _unsafe_explain_key(key: object) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(key).casefold()).strip("_")
+    parts = frozenset(normalized.split("_"))
+    return normalized in _SENSITIVE_KEYS or bool(parts & _SENSITIVE_KEY_PARTS)
+
+
+def validate_raw_explain(value) -> None:
+    """Fail closed before raw PostgreSQL plan evidence enters a result artifact."""
+    if isinstance(value, list):
+        for item in value:
+            validate_raw_explain(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _unsafe_explain_key(key):
+                raise ValueError("unsafe EXPLAIN evidence")
+            validate_raw_explain(item)
+        return
+    if isinstance(value, str):
+        text = value.casefold()
+        if (
+            any(marker in text for marker in _SENSITIVE_TEXT)
+            or _CONNECTION_URI.search(value)
+            or _LIBPQ_KEYWORD.search(value)
+            or _BEARER.search(value)
+            or _SECRET_KEY_VALUE.search(value)
+        ):
+            raise ValueError("unsafe EXPLAIN evidence")
+        return
+    if not isinstance(value, (int, float, bool, type(None))):
+        raise ValueError("unsafe EXPLAIN evidence")
+
+
+def validate_publication_explain(value) -> None:
+    """Validate every raw EXPLAIN field at a formal publication boundary."""
+    if isinstance(value, list):
+        for item in value:
+            validate_publication_explain(item)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        if key == "explain_analyze":
+            validate_raw_explain(item)
+        validate_publication_explain(item)
+
+
+def _deployment_evidence() -> dict[str, str | None]:
+    kind = os.environ.get("VCP_TEST_PG_DEPLOYMENT_KIND", "native_portable")
+    declared = os.environ.get("VCP_TEST_PG_IMAGE_DIGEST")
+    if kind not in {"native_portable", "container"}:
+        raise ValueError("invalid PostgreSQL deployment evidence")
+    if declared is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", declared):
+        raise ValueError("invalid PostgreSQL deployment evidence")
+    if kind == "native_portable":
+        if declared is not None:
+            raise ValueError("invalid PostgreSQL deployment evidence")
+        return {
+            "deployment_kind": kind,
+            "image_digest": None,
+            "image_digest_source": "not_applicable",
+            "operator_declared_image_digest": None,
+            "operator_declared_image_digest_source": None,
+        }
+    return {
+        "deployment_kind": kind,
+        "image_digest": None,
+        "image_digest_source": "unavailable",
+        "operator_declared_image_digest": declared,
+        "operator_declared_image_digest_source": (
+            "operator_declared_unverified" if declared is not None else None
+        ),
+    }
+
+
+@lru_cache(maxsize=1)
+def _cpu_details() -> tuple[str, int, int]:
+    """Return model, physical cores and logical CPUs without an optional dependency."""
+    logical = os.cpu_count() or 1
+    model = platform.processor().strip() or os.environ.get("PROCESSOR_IDENTIFIER", "unknown")
+    physical = logical
+    try:
+        if platform.system() == "Windows":
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        "$c=Get-CimInstance Win32_Processor; "
+                        "[pscustomobject]@{name=($c.Name -join '; '); "
+                        "physical=($c|Measure-Object NumberOfCores -Sum).Sum; "
+                        "logical=($c|Measure-Object NumberOfLogicalProcessors -Sum).Sum}"
+                        "|ConvertTo-Json -Compress"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            payload = json.loads(result.stdout)
+            model = str(payload["name"]).strip() or model
+            physical, logical = int(payload["physical"]), int(payload["logical"])
+        elif platform.system() == "Linux":
+            pairs = set()
+            current: dict[str, str] = {}
+            linux_model = ""
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    if "physical id" in current and "core id" in current:
+                        pairs.add((current["physical id"], current["core id"]))
+                    current = {}
+                    continue
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    current[key.strip()] = value.strip()
+                    if key.strip() == "model name" and not linux_model:
+                        linux_model = value.strip()
+            if "physical id" in current and "core id" in current:
+                pairs.add((current["physical id"], current["core id"]))
+            physical = len(pairs) or logical
+            model = linux_model or model
+        elif platform.system() == "Darwin":
+            physical = int(
+                subprocess.run(
+                    ["sysctl", "-n", "hw.physicalcpu"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=10,
+                ).stdout
+            )
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, json.JSONDecodeError):
+        pass
+    return model, max(1, physical), max(1, logical)
+
+
+@lru_cache(maxsize=1)
+def _ram_bytes() -> int:
+    try:
+        if platform.system() == "Windows":
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            return int(result.stdout.strip())
+        if platform.system() == "Darwin":
+            return int(
+                subprocess.run(
+                    ["sysctl", "-n", "hw.memsize"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=10,
+                ).stdout
+            )
+        return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 1
+
+
+def runtime_environment(storage_path: Path | None = None) -> dict[str, Any]:
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         commit = "unavailable"
+    model, physical, logical = _cpu_details()
+    disk_path = Path(storage_path or Path.cwd()).resolve()
+    disk = shutil.disk_usage(disk_path.anchor or disk_path)
     return {
         "system": platform.system(),
         "machine": platform.machine(),
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
-        "cpu_count": os.cpu_count(),
+        "cpu_count": logical,
+        "cpu_model": model,
+        "physical_cpu_cores": physical,
+        "logical_cpu_count": logical,
+        "ram_bytes": _ram_bytes(),
+        "disk_path": disk_path.anchor or str(disk_path),
+        "disk_total_bytes": disk.total,
+        "disk_free_bytes": disk.free,
         "sqlite_version": sqlite3.sqlite_version,
         "vcp_commit": commit,
     }
@@ -151,6 +380,9 @@ def fresh_backend(method: str, data: Path, *, pg_runtime=None):
         with connect() as connection:
             major, fingerprint = postgres.maintenance_environment(connection)
             version = connection.info.server_version
+            server_version = connection.execute("SHOW server_version").fetchone()[0]
+
+        deployment = _deployment_evidence()
 
         # This test-only scope routes only this backend's identity to its owned database.
         def backend_connection(config, driver):
@@ -163,6 +395,8 @@ def fresh_backend(method: str, data: Path, *, pg_runtime=None):
                 {
                     "postgresql_major": major,
                     "postgresql_version": version,
+                    "postgresql_server_version": server_version,
+                    **deployment,
                     "environment_fingerprint": fingerprint,
                     "backend_schema_version": postgres.POSTGRES_SCHEMA_VERSION,
                 },
@@ -276,7 +510,8 @@ class _ExplainConnection:
             raw = self.raw.execute(
                 "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + query, params
             ).fetchone()[0]
-            self.plans.extend(sanitize_explain(raw))
+            validate_raw_explain(raw)
+            self.plans.extend(raw)
 
     def execute(self, query, params=()):
         self.probe(query, params)
@@ -351,22 +586,45 @@ def _all_heads(graph):
     return sorted(key for key, entity in graph.entities.items() if entity.entity_type == "dataset")
 
 
-def _storage(state, method) -> tuple[int, str]:
+def _storage(state, method) -> dict[str, int | str | None]:
     if method == "canonical_full":
-        return 0, "no persistent database; Python heap not measured"
+        return {
+            "database_bytes": 0,
+            "provenance_total_relation_bytes": None,
+            "index_bytes": None,
+            "storage_measurement": "no persistent database; Python heap not measured",
+        }
     if method.startswith("sqlite_"):
         path = state.backend.index.path
         paths = [path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")]
-        return sum(
-            p.stat().st_size for p in paths if p.exists()
-        ), "SQLite file bytes including WAL/SHM"
+        return {
+            "database_bytes": sum(p.stat().st_size for p in paths if p.exists()),
+            "provenance_total_relation_bytes": None,
+            "index_bytes": None,
+            "storage_measurement": "SQLite file bytes including WAL/SHM",
+        }
     with state.connect() as connection:
-        size = connection.execute(
+        database_bytes = connection.execute(
+            "SELECT pg_database_size(current_database())"
+        ).fetchone()[0]
+        relation_bytes = connection.execute(
             "SELECT coalesce(sum(pg_total_relation_size(c.oid)),0)::bigint "
             "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
             "WHERE n.nspname='vcp_provenance' AND c.relkind='r'"
         ).fetchone()[0]
-    return int(size), "sum pg_total_relation_size of vcp_provenance tables (includes indexes/TOAST)"
+        index_bytes = connection.execute(
+            "SELECT coalesce(sum(pg_indexes_size(c.oid)),0)::bigint "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname='vcp_provenance' AND c.relkind='r'"
+        ).fetchone()[0]
+    return {
+        "database_bytes": int(database_bytes),
+        "provenance_total_relation_bytes": int(relation_bytes),
+        "index_bytes": int(index_bytes),
+        "storage_measurement": (
+            "PostgreSQL pg_database_size plus vcp_provenance total relation and index bytes"
+        ),
+    }
 
 
 def _closure(workload):
@@ -411,8 +669,11 @@ class ScenarioResult:
     samples: list[dict[str, Any]] = field(default_factory=list)
     plans: list[dict[str, Any]] = field(default_factory=list)
     failure: str | None = None
+    policy_id: str | None = None
+    policy_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        validate_raw_explain(self.plans)
         spec, graph = self.workload.scenario, self.workload.expected
         good = (
             self.failure is None
@@ -446,6 +707,8 @@ class ScenarioResult:
             "repetitions": len(self.samples),
             "parity_rate": float(good),
             "explain_analyze": self.plans,
+            "explain_analyze_sanitized": sanitize_explain(self.plans),
+            "explain_scope": "first executed DML row for each SQL statement shape",
             "instrumentation": (
                 "separate fresh state; first DML row per SQL shape; rollback; excluded from timings"
             ),
@@ -467,8 +730,12 @@ class ScenarioResult:
             "database_bytes",
             "storage_measurement",
             "graph_hash",
+            "provenance_total_relation_bytes",
+            "index_bytes",
         ):
             result[key] = first.get(key)
+        result["policy_id"] = self.policy_id
+        result["policy_sha256"] = self.policy_sha256
         result["dirty_ratio"] = (
             first.get("dirty_entities", 0) / len(graph.entities) if samples else None
         )
@@ -482,14 +749,28 @@ class ScenarioResult:
 
 
 def run_method(
-    workload: Workload, method: str, *, repetitions=None, pg_runtime=None, policy_id=None
+    workload: Workload,
+    method: str,
+    *,
+    repetitions=None,
+    pg_runtime=None,
+    policy_id=None,
+    policy_sha256=None,
 ) -> ScenarioResult:
     if method not in METHODS:
         raise ValueError("unknown benchmark method")
     repetitions = workload.scenario.repetitions if repetitions is None else repetitions
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
-    result = ScenarioResult(method, workload, runtime_environment())
+    if method == "postgres_adaptive" and not policy_id:
+        raise ValueError("postgres_adaptive requires a frozen policy")
+    result = ScenarioResult(
+        method,
+        workload,
+        runtime_environment(workload.data),
+        policy_id=policy_id if method == "postgres_adaptive" else None,
+        policy_sha256=policy_sha256 if method == "postgres_adaptive" else None,
+    )
     expected, expected_hash = workload.expected, graph_hash(workload.expected)
     expected_statuses = {head: compute_statuses(expected, head) for head in _all_heads(expected)}
     dirty = _closure(workload)
@@ -538,7 +819,7 @@ def run_method(
                         if state.backend is None
                         else {row["head_id"] for row in state.backend.normalized()["statuses"]}
                     )
-                    database_bytes, storage_measurement = _storage(state, method)
+                    storage = _storage(state, method)
                     row = {
                         "maintenance_ms": maintenance_ms,
                         "status_ms": status_ms,
@@ -552,8 +833,7 @@ def run_method(
                             and materialized_heads == set(_all_heads(expected))
                         ),
                         "graph_hash": recorded_hash,
-                        "database_bytes": database_bytes,
-                        "storage_measurement": storage_measurement,
+                        **storage,
                         **_decision(outcome, method, workload, dirty),
                     }
                     result.samples.append(row)
@@ -586,19 +866,61 @@ def run_method(
     return result
 
 
-def run_matrix(root: Path, scenarios, *, repetitions=None, pg_runtime=None):
+def run_matrix(
+    root: Path,
+    scenarios,
+    *,
+    repetitions=None,
+    pg_runtime=None,
+    policy=None,
+    evidence=None,
+    policy_sha256=None,
+):
+    if policy is None or evidence is None or policy_sha256 is None:
+        raise ValueError("six-method benchmark requires a frozen policy")
     rows = []
     for scenario in scenarios:
         root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="vcp-scenario-", dir=root) as temporary:
             workload = build_scenario(Path(temporary) / scenario.scenario_id, scenario)
+            workload = prepare_policy_workload(workload, policy, evidence)
             for method in METHODS:
                 rows.append(
                     run_method(
-                        workload, method, repetitions=repetitions, pg_runtime=pg_runtime
+                        workload,
+                        method,
+                        repetitions=repetitions,
+                        pg_runtime=pg_runtime,
+                        policy_id=policy.id if method == "postgres_adaptive" else None,
+                        policy_sha256=(policy_sha256 if method == "postgres_adaptive" else None),
                     ).to_dict()
                 )
     return rows
+
+
+def prepare_policy_workload(workload, policy, evidence):
+    if __package__:
+        from .evaluate_adaptive import prepare_workload
+    else:
+        from evaluate_adaptive import prepare_workload
+    return prepare_workload(workload, policy, evidence)
+
+
+def load_frozen_policy(path: Path):
+    if __package__:
+        from .evaluate_adaptive import load_calibration, policy_file_sha256
+    else:
+        from evaluate_adaptive import load_calibration, policy_file_sha256
+    policy, evidence = load_calibration(path)
+    return policy, evidence, policy_file_sha256(path, policy)
+
+
+def empirical_crossover(evidence):
+    if __package__:
+        from .evaluate_adaptive import empirical_crossover as build_crossover
+    else:
+        from evaluate_adaptive import empirical_crossover as build_crossover
+    return build_crossover(evidence)
 
 
 def main(argv=None) -> int:
@@ -607,25 +929,49 @@ def main(argv=None) -> int:
     parser.add_argument("--ratios", type=float, nargs="+", default=list(RATIOS))
     parser.add_argument("--seeds", type=int, nargs="+", default=[20260913, 20260914])
     parser.add_argument("--repetitions", type=int)
+    parser.add_argument("--policy-from", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
+        if args.output.exists():
+            raise ValueError("benchmark output is write-once")
         pg_runtime = postgres_preflight()
+        if args.policy_from is None:
+            raise ValueError("six-method benchmark requires a frozen policy")
+        policy, evidence, policy_sha256 = load_frozen_policy(args.policy_from)
         scenarios = scenario_matrix(seeds=args.seeds, entities=args.entities, ratios=args.ratios)
         with tempfile.TemporaryDirectory(prefix="vcp-adaptive-benchmark-") as temporary:
             rows = run_matrix(
-                Path(temporary), scenarios, repetitions=args.repetitions, pg_runtime=pg_runtime
+                Path(temporary),
+                scenarios,
+                repetitions=args.repetitions,
+                pg_runtime=pg_runtime,
+                policy=policy,
+                evidence=evidence,
+                policy_sha256=policy_sha256,
             )
         document = {
             "schema_version": BENCHMARK_SCHEMA_VERSION,
             "created_at": stamp(),
             "kind": "adaptive-provenance-six-method-benchmark",
             "methods": list(METHODS),
+            "policy_id": policy.id,
+            "policy_sha256": policy_sha256,
+            "empirical_crossover": empirical_crossover(evidence),
+            "environment": next(
+                (
+                    row["environment"]
+                    for row in rows
+                    if row["method"].startswith("postgres_") and row["status"] == "ok"
+                ),
+                None,
+            ),
             "results": rows,
         }
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n"
+        validate_publication_explain(document)
+        write_once_text(
+            args.output,
+            json.dumps(document, indent=2) + "\n",
         )
         return 0 if all(row["status"] == "ok" for row in rows) else 1
     except Exception as error:

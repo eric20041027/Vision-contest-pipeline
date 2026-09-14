@@ -1,7 +1,7 @@
 # PostgreSQL Adaptive Provenance 實作交接
 
 - 日期：2026-09-13
-- 狀態：Tasks 1–11 implementation/review complete；Task 12 local verification進行中；external evidence pending
+- 狀態：Tasks 1–11 implementation/review complete；Task 12 local verification complete；external evidence pending
 - 分支：`codex/postgresql-adaptive-provenance`
 - feature 起點：`codex/dataset-evolution-provenance@a625331`
 - SDD start commit：`33dd3ba0c08ccdb4b9435f92fb36a91b2d197e6c`
@@ -106,12 +106,14 @@ current full regression:
 - Task 12 provenance scope: 342 passed, 43 unconfigured PostgreSQL skips. It reported 51.52% total coverage and
   exit 1 only because this intentionally partial scope cannot satisfy repository-wide `fail_under = 80`; the
   PostgreSQL provenance module itself was 90% in that run. This is not full-suite coverage evidence.
-- Task 12 full `uv run pytest --cov=vcp`: blocked in collection before tests/coverage by the pre-existing
-  `tests/integration/provenance/conftest.py` module-name collision. Ten other integration modules resolve
-  `from conftest import load_real` to that file, which does not define it. The controller owns a separate TDD
-  correction/re-review in the originating integration-harness scope; Task 12 did not alter out-of-scope tests.
-- Task 12 repository static gates passed: `uv run ruff check .`, `uv run ruff format --check .` (346 files), and
-  `git diff --check`.
+- Historical Task 12 evidence at `e505c3e` recorded a collection block from a duplicate `conftest` module name.
+  That originating integration-harness defect was independently corrected and reviewed in `9150735`; it is no
+  longer a full-suite limitation of this branch.
+- Current full regression executed at `915073588a26fd468c626fc4874b315ac770d631`:
+  `uv run pytest --cov=vcp` → 1,498 passed, 59 skipped, 94.73% total coverage, exit 0 (384.40s). The skips,
+  including unconfigured PostgreSQL cases, remain skips rather than live database passes.
+- Task 12 continuation static gates passed: `uv run ruff check .`, `uv run ruff format --check .` (348 files),
+  and `git diff --check`.
 - Task 12 integration runner was re-run and failed at its fixed missing-runtime preflight with exit 1; no Docker,
   service, connection, credential read, or PostgreSQL test execution occurred.
 

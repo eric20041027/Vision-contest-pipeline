@@ -18,6 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.artifact import store
 from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import sha256_text
@@ -31,6 +32,7 @@ from vcp.provenance.strategy import (
     CalibrationEvidence,
     MaintenanceFeatures,
     _object_without_duplicate_keys,
+    _policy_sha256,
     calibration_text,
     load_policy_artifact,
     select_strategy,
@@ -158,6 +160,7 @@ class BenchmarkRow(_Sample):
 def validate_rows(rows, *, seeds, methods):
     """Reject incomplete/mixed/failed inputs before any fit, publication or aggregate."""
     try:
+        expected = expected_scenarios(seeds)
         validated = [BenchmarkRow.model_validate(row) for row in rows]
         if not validated or {r.seed for r in validated} != set(seeds):
             raise ValueError
@@ -181,6 +184,7 @@ def validate_rows(rows, *, seeds, methods):
             row.features()
             if (
                 row.repetitions != len(row.samples)
+                or row.repetitions != scenario.repetitions
                 or row.dirty_ratio != row.dirty_entities / row.total_entities
                 or row.realized_change_ratio != row.changed_samples / row.sample_entities
                 or row.total_changes != row.historical_changes + row.changed_samples
@@ -238,11 +242,24 @@ def validate_rows(rows, *, seeds, methods):
                     or row.repetitions != first.repetitions
                 ):
                     raise ValueError
-        if len(environments) != 1:
+        if len(environments) != 1 or set(groups) != set(expected):
             raise ValueError
         return {key: groups[key] for key in sorted(groups)}
     except (TypeError, ValueError, KeyError, AttributeError):
         raise ValidationFailed("invalid_benchmark_rows") from None
+
+
+def expected_scenarios(seeds):
+    """Pinned normative manifest, independent of benchmark runner defaults."""
+    if tuple(seeds) not in (CALIBRATION_SEEDS, HELDOUT_SEEDS):
+        raise ValueError("invalid scenario partition")
+    scenarios = scenario_matrix(
+        seeds=seeds,
+        entities=(1000, 10000, 100000, 1000000),
+        ratios=(0, 0.001, 0.01, 0.05, 0.10, 0.25, 0.50, 0.90, 1.0),
+        topologies=("chain", "branched"),
+    )
+    return {row.scenario_hash: row for row in sorted(scenarios, key=lambda s: s.scenario_hash)}
 
 
 def paired_observations(rows):
@@ -250,6 +267,10 @@ def paired_observations(rows):
     result = []
     for group in groups.values():
         full, incremental = (group[name] for name in FIXED_METHODS)
+        if full.changed_samples == 0 or (
+            full.selected_strategy != "FULL" or incremental.selected_strategy != "INCREMENTAL"
+        ):
+            continue
         result.append(
             {
                 **full.features().model_dump(),
@@ -282,6 +303,13 @@ def load_calibration(path: Path):
         policy = AdaptivePolicy.model_validate(document["policy"])
         evidence = CalibrationEvidence.model_validate(document["calibration"])
         if not evidence.observations:
+            raise ValueError
+        expected = expected_scenarios(CALIBRATION_SEEDS)
+        if (
+            evidence.scenario_hashes != tuple(expected)
+            or evidence.scenario_ids != tuple(s.scenario_id for s in expected.values())
+            or evidence.scenario_repetitions != tuple(s.repetitions for s in expected.values())
+        ):
             raise ValueError
         first = evidence.observations[0]
         verified = load_policy_artifact(
@@ -366,6 +394,18 @@ class EvaluationResult(_Strict):
 
 def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
     policy, evidence = load_calibration(policy_from)
+    policy_from = Path(policy_from)
+    try:
+        manifest = store.load_manifest(
+            policy_from.parent / (policy_from.stem + "-artifacts"), "provenance_policy", policy.id
+        )
+        policy_sha256 = next(
+            entry.sha256 for entry in manifest.files if entry.name == "policy.json"
+        )
+        if policy_sha256 != _policy_sha256(policy):
+            raise ValueError
+    except (OSError, ValueError, VcpError, StopIteration):
+        raise ValidationFailed("invalid_calibration_artifact") from None
     # Check both identities before seed validation, so leakage has a precise failure.
     ids, hashes = set(evidence.scenario_ids), set(evidence.scenario_hashes)
     workloads = {row.workload_hash for row in evidence.observations}
@@ -432,7 +472,7 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
         raise ValidationFailed("invalid_evaluation_aggregate")
     return EvaluationResult(
         policy_id=policy.id,
-        policy_sha256=sha256_text(json.dumps(policy.model_dump(mode="json"), sort_keys=True)),
+        policy_sha256=policy_sha256,
         parity_rate=1.0,
         overlap_count=0,
         scenario_count=len(groups),

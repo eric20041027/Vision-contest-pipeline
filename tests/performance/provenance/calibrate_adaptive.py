@@ -11,6 +11,7 @@ from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.provenance.strategy import (
     CALIBRATION_SEEDS,
+    CalibrationEvidence,
     calibration_evidence,
     calibration_text,
     fit_policy,
@@ -24,6 +25,7 @@ if __package__:
         SafeArgumentParser,
         collect_rows,
         paired_observations,
+        validate_rows,
     )
     from .workloads import scenario_matrix
 else:
@@ -33,11 +35,12 @@ else:
         SafeArgumentParser,
         collect_rows,
         paired_observations,
+        validate_rows,
     )
     from workloads import scenario_matrix
 
 
-def publish_calibration(observations, output):
+def publish_calibration(rows, output):
     """Publish only validated measurements; callers own whether inputs are live or tests.
 
     The output embeds the exact policy and manifest. Its sibling artifact root
@@ -48,8 +51,16 @@ def publish_calibration(observations, output):
         output = Path(output).resolve()
         if output.exists():
             raise ValueError
-        evidence = calibration_evidence(observations)
-        policy = fit_policy(observations)
+        groups = validate_rows(rows, seeds=CALIBRATION_SEEDS, methods=FIXED_METHODS)
+        selected = calibration_evidence(paired_observations(rows))
+        coverage = [group["postgres_full"] for group in groups.values()]
+        evidence = CalibrationEvidence(
+            scenario_ids=tuple(row.scenario_id for row in coverage),
+            scenario_hashes=tuple(row.scenario_hash for row in coverage),
+            scenario_repetitions=tuple(row.repetitions for row in coverage),
+            observations=selected.observations,
+        )
+        policy = fit_policy(evidence)
         root = output.parent / (output.stem + "-artifacts")
         source = root / "inputs" / "calibration.json"
         write_once_text(source, calibration_text(evidence))
@@ -84,7 +95,7 @@ def main(argv=None) -> int:
                 methods=FIXED_METHODS,
                 pg_runtime=pg_runtime,
             )
-        publish_calibration(paired_observations(rows), args.output)
+        publish_calibration(rows, args.output)
         print("VERDICT cmd=provenance.calibrate status=OK", file=sys.stderr)
         return 0
     except Exception:

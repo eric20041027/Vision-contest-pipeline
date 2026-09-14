@@ -80,6 +80,7 @@ class CalibrationObservation(MaintenanceFeatures):
     """Allowlisted paired PostgreSQL measurements; no arbitrary runtime metadata."""
 
     scenario_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    changed_samples: int = Field(gt=0)
     scenario_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     workload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     seed: Literal[20260913, 20260914]
@@ -104,6 +105,7 @@ class CalibrationEvidence(_Strict):
     scenario_ids: tuple[str, ...] = Field(min_length=1)
     scenario_hashes: tuple[str, ...] = Field(min_length=1)
     observations: tuple[CalibrationObservation, ...] | None = None
+    scenario_repetitions: tuple[int, ...] | None = None
 
     @field_validator("scenario_ids")
     @classmethod
@@ -127,11 +129,19 @@ class CalibrationEvidence(_Strict):
     def _corresponding_entries(self) -> CalibrationEvidence:
         if len(self.scenario_ids) != len(self.scenario_hashes):
             raise ValueError("scenario_ids and scenario_hashes must have equal length")
+        if self.scenario_repetitions is not None and (
+            len(self.scenario_repetitions) != len(self.scenario_ids)
+            or any(count not in (3, 7) for count in self.scenario_repetitions)
+        ):
+            raise ValueError("invalid scenario repetitions")
         if self.observations is not None:
             rows = self.observations
+            identities = dict(zip(self.scenario_hashes, self.scenario_ids, strict=True))
+            hashes = tuple(row.scenario_hash for row in rows)
             if (
-                tuple(row.scenario_id for row in rows) != self.scenario_ids
-                or tuple(row.scenario_hash for row in rows) != self.scenario_hashes
+                len(rows) < len(INCREMENTAL_FEATURE_ORDER) + 1
+                or any(identities.get(row.scenario_hash) != row.scenario_id for row in rows)
+                or hashes != tuple(sorted(set(hashes)))
                 or self.scenario_hashes != tuple(sorted(self.scenario_hashes))
                 or {row.seed for row in rows} != set(CALIBRATION_SEEDS)
                 or len({row.workload_hash for row in rows}) != len(rows)
@@ -144,6 +154,8 @@ class CalibrationEvidence(_Strict):
 def calibration_evidence(calibration_rows) -> CalibrationEvidence:
     """Normalize test or live paired rows before hashing, without fitting anything."""
     try:
+        if isinstance(calibration_rows, CalibrationEvidence):
+            return CalibrationEvidence.model_validate(calibration_rows.model_dump())
         rows = tuple(
             sorted(
                 (

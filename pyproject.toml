@@ -73,7 +73,10 @@ select = ["E", "F", "I", "UP", "B", "TID"]
 testpaths = ["tests"]
 pythonpath = ["tests"]
 addopts = "-q"
-markers = ["realdata: needs real datasets under VCP_DATA_ROOT; skipped otherwise"]
+markers = [
+  "realdata: needs real datasets under VCP_DATA_ROOT; skipped otherwise",
+  "postgres: needs explicitly configured PostgreSQL integration service; skipped otherwise",
+]
 
 [tool.coverage.run]
 source = ["vcp"]

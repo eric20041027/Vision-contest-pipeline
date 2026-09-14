@@ -90,3 +90,102 @@ def test_sqlite_adapter_classifies_verified_zero_change_diff(roots):
     assert result.selected_strategy == "NO_OP"
     assert result.strategy_reason == "verified_zero_semantic_changes"
     assert result.changed_samples == 0
+
+
+@pytest.mark.parametrize("mode", ["incremental", "duplicate", "zero-change"])
+def test_sqlite_adapter_ingest_does_not_load_historical_payloads(roots, monkeypatch, mode):
+    from vcp.provenance import index as index_module
+
+    samples = det_samples(3, seed=33)
+    changed = [sample.model_copy(deep=True) for sample in samples]
+    changed[0] = changed[0].model_copy(update={"group": "changed"})
+    newest = [sample.model_copy(deep=True) for sample in changed]
+    if mode != "zero-change":
+        newest[1] = newest[1].model_copy(update={"group": "newest"})
+    for name, rows in (("history-old", samples), ("history-new", changed), ("latest", newest)):
+        _save_dataset(roots, name, rows)
+    adapter = make_backend(BackendConfig(), roots.data)
+    adapter.rebuild(roots.data, roots.configs)
+    _create_diff(roots, "history-old", "history-new", "history-diff")
+    adapter.ingest_diff("history-diff", roots.data, roots.configs)
+    _create_diff(roots, "history-new", "latest", "latest-diff")
+    if mode == "duplicate":
+        adapter.ingest_diff("latest-diff", roots.data, roots.configs)
+
+    load_graph = index_module._load_graph
+    open_index = adapter.index._open
+    statements = []
+
+    def structural_only(connection, **kwargs):
+        assert kwargs.get("include_changes", True) is False, "loaded historical change payloads"
+        assert kwargs.get("include_change_ids", True) is False, "loaded complete transition history"
+        return load_graph(connection, **kwargs)
+
+    def traced_open():
+        connection = open_index()
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    with monkeypatch.context() as patch:
+        patch.setattr(index_module, "_load_graph", structural_only)
+        patch.setattr(adapter.index, "_open", traced_open)
+        result = adapter.ingest_diff("latest-diff", roots.data, roots.configs)
+
+    graph = adapter.load_graph()
+    assert result.total_entities == len(graph.entities)
+    assert result.dirty_ratio == result.dirty_entities / len(graph.entities)
+    assert result.artifact_id == "latest-diff"
+    assert result.backend == "sqlite"
+    assert result.requested_strategy == "incremental"
+    assert result.inserted is (mode != "duplicate")
+    assert result.changed_samples == (0 if mode == "zero-change" else 1)
+    assert result.selected_strategy == ("INCREMENTAL" if mode == "incremental" else "NO_OP")
+    assert (
+        result.strategy_reason
+        == {
+            "incremental": "requested_incremental",
+            "duplicate": "duplicate_artifact_no_op",
+            "zero-change": "verified_zero_semantic_changes",
+        }[mode]
+    )
+    assert result.graph_hash == adapter.stats()["graph_hash"]
+    assert result.policy_version == "sqlite-compat-v1"
+    assert result.estimated_incremental_ms is None
+    assert result.estimated_full_ms is None
+    assert any("SELECT COUNT(*) AS n FROM entities" in sql for sql in statements)
+    assert not any(
+        "event_json" in sql and "FROM sample_changes" in sql and "WHERE change_id=" not in sql
+        for sql in statements
+    )
+
+
+def test_sqlite_adapter_elapsed_includes_verification_ingest_and_counts(roots, monkeypatch):
+    from vcp.provenance import backend as backend_module
+
+    samples = det_samples(3, seed=34)
+    _save_dataset(roots, "timed-old", samples)
+    _save_dataset(roots, "timed-new", [sample.model_copy(deep=True) for sample in samples])
+    adapter = make_backend(BackendConfig(), roots.data)
+    adapter.rebuild(roots.data, roots.configs)
+    _create_diff(roots, "timed-old", "timed-new", "timed-diff")
+    clock_ns = 0
+
+    def timed(operation, duration_ns):
+        def wrapper(*args, **kwargs):
+            nonlocal clock_ns
+            result = operation(*args, **kwargs)
+            clock_ns += duration_ns
+            return result
+
+        return wrapper
+
+    monkeypatch.setattr(backend_module, "perf_counter_ns", lambda: clock_ns)
+    monkeypatch.setattr(
+        backend_module, "load_dataset_diff", timed(backend_module.load_dataset_diff, 2_000_000)
+    )
+    monkeypatch.setattr(adapter.index, "ingest_diff", timed(adapter.index.ingest_diff, 3_000_000))
+    monkeypatch.setattr(adapter.index, "stats", timed(adapter.index.stats, 5_000_000))
+
+    result = adapter.ingest_diff("timed-diff", roots.data, roots.configs)
+
+    assert result.elapsed_ms == 10.0

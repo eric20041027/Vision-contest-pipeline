@@ -148,15 +148,14 @@ class SQLiteBackend:
         requested_strategy: RequestedStrategy | str = RequestedStrategy.INCREMENTAL,
         policy_id: str | None = None,
     ) -> MaintenanceResult:
+        started = perf_counter_ns()
         del policy_id
         if requested_strategy != "incremental":
             raise ValidationFailed(f"unsupported_strategy: {requested_strategy}")
         verified = load_dataset_diff(Path(data_root), artifact_id, verify_inputs=True)
         changed_samples = len(verified.changes)
-        started = perf_counter_ns()
         result: IngestResult = self.index.ingest_diff(artifact_id, data_root, configs_root)
-        elapsed_ms = (perf_counter_ns() - started) / 1_000_000
-        total_entities = len(self.index.load_graph().entities)
+        total_entities = self.index.stats()["entities"]
         dirty_ratio = result.dirty_entities / total_entities if total_entities else 0.0
         if not result.inserted:
             selected = SelectedStrategy.NO_OP
@@ -167,6 +166,7 @@ class SQLiteBackend:
         else:
             selected = SelectedStrategy.INCREMENTAL
             reason = "requested_incremental"
+        elapsed_ms = (perf_counter_ns() - started) / 1_000_000
         return MaintenanceResult(
             artifact_id=result.artifact_id,
             inserted=result.inserted,

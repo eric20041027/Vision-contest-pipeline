@@ -585,13 +585,15 @@ def run_method(
 def run_matrix(root: Path, scenarios, *, repetitions=None, pg_runtime=None):
     rows = []
     for scenario in scenarios:
-        workload = build_scenario(root / scenario.scenario_id, scenario)
-        for method in METHODS:
-            rows.append(
-                run_method(
-                    workload, method, repetitions=repetitions, pg_runtime=pg_runtime
-                ).to_dict()
-            )
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="vcp-scenario-", dir=root) as temporary:
+            workload = build_scenario(Path(temporary) / scenario.scenario_id, scenario)
+            for method in METHODS:
+                rows.append(
+                    run_method(
+                        workload, method, repetitions=repetitions, pg_runtime=pg_runtime
+                    ).to_dict()
+                )
     return rows
 
 

@@ -35,6 +35,46 @@ def test_scenario_matrix_is_complete_deterministic_and_disjoint():
     assert all(s.repetitions == (7 if s.entities <= 10_000 else 3) for s in calibration)
 
 
+def test_matrix_releases_each_scenario_fixture_before_building_the_next(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    scenarios = [Scenario(40, ratio, "chain", 20260913) for ratio in (0, 0.5)]
+    fixture_roots = []
+    calls = []
+    runtime = object()
+
+    def build(root, scenario):
+        assert all(not previous.exists() for previous in fixture_roots)
+        root.mkdir(parents=True)
+        (root / "fixture.json").write_text("{}\n", encoding="utf-8", newline="\n")
+        fixture_roots.append(root)
+        return SimpleNamespace(root=root, scenario=scenario)
+
+    def run(workload, method, *, repetitions, pg_runtime):
+        assert (workload.root / "fixture.json").is_file()
+        assert repetitions == 2 and pg_runtime is runtime
+        row = {"scenario_id": workload.scenario.scenario_id, "method": method}
+        calls.append(row)
+        return SimpleNamespace(to_dict=lambda: row)
+
+    monkeypatch.setattr(bench, "build_scenario", build)
+    monkeypatch.setattr(bench, "run_method", run)
+    rows = bench.run_matrix(tmp_path, scenarios, repetitions=2, pg_runtime=runtime)
+
+    assert (
+        rows
+        == calls
+        == [
+            {"scenario_id": scenario.scenario_id, "method": method}
+            for scenario in scenarios
+            for method in bench.METHODS
+        ]
+    )
+    assert len(fixture_roots) == 2
+    assert all(not root.exists() for root in fixture_roots)
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize("topology", ["chain", "branched"])
 def test_workload_is_canonical_exact_size_and_seeded(tmp_path, topology):
     spec = Scenario(entities=40, change_ratio=0.5, topology=topology, seed=20260913)

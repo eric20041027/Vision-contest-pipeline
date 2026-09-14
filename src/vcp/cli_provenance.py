@@ -266,11 +266,14 @@ def stale_cmd(
 
     def fn() -> CmdResult:
         _root, index = _backend(data_root, backend, pg_service)
-        graph = index.load_graph()
-        head_id = _dataset_id(graph, head)
-        if head_id not in dataset_heads(graph):
-            raise ValidationFailed(f"not_a_head: {head_id}; choose one of {dataset_heads(graph)}")
-        statuses = index.statuses(head_id)
+        with index.read_snapshot() as reader:
+            graph = reader.load_graph()
+            head_id = _dataset_id(graph, head)
+            if head_id not in dataset_heads(graph):
+                raise ValidationFailed(
+                    f"not_a_head: {head_id}; choose one of {dataset_heads(graph)}"
+                )
+            statuses = reader.statuses(head_id)
         rows = [
             statuses[ident]
             for ident, entity in sorted(graph.entities.items())
@@ -338,8 +341,9 @@ def status_cmd(
 
     def fn() -> CmdResult:
         root, index = _backend(data_root, backend, pg_service)
-        stats = index.stats()
-        verified = index.verify(root, resolve_configs_root(configs_root))
+        with index.read_snapshot() as reader:
+            stats = reader.stats()
+            verified = reader.verify(root, resolve_configs_root(configs_root))
         fields: dict[str, FieldValue] = {
             "backend": index.name.value,
             "entities": stats["entities"],

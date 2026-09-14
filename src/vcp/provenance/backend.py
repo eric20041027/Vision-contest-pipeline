@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import import_module
@@ -75,9 +77,27 @@ class MaintenanceResult:
         object.__setattr__(self, "selected_strategy", SelectedStrategy(self.selected_strategy))
 
 
-class ProvenanceBackend(Protocol):
+class ProvenanceReader(Protocol):
+    """Read operations available within a backend-managed compound read lifetime."""
+
+    def load_graph(self) -> ProvenanceGraph: ...
+
+    def statuses(self, head_id: str) -> dict[str, StatusRecord]: ...
+
+    def normalized(self) -> dict[str, Any]: ...
+
+    def stats(self) -> dict[str, Any]: ...
+
+    def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult: ...
+
+
+class ProvenanceBackend(ProvenanceReader, Protocol):
     name: BackendName
     location_label: str
+
+    def read_snapshot(self) -> AbstractContextManager[ProvenanceReader]:
+        """Group dependent reads; concurrent generation backends must pin their snapshot."""
+        ...
 
     def rebuild(self, data_root: Path, configs_root: Path) -> RebuildResult: ...
 
@@ -168,6 +188,11 @@ class SQLiteBackend:
     def load_graph(self) -> ProvenanceGraph:
         return self.index.load_graph()
 
+    @contextmanager
+    def read_snapshot(self) -> Iterator[ProvenanceReader]:
+        """Preserve the existing embedded index's read behavior."""
+        yield self
+
     def statuses(self, head_id: str) -> dict[str, StatusRecord]:
         return self.index.statuses(head_id)
 
@@ -208,6 +233,7 @@ __all__ = [
     "BackendName",
     "MaintenanceResult",
     "ProvenanceBackend",
+    "ProvenanceReader",
     "RequestedStrategy",
     "RebuildResult",
     "SQLiteBackend",

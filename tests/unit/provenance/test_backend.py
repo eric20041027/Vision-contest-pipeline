@@ -24,6 +24,11 @@ def test_sqlite_adapter_preserves_normalized_results(roots):
     adapter = SQLiteBackend(direct)
     direct.rebuild(roots.data, roots.configs)
     assert adapter.normalized() == direct.normalized()
+    with adapter.read_snapshot() as reader:
+        assert reader.normalized() == direct.normalized()
+        assert reader.load_graph().normalized() == direct.load_graph().normalized()
+        assert reader.stats() == direct.stats()
+        assert reader.verify(roots.data, roots.configs) == direct.verify(roots.data, roots.configs)
 
 
 @pytest.mark.parametrize("strategy", ["full", "auto"])

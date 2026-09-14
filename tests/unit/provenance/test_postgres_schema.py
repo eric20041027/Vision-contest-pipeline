@@ -1,3 +1,4 @@
+import re
 from contextlib import contextmanager
 
 import pytest
@@ -167,6 +168,48 @@ def test_schema_declares_generation_and_normalized_join_foreign_keys():
     assert "REFERENCES vcp_provenance.sample_changes(generation_id, change_id)" in sql
 
 
+def test_every_foreign_key_has_a_leading_supporting_index():
+    """Inventory all inline/composite FKs, including PK and UNIQUE backing indexes."""
+    tables = {}
+    for statement in POSTGRES_DDL:
+        table = re.match(r"CREATE TABLE IF NOT EXISTS vcp_provenance\.(\w+) \(", statement)
+        if table:
+            tables[table[1]] = statement
+    missing = []
+    foreign_key_count = 0
+
+    def split(value):
+        return tuple(part.strip() for part in value.split(","))
+
+    for table, ddl in tables.items():
+        foreign_keys = [split(value) for value in re.findall(r"FOREIGN KEY \(([^)]+)\)", ddl)]
+        foreign_keys += [
+            (column,)
+            for column in re.findall(r"^\s*(\w+) [^,\n]+\s+REFERENCES ", ddl, re.MULTILINE)
+        ]
+        indexes = [split(value) for value in re.findall(r"PRIMARY KEY \(([^)]+)\)", ddl)]
+        indexes += [
+            (column,)
+            for column in re.findall(r"^\s*(\w+) \w+ (?:PRIMARY KEY|UNIQUE)", ddl, re.MULTILINE)
+        ]
+        for statement in POSTGRES_DDL:
+            found = re.search(rf"ON vcp_provenance\.{table}\(([^)]+)\)", statement)
+            if found:
+                indexes.append(split(found[1]))
+        foreign_key_count += len(foreign_keys)
+        for columns in foreign_keys:
+            if not any(index[: len(columns)] == columns for index in indexes):
+                missing.append((table, columns))
+    assert foreign_key_count == 22
+    assert missing == []
+
+
+def test_install_locks_before_any_catalog_read_or_ddl():
+    connection = _Connection()
+    install_schema(connection)
+    assert connection.statements[0] == ("SELECT pg_advisory_xact_lock(%s)", (0x56435050524F5631,))
+
+
 def test_install_creates_and_marks_a_new_schema_in_one_transaction():
     connection = _Connection()
 
@@ -174,8 +217,8 @@ def test_install_creates_and_marks_a_new_schema_in_one_transaction():
 
     assert connection.transactions == 1
     statements = [statement for statement, _params in connection.statements]
-    assert statements[1:] == list(POSTGRES_DDL)
-    assert "to_regnamespace" in statements[0]
+    assert statements[2:] == list(POSTGRES_DDL)
+    assert "to_regnamespace" in statements[1]
     assert statements[-1].startswith("COMMENT ON SCHEMA")
     assert POSTGRES_SCHEMA_VERSION == 1
     assert SCHEMA_NAME == "vcp_provenance"
@@ -189,6 +232,7 @@ def test_install_rejects_existing_schema_without_matching_marker(version):
         install_schema(connection)
 
     assert [statement for statement, _params in connection.statements] == [
+        "SELECT pg_advisory_xact_lock(%s)",
         "SELECT to_regnamespace(%s)",
         "SELECT obj_description(to_regnamespace(%s), 'pg_namespace')",
     ]
@@ -200,11 +244,12 @@ def test_install_is_idempotent_for_existing_matching_schema():
     install_schema(connection)
 
     statements = [statement for statement, _params in connection.statements]
-    assert statements[:2] == [
+    assert statements[:3] == [
+        "SELECT pg_advisory_xact_lock(%s)",
         "SELECT to_regnamespace(%s)",
         "SELECT obj_description(to_regnamespace(%s), 'pg_namespace')",
     ]
-    assert statements[2:] == list(POSTGRES_DDL[1:-1])
+    assert statements[3:] == list(POSTGRES_DDL[1:-1])
 
 
 @pytest.mark.parametrize("value", [None, ("wrong",)])

@@ -10,6 +10,7 @@ from vcp.core.errors import IntegrityError
 
 POSTGRES_SCHEMA_VERSION = 1
 SCHEMA_NAME = "vcp_provenance"
+WRITER_LOCK_KEY = 0x56435050524F5631
 _SCHEMA_VERSION_COMMENT = f"vcp_provenance_schema_version={POSTGRES_SCHEMA_VERSION}"
 _HASH_CHECK = "VALUE ~ '^[0-9a-f]{64}$'"
 
@@ -140,6 +141,8 @@ POSTGRES_DDL = (
         ON {SCHEMA_NAME}.sample_changes(generation_id, sample_id, change_id)""",
     f"""CREATE INDEX IF NOT EXISTS changes_transition
         ON {SCHEMA_NAME}.sample_changes(generation_id, source_id, target_id)""",
+    f"""CREATE INDEX IF NOT EXISTS changes_target
+        ON {SCHEMA_NAME}.sample_changes(generation_id, target_id)""",
     f"""CREATE INDEX IF NOT EXISTS changes_type
         ON {SCHEMA_NAME}.sample_changes(generation_id, change_type, change_id)""",
     f"""CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.dataset_edge_changes (
@@ -268,16 +271,20 @@ def _require_matching_schema_marker(connection: Any) -> None:
 def install_schema(connection: Any) -> None:
     """Install the fixed v1 layout atomically without applying a migration."""
     with _transaction(connection):
-        existing_schema = _scalar(
-            connection.execute(_SCHEMA_EXISTS_QUERY, (SCHEMA_NAME,)).fetchone()
-        )
-        if existing_schema is not None:
-            _require_matching_schema_marker(connection)
-            statements = POSTGRES_DDL[1:-1]
-        else:
-            statements = POSTGRES_DDL
-        for statement in statements:
-            connection.execute(statement)
+        connection.execute("SELECT pg_advisory_xact_lock(%s)", (WRITER_LOCK_KEY,))
+        install_schema_in_transaction(connection)
+
+
+def install_schema_in_transaction(connection: Any) -> None:
+    """Install within the caller's transaction, which must already hold the writer lock."""
+    existing_schema = _scalar(connection.execute(_SCHEMA_EXISTS_QUERY, (SCHEMA_NAME,)).fetchone())
+    if existing_schema is not None:
+        _require_matching_schema_marker(connection)
+        statements = POSTGRES_DDL[1:-1]
+    else:
+        statements = POSTGRES_DDL
+    for statement in statements:
+        connection.execute(statement)
 
 
 def validate_schema(connection: Any) -> None:
@@ -295,7 +302,9 @@ __all__ = [
     "POSTGRES_DDL",
     "POSTGRES_SCHEMA_VERSION",
     "SCHEMA_NAME",
+    "WRITER_LOCK_KEY",
     "install_schema",
+    "install_schema_in_transaction",
     "validate_schema",
     "validate_schema_in_transaction",
 ]

@@ -94,6 +94,42 @@ def test_bundle_verifies_exact_embedded_policy_and_immutable_output(tmp_path):
         evaluation.load_calibration(path)
 
 
+def test_calibration_publishes_multivariate_empirical_crossover_schema(tmp_path):
+    path = tmp_path / "result.json"
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    crossover = json.loads(path.read_text())["empirical_crossover"]
+    assert crossover["schema_version"] == 1
+    assert crossover["global_threshold"] is None
+    assert crossover["fixed_feature_dimensions"] == ["topology", "entities", "seed"]
+    assert crossover["varied_feature"] == "change_ratio"
+    assert "no interpolation" in crossover["algorithm"]
+    assert crossover["slices"]
+    assert set(crossover["slices"][0]) == {
+        "topology",
+        "entities",
+        "seed",
+        "observations",
+        "crossover",
+    }
+
+
+def test_calibration_and_evaluation_outputs_are_write_once(tmp_path, monkeypatch):
+    output = tmp_path / "heldout.json"
+    output.write_text("owner-data\n", encoding="utf-8")
+    policy_path = tmp_path / "policy.json"
+    policy = calibration.publish_calibration(
+        benchmark_rows(strategy.CALIBRATION_SEEDS), policy_path
+    )
+    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: object())
+    monkeypatch.setattr(
+        evaluation,
+        "collect_rows",
+        lambda *args, **kwargs: benchmark_rows(strategy.HELDOUT_SEEDS, policy),
+    )
+    assert evaluation.main(["--policy-from", str(policy_path), "--output", str(output)]) == 1
+    assert output.read_text(encoding="utf-8") == "owner-data\n"
+
+
 def test_runners_fail_without_pg_and_do_not_emit_json(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("VCP_TEST_PG_SERVICE", raising=False)
     output = tmp_path / "result.json"
@@ -142,6 +178,8 @@ def benchmark_rows(seeds, policy=None):
                 head_parity=True,
                 graph_hash="f" * 64,
                 database_bytes=1024,
+                provenance_total_relation_bytes=768,
+                index_bytes=256,
                 storage_measurement=evaluation._STORAGE,
                 requested_strategy=requested,
                 selected_strategy=decision.selected_strategy.value,
@@ -163,6 +201,10 @@ def benchmark_rows(seeds, policy=None):
             row.update(
                 schema_version=1,
                 method=method,
+                policy_id=policy.id if method == "postgres_adaptive" else None,
+                policy_sha256=(
+                    strategy._policy_sha256(policy) if method == "postgres_adaptive" else None
+                ),
                 scenario_id=scenario.scenario_id,
                 scenario_hash=scenario.scenario_hash,
                 workload_hash=scenario.scenario_hash,
@@ -181,10 +223,23 @@ def benchmark_rows(seeds, policy=None):
                     python_version="3.12.10",
                     python_implementation="CPython",
                     cpu_count=8,
+                    cpu_model="Unit Test CPU",
+                    physical_cpu_cores=4,
+                    logical_cpu_count=8,
+                    ram_bytes=16 * 1024**3,
+                    disk_path="C:\\",
+                    disk_total_bytes=100 * 1024**3,
+                    disk_free_bytes=50 * 1024**3,
                     sqlite_version="3.50.0",
                     vcp_commit="a" * 40,
                     postgresql_major=17,
                     postgresql_version=170011,
+                    postgresql_server_version="17.11",
+                    deployment_kind="native_portable",
+                    image_digest=None,
+                    image_digest_source="not_applicable",
+                    operator_declared_image_digest=None,
+                    operator_declared_image_digest_source=None,
                     environment_fingerprint="a" * 64,
                     backend_schema_version=1,
                 ),
@@ -194,6 +249,8 @@ def benchmark_rows(seeds, policy=None):
                 repetitions=scenario.repetitions,
                 parity_rate=1.0,
                 explain_analyze=[{"Plan": {"Node Type": "ModifyTable"}}],
+                explain_analyze_sanitized=[{"Plan": {"Node Type": "ModifyTable"}}],
+                explain_scope="first executed DML row for each SQL statement shape",
                 instrumentation=(
                     "separate fresh state; first DML row per SQL shape; "
                     "rollback; excluded from timings"
@@ -640,6 +697,18 @@ def test_reported_policy_hash_is_exact_verified_file_hash(tmp_path):
     manifest = json.loads((directory / "manifest.json").read_text())
     entry = next(entry for entry in manifest["files"] if entry["name"] == "policy.json")
     assert result.policy_sha256 == entry["sha256"] == sha256_file(directory / "policy.json")
+
+
+@pytest.mark.parametrize("field", ["policy_id", "policy_sha256"])
+def test_heldout_rejects_mismatched_adaptive_policy_identity(tmp_path, field):
+    path = tmp_path / "result.json"
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    rows = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
+    for row in rows:
+        if row["method"] == "postgres_adaptive":
+            row[field] = "wrong-policy" if field == "policy_id" else "b" * 64
+    with pytest.raises(ValidationFailed, match="policy_decision_mismatch"):
+        evaluation.evaluate_policy(path, rows)
 
 
 def publish_generic_unit_evidence(path, evidence):

@@ -44,49 +44,14 @@ from vcp.provenance.schema import (
     DatasetDiffSummary,
     EntityStatus,
     ProvenanceEntity,
-    SampleChange,
     SemanticEffect,
-    make_change_id,
 )
 from vcp.provenance.views import compute_statuses
 
-SEED = 20260913
-SCALES = (1_000, 10_000, 100_000, 1_000_000)
-
-
-def _change(
-    index: int,
-    before: str,
-    after: str,
-    *,
-    prefix: str,
-    effect: SemanticEffect = SemanticEffect.DISPLAY_ONLY,
-) -> SampleChange:
-    sample_id = f"{prefix}-{index:08d}"
-    row_before = sha256_text(f"before:{sample_id}")
-    row_after = sha256_text(f"after:{sample_id}")
-    return SampleChange(
-        change_id=make_change_id(
-            before, after, sample_id, ChangeType.MODIFIED, row_before, row_after
-        ),
-        from_dataset="synthetic-source",
-        from_samples_hash=before,
-        to_dataset="synthetic-target",
-        to_samples_hash=after,
-        sample_id=sample_id,
-        change_type=ChangeType.MODIFIED,
-        changed_domains=[
-            ChangeDomain.LABEL_SOURCE
-            if effect == SemanticEffect.TRAINING_AFFECTING
-            else ChangeDomain.META
-        ],
-        changed_fields=[
-            "label_source" if effect == SemanticEffect.TRAINING_AFFECTING else "meta.display"
-        ],
-        semantic_effects=[effect],
-        before_row_hash=row_before,
-        after_row_hash=row_after,
-    )
+if __package__:
+    from .workloads import SCALES, SEED, _change
+else:
+    from workloads import SCALES, SEED, _change
 
 
 def _record_value(record: dict[str, object]) -> int:
@@ -408,11 +373,24 @@ def run_scale(root: Path, count: int) -> dict[str, object]:
     }
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--scales", type=int, nargs="+", default=list(SCALES))
+    parser.add_argument(
+        "--six-method",
+        action="store_true",
+        help="add the entity-count adaptive matrix; requires the disposable test service",
+    )
     args = parser.parse_args()
+    if args.six_method:
+        if __package__:
+            from .adaptive_benchmark import postgres_preflight, run_matrix
+            from .workloads import scenario_matrix
+        else:
+            from adaptive_benchmark import postgres_preflight, run_matrix
+            from workloads import scenario_matrix
+        runtime = postgres_preflight()
     with tempfile.TemporaryDirectory(prefix="vcp-production-provenance-") as temporary:
         root = Path(temporary)
         scales = [run_scale(root, count) for count in args.scales]
@@ -428,10 +406,16 @@ def main() -> None:
         "warmup": "OS cache naturally warm after deterministic fixture generation; no timed warmup",
         "scales": scales,
     }
+    if args.six_method:
+        with tempfile.TemporaryDirectory(prefix="vcp-production-six-method-") as temporary:
+            result["six_method_benchmark"] = run_matrix(
+                Path(temporary), scenario_matrix(entities=args.scales), pg_runtime=runtime
+            )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps(result, indent=2))
+    return int(any(row["status"] != "ok" for row in result.get("six_method_benchmark", [])))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

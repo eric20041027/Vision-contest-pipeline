@@ -60,6 +60,14 @@ def versions(roots, *, zero=False):
     dataset(roots, "new", changed)
 
 
+@pytest.fixture
+def checkpoint_log(roots):
+    path = roots.data / "logs" / "provenance.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"event_id": "a" * 64}) + "\n", encoding="utf-8", newline="\n")
+    return path
+
+
 def assert_parity(backend, roots):
     canonical = build_graph(roots.data, roots.configs)
     indexed = backend.load_graph()
@@ -218,18 +226,28 @@ def test_zero_event_is_topology_only_and_duplicate_is_no_op(postgres_harness, ro
 @pytest.mark.parametrize(
     "table", ["sample_changes", "entity_status", "maintenance_decisions", "ingest_checkpoints"]
 )
-def test_injected_rollback_preserves_every_table(postgres_harness, roots, requested, table):
+def test_injected_rollback_preserves_every_table(
+    postgres_harness, roots, checkpoint_log, requested, table
+):
     versions(roots)
     backend = postgres_harness.backend
     backend.rebuild(roots.data, roots.configs)
     diff(roots)
     before = postgres_harness.snapshot()
+    assert before["ingest_checkpoints"], "rollback test requires a persisted checkpoint row"
+    checkpoint = json.loads(before["ingest_checkpoints"][0][0])
+    assert checkpoint["consumed_bytes"] == checkpoint_log.stat().st_size > 0
+    with checkpoint_log.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps({"event_id": "b" * 64}) + "\n")
     with postgres_harness.fail_after(table) as fired:
         with pytest.raises(RuntimeError, match="injected rollback"):
             backend.ingest_diff("change", roots.data, roots.configs, requested_strategy=requested)
     assert fired.is_set()
     assert postgres_harness.snapshot() == before
     backend.ingest_diff("change", roots.data, roots.configs, requested_strategy=requested)
+    checkpoint = json.loads(postgres_harness.snapshot()["ingest_checkpoints"][0][0])
+    assert checkpoint["consumed_bytes"] == checkpoint_log.stat().st_size
+    assert checkpoint["prefix_sha256"] == sha256_file(checkpoint_log)
     assert_parity(backend, roots)
 
 
@@ -397,12 +415,20 @@ def test_advisory_lock_serializes_concurrent_duplicate_writers(postgres_harness,
         ("INSERT INTO vcp_provenance.entities SELECT * FROM vcp_provenance.entities", "23505"),
     ],
 )
-def test_real_schema_constraints_rollback(postgres_harness, roots, statement, sqlstate):
+@pytest.mark.parametrize("schema_state", ["fresh", "existing"])
+def test_real_schema_constraints_rollback(
+    postgres_harness, roots, checkpoint_log, statement, sqlstate, schema_state
+):
     versions(roots)
     diff(roots)
     postgres_harness.backend.rebuild(roots.data, roots.configs)
     before = postgres_harness.snapshot()
+    assert before["ingest_checkpoints"], "constraint test must update an existing checkpoint row"
+    checkpoint = json.loads(before["ingest_checkpoints"][0][0])
+    assert checkpoint["consumed_bytes"] == checkpoint_log.stat().st_size > 0
     with postgres_harness.connect() as connection:
+        if schema_state == "existing":
+            postgres.install_schema(connection)
         with pytest.raises(postgres_harness.factory.driver.Error) as caught:
             with connection.transaction():
                 connection.execute(statement)

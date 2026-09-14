@@ -11,11 +11,17 @@ from pathlib import Path
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import provenance_index_path
 from vcp.core.time import stamp
+from vcp.data.dataset import Dataset
 from vcp.measure.runs import load_run
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import ProvenanceIndex, dataset_heads
 from vcp.provenance.views import compute_statuses
+
+if __package__:
+    from .workloads import Scenario, Workload, finish_workload
+else:
+    from workloads import Scenario, Workload, finish_workload
 
 DATASETS = (
     "rsna-knee-sixslot-r3-20260908",
@@ -62,7 +68,59 @@ def _copy_snapshot(
     return selected_runs
 
 
-def validate(source_data: Path, source_configs: Path) -> dict[str, object]:
+def build_real_scenario(
+    root: Path,
+    source_data: Path,
+    source_configs: Path,
+    transition: int,
+) -> Workload:
+    """Each real transition starts from a fresh copy and its own canonical prefix."""
+    before, after = TRANSITIONS[transition]
+    root.mkdir(parents=True, exist_ok=False)
+    data, configs = root / "data", root / "configs"
+    _copy_snapshot(source_data, source_configs, data, configs)
+    for index, (old, new) in enumerate(TRANSITIONS[:transition]):
+        create_dataset_diff(
+            DatasetDiffSpec(
+                from_dataset=old,
+                to_dataset=new,
+                artifact_id=f"real-history-{index}",
+                data_root=data,
+                configs_root=configs,
+            )
+        )
+    from vcp.provenance.diff import compare_dataset_versions
+
+    comparison = compare_dataset_versions(
+        DatasetDiffSpec(
+            from_dataset=before,
+            to_dataset=after,
+            artifact_id="adaptive-delta",
+            data_root=data,
+            configs_root=configs,
+        )
+    )
+    samples = Dataset.load_card(before, data_root=data, configs_root=configs).sample_count
+    if samples == 0:
+        raise ValueError("real benchmark requires a nonempty source dataset")
+    scenario = Scenario(
+        entities=len(build_graph(data, configs).entities),
+        change_ratio=comparison.summary.total_changes / samples,
+        topology="chain",
+        seed=20260913,
+        track="real",
+        variant=f"transition-{transition}",
+    )
+    return finish_workload(root, scenario, before, after, sample_entities=samples)
+
+
+def validate(source_data: Path, source_configs: Path, *, six_method=False) -> dict[str, object]:
+    if six_method:
+        if __package__:
+            from .adaptive_benchmark import METHODS, postgres_preflight, run_method
+        else:
+            from adaptive_benchmark import METHODS, postgres_preflight, run_method
+        runtime = postgres_preflight()
     with tempfile.TemporaryDirectory(prefix="vcp-real-provenance-") as directory:
         root = Path(directory)
         data = root / "data"
@@ -111,7 +169,7 @@ def validate(source_data: Path, source_configs: Path) -> dict[str, object]:
                 status_differences[head] = differences
         status_parity = not status_differences
         verification = index.verify(data, configs)
-        return {
+        document = {
             "created_at": stamp(),
             "mode": "metadata-only temporary copy; source roots opened read-only",
             "source_data_root": str(source_data),
@@ -130,22 +188,36 @@ def validate(source_data: Path, source_configs: Path) -> dict[str, object]:
             "status_differences": status_differences,
             "verify_index": verification.__dict__,
         }
+        if six_method:
+            rows = []
+            for transition in range(len(TRANSITIONS)):
+                workload = build_real_scenario(
+                    root / f"real-{transition}", source_data, source_configs, transition
+                )
+                for method in METHODS:
+                    rows.append(run_method(workload, method, pg_runtime=runtime).to_dict())
+            document["six_method_benchmark"] = rows
+        return document
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--configs-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--six-method", action="store_true")
     args = parser.parse_args()
-    result = validate(args.data_root.resolve(), args.configs_root.resolve())
+    result = validate(
+        args.data_root.resolve(), args.configs_root.resolve(), six_method=args.six_method
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
         newline="\n",
     )
+    return int(any(row["status"] != "ok" for row in result.get("six_method_benchmark", [])))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

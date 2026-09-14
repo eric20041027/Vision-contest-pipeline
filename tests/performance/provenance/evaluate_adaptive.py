@@ -182,9 +182,14 @@ def validate_rows(rows, *, seeds, methods):
                 raise ValueError
             group[row.method] = row
             row.features()
+            sample_entities, changed_samples = scenario_counts(scenario)
             if (
                 row.repetitions != len(row.samples)
                 or row.repetitions != scenario.repetitions
+                or row.sample_entities != sample_entities
+                or row.changed_samples != changed_samples
+                or (row.selected_strategy == "NO_OP") != (changed_samples == 0)
+                or (changed_samples == 0 and row.dirty_entities != 0)
                 or row.dirty_ratio != row.dirty_entities / row.total_entities
                 or row.realized_change_ratio != row.changed_samples / row.sample_entities
                 or row.total_changes != row.historical_changes + row.changed_samples
@@ -262,6 +267,37 @@ def expected_scenarios(seeds):
     return {row.scenario_hash: row for row in sorted(scenarios, key=lambda s: s.scenario_hash)}
 
 
+def scenario_counts(scenario):
+    """Pinned v1 generator arithmetic; no canonical files or large fixtures are built."""
+    sample_entities = (scenario.entities - 20) // 3
+    return sample_entities, round(sample_entities * scenario.change_ratio)
+
+
+def validate_calibration_manifest(evidence):
+    """Bind normative coverage to every eligible fit identity and workload association."""
+    expected = expected_scenarios(CALIBRATION_SEEDS)
+    eligible = {key: scenario for key, scenario in expected.items() if scenario_counts(scenario)[1]}
+    if (
+        evidence.scenario_hashes != tuple(expected)
+        or evidence.scenario_ids != tuple(s.scenario_id for s in expected.values())
+        or evidence.scenario_repetitions != tuple(s.repetitions for s in expected.values())
+        or evidence.scenario_workload_hashes is None
+        or evidence.observations is None
+        or tuple(row.scenario_hash for row in evidence.observations) != tuple(eligible)
+    ):
+        raise ValueError("invalid normative calibration manifest")
+    workloads = dict(zip(evidence.scenario_hashes, evidence.scenario_workload_hashes, strict=True))
+    for row in evidence.observations:
+        scenario = eligible[row.scenario_hash]
+        if (
+            row.scenario_id != scenario.scenario_id
+            or row.seed != scenario.seed
+            or row.changed_samples != scenario_counts(scenario)[1]
+            or row.workload_hash != workloads[row.scenario_hash]
+        ):
+            raise ValueError("invalid normative calibration observation")
+
+
 def paired_observations(rows):
     groups = validate_rows(rows, seeds=CALIBRATION_SEEDS, methods=FIXED_METHODS)
     result = []
@@ -302,15 +338,7 @@ def load_calibration(path: Path):
             raise ValueError
         policy = AdaptivePolicy.model_validate(document["policy"])
         evidence = CalibrationEvidence.model_validate(document["calibration"])
-        if not evidence.observations:
-            raise ValueError
-        expected = expected_scenarios(CALIBRATION_SEEDS)
-        if (
-            evidence.scenario_hashes != tuple(expected)
-            or evidence.scenario_ids != tuple(s.scenario_id for s in expected.values())
-            or evidence.scenario_repetitions != tuple(s.repetitions for s in expected.values())
-        ):
-            raise ValueError
+        validate_calibration_manifest(evidence)
         first = evidence.observations[0]
         verified = load_policy_artifact(
             path.parent / (path.stem + "-artifacts"),

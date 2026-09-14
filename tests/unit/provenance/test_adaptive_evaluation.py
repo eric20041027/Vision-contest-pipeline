@@ -640,3 +640,188 @@ def test_reported_policy_hash_is_exact_verified_file_hash(tmp_path):
     manifest = json.loads((directory / "manifest.json").read_text())
     entry = next(entry for entry in manifest["files"] if entry["name"] == "policy.json")
     assert result.policy_sha256 == entry["sha256"] == sha256_file(directory / "policy.json")
+
+
+def publish_generic_unit_evidence(path, evidence):
+    """Use the generic artifact API to demonstrate a valid hash is not a normative study."""
+    policy = strategy.fit_policy(evidence)
+    root = path.parent / (path.stem + "-artifacts")
+    source = root / "inputs" / "calibration.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(strategy.calibration_text(evidence), encoding="utf-8", newline="\n")
+    strategy.write_policy_artifact(root, policy, source)
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "postgres-provenance-calibration-v1",
+                "policy": policy.model_dump(mode="json"),
+                "calibration": evidence.model_dump(mode="json"),
+            }
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    assert strategy.load_policy_artifact(root, policy.id) == policy
+    return policy
+
+
+def test_normative_load_rejects_trimmed_but_valid_generic_policy(tmp_path):
+    path = tmp_path / "complete.json"
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    _, evidence = evaluation.load_calibration(path)
+    retained = tuple(
+        sorted(
+            [
+                row
+                for seed in strategy.CALIBRATION_SEEDS
+                for row in [row for row in evidence.observations if row.seed == seed][:3]
+            ],
+            key=lambda row: row.scenario_hash,
+        )
+    )
+    trimmed = evidence.model_copy(update={"observations": retained})
+    path = tmp_path / "trimmed.json"
+    policy = publish_generic_unit_evidence(path, trimmed)
+    assert policy.training_row_count == 6
+    with pytest.raises(ValidationFailed, match="invalid_calibration_artifact"):
+        evaluation.load_calibration(path)
+    with pytest.raises(ValidationFailed, match="invalid_calibration_artifact"):
+        evaluation.evaluate_policy(path, benchmark_rows(strategy.HELDOUT_SEEDS, policy))
+
+
+def test_publication_rejects_nonzero_scenario_falsified_as_noop(tmp_path):
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    identity = next(row["scenario_hash"] for row in rows if row["changed_samples"] > 0)
+    for row in rows:
+        if row["scenario_hash"] != identity:
+            continue
+        row.update(
+            changed_samples=0,
+            dirty_entities=0,
+            dirty_ratio=0.0,
+            realized_change_ratio=0.0,
+            total_changes=row["historical_changes"],
+            selected_strategy="NO_OP",
+            strategy_reason="verified_zero_semantic_changes",
+            throughput_samples_per_second=0.0,
+        )
+        for sample in row["samples"]:
+            sample.update(
+                dirty_entities=0,
+                selected_strategy="NO_OP",
+                strategy_reason="verified_zero_semantic_changes",
+            )
+    with pytest.raises(ValidationFailed, match="calibration_publication_failed"):
+        calibration.publish_calibration(rows, tmp_path / "falsified.json")
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("field", ["sample_entities", "changed_samples"])
+@pytest.mark.parametrize("seeds", [strategy.CALIBRATION_SEEDS, strategy.HELDOUT_SEEDS])
+def test_scenario_counts_cannot_be_self_consistently_falsified(field, seeds):
+    policy = strategy.fit_policy(observations()) if seeds == strategy.HELDOUT_SEEDS else None
+    rows = benchmark_rows(seeds, policy)
+    identity = next(row["scenario_hash"] for row in rows if row["changed_samples"] > 0)
+    for row in rows:
+        if row["scenario_hash"] == identity:
+            row[field] += 1
+            row["total_changes"] = row["historical_changes"] + row["changed_samples"]
+            row["realized_change_ratio"] = row["changed_samples"] / row["sample_entities"]
+    with pytest.raises(ValidationFailed, match="invalid_benchmark_rows"):
+        evaluation.validate_rows(
+            rows,
+            seeds=seeds,
+            methods=evaluation.EVALUATION_METHODS if policy else evaluation.FIXED_METHODS,
+        )
+
+
+@pytest.mark.parametrize("field", ["workload_hash", "seed", "changed_samples"])
+def test_normative_loader_rejects_republished_mismatched_fit_associations(tmp_path, field):
+    path = tmp_path / "complete.json"
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    _, evidence = evaluation.load_calibration(path)
+    changed = list(evidence.observations)
+    row = changed[0]
+    value = {
+        "workload_hash": "c" * 64,
+        "seed": next(seed for seed in strategy.CALIBRATION_SEEDS if seed != row.seed),
+        "changed_samples": row.changed_samples + 1,
+    }[field]
+    changed[0] = row.model_copy(update={field: value})
+    evidence = evidence.model_copy(update={"observations": tuple(changed)})
+    path = tmp_path / "reassociated.json"
+    publish_generic_unit_evidence(path, evidence)
+    with pytest.raises(ValidationFailed, match="invalid_calibration_artifact"):
+        evaluation.load_calibration(path)
+
+
+def test_publication_checks_exact_fit_identity_set_before_claim(tmp_path, monkeypatch):
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    projected = evaluation.paired_observations(rows)
+    trimmed = [
+        row
+        for seed in strategy.CALIBRATION_SEEDS
+        for row in [row for row in projected if row["seed"] == seed][:3]
+    ]
+    monkeypatch.setattr(calibration, "paired_observations", lambda rows: trimmed)
+    with pytest.raises(ValidationFailed, match="calibration_publication_failed"):
+        calibration.publish_calibration(rows, tmp_path / "trimmed.json")
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("mutation", ["missing", "swapped"])
+def test_normative_load_requires_pinned_workload_associations(tmp_path, mutation):
+    path = tmp_path / "complete.json"
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    _, evidence = evaluation.load_calibration(path)
+    hashes = list(evidence.scenario_workload_hashes)
+    positions = [
+        evidence.scenario_hashes.index(row.scenario_hash) for row in evidence.observations[:2]
+    ]
+    hashes[positions[0]], hashes[positions[1]] = hashes[positions[1]], hashes[positions[0]]
+    evidence = evidence.model_copy(
+        update={"scenario_workload_hashes": None if mutation == "missing" else tuple(hashes)}
+    )
+    path = tmp_path / "generic.json"
+    publish_generic_unit_evidence(path, evidence)
+    with pytest.raises(ValidationFailed, match="invalid_calibration_artifact"):
+        evaluation.load_calibration(path)
+
+
+@pytest.mark.parametrize("mutation", ["secret", "nested", "duplicate", "short"])
+def test_new_workload_hash_evidence_field_is_strict_and_secret_safe(tmp_path, mutation):
+    evidence = strategy.calibration_evidence(observations())
+    payload = evidence.model_dump(mode="json")
+    hashes = [row["workload_hash"] for row in payload["observations"]]
+    if mutation == "secret":
+        hashes[0] = "postgresql://PRIVATE_MARKER"
+    elif mutation == "nested":
+        hashes[0] = {"password": "PRIVATE_MARKER"}
+    elif mutation == "duplicate":
+        hashes[0] = hashes[1]
+    else:
+        hashes.pop()
+    payload["scenario_workload_hashes"] = hashes
+    source = tmp_path / "untrusted.json"
+    source.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
+    policy = strategy.fit_policy(observations()).model_copy(
+        update={"calibration_sha256": sha256_file(source)}
+    )
+    with pytest.raises(ValidationFailed) as error:
+        strategy.write_policy_artifact(tmp_path / "data", policy, source)
+    assert "PRIVATE_MARKER" not in "".join(traceback.format_exception(error.value))
+    assert not (tmp_path / "data" / "artifacts").exists()
+
+
+def test_exact_eligible_set_is_derived_without_building_fixtures(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("deriving a manifest must not build any fixture")
+
+    monkeypatch.setattr(evaluation, "build_scenario", forbidden)
+    scenarios = evaluation.expected_scenarios(strategy.CALIBRATION_SEEDS)
+    eligible = [
+        scenario for scenario in scenarios.values() if evaluation.scenario_counts(scenario)[1]
+    ]
+    assert len(scenarios) == 144 and len(eligible) == 124
+    assert evaluation.scenario_counts(Scenario(1000, 0.001, "chain", 20260913)) == (326, 0)
+    assert evaluation.scenario_counts(Scenario(1000000, 1.0, "chain", 20260913)) == (333326, 333326)

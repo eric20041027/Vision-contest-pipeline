@@ -50,9 +50,11 @@ from vcp.provenance.schema import (
 from vcp.provenance.views import compute_statuses
 
 if __package__:
-    from .workloads import SCALES, SEED, _change
+    from .workloads import PRODUCTION_SCALES as SCALES
+    from .workloads import SEED, _change
 else:
-    from workloads import SCALES, SEED, _change
+    from workloads import PRODUCTION_SCALES as SCALES
+    from workloads import SEED, _change
 
 
 def _record_value(record: dict[str, object]) -> int:

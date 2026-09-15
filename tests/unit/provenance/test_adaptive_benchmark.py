@@ -23,8 +23,8 @@ from vcp.provenance.graph import build_graph
 def test_scenario_matrix_is_complete_deterministic_and_disjoint():
     calibration = scenario_matrix(seeds=(20260913, 20260914))
     heldout = scenario_matrix(seeds=(20261001, 20261002))
-    assert len(calibration) == 144
-    assert {s.entities for s in calibration} == {1_000, 10_000, 100_000, 1_000_000}
+    assert len(calibration) == 108
+    assert {s.entities for s in calibration} == {1_000, 10_000, 100_000}
     assert {s.change_ratio for s in calibration} == {
         0,
         0.001,
@@ -1461,3 +1461,19 @@ def test_mutating_explain_always_rolls_back(fail):
     assert connection.value == 0
     assert connection.events[0] == "BEGIN"
     assert connection.events[-1] == "ROLLBACK"
+
+
+def test_normative_manifest_and_runner_ladder_cannot_drift_apart():
+    """`expected_scenarios` pins its own ladder on purpose; drift must fail loudly, not silently.
+
+    The duplication stops a runner-default edit from moving normative acceptance. This test is
+    the other half of that contract: the two must still describe the same matrix.
+    """
+    from performance.provenance.evaluate_adaptive import expected_scenarios
+
+    manifest = expected_scenarios((20260913, 20260914))
+    assert {scenario.entities for scenario in manifest.values()} == set(workloads.SCALES)
+    assert 1_000_000 not in workloads.SCALES
+    # The production ladder keeps 1M; adaptive acceptance never reads it.
+    assert 1_000_000 in workloads.PRODUCTION_SCALES
+    assert len(manifest) == len(scenario_matrix(seeds=(20260913, 20260914)))

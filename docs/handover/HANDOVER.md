@@ -86,6 +86,7 @@ six-method 結果仍缺（calibration v1 與 1M memory gate v2–v4 被 RAM 護�
 - 實作計畫：`docs/superpowers/plans/<date>-vcp-planN-*.md`（執行當時的程式碼；已被後來修正的地方在計畫末的「執行期修正」一節或後記）。
 - 後記：`docs/superpowers/plans/<date>-vcp-planN-followups.md`——裁決、審查發現、待辦與處置；**開放的待辦都在各後記的最後一節**。
 - 比賽膠水：`projects/rsna-knee/RUNBOOK.md`（實際步驟與讀數）、`DESIGN.md`（設計與裁決），以及歷史下載腳本。
+- 新手視覺導覽：`docs/guides/VCP_VISUAL_GUIDE.md`（六層架構、完整生命週期、證據地圖、VERDICT、人機分工與第一次跑通）。
 - 專案 skill：`.claude/skills/` 與 `.agents/skills/`。`vcp-running-contests` 是完整比賽、使用者介紹與人機交接的入口；新賽事、資料層與通用登記項再分別使用 vcp-contest-onboarding、vcp-data-pipeline、vcp-extend-registry。
 
 ## 6. 開放的待辦（依優先序）

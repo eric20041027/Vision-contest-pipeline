@@ -5,7 +5,7 @@
 - 功能分支：`codex/dataset-evolution-provenance`
 - 基底：`main@09af0cc`
 - 功能 commit：`6ba42b8 feat(provenance): add dataset evolution tracking`
-- 版本：`0.7.0` candidate；尚未 tag 或 release
+- 版本：`0.7.0`（tag `v0.7.0` 於 PR 合併 commit）
 - 工作目錄：`.claude/worktrees/dataset-evolution-provenance`
 
 ## 1. 給接手 agent 的結論
@@ -25,7 +25,7 @@ manifest、source audit 與 append-only ledger。實作沒有修改 DatasetCard 
 - `1202 passed, 16 skipped`，coverage `95.05%`。
 - `ruff check .`、`ruff format --check .`、`git diff --check` 通過。
 - final whole-branch review 為 `APPROVE`，CRITICAL/HIGH/MEDIUM/LOW 均為 0。
-- 尚未 push、建立 PR、merge、tag 或 release；不要把 `0.7.0` 稱為已發布版本。
+- 已於 2026-09-15 經使用者授權以 PR 合併並 tag `v0.7.0`。
 - 原 checkout `codex/vcp-visual-guide` 的未提交文件修改未被碰觸。
 
 ## 2. 使用者需求如何落地
@@ -224,7 +224,7 @@ Final whole-branch re-review 結果：APPROVE，所有已知 HIGH/MEDIUM 均關�
 
 以下不是缺陷，而是尚未獲授權或本計畫刻意不包含：
 
-- 沒有 push branch、建立 PR、merge 到 main、建立 `v0.7.0` tag 或發布套件。
+- push、PR、merge、`v0.7.0` tag 已於 2026-09-15 完成；沒有發布 wheel。
 - 沒有修改 live `raw/`、canonical ledger 或正式比賽 submission。
 - 沒有 dashboard、遠端 provenance service、通用 event bus 或 DICOM read-level tracing。
 - 沒有讓 SQLite 成為 source of truth；它必須保持可刪除與可重建。

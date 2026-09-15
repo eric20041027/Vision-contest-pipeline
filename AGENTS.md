@@ -44,7 +44,7 @@
 
 ## 文件
 - RSNA Knee 實際基準流程：`projects/rsna-knee/RUNBOOK.md`（真實命令、讀數、外部待續條件）；設計與裁決：同目錄 `DESIGN.md`。Windows 訓練命令使用獨立 venv 的絕對 interpreter；checkpoint 綁定的前處理 / 模型檔不可在訓練後靜默改動。
-- PostgreSQL provenance 操作與安全邊界：`docs/guides/POSTGRESQL_PROVENANCE.md`；研究方法與尚缺證據：`docs/benchmarks/postgres-provenance-v1.md`；本分支交接：`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。`0.8.0` 只是一個 candidate，沒有 tag 前不可稱 release。
+- PostgreSQL provenance 操作與安全邊界：`docs/guides/POSTGRESQL_PROVENANCE.md`；研究方法、live 證據與尚缺證據：`docs/benchmarks/postgres-provenance-v1.md`；交接：`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`
 - 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。
 

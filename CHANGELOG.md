@@ -17,7 +17,7 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
 
 ## [0.8.0] - 2026-09-13
 
-PostgreSQL Adaptive Provenance candidate；尚未 tag 或 release。MINOR 的理由：八個
+PostgreSQL Adaptive Provenance；tag `v0.8.0` 打在 PR 的合併 commit 上。MINOR 的理由：八個
 `vcp provenance` 命令新增 backend/service CLI 契約，`ingest` 新增 strategy/policy 契約，並新增
 PostgreSQL schema、maintenance decision 與 immutable policy artifact 內容。
 
@@ -27,18 +27,21 @@ PostgreSQL schema、maintenance decision 與 immutable policy artifact 內容。
   publication、full/incremental/NO_OP maintenance、canonical parity verification 與安全去敏錯誤。
 - deterministic `incremental|full|auto` selector、safe FULL fallback、immutable calibration policy artifact
   驗證與 decision telemetry。
-- localhost-only PostgreSQL 17.11 Compose harness、43 個 opt-in integration cases、six-method benchmark、
-  calibration-only fitter 與 frozen held-out evaluator。
+- localhost-only PostgreSQL 17.11 Compose harness、opt-in integration cases（`-m postgres`，未配置 service
+  即 skip）、six-method benchmark、calibration-only fitter 與 frozen held-out evaluator。
 
 ### Changed
 - `vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index` 接受
   `--backend sqlite|postgresql` 與 `--pg-service`；`ingest` 另接受 `--strategy` 與 `--policy`。
-- package candidate version升為 `0.8.0`；README、AGENTS、操作指南、benchmark evidence boundary 與
+- package version 升為 `0.8.0`；README、AGENTS、操作指南、benchmark evidence boundary 與
   handoff 同步更新。
 
 ### Evidence boundary
-- 此環境沒有 Docker/PostgreSQL runtime；43 個 integration cases 明確 skipped，不是 PostgreSQL passes。
-- 沒有 live PostgreSQL、large-scale、calibration、held-out、policy ID/hash 或 RSNA six-method結果；不得從
+- 2026-09-14 起本機有原生 PostgreSQL 17.11（非 Docker）：live integration v3 PASS 51/51
+  （`docs/benchmarks/postgres-provenance-integration-v3.json`）；未配置 service 時 integration cases 仍是
+  skipped，不是 pass。
+- 沒有 large-scale、calibration、held-out、policy ID/hash 或 RSNA six-method 結果：calibration v1 與 1M
+  memory gate v2–v4 都被 RAM 護欄中止，證據與下一步在 `docs/benchmarks/postgres-provenance-v1.md`；不得從
   offline doubles、SQLite smoke 或方法文件推導效能結論。
 
 ## [0.7.0] - 2026-09-13

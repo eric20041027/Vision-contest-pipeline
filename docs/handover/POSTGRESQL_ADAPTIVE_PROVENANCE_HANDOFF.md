@@ -1,12 +1,12 @@
 # PostgreSQL Adaptive Provenance 實作交接
 
-- 日期：2026-09-13
-- 狀態：Tasks 1–11 implementation/review complete；Task 12 local verification complete；external evidence pending
-- 分支：`codex/postgresql-adaptive-provenance`
+- 日期：2026-09-13（2026-09-15 更新合併與 live 證據狀態）
+- 狀態：Tasks 1–12 complete；2026-09-14 追加 live PostgreSQL 整合證據與記憶體護欄工作（commits `af03188`…`fd92de2`，無 ledger）；external evidence 部分完成，見 §6
+- 分支：`codex/postgresql-adaptive-provenance`（已合併到 `main`）
 - feature 起點：`codex/dataset-evolution-provenance@a625331`
 - SDD start commit：`33dd3ba0c08ccdb4b9435f92fb36a91b2d197e6c`
 - Task 12 implementation base：`f82fea4bb5a969804d6d68b583f701d510c836ac`
-- 版本：`0.8.0` candidate；不是 released version
+- 版本：`0.8.0`（tag `v0.8.0` 於 PR 合併 commit）
 
 ## 1. 結論
 
@@ -19,9 +19,11 @@ Tasks 1–11 每一輪 task-scoped independent review 的 finding 已修正並 r
 security 與 whole-branch reviews 在 code head `7eaef001c987af4f341ec8533ca33b4d9e00fed9` 均為 code-clean。
 這是 source-level review 結論，不等於完整 spec acceptance 或 external evidence completion。
 
-外部證據沒有完成：本機沒有 Docker/PostgreSQL runtime，沒有 live database execution、完整
-large-scale matrix、calibration、held-out、policy artifact、live RSNA run 或效能 gate裁決。沒有 push、
-PR、merge、tag 或 release。
+外部證據部分完成：2026-09-14 起本機有原生 PostgreSQL 17.11（非 Docker），live integration v3 PASS 51/51
+（`docs/benchmarks/postgres-provenance-integration-v3.json`）；仍沒有完整 large-scale matrix、calibration、
+held-out、policy artifact、live RSNA run 或效能 gate 裁決（calibration v1 與 1M memory gate v2–v4 被 RAM
+護欄中止，證據與下一步見 `docs/benchmarks/postgres-provenance-v1.md`）。分支已於 2026-09-15 經使用者授權以
+PR 合併並 tag `v0.8.0`。
 
 ## 2. 功能與安全邊界
 
@@ -127,18 +129,18 @@ current full regression:
 
 | Required evidence | Current state |
 |---|---|
-| PostgreSQL version | Compose image pinned `17.11-bookworm`；無 live server readback |
-| Live integration | Absent；43 cases是 skips，不是 passes |
-| Six-method scaled/large-scale | Absent |
+| PostgreSQL version | 17.11 / 170011 live readback（原生 Windows 服務）；Compose image 仍 pin `17.11-bookworm` |
+| Live integration | PASS 51/51 at `d8cc334`（integration-v3；rollback 28、concurrency 1、MVCC 1、parity 3）；Linux CI 仍缺 |
+| Six-method scaled/large-scale | Absent；1M memory gate v2–v4 ABORT（非正式） |
 | Live RSNA six-method | Absent |
-| Calibration artifact | Absent |
+| Calibration artifact | Absent；v1 嘗試 ABORT（RAM 護欄） |
 | Policy ID / exact policy hash | Absent |
 | Held-out evaluation | Absent |
 | Calibration/held-out separation | Offline tests enforce disjoint ID/hash/workload sets；無 live outputs可比較 |
 | Adaptive p50/p95 gates | 未執行、未裁決 |
 
-不要填 crossover、latency、policy version result、pass/fail或RSNA numbers。唯一 performance-related
-execution是 Task 10 small offline SQLite/canonical smoke，不含 PostgreSQL。
+不要填 crossover、latency、policy version result、pass/fail 或 RSNA numbers。performance-related execution
+只有 Task 10 small offline SQLite/canonical smoke 與上述被中止的嘗試，沒有任何 PostgreSQL 效能數字。
 
 ## 7. 驗收與尚缺項目
 
@@ -146,12 +148,13 @@ execution是 Task 10 small offline SQLite/canonical smoke，不含 PostgreSQL。
 database、security 與 whole-branch reviews 在 `7eaef001c987af4f341ec8533ca33b4d9e00fed9` code-clean，
 但 immutable plan未改且仍缺：
 
-1. 在可用 Docker Compose host 跑 `tests/integration/postgres/run.ps1`，取得 PostgreSQL 17.11真實
-   SQL/constraint/rollback/concurrency/MVCC及 Linux CI evidence。
-2. 跑完整 six-method 1K/10K/100K/1M matrix與 real track，保存 machine-readable output與hash。
+1. 本機原生服務已取得 v3 PASS 51/51（rollback / concurrency / MVCC / parity）；Linux CI evidence 仍要在
+   可用 Docker Compose host 跑 `tests/integration/postgres/run.ps1` 取得。
+2. 跑完整 six-method 1K/10K/100K/1M matrix與 real track，保存 machine-readable output與hash（先完成
+   graph loader 的串流 replay，再重跑 1M memory gate）。
 3. 先跑 calibration-only，再於不同 process跑 frozen held-out；記 policy ID、精確 policy file hash、
    environment/version、完整 scenario/sample counts、zero leakage、parity與 honest p50/p95 gate結果。
-4. 只有另行授權後才能 push/open PR/merge/tag/release；`0.8.0` 在此前始終只是 candidate。
+4. push / PR / merge / tag 已於 2026-09-15 經使用者授權完成；後續證據工作在 `main` 之後的新分支進行。
 
 ## 8. 下一位 operator
 

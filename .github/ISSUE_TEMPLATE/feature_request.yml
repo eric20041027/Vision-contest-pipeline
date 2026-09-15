@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a new capability or a change to an existing one
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New task types, importers, exporters, metrics, σ_p methods, fusers and platforms are
+        meant to be registry entries rather than schema or CLI changes. If yours fits that
+        shape, say so — those are usually quick to accept.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that vcp makes hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: If it adds or changes a command, sketch the command line and the VERDICT fields you would expect.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: shape
+    attributes:
+      label: Which shape is this?
+      options:
+        - A new registry entry (importer, exporter, metric, σ_p method, fuser, platform, task)
+        - A change to an existing command's behaviour or options
+        - A new command or command group
+        - Something structural (artifact or ledger format, provenance model)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What would make it safe
+      description: |
+        This project prefers mechanisms over conventions. What would have to be recorded,
+        verified or refused for this to be trustworthy?
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This does not require a competition name inside `src/vcp`
+        - label: This does not require vcp to read or store a credential

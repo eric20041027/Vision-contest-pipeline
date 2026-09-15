@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/eric20041027/Vision-contest-pipeline/security/advisories/new
+    about: Report credential exposure, path escapes or forgeable evidence privately, not as a public issue.
+  - name: Question or idea
+    url: https://github.com/eric20041027/Vision-contest-pipeline/discussions
+    about: Usage questions and open-ended design discussion.
+  - name: Command reference
+    url: https://github.com/eric20041027/Vision-contest-pipeline/blob/main/docs/reference/cli.md
+    about: Every command and option, before filing a bug about behaviour.

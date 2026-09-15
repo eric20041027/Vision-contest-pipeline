@@ -10,9 +10,13 @@ import pytest
 from performance.provenance import adaptive_benchmark as bench
 from performance.provenance import production_benchmark, real_validation, workloads
 from performance.provenance.workloads import Scenario, build_scenario, scenario_matrix
+from vcp.core.config import dump_yaml_model
+from vcp.core.errors import ValidationFailed
+from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.schema import DatasetCard, Sample, SourceInfo, View
+from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
 
 
@@ -109,6 +113,151 @@ def test_streamed_synthetic_dataset_is_byte_identical_to_materialized_writer(tmp
         ).samples
         == reference.samples
     )
+
+
+def test_streamed_history_diff_is_byte_identical_to_production_artifact(tmp_path, monkeypatch):
+    created_at = "2026-09-14T00:00:00Z"
+    monkeypatch.setattr("vcp.artifact.writer.stamp", lambda: created_at)
+
+    def build_pair(root):
+        data, configs = root / "data", root / "configs"
+        for name, revision in (("synthetic-a", 0), ("synthetic-b", 1)):
+            card = DatasetCard(
+                name=name,
+                task="cls",
+                image_root=f"raw/{name}",
+                source=SourceInfo(
+                    importer="synthetic",
+                    importer_version="1",
+                    raw_path="opaque",
+                    raw_hash="0" * 64,
+                    license="synthetic",
+                    url="",
+                    downloaded_at=created_at,
+                ),
+                created_at=created_at,
+                sample_count=7,
+                samples_hash="0" * 64,
+            )
+            workloads._write_synthetic_dataset(
+                DatasetPaths.resolve(name, data_root=data, configs_root=configs),
+                card,
+                count=7,
+                revision=revision,
+                seed=20260913,
+                changed=frozenset(),
+            )
+        return data, configs
+
+    production_data, production_configs = build_pair(tmp_path / "production")
+    streamed_data, streamed_configs = build_pair(tmp_path / "streamed")
+    production = create_dataset_diff(
+        DatasetDiffSpec(
+            from_dataset="synthetic-a",
+            to_dataset="synthetic-b",
+            artifact_id="history-0",
+            data_root=production_data,
+            configs_root=production_configs,
+        )
+    )
+
+    def reject_theoretical_rebuild(*args, **kwargs):
+        raise AssertionError("history diff must read the files it is evidencing")
+
+    monkeypatch.setattr(workloads, "_synthetic_sample", reject_theoretical_rebuild)
+    streamed = workloads._write_synthetic_history_diff(
+        streamed_data,
+        streamed_configs,
+        "synthetic-a",
+        "synthetic-b",
+        "history-0",
+        count=7,
+    )
+
+    production_files = {
+        path.relative_to(production.artifact_dir).as_posix(): path.read_bytes()
+        for path in production.artifact_dir.rglob("*")
+        if path.is_file()
+    }
+    streamed_files = {
+        path.relative_to(streamed).as_posix(): path.read_bytes()
+        for path in streamed.rglob("*")
+        if path.is_file()
+    }
+    assert streamed_files == production_files
+
+
+def test_streamed_history_diff_rejects_reordered_rows_before_claiming_artifact(tmp_path):
+    data, configs = tmp_path / "data", tmp_path / "configs"
+    cards = {}
+    for name, revision in (("synthetic-a", 0), ("synthetic-b", 1)):
+        card = DatasetCard(
+            name=name,
+            task="cls",
+            image_root=f"raw/{name}",
+            source=SourceInfo(
+                importer="synthetic",
+                importer_version="1",
+                raw_path="opaque",
+                raw_hash="0" * 64,
+                license="synthetic",
+                url="",
+                downloaded_at="2026-09-14T00:00:00Z",
+            ),
+            created_at="2026-09-14T00:00:00Z",
+            sample_count=3,
+            samples_hash="0" * 64,
+        )
+        paths = DatasetPaths.resolve(name, data_root=data, configs_root=configs)
+        cards[name] = workloads._write_synthetic_dataset(
+            paths,
+            card,
+            count=3,
+            revision=revision,
+            seed=20260913,
+            changed=frozenset(),
+        )
+    before_paths = DatasetPaths.resolve("synthetic-a", data_root=data, configs_root=configs)
+    rows = before_paths.samples_jsonl.read_bytes().splitlines(keepends=True)
+    before_paths.samples_jsonl.write_bytes(b"".join([rows[1], rows[0], rows[2]]))
+    dump_yaml_model(
+        cards["synthetic-a"].model_copy(
+            update={"samples_hash": sha256_file(before_paths.samples_jsonl)}
+        ),
+        before_paths.card_yaml,
+    )
+
+    with pytest.raises(ValidationFailed, match="must align"):
+        workloads._write_synthetic_history_diff(
+            data,
+            configs,
+            "synthetic-a",
+            "synthetic-b",
+            "history-bad",
+            count=3,
+        )
+    assert not (data / "artifacts" / "dataset_diff" / "history-bad").exists()
+
+
+@pytest.mark.parametrize("ident", ["../escape", "nested/history", r"nested\history"])
+def test_streamed_history_diff_rejects_unsafe_id_before_filesystem_writes(tmp_path, ident):
+    data = tmp_path / "data"
+    data.mkdir()
+    before = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+
+    with pytest.raises(ValidationFailed, match="invalid name"):
+        workloads._write_synthetic_history_diff(
+            data,
+            tmp_path / "configs",
+            "synthetic-a",
+            "synthetic-b",
+            ident,
+            count=3,
+        )
+
+    assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == before
+    assert not (tmp_path / "escape").exists()
+    assert not (data / "artifacts").exists()
 
 
 def test_matrix_releases_each_scenario_fixture_before_building_the_next(tmp_path, monkeypatch):

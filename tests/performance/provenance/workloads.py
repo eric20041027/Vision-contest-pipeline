@@ -8,27 +8,43 @@ Generation, artifact creation and copying are never timed as maintenance.
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import math
 import random
 import shutil
+import tempfile
+from collections import Counter
 from collections.abc import Set
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from vcp.core.config import dump_yaml_model
+from pydantic import ValidationError
+
+from vcp.artifact.schema import ArtifactSpec, InputRef
+from vcp.artifact.writer import ArtifactWriter
+from vcp.core.config import dump_yaml_model, load_yaml_model
+from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
-from vcp.core.paths import DatasetPaths
+from vcp.core.paths import DatasetPaths, validate_name
 from vcp.core.time import stamp
-from vcp.data.schema import DatasetCard, Sample, SourceInfo, View, sample_json_line
+from vcp.data.schema import DatasetCard, Sample, SourceInfo, View, dump_sample, sample_json_line
 from vcp.data.split import SplitPlan, SubsetSpec, save_plan
 from vcp.measure.schema import Reading, RunCard, RunSource
-from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
+from vcp.provenance.diff import (
+    CHANGES_FILE,
+    KIND,
+    SUMMARY_FILE,
+    DatasetDiffSpec,
+    create_dataset_diff,
+)
 from vcp.provenance.graph import ProvenanceGraph, build_graph, dataset_version_id
 from vcp.provenance.index import graph_hash
+from vcp.provenance.policy import classify_rows
 from vcp.provenance.schema import (
     ChangeDomain,
     ChangeType,
+    DatasetDiffSummary,
     SampleChange,
     SemanticEffect,
     make_change_id,
@@ -214,13 +230,7 @@ def _write_synthetic_dataset(
     paths.samples_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with paths.samples_jsonl.open("w", encoding="utf-8", newline="\n") as stream:
         for index in range(count):
-            sample = Sample(
-                sample_id=f"delta-{index:08d}",
-                views=[View(path=f"opaque/{index}.png")],
-                label_source="none",
-                group=f"changed-{index}" if index in changed else f"g-{index % 8}",
-                meta={"display": revision, "seed": seed},
-            )
+            sample = _synthetic_sample(index, revision, seed, changed)
             stream.write(sample_json_line(sample))
             stream.write("\n")
     saved = card.model_copy(
@@ -228,6 +238,164 @@ def _write_synthetic_dataset(
     )
     dump_yaml_model(saved, paths.card_yaml)
     return saved
+
+
+def _synthetic_sample(
+    index: int, revision: int, seed: int, changed: Set[int] = frozenset()
+) -> Sample:
+    return Sample(
+        sample_id=f"delta-{index:08d}",
+        views=[View(path=f"opaque/{index}.png")],
+        label_source="none",
+        group=f"changed-{index}" if index in changed else f"g-{index % 8}",
+        meta={"display": revision, "seed": seed},
+    )
+
+
+def _write_synthetic_history_diff(
+    data: Path,
+    configs: Path,
+    before: str,
+    after: str,
+    ident: str,
+    *,
+    count: int,
+) -> Path:
+    """Publish a known synthetic history transition with bounded benchmark-fixture memory."""
+    validate_name(ident)
+    before_paths = DatasetPaths.resolve(before, data_root=data, configs_root=configs)
+    after_paths = DatasetPaths.resolve(after, data_root=data, configs_root=configs)
+    before_card = load_yaml_model(before_paths.card_yaml, DatasetCard)
+    after_card = load_yaml_model(after_paths.card_yaml, DatasetCard)
+    if before_card.name != before or after_card.name != after:
+        raise ValueError("synthetic history card name does not match its path")
+    if before_card.sample_count != count or after_card.sample_count != count:
+        raise ValueError("synthetic history card count does not match the scenario")
+    change_counts: Counter[str] = Counter()
+    domain_counts: Counter[str] = Counter()
+    effect_counts: Counter[str] = Counter()
+    before_digest = hashlib.sha256()
+    after_digest = hashlib.sha256()
+    with tempfile.TemporaryDirectory(prefix=f"vcp-{ident}-", dir=data) as temp:
+        spool = Path(temp) / CHANGES_FILE
+        with (
+            before_paths.samples_jsonl.open("rb") as before_stream,
+            after_paths.samples_jsonl.open("rb") as after_stream,
+            spool.open("wb") as stream,
+        ):
+            seen = 0
+            while True:
+                before_row = before_stream.readline()
+                after_row = after_stream.readline()
+                if not before_row and not after_row:
+                    break
+                if not before_row or not after_row:
+                    raise ValidationFailed("synthetic history versions have different row counts")
+                if (
+                    not before_row.endswith(b"\n")
+                    or before_row.endswith(b"\r\n")
+                    or not after_row.endswith(b"\n")
+                    or after_row.endswith(b"\r\n")
+                ):
+                    raise ValidationFailed("synthetic history rows must use LF line endings")
+                before_digest.update(before_row)
+                after_digest.update(after_row)
+                try:
+                    before_sample = Sample.model_validate_json(before_row)
+                    after_sample = Sample.model_validate_json(after_row)
+                except ValidationError as error:
+                    raise ValidationFailed(
+                        f"invalid synthetic history row {seen + 1}: {error}"
+                    ) from error
+                expected_id = f"delta-{seen:08d}"
+                if before_sample.sample_id != expected_id or after_sample.sample_id != expected_id:
+                    raise ValidationFailed(
+                        f"synthetic history row {seen + 1} must align on {expected_id!r}"
+                    )
+                before_payload = dump_sample(before_sample)
+                after_payload = dump_sample(after_sample)
+                if before_payload == after_payload:
+                    raise ValidationFailed(
+                        f"synthetic history row {seen + 1} is not a modified sample"
+                    )
+                fields, domains, effects = classify_rows(before_payload, after_payload)
+                before_hash = hashlib.sha256(before_row).hexdigest()
+                after_hash = hashlib.sha256(after_row).hexdigest()
+                change = SampleChange(
+                    change_id=make_change_id(
+                        before_card.samples_hash,
+                        after_card.samples_hash,
+                        expected_id,
+                        ChangeType.MODIFIED,
+                        before_hash,
+                        after_hash,
+                    ),
+                    from_dataset=before,
+                    from_samples_hash=before_card.samples_hash,
+                    to_dataset=after,
+                    to_samples_hash=after_card.samples_hash,
+                    sample_id=expected_id,
+                    change_type=ChangeType.MODIFIED,
+                    changed_domains=domains,
+                    changed_fields=fields,
+                    semantic_effects=effects,
+                    before_row_hash=before_hash,
+                    after_row_hash=after_hash,
+                )
+                stream.write(change.model_dump_json().encode())
+                stream.write(b"\n")
+                change_counts[change.change_type.value] += 1
+                domain_counts.update(domain.value for domain in domains)
+                effect_counts.update(effect.value for effect in effects)
+                seen += 1
+        if seen != count:
+            raise ValidationFailed(f"synthetic history has {seen} rows, expected {count}")
+        if before_digest.hexdigest() != before_card.samples_hash:
+            raise IntegrityError("synthetic history before samples_hash mismatch")
+        if after_digest.hexdigest() != after_card.samples_hash:
+            raise IntegrityError("synthetic history after samples_hash mismatch")
+        spec = ArtifactSpec(
+            kind=KIND,
+            id=ident,
+            dataset=after,
+            params={
+                "from_dataset": before,
+                "from_samples_hash": before_card.samples_hash,
+                "to_dataset": after,
+                "to_samples_hash": after_card.samples_hash,
+                "policies": "",
+            },
+            inputs=[
+                InputRef(
+                    name="from_samples",
+                    path=str(before_paths.samples_jsonl),
+                    sha256=before_card.samples_hash,
+                ),
+                InputRef(
+                    name="to_samples",
+                    path=str(after_paths.samples_jsonl),
+                    sha256=after_card.samples_hash,
+                ),
+            ],
+        )
+        summary = DatasetDiffSummary(
+            artifact_id=ident,
+            from_dataset=before,
+            from_samples_hash=before_card.samples_hash,
+            to_dataset=after,
+            to_samples_hash=after_card.samples_hash,
+            grade="fallback",
+            policies=[],
+            total_changes=seen,
+            counts=dict(sorted(change_counts.items())),
+            domain_counts=dict(sorted(domain_counts.items())),
+            effect_counts=dict(sorted(effect_counts.items())),
+        )
+        with ArtifactWriter.create(spec, data_root=data) as writer:
+            writer.add_file(CHANGES_FILE, spool)
+            writer.write_json(SUMMARY_FILE, summary.model_dump(mode="json"))
+            writer.commit()
+            return writer.dir
 
 
 def build_scenario(root: Path, scenario: Scenario) -> Workload:
@@ -281,7 +449,14 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
     if scenario.topology == "branched":
         transitions = (("synthetic-a", "synthetic-source"), ("synthetic-b", "synthetic-source"))
     for index, (before, after) in enumerate(transitions):
-        _diff(data, configs, before, after, f"history-{index}")
+        _write_synthetic_history_diff(
+            data,
+            configs,
+            before,
+            after,
+            f"history-{index}",
+            count=count,
+        )
     if source_card is None:  # pragma: no cover - fixed fixture definition above
         raise RuntimeError("synthetic source dataset was not built")
     paths = DatasetPaths.resolve(source_card.name, data_root=data, configs_root=configs)

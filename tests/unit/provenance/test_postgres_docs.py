@@ -40,17 +40,28 @@ def test_postgres_guide_covers_supported_operations_and_safe_setup():
 def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
     benchmark = BENCHMARK.read_text(encoding="utf-8")
     handoff = HANDOFF.read_text(encoding="utf-8")
-    for missing_evidence in (
-        "live PostgreSQL",
-        "large-scale",
-        "calibration",
-        "held-out",
-    ):
+    # Live integration (2026-09-14) is the only PostgreSQL evidence; the aborted attempts stay
+    # visible and every other acceptance field stays explicitly absent.
+    for present_evidence in ("live integration", "PASS 51/51", "170011", "ABORT", "skipped"):
+        assert present_evidence in benchmark
+    for missing_evidence in ("large-scale", "calibration", "held-out"):
         assert missing_evidence in benchmark
-    assert "43" in benchmark and "skipped" in benchmark
-    assert "0.8.0" in handoff and "candidate" in handoff
-    for unpublished in ("push", "PR", "merge", "tag", "release"):
-        assert unpublished in handoff
+    for absent_row in (
+        "| Six-method scaled result | Absent |",
+        "| Real/RSNA six-method result | Absent |",
+        "| Policy artifact ID | Absent |",
+        "| Exact policy file SHA-256 | Absent |",
+        "| Held-out result JSON | Absent |",
+    ):
+        assert absent_row in benchmark
+    assert "0.8.0" in handoff and "v0.8.0" in handoff
+    assert "不要填 crossover" in handoff
+    assert "Linux CI" in handoff
+    for still_absent in (
+        "| Live RSNA six-method | Absent |",
+        "| Policy ID / exact policy hash | Absent |",
+    ):
+        assert still_absent in handoff
 
 
 def test_benchmark_reproduction_has_its_own_secret_safe_opt_in_preflight():

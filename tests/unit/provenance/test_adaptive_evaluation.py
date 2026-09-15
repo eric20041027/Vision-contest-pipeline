@@ -677,10 +677,10 @@ def test_no_op_latency_cannot_change_fitted_policy_or_identity(tmp_path):
     second = calibration.publish_calibration(changed, tmp_path / "second.json")
     assert first.model_dump() == second.model_dump()
     _, evidence = evaluation.load_calibration(tmp_path / "first.json")
-    assert len(evidence.scenario_ids) == 144
-    assert len(evidence.scenario_repetitions) == 144
-    assert sum(evidence.scenario_repetitions) == 720
-    assert first.training_row_count == 124
+    assert len(evidence.scenario_ids) == 108
+    assert len(evidence.scenario_repetitions) == 108
+    assert sum(evidence.scenario_repetitions) == 612
+    assert first.training_row_count == 92
     assert first.training_row_count == sum(
         r["changed_samples"] > 0 and r["method"] == "postgres_full" for r in rows
     )
@@ -918,7 +918,7 @@ def test_exact_eligible_set_is_derived_without_building_fixtures(monkeypatch):
     eligible = [
         scenario for scenario in scenarios.values() if evaluation.scenario_counts(scenario)[1]
     ]
-    assert len(scenarios) == 144 and len(eligible) == 124
+    assert len(scenarios) == 108 and len(eligible) == 92
     assert evaluation.scenario_counts(Scenario(1000, 0.001, "chain", 20260913)) == (326, 0)
     assert evaluation.scenario_counts(Scenario(1000000, 1.0, "chain", 20260913)) == (333326, 333326)
 
@@ -929,7 +929,7 @@ def test_heldout_cannot_reuse_excluded_calibration_noop_workload(tmp_path):
     _, evidence = evaluation.load_calibration(path)
     fitted = {row.workload_hash for row in evidence.observations}
     excluded = set(evidence.scenario_workload_hashes) - fitted
-    assert len(excluded) == 20
+    assert len(excluded) == 16
     leaked_hash = sorted(excluded)[0]
     heldout = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
     identity = heldout[0]["scenario_hash"]
@@ -947,7 +947,7 @@ def test_heldout_cannot_reuse_excluded_calibration_noop_workload(tmp_path):
                 heldout, seeds=strategy.HELDOUT_SEEDS, methods=evaluation.EVALUATION_METHODS
             )
         )
-        == 144
+        == 108
     )
     with pytest.raises(ValidationFailed, match="workload_leakage") as error:
         evaluation.evaluate_policy(path, heldout)

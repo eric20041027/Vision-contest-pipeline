@@ -312,7 +312,7 @@ def expected_scenarios(seeds):
         raise ValueError("invalid scenario partition")
     scenarios = scenario_matrix(
         seeds=seeds,
-        entities=(1000, 10000, 100000, 1000000),
+        entities=(1000, 10000, 100000),
         ratios=(0, 0.001, 0.01, 0.05, 0.10, 0.25, 0.50, 0.90, 1.0),
         topologies=("chain", "branched"),
     )

@@ -150,13 +150,13 @@ operator 建立、權限受限的 **absolute temporary file paths**。不要在�
 
 ```powershell
 uv run python tests/performance/provenance/adaptive_benchmark.py `
-  --entities 1000 10000 100000 1000000 `
+  --entities 1000 10000 100000 `
   --ratios 0 0.001 0.01 0.05 0.10 0.25 0.50 0.90 1 `
   --seeds 20260913 20260914 `
   --output <NEW_RESULT_PATH>
 ```
 
-1K/10K 每 scenario 固定 7 repetitions，100K/1M 固定 3；不要用 `--repetitions` override 產生 normative
+1K/10K 每 scenario 固定 7 repetitions，100K 固定 3；不要用 `--repetitions` override 產生 normative
 calibration/held-out evidence。每個 method/repetition 使用 fresh state；mutating EXPLAIN 在額外 state 的
 explicit rollback transaction 內執行，不進 latency samples。
 
@@ -169,8 +169,8 @@ uv run python tests/performance/provenance/evaluate_adaptive.py `
   --output docs/benchmarks/postgres-provenance-heldout-v1.json
 ```
 
-Calibration 只用 seeds `20260913/20260914` 的 fixed PostgreSQL methods，完整驗證 144 scenarios 後從
-124 個 positive-change pairs fit nonnegative models；20 個 NO_OP scenarios仍屬 coverage/leakage evidence，
+Calibration 只用 seeds `20260913/20260914` 的 fixed PostgreSQL methods，完整驗證 108 scenarios 後從
+92 個 positive-change pairs fit nonnegative models；16 個 NO_OP scenarios仍屬 coverage/leakage evidence，
 不進 fit。Held-out 只用 seeds `20261001/20261002`，在另一 process 驗 immutable policy，禁止 fit，並以
 scenario ID/hash/workload hash 拒絕 leakage。兩個 output 都是 write-once；policy artifact 在 calibration
 output 的 sibling `-artifacts` data root。

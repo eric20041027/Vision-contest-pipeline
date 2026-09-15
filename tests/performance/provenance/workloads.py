@@ -51,7 +51,12 @@ from vcp.provenance.schema import (
 )
 
 SEED = 20260913
-SCALES = (1_000, 10_000, 100_000, 1_000_000)
+# Normative adaptive matrix. 1M is deliberately out of scope: it cannot complete on a
+# 32 GiB host (see the Plan 12 postscript ruling) and would block every policy forever.
+SCALES = (1_000, 10_000, 100_000)
+# The separate historical ladder for production_benchmark, whose 1M runs are canonical/SQLite
+# only and have completed; adaptive acceptance never reads this one.
+PRODUCTION_SCALES = (1_000, 10_000, 100_000, 1_000_000)
 RATIOS = (0, 0.001, 0.01, 0.05, 0.10, 0.25, 0.50, 0.90, 1.0)
 TOPOLOGIES = ("chain", "branched")
 CALIBRATION_SEEDS = (20260913, 20260914)

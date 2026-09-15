@@ -4,6 +4,7 @@
 
 ```bash
 uv sync                      # 核心 venv；DICOM 支援：uv sync --extra dicom
+uv sync --extra postgres     # 可選 PostgreSQL provenance backend
 uv run vcp --help
 uv run pytest --cov=vcp
 ```
@@ -28,11 +29,19 @@ uv run pytest --cov=vcp
 ## Dataset evolution 與 provenance index
 
 `vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index` 從 canonical
-dataset、plan、run、reading、artifact、fusion、submission 與 backup 建 deterministic graph。SQLite 位於
-`<data_root>/indexes/provenance.sqlite3`，可刪除、可由 canonical records 完整重建，不進 Git。`sync`
-只接受新增 canonical records；既有 evidence 遭刪改、ledger prefix drift 或 diff manifest/payload 不再
-符合會 fail closed。操作、status 語意、repair 與可重跑 benchmark 見
-[`docs/guides/DATASET_EVOLUTION_PROVENANCE.md`](docs/guides/DATASET_EVOLUTION_PROVENANCE.md)。
+dataset、plan、run、reading、artifact、fusion、submission 與 backup 建 deterministic graph。未指定
+`--backend` 時仍使用 SQLite；檔案位於 `<data_root>/indexes/provenance.sqlite3`，可刪除、可由
+canonical records 完整重建，不進 Git。PostgreSQL 是 optional、noncanonical 的另一個衍生索引；所有
+命令可加 `--backend postgresql [--pg-service SERVICE]`，只有 `ingest` 另接受
+`--strategy incremental|full|auto [--policy ID]`。`--policy` 只適用於 PostgreSQL auto；auto 沒有
+policy 時會 WARN 並安全選 FULL（已驗證的零 semantic work 除外）。
+
+`sync` 只接受新增 canonical records；既有 evidence 遭刪改、ledger prefix drift 或 diff
+manifest/payload 不再符合會 fail closed。SQLite 操作與 status 語意見
+[`DATASET_EVOLUTION_PROVENANCE.md`](docs/guides/DATASET_EVOLUTION_PROVENANCE.md)；PostgreSQL 的 optional
+安裝、libpq service、全部 flags、repair、整合 harness 與 benchmark/calibration 命令見
+[`POSTGRESQL_PROVENANCE.md`](docs/guides/POSTGRESQL_PROVENANCE.md)。目前 PostgreSQL live、large-scale、
+calibration 與 held-out 結果仍待外部 runtime，不得把 offline tests 或 skips 當成資料庫通過。
 
 ## 量測層命令 `vcp eval`
 

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "evidence_id": "postgres-provenance-integration-v1",
+  "evidence_time_utc": "2026-09-14T20:03:03.256997+00:00",
+  "git_commit": "8611b5237d2cd82e1df822b6b55f1b212a0dfab6",
+  "command": "uv run --frozen --extra postgres pytest -m postgres tests/integration/provenance -o addopts= --tb=short -q -rs --junitxml docs/benchmarks/postgres-provenance-integration-v1.xml",
+  "command_exit_code": 1,
+  "junit": {
+    "path": "docs/benchmarks/postgres-provenance-integration-v1.xml",
+    "sha256": "24726f407686613ab0061191d71304d8500b61fd9d9510a37dca83837127b859",
+    "tests": 43,
+    "passed": 39,
+    "failed": 4,
+    "errors": 0,
+    "skipped": 0,
+    "duration_seconds": 57.74
+  },
+  "postgresql": {
+    "service": "vcp-pg17-evidence",
+    "select_version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+    "server_version_num": "170011"
+  },
+  "hardware_metadata": {
+    "path": "C:\\vcp-data\\services\\postgresql-17.11-vcp\\runtime-metadata.json",
+    "sha256": "ddda3858b9c369d186aa911448faba8639c3dc53fb56f844544dc39ee2e62f6f"
+  },
+  "categories": {
+    "transaction_rollback": {
+      "result": "FAIL",
+      "tests": 20,
+      "passed": 16,
+      "failed": 4,
+      "failed_testcases": [
+        "test_injected_rollback_preserves_every_table[ingest_checkpoints-incremental]",
+        "test_injected_rollback_preserves_every_table[ingest_checkpoints-full]",
+        "test_injected_rollback_preserves_every_table[ingest_checkpoints-auto]",
+        "test_real_schema_constraints_rollback[UPDATE vcp_provenance.ingest_checkpoints SET consumed_bytes=-1-23514]"
+      ],
+      "failure_observations": [
+        "The three injected ingest_checkpoints cases did not raise the expected RuntimeError.",
+        "The negative consumed_bytes update did not raise the expected PostgreSQL driver Error."
+      ]
+    },
+    "concurrency": {
+      "result": "PASS",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "testcases": [
+        "test_advisory_lock_serializes_concurrent_duplicate_writers"
+      ]
+    },
+    "mvcc": {
+      "result": "PASS",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "testcases": [
+        "test_reader_sees_old_generation_until_rebuild_commit"
+      ]
+    },
+    "canonical_sqlite_postgresql_parity": {
+      "result": "PASS",
+      "tests": 3,
+      "passed": 3,
+      "failed": 0,
+      "testcases": [
+        "test_every_strategy_matches_canonical_and_sqlite[incremental]",
+        "test_every_strategy_matches_canonical_and_sqlite[full]",
+        "test_every_strategy_matches_canonical_and_sqlite[auto]"
+      ]
+    }
+  },
+  "failed_testcases": [
+    {
+      "name": "test_injected_rollback_preserves_every_table[ingest_checkpoints-incremental]",
+      "observation": "DID NOT RAISE RuntimeError"
+    },
+    {
+      "name": "test_injected_rollback_preserves_every_table[ingest_checkpoints-full]",
+      "observation": "DID NOT RAISE RuntimeError"
+    },
+    {
+      "name": "test_injected_rollback_preserves_every_table[ingest_checkpoints-auto]",
+      "observation": "DID NOT RAISE RuntimeError"
+    },
+    {
+      "name": "test_real_schema_constraints_rollback[UPDATE vcp_provenance.ingest_checkpoints SET consumed_bytes=-1-23514]",
+      "observation": "DID NOT RAISE PostgreSQL driver Error"
+    }
+  ]
+}

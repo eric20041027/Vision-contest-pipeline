@@ -11,7 +11,7 @@ import random
 
 import pytest
 
-from conftest import load_real
+from integration_helpers import load_real
 from vcp.measure.metrics import get_metric
 from vcp.measure.predictions import predictions_by_id
 from vcp.measure.schema import Prediction

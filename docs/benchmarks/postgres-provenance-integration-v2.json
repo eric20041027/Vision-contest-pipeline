@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "evidence_id": "postgres-provenance-integration-v2",
+  "write_once": true,
+  "evidence_time_utc": "2026-09-14T20:32:00.357446+00:00",
+  "result": "FAIL",
+  "tested_git_commit": "af0318830001c7ad12e16371a2cf44f15ae1be3d",
+  "evidence_write_git_commit": "d8cc334a268907e952c0ae251de1bd043df2629f",
+  "concurrent_commit_note": "The tested commit was captured immediately before pytest. Unrelated benchmark commits advanced HEAD while the integration run was in progress.",
+  "command": "uv run pytest tests/integration/provenance --junitxml=docs/benchmarks/postgres-provenance-integration-v2.xml -q",
+  "command_exit_code": 1,
+  "junit": {
+    "path": "docs/benchmarks/postgres-provenance-integration-v2.xml",
+    "sha256": "367e04600fcb81c370a66990cdd7ec462582e673e3fefc17d42278eb012bdf2f",
+    "tests": 51,
+    "passed": 0,
+    "failed": 0,
+    "errors": 51,
+    "skipped": 0,
+    "duration_seconds": 261.937
+  },
+  "failure": {
+    "phase": "fixture_setup",
+    "code": "database_connection_failed",
+    "observation": "The configured loopback endpoint was not listening during this write-once rerun. Every test errored while creating its isolated PostgreSQL database.",
+    "listener_127_0_0_1_55432_after_run": false,
+    "mixed_service_state_avoided": true,
+    "rerun_required": true
+  },
+  "postgresql": {
+    "service": "vcp-pg17-evidence",
+    "sql_query_during_v2": "UNAVAILABLE",
+    "version_from_runtime_metadata": "17.11",
+    "server_version_num_from_runtime_metadata": "170011",
+    "last_successful_sql_version_evidence": {
+      "artifact": "docs/benchmarks/postgres-provenance-integration-v1.json",
+      "artifact_sha256": "b9d289dd1fa41d738a3677ccc198028ce2887b5fb3156661c553cb4e9388afc8",
+      "select_version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+      "server_version_num": "170011"
+    }
+  },
+  "runtime_metadata": {
+    "path": "C:\\vcp-data\\services\\postgresql-17.11-vcp\\runtime-metadata.json",
+    "sha256": "ddda3858b9c369d186aa911448faba8639c3dc53fb56f844544dc39ee2e62f6f"
+  },
+  "predecessor_failure_evidence": {
+    "evidence_id": "postgres-provenance-integration-v1",
+    "json_path": "docs/benchmarks/postgres-provenance-integration-v1.json",
+    "json_sha256": "b9d289dd1fa41d738a3677ccc198028ce2887b5fb3156661c553cb4e9388afc8",
+    "junit_path": "docs/benchmarks/postgres-provenance-integration-v1.xml",
+    "junit_sha256": "24726f407686613ab0061191d71304d8500b61fd9d9510a37dca83837127b859"
+  },
+  "categories": {
+    "transaction_rollback": {
+      "selector": "testcase name contains rollback",
+      "result": "ERROR",
+      "tests": 28,
+      "passed": 0,
+      "failed": 0,
+      "errors": 28,
+      "skipped": 0,
+      "executed_behavior": false
+    },
+    "concurrency": {
+      "selector": "test_advisory_lock_serializes_concurrent_duplicate_writers",
+      "result": "ERROR",
+      "tests": 1,
+      "passed": 0,
+      "failed": 0,
+      "errors": 1,
+      "skipped": 0,
+      "executed_behavior": false
+    },
+    "mvcc": {
+      "selector": "test_reader_sees_old_generation_until_rebuild_commit",
+      "result": "ERROR",
+      "tests": 1,
+      "passed": 0,
+      "failed": 0,
+      "errors": 1,
+      "skipped": 0,
+      "executed_behavior": false
+    },
+    "canonical_sqlite_postgresql_parity": {
+      "selector": "test_every_strategy_matches_canonical_and_sqlite",
+      "result": "ERROR",
+      "tests": 3,
+      "passed": 0,
+      "failed": 0,
+      "errors": 3,
+      "skipped": 0,
+      "executed_behavior": false
+    }
+  }
+}

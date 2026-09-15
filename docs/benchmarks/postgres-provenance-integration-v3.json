@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "evidence_id": "postgres-provenance-integration-v3",
+  "write_once": true,
+  "evidence_time_utc": "2026-09-14T20:37:54.697731+00:00",
+  "result": "PASS",
+  "git_commit": "d8cc334a268907e952c0ae251de1bd043df2629f",
+  "command": "uv run pytest tests/integration/provenance --junitxml=docs/benchmarks/postgres-provenance-integration-v3.xml -q",
+  "command_exit_code": 0,
+  "junit": {
+    "path": "docs/benchmarks/postgres-provenance-integration-v3.xml",
+    "sha256": "b50ada0f459c5ddce82bc4da23cf6850a702b5a5416cdf6972b626e766b61823",
+    "tests": 51,
+    "passed": 51,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "duration_seconds": 58.36
+  },
+  "postgresql": {
+    "service": "vcp-pg17-evidence",
+    "select_version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+    "server_version_num": "170011",
+    "server_address": "127.0.0.1",
+    "server_port": 55432,
+    "lifecycle_kind": "windows_user_scheduled_task",
+    "task_name": "VCP-PostgreSQL-17.11",
+    "task_state_after_run": "Running",
+    "listener_alive_after_run": true
+  },
+  "runtime_metadata": {
+    "path": "C:\\vcp-data\\services\\postgresql-17.11-vcp\\runtime-metadata.json",
+    "sha256": "e504653b7dfd14b8ae92da9fa5f2f13e05aa7535ceba8f07bd635b110b78adf6"
+  },
+  "predecessors": [
+    {
+      "evidence_id": "postgres-provenance-integration-v1",
+      "status": "FAIL",
+      "summary": "39 passed and 4 behavior failures before the checkpoint test/schema correction.",
+      "json_path": "docs/benchmarks/postgres-provenance-integration-v1.json",
+      "json_sha256": "b9d289dd1fa41d738a3677ccc198028ce2887b5fb3156661c553cb4e9388afc8",
+      "junit_path": "docs/benchmarks/postgres-provenance-integration-v1.xml",
+      "junit_sha256": "24726f407686613ab0061191d71304d8500b61fd9d9510a37dca83837127b859"
+    },
+    {
+      "evidence_id": "postgres-provenance-integration-v2",
+      "status": "ERROR",
+      "summary": "51 setup errors because the agent-owned PostgreSQL process had been reclaimed before the run.",
+      "json_path": "docs/benchmarks/postgres-provenance-integration-v2.json",
+      "json_sha256": "04be858b0d1943b09b4ee2d4edac7d9411f2c9c55faae2d58ed1a50537d7c268",
+      "junit_path": "docs/benchmarks/postgres-provenance-integration-v2.xml",
+      "junit_sha256": "367e04600fcb81c370a66990cdd7ec462582e673e3fefc17d42278eb012bdf2f"
+    }
+  ],
+  "categories": {
+    "transaction_rollback": {
+      "selector": "testcase name contains rollback",
+      "result": "PASS",
+      "tests": 28,
+      "passed": 28,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "executed_behavior": true
+    },
+    "concurrency": {
+      "selector": "test_advisory_lock_serializes_concurrent_duplicate_writers",
+      "result": "PASS",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "executed_behavior": true
+    },
+    "mvcc": {
+      "selector": "test_reader_sees_old_generation_until_rebuild_commit",
+      "result": "PASS",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "executed_behavior": true
+    },
+    "canonical_sqlite_postgresql_parity": {
+      "selector": "test_every_strategy_matches_canonical_and_sqlite",
+      "result": "PASS",
+      "tests": 3,
+      "passed": 3,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "executed_behavior": true
+    }
+  }
+}

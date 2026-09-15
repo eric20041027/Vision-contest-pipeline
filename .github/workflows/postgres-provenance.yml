@@ -1,0 +1,35 @@
+name: PostgreSQL provenance integration
+on:
+  pull_request:
+    paths:
+      - "src/vcp/**"
+      - "tests/helpers.py"
+      - "tests/conftest.py"
+      - "tests/integration/conftest.py"
+      - "tests/integration/provenance/**"
+      - "tests/integration/postgres/**"
+      - "tests/unit/provenance/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/postgres-provenance.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.6"
+      - name: Generate ephemeral password
+        shell: bash
+        run: |
+          password="$(openssl rand -hex 32)"
+          echo "::add-mask::$password"
+          printf 'VCP_TEST_PG_PASSWORD=%s\n' "$password" >> "$GITHUB_ENV"
+      - name: Run the shared Compose harness
+        shell: pwsh
+        run: ./tests/integration/postgres/run.ps1

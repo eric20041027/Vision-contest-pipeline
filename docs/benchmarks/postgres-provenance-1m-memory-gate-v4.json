@@ -1,0 +1,101 @@
+{
+  "abort_reason": "system_available_ram_lt_2_gib_sustained_30s",
+  "created_at": "2026-09-15T03:39:40.284Z",
+  "duration_seconds": 80.9732304,
+  "evidence_id": "postgres-provenance-1m-memory-gate-v4",
+  "explain": {
+    "count": 0,
+    "raw_plan_included": false,
+    "scope": "not_captured; scenario aborted during canonical baseline graph build before maintenance instrumentation"
+  },
+  "kind": "postgres-provenance-1m-memory-gate-v1",
+  "method": "postgres_full",
+  "metrics": {
+    "database_bytes": null,
+    "index_bytes": null,
+    "maintenance_p50_ms": null,
+    "maintenance_p95_ms": null,
+    "provenance_total_relation_bytes": null,
+    "throughput_samples_per_second": null
+  },
+  "normative": false,
+  "parity": {
+    "graph_hash_parity": null,
+    "graph_parity": null,
+    "head_parity": null,
+    "status": "not_evaluated",
+    "status_parity": null
+  },
+  "phase_observation": {
+    "historical_diff_streaming_completed": true,
+    "instrumentation_reached": false,
+    "maintenance_reached": false,
+    "note": "history artifacts and operational tail were published before memory pressure occurred in canonical baseline graph build"
+  },
+  "phase_reached": "baseline_graph_build",
+  "predecessor": {
+    "evidence_id": "postgres-provenance-1m-memory-gate-v3",
+    "phase_reached": "baseline_graph_build",
+    "preserved": true,
+    "status": "ABORT"
+  },
+  "purpose": "non-normative single-scenario resource-safety gate after historical diff streaming; not a formal benchmark result",
+  "repetitions": 1,
+  "resource_gate": {
+    "available_ram_abort_bytes": 2147483648,
+    "host_isolation": "not_asserted",
+    "minimum_c_free_bytes": 130980782080,
+    "minimum_system_available_ram_bytes": 597352448,
+    "peak_scenario_child_private_bytes": 6091624448,
+    "peak_scenario_child_working_set_bytes": 5546512384,
+    "private_abort_bytes": 25769803776,
+    "sample_interval_seconds": 15,
+    "sustained_seconds": 30
+  },
+  "runner": {
+    "result_published": false,
+    "stderr_sha256": "3e2f777239e8875796a6a61feebd144090ede865f96db1df16a9bbcefd597d90",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "scenario": {
+    "change_ratio": 0.1,
+    "entities": 1000000,
+    "repetitions": 1,
+    "scenario_hash": "43d49aea9e24d9262497fca16bbb78c3c89bd9023317a9d7e91f71546f9cc2bd",
+    "scenario_id": "scaled-20260913-1000000-43d49aea9e24d926",
+    "seed": 20260913,
+    "topology": "chain",
+    "track": "scaled",
+    "variant": "v1"
+  },
+  "schema_version": 1,
+  "service_post_state": {
+    "databases_deleted_by_gate": 0,
+    "deletion_reason": "no database was provably created and owned by this aborted scenario",
+    "owned_pattern_database_count_observed": 1,
+    "port": 55432,
+    "postgresql_version": "17.11",
+    "process_count": 6,
+    "state": "running"
+  },
+  "source": {
+    "head": "fd92de2fd0b7b8cba333e98e426681ef60073bf1",
+    "runtime_metadata_sha256": "e504653b7dfd14b8ae92da9fa5f2f13e05aa7535ceba8f07bd635b110b78adf6",
+    "runtime_vcp_commit": "fd92de2fd0b7b8cba333e98e426681ef60073bf1",
+    "source_tree_sha256": "de05188177764387b5856e122760ffa07482e970e49a3d641d98200467f0c311"
+  },
+  "status": "ABORT",
+  "task": "Task 19",
+  "telemetry": {
+    "path": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v4.telemetry.json",
+    "samples": 6,
+    "sha256": "eb687b342d593047a017288370db598287c56335947032e7d4b621ec3cf3e420"
+  },
+  "work_dir_contract": {
+    "checkpoint_file_sha256": "5506d0c9c3701b9e45259db349ff9a2076e004176328a96098741824a951190b",
+    "execution_id": "17f77b3fad1fabc3bab1323cabcf3501",
+    "execution_identity_sha256": "a26b14b42de58c96425a3c6080c4ee3fad91b296487f13cf74c1407095b15ef7",
+    "path": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v4",
+    "retained_bytes_at_publication": 647932362
+  }
+}

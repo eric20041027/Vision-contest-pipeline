@@ -1,0 +1,244 @@
+"""Backend contract and compatibility adapter for provenance indexes."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
+from enum import StrEnum
+from importlib import import_module
+from pathlib import Path
+from time import perf_counter_ns
+from typing import Any, Protocol
+
+from vcp.core.errors import ValidationFailed
+from vcp.core.paths import provenance_index_path
+from vcp.provenance.diff import load_dataset_diff
+from vcp.provenance.graph import ProvenanceGraph
+from vcp.provenance.index import (
+    IngestResult,
+    ProvenanceIndex,
+    RebuildResult,
+    VerifyIndexResult,
+)
+from vcp.provenance.schema import StatusRecord
+
+
+class BackendName(StrEnum):
+    SQLITE = "sqlite"
+    POSTGRESQL = "postgresql"
+
+
+class RequestedStrategy(StrEnum):
+    INCREMENTAL = "incremental"
+    FULL = "full"
+    AUTO = "auto"
+
+
+class SelectedStrategy(StrEnum):
+    NO_OP = "NO_OP"
+    INCREMENTAL = "INCREMENTAL"
+    FULL = "FULL"
+
+
+@dataclass(frozen=True)
+class BackendConfig:
+    name: BackendName = BackendName.SQLITE
+    pg_service: str | None = None
+
+
+@dataclass(frozen=True)
+class MaintenanceResult:
+    """Committed maintenance outcome.
+
+    PostgreSQL counts describe the verified candidate graph and planned semantic
+    closure (including possible reading repair), independently of the selected path.
+    Duplicate artifacts retain their verified event count but have zero dirty work.
+    """
+
+    artifact_id: str
+    inserted: bool
+    backend: str
+    requested_strategy: RequestedStrategy
+    selected_strategy: SelectedStrategy
+    strategy_reason: str
+    changed_samples: int
+    dirty_entities: int
+    total_entities: int
+    dirty_ratio: float
+    estimated_incremental_ms: float | None
+    estimated_full_ms: float | None
+    policy_version: str
+    elapsed_ms: float
+    graph_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "requested_strategy", RequestedStrategy(self.requested_strategy))
+        object.__setattr__(self, "selected_strategy", SelectedStrategy(self.selected_strategy))
+
+
+class ProvenanceReader(Protocol):
+    """Read operations available within a backend-managed compound read lifetime."""
+
+    def load_graph(self) -> ProvenanceGraph: ...
+
+    def statuses(self, head_id: str) -> dict[str, StatusRecord]: ...
+
+    def normalized(self) -> dict[str, Any]: ...
+
+    def stats(self) -> dict[str, Any]: ...
+
+    def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult: ...
+
+
+class ProvenanceBackend(ProvenanceReader, Protocol):
+    name: BackendName
+    location_label: str
+
+    def read_snapshot(self) -> AbstractContextManager[ProvenanceReader]:
+        """Group dependent reads; concurrent generation backends must pin their snapshot."""
+        ...
+
+    def rebuild(self, data_root: Path, configs_root: Path) -> RebuildResult: ...
+
+    def sync(self, data_root: Path, configs_root: Path) -> RebuildResult: ...
+
+    def ingest_diff(
+        self,
+        artifact_id: str,
+        data_root: Path,
+        configs_root: Path,
+        *,
+        requested_strategy: RequestedStrategy | str = RequestedStrategy.INCREMENTAL,
+        policy_id: str | None = None,
+    ) -> MaintenanceResult: ...
+
+    def load_graph(self) -> ProvenanceGraph: ...
+
+    def statuses(self, head_id: str) -> dict[str, StatusRecord]: ...
+
+    def normalized(self) -> dict[str, Any]: ...
+
+    def stats(self) -> dict[str, Any]: ...
+
+    def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult: ...
+
+
+class SQLiteBackend:
+    """Adapter exposing the backend contract over the existing SQLite index."""
+
+    name = BackendName.SQLITE
+
+    def __init__(self, index: ProvenanceIndex) -> None:
+        self.index = index
+        self.location_label = str(index.path)
+
+    def rebuild(self, data_root: Path, configs_root: Path) -> RebuildResult:
+        return self.index.rebuild(data_root, configs_root)
+
+    def sync(self, data_root: Path, configs_root: Path) -> RebuildResult:
+        return self.index.sync(data_root, configs_root)
+
+    def ingest_diff(
+        self,
+        artifact_id: str,
+        data_root: Path,
+        configs_root: Path,
+        *,
+        requested_strategy: RequestedStrategy | str = RequestedStrategy.INCREMENTAL,
+        policy_id: str | None = None,
+    ) -> MaintenanceResult:
+        started = perf_counter_ns()
+        del policy_id
+        if requested_strategy != "incremental":
+            raise ValidationFailed(f"unsupported_strategy: {requested_strategy}")
+        verified = load_dataset_diff(Path(data_root), artifact_id, verify_inputs=True)
+        changed_samples = len(verified.changes)
+        result: IngestResult = self.index.ingest_diff(artifact_id, data_root, configs_root)
+        total_entities = self.index.stats()["entities"]
+        dirty_ratio = result.dirty_entities / total_entities if total_entities else 0.0
+        if not result.inserted:
+            selected = SelectedStrategy.NO_OP
+            reason = "duplicate_artifact_no_op"
+        elif changed_samples == 0:
+            selected = SelectedStrategy.NO_OP
+            reason = "verified_zero_semantic_changes"
+        else:
+            selected = SelectedStrategy.INCREMENTAL
+            reason = "requested_incremental"
+        elapsed_ms = (perf_counter_ns() - started) / 1_000_000
+        return MaintenanceResult(
+            artifact_id=result.artifact_id,
+            inserted=result.inserted,
+            backend=self.name.value,
+            requested_strategy=RequestedStrategy.INCREMENTAL,
+            selected_strategy=selected,
+            strategy_reason=reason,
+            changed_samples=changed_samples,
+            dirty_entities=result.dirty_entities,
+            total_entities=total_entities,
+            dirty_ratio=dirty_ratio,
+            estimated_incremental_ms=None,
+            estimated_full_ms=None,
+            policy_version="sqlite-compat-v1",
+            elapsed_ms=elapsed_ms,
+            graph_hash=result.graph_hash,
+        )
+
+    def load_graph(self) -> ProvenanceGraph:
+        return self.index.load_graph()
+
+    @contextmanager
+    def read_snapshot(self) -> Iterator[ProvenanceReader]:
+        """Preserve the existing embedded index's read behavior."""
+        yield self
+
+    def statuses(self, head_id: str) -> dict[str, StatusRecord]:
+        return self.index.statuses(head_id)
+
+    def normalized(self) -> dict[str, Any]:
+        return self.index.normalized()
+
+    def stats(self) -> dict[str, Any]:
+        return self.index.stats()
+
+    def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult:
+        return self.index.verify(data_root, configs_root)
+
+
+def parse_backend(value: BackendName | str) -> BackendName:
+    if isinstance(value, BackendName):
+        return value
+    try:
+        return BackendName(value.lower())
+    except (AttributeError, ValueError) as exc:
+        raise ValidationFailed(f"unsupported_backend: {value}") from exc
+
+
+def make_backend(config: BackendConfig, data_root: Path) -> ProvenanceBackend:
+    name = parse_backend(config.name)
+    if name is BackendName.SQLITE:
+        return SQLiteBackend(ProvenanceIndex(provenance_index_path(Path(data_root))))
+    try:
+        module = import_module("vcp.provenance.postgres")
+    except ImportError:
+        raise ValidationFailed(
+            "missing_dependency: install with `uv sync --extra postgres`"
+        ) from None
+    return module.PostgresProvenanceBackend(config)
+
+
+__all__ = [
+    "BackendConfig",
+    "BackendName",
+    "MaintenanceResult",
+    "ProvenanceBackend",
+    "ProvenanceReader",
+    "RequestedStrategy",
+    "RebuildResult",
+    "SQLiteBackend",
+    "SelectedStrategy",
+    "VerifyIndexResult",
+    "make_backend",
+    "parse_backend",
+]

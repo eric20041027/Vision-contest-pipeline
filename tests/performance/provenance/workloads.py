@@ -7,6 +7,7 @@ Generation, artifact creation and copying are never timed as maintenance.
 
 from __future__ import annotations
 
+import gc
 import json
 import math
 import random
@@ -169,6 +170,10 @@ def finish_workload(
     baseline = build_graph(data, configs)
     if len(baseline.entities) != scenario.entities:
         raise ValueError("canonical fixture does not match the target entity count")
+    baseline_hash = graph_hash(baseline)
+    historical_changes = len(baseline.changes)
+    del baseline
+    gc.collect()
     delta = _diff(data, configs, before, after, "adaptive-delta")
     expected = build_graph(data, configs)
     if expected.gaps or any(e.broken_reason for e in expected.entities.values()):
@@ -177,9 +182,7 @@ def finish_workload(
     shutil.move(str(delta.artifact_dir), pending)
     source_id = dataset_version_id(before, delta.summary.from_samples_hash)
     target_id = dataset_version_id(after, delta.summary.to_samples_hash)
-    workload_hash = sha256_text(
-        scenario.scenario_hash + graph_hash(baseline) + graph_hash(expected)
-    )
+    workload_hash = sha256_text(scenario.scenario_hash + baseline_hash + graph_hash(expected))
     return Workload(
         scenario,
         data,
@@ -190,7 +193,7 @@ def finish_workload(
         target_id,
         sample_entities,
         delta.summary.total_changes,
-        len(baseline.changes),
+        historical_changes,
         expected,
         workload_hash,
     )
@@ -209,7 +212,7 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
     count = (scenario.entities - 20) // 3
     rng = random.Random(scenario.seed)
     changed = set(rng.sample(range(count), round(count * scenario.change_ratio)))
-    datasets = {}
+    source_dataset = None
     for name, revision in (
         ("synthetic-a", 0),
         ("synthetic-b", 1),
@@ -248,13 +251,16 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
         )
         dataset = Dataset.from_parts(card, samples)
         dataset.save(DatasetPaths.resolve(name, data_root=data, configs_root=configs))
-        datasets[name] = dataset
+        if name == "synthetic-source":
+            source_dataset = dataset
     transitions = (("synthetic-a", "synthetic-b"), ("synthetic-b", "synthetic-source"))
     if scenario.topology == "branched":
         transitions = (("synthetic-a", "synthetic-source"), ("synthetic-b", "synthetic-source"))
     for index, (before, after) in enumerate(transitions):
         _diff(data, configs, before, after, f"history-{index}")
-    dataset = datasets["synthetic-source"]
+    if source_dataset is None:  # pragma: no cover - fixed fixture definition above
+        raise RuntimeError("synthetic source dataset was not built")
+    dataset = source_dataset
     paths = DatasetPaths.resolve(dataset.card.name, data_root=data, configs_root=configs)
     plan = SplitPlan(
         plan_id="fixed",

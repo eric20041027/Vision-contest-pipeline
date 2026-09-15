@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from importlib import import_module
+from itertools import islice, zip_longest
 from pathlib import Path
 from threading import RLock
 from time import perf_counter_ns
@@ -82,6 +83,7 @@ _diagnostic_factory = None
 _previous_record_factory = None
 _ADVISORY_LOCK_KEY = WRITER_LOCK_KEY
 _FINGERPRINT_MODULUS = 1 << 256
+_DEFAULT_BATCH_SIZE = 4096
 _TABLES = (
     "entities",
     "provenance_edges",
@@ -316,6 +318,16 @@ class GraphRows:
     dataset_edge_changes: tuple[tuple[Any, ...], ...]
 
 
+def _batches(
+    rows: Iterator[Any], *, batch_size: int = _DEFAULT_BATCH_SIZE
+) -> Iterator[tuple[Any, ...]]:
+    """Yield bounded non-empty batches while preserving the source order."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    while batch := tuple(islice(rows, batch_size)):
+        yield batch
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -345,9 +357,8 @@ def _transition_artifact(graph: ProvenanceGraph, source: str, target: str) -> st
     return min(artifacts)
 
 
-def serialize_graph(graph: ProvenanceGraph, *, generation_id: UUID | str) -> GraphRows:
-    """Serialize every graph domain field without changing canonical graph semantics."""
-    entities = tuple(
+def _entity_rows(graph: ProvenanceGraph, generation_id: UUID | str) -> Iterator[tuple[Any, ...]]:
+    yield from (
         (
             generation_id,
             entity.entity_id,
@@ -359,7 +370,12 @@ def serialize_graph(graph: ProvenanceGraph, *, generation_id: UUID | str) -> Gra
         )
         for entity in (graph.entities[ident] for ident in sorted(graph.entities))
     )
-    edges = tuple(
+
+
+def _provenance_edge_rows(
+    graph: ProvenanceGraph, generation_id: UUID | str
+) -> Iterator[tuple[Any, ...]]:
+    yield from (
         (
             generation_id,
             edge.edge_id,
@@ -370,7 +386,11 @@ def serialize_graph(graph: ProvenanceGraph, *, generation_id: UUID | str) -> Gra
         )
         for edge in (graph.edges[ident] for ident in sorted(graph.edges))
     )
-    changes = []
+
+
+def _sample_change_rows(
+    graph: ProvenanceGraph, generation_id: UUID | str
+) -> Iterator[tuple[Any, ...]]:
     transition_by_change: dict[str, tuple[str, str]] = {}
     for transition, change_ids in sorted(graph.transitions.items()):
         for change_id in change_ids:
@@ -383,42 +403,71 @@ def serialize_graph(graph: ProvenanceGraph, *, generation_id: UUID | str) -> Gra
         except KeyError:
             source = dataset_version_id(change.from_dataset, change.from_samples_hash)
             target = dataset_version_id(change.to_dataset, change.to_samples_hash)
-        changes.append(
-            (
-                generation_id,
-                change.change_id,
-                change.schema_version,
-                source,
-                target,
-                change.from_dataset,
-                change.from_samples_hash,
-                change.to_dataset,
-                change.to_samples_hash,
-                change.sample_id,
-                change.change_type.value,
-                [item.value for item in change.changed_domains],
-                list(change.changed_fields),
-                [item.value for item in change.semantic_effects],
-                change.before_row_hash,
-                change.after_row_hash,
-            )
+        yield (
+            generation_id,
+            change.change_id,
+            change.schema_version,
+            source,
+            target,
+            change.from_dataset,
+            change.from_samples_hash,
+            change.to_dataset,
+            change.to_samples_hash,
+            change.sample_id,
+            change.change_type.value,
+            [item.value for item in change.changed_domains],
+            list(change.changed_fields),
+            [item.value for item in change.semantic_effects],
+            change.before_row_hash,
+            change.after_row_hash,
         )
-    dataset_edges = []
-    edge_changes = []
-    for (source, target), change_ids in sorted(graph.transitions.items()):
+
+
+def _dataset_edge_rows(
+    graph: ProvenanceGraph, generation_id: UUID | str
+) -> Iterator[tuple[Any, ...]]:
+    for (source, target), _change_ids in sorted(graph.transitions.items()):
         artifact_id = _transition_artifact(graph, source, target)
-        dataset_edges.append((generation_id, source, target, artifact_id))
-        edge_changes.extend(
-            (generation_id, source, target, change_id) for change_id in sorted(change_ids)
-        )
+        yield generation_id, source, target, artifact_id
+
+
+def _dataset_edge_change_rows(
+    graph: ProvenanceGraph, generation_id: UUID | str
+) -> Iterator[tuple[Any, ...]]:
+    for (source, target), change_ids in sorted(graph.transitions.items()):
+        for change_id in sorted(change_ids):
+            yield generation_id, source, target, change_id
+
+
+def _graph_row_iterators(
+    graph: ProvenanceGraph, generation_id: UUID | str
+) -> dict[str, Iterator[tuple[Any, ...]]]:
+    """Return stable production iterators without materializing table-sized tuples."""
+    return {
+        "entities": _entity_rows(graph, generation_id),
+        "provenance_edges": _provenance_edge_rows(graph, generation_id),
+        "sample_changes": _sample_change_rows(graph, generation_id),
+        "dataset_edges": _dataset_edge_rows(graph, generation_id),
+        "dataset_edge_changes": _dataset_edge_change_rows(graph, generation_id),
+    }
+
+
+def serialize_graph(graph: ProvenanceGraph, *, generation_id: UUID | str) -> GraphRows:
+    """Serialize every graph domain field without changing canonical graph semantics.
+
+    This compatibility API intentionally materializes tuples. Production writes and
+    parity checks use ``_graph_row_iterators`` directly so their extra memory stays
+    bounded by the configured batch size.
+    """
+    rows = _graph_row_iterators(graph, generation_id)
     return GraphRows(
         generation_id=generation_id,
         gaps=tuple(sorted(graph.gaps)),
-        entities=entities,
-        provenance_edges=edges,
-        sample_changes=tuple(changes),
-        dataset_edges=tuple(dataset_edges),
-        dataset_edge_changes=tuple(edge_changes),
+        entities=tuple(rows["entities"]),
+        provenance_edges=tuple(rows["provenance_edges"]),
+        sample_changes=tuple(rows["sample_changes"]),
+        dataset_edges=tuple(rows["dataset_edges"]),
+        dataset_edge_changes=tuple(rows["dataset_edge_changes"]),
     )
 
 
@@ -636,11 +685,18 @@ def _generation_fingerprint(graph: ProvenanceGraph) -> tuple[int, str]:
 
 
 def _status_rows(graph: ProvenanceGraph, generation_id: UUID | str) -> tuple[tuple[Any, ...], ...]:
-    rows = []
+    """Compatibility materialization for small callers and existing tests."""
+    return tuple(_iter_status_rows(graph, generation_id))
+
+
+def _iter_status_rows(
+    graph: ProvenanceGraph, generation_id: UUID | str
+) -> Iterator[tuple[Any, ...]]:
+    """Compute only one head's status mapping at a time, then release it."""
     for head in _status_heads(graph):
         statuses = compute_statuses(graph, head)
-        rows.extend(
-            (
+        for ident, record in sorted(statuses.items()):
+            yield (
                 generation_id,
                 head,
                 ident,
@@ -648,9 +704,21 @@ def _status_rows(graph: ProvenanceGraph, generation_id: UUID | str) -> tuple[tup
                 record.reason,
                 record.predecessor_id,
             )
-            for ident, record in sorted(statuses.items())
-        )
-    return tuple(rows)
+
+
+def _write_status_rows(
+    connection: Any,
+    graph: ProvenanceGraph,
+    generation_id: UUID | str,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> None:
+    _execute_many(
+        connection,
+        f"INSERT INTO {SCHEMA_NAME}.entity_status VALUES (%s, %s, %s, %s, %s, %s)",
+        _iter_status_rows(graph, generation_id),
+        batch_size=batch_size,
+    )
 
 
 def _status_heads(graph: ProvenanceGraph) -> list[str]:
@@ -694,57 +762,201 @@ def _ingested_artifact_rows(
     )
 
 
-def _execute_many(connection: Any, query: str, rows: Sequence[Sequence[Any]]) -> None:
-    if not rows:
-        return
+def _execute_many(
+    connection: Any,
+    query: str,
+    rows: Sequence[Sequence[Any]] | Iterator[Sequence[Any]],
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> None:
+    iterator = iter(rows)
     with connection.cursor() as cursor:
-        cursor.executemany(query, rows)
+        for batch in _batches(iterator, batch_size=batch_size):
+            cursor.executemany(query, batch)
 
 
-def _write_graph_rows(connection: Any, rows: GraphRows) -> None:
-    _execute_many(
-        connection,
-        f"""INSERT INTO {SCHEMA_NAME}.entities(
-            generation_id, entity_id, entity_type, key_value, dataset_version_id,
-            attributes, broken_reason
-        ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)""",
-        rows.entities,
-    )
-    _execute_many(
-        connection,
-        f"""INSERT INTO {SCHEMA_NAME}.provenance_edges(
-            generation_id, edge_id, source_id, target_id, edge_type, attributes
-        ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)""",
-        rows.provenance_edges,
-    )
-    _execute_many(
-        connection,
-        f"""INSERT INTO {SCHEMA_NAME}.sample_changes(
-            generation_id, change_id, schema_version, source_id, target_id,
-            from_dataset, from_samples_hash, to_dataset, to_samples_hash, sample_id,
-            change_type, changed_domains, changed_fields, semantic_effects,
-            before_row_hash, after_row_hash
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-        rows.sample_changes,
-    )
-    _execute_many(
-        connection,
-        f"""INSERT INTO {SCHEMA_NAME}.dataset_edges(
-            generation_id, source_id, target_id, artifact_id
-        ) VALUES (%s, %s, %s, %s)""",
-        rows.dataset_edges,
-    )
-    _execute_many(
-        connection,
-        f"""INSERT INTO {SCHEMA_NAME}.dataset_edge_changes(
-            generation_id, source_id, target_id, change_id
-        ) VALUES (%s, %s, %s, %s)""",
-        rows.dataset_edge_changes,
-    )
+_GRAPH_INSERTS = {
+    "entities": f"""INSERT INTO {SCHEMA_NAME}.entities(
+        generation_id, entity_id, entity_type, key_value, dataset_version_id,
+        attributes, broken_reason
+    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)""",
+    "provenance_edges": f"""INSERT INTO {SCHEMA_NAME}.provenance_edges(
+        generation_id, edge_id, source_id, target_id, edge_type, attributes
+    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)""",
+    "sample_changes": f"""INSERT INTO {SCHEMA_NAME}.sample_changes(
+        generation_id, change_id, schema_version, source_id, target_id,
+        from_dataset, from_samples_hash, to_dataset, to_samples_hash, sample_id,
+        change_type, changed_domains, changed_fields, semantic_effects,
+        before_row_hash, after_row_hash
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+    "dataset_edges": f"""INSERT INTO {SCHEMA_NAME}.dataset_edges(
+        generation_id, source_id, target_id, artifact_id
+    ) VALUES (%s, %s, %s, %s)""",
+    "dataset_edge_changes": f"""INSERT INTO {SCHEMA_NAME}.dataset_edge_changes(
+        generation_id, source_id, target_id, change_id
+    ) VALUES (%s, %s, %s, %s)""",
+}
+
+
+def _write_graph_rows(
+    connection: Any, rows: GraphRows, *, batch_size: int = _DEFAULT_BATCH_SIZE
+) -> None:
+    for table, query in _GRAPH_INSERTS.items():
+        _execute_many(connection, query, getattr(rows, table), batch_size=batch_size)
+
+
+def _write_graph(
+    connection: Any,
+    graph: ProvenanceGraph,
+    generation_id: UUID | str,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> None:
+    """Write a graph in bounded batches inside the caller-owned transaction."""
+    for table, rows in _graph_row_iterators(graph, generation_id).items():
+        _execute_many(connection, _GRAPH_INSERTS[table], rows, batch_size=batch_size)
+
+
+_GRAPH_SELECTS = {
+    "entities": f"""SELECT generation_id, entity_id, entity_type, key_value,
+        dataset_version_id, attributes, broken_reason
+        FROM {SCHEMA_NAME}.entities WHERE generation_id=%s ORDER BY entity_id""",
+    "provenance_edges": f"""SELECT generation_id, edge_id, source_id, target_id,
+        edge_type, attributes FROM {SCHEMA_NAME}.provenance_edges
+        WHERE generation_id=%s ORDER BY edge_id""",
+    "sample_changes": f"""SELECT generation_id, change_id, schema_version, source_id,
+        target_id, from_dataset, from_samples_hash, to_dataset, to_samples_hash,
+        sample_id, change_type, changed_domains, changed_fields, semantic_effects,
+        before_row_hash, after_row_hash FROM {SCHEMA_NAME}.sample_changes
+        WHERE generation_id=%s ORDER BY change_id""",
+    "dataset_edges": f"""SELECT generation_id, source_id, target_id, artifact_id
+        FROM {SCHEMA_NAME}.dataset_edges
+        WHERE generation_id=%s ORDER BY source_id, target_id""",
+    "dataset_edge_changes": f"""SELECT generation_id, source_id, target_id, change_id
+        FROM {SCHEMA_NAME}.dataset_edge_changes
+        WHERE generation_id=%s ORDER BY source_id, target_id, change_id""",
+}
+
+_GRAPH_COLUMNS = {
+    "entities": (
+        "generation_id",
+        "entity_id",
+        "entity_type",
+        "key_value",
+        "dataset_version_id",
+        "attributes",
+        "broken_reason",
+    ),
+    "provenance_edges": (
+        "generation_id",
+        "edge_id",
+        "source_id",
+        "target_id",
+        "edge_type",
+        "attributes",
+    ),
+    "sample_changes": tuple(
+        "generation_id change_id schema_version source_id target_id from_dataset "
+        "from_samples_hash to_dataset to_samples_hash sample_id change_type changed_domains "
+        "changed_fields semantic_effects before_row_hash after_row_hash".split()
+    ),
+    "dataset_edges": ("generation_id", "source_id", "target_id", "artifact_id"),
+    "dataset_edge_changes": ("generation_id", "source_id", "target_id", "change_id"),
+}
+
+_GRAPH_JSON_COLUMNS = {"entities": {5}, "provenance_edges": {5}}
+
+
+def _stream_query_rows(
+    connection: Any,
+    query: str,
+    params: Sequence[Any],
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> Iterator[Sequence[Any]]:
+    """Stream ordered rows through a transaction-scoped server cursor when available."""
+    cursor_name = f"vcp_parity_{uuid4().hex}"
+    try:
+        manager = connection.cursor(name=cursor_name)
+    except TypeError:  # Small DB-API test doubles may not implement named cursors.
+        manager = connection.cursor()
+    with manager as cursor:
+        result = cursor.execute(query, tuple(params))
+        source = result if hasattr(result, "fetchmany") else cursor
+        if not hasattr(source, "fetchmany"):
+            # Compatibility for minimal DB-API doubles; Psycopg's named cursor
+            # always takes the bounded fetchmany path above.
+            yield from result.fetchall()
+            return
+        while batch := source.fetchmany(batch_size):
+            yield from batch
+
+
+def _normalized_parity_field(table: str, index: int, value: Any) -> Any:
+    if index == 0 and _GRAPH_COLUMNS[table][index] == "generation_id":
+        return str(value)
+    if index in _GRAPH_JSON_COLUMNS.get(table, set()):
+        return _json(_json_object(value))
+    return value
+
+
+def _assert_ordered_rows_equal(
+    table: str,
+    expected: Iterator[Sequence[Any]],
+    actual: Iterator[Sequence[Any]],
+) -> None:
+    missing = object()
+    columns = _GRAPH_COLUMNS[table]
+    for row_number, (wanted, present) in enumerate(
+        zip_longest(expected, actual, fillvalue=missing), start=1
+    ):
+        if wanted is missing or present is missing:
+            raise IntegrityError(f"mismatch: {table} row {row_number} cardinality")
+        if len(wanted) != len(present):
+            raise IntegrityError(f"mismatch: {table} row {row_number} field count")
+        for index, (wanted_field, present_field) in enumerate(zip(wanted, present, strict=True)):
+            if _normalized_parity_field(table, index, wanted_field) != _normalized_parity_field(
+                table, index, present_field
+            ):
+                raise IntegrityError(f"mismatch: {table} row {row_number} field {columns[index]}")
+
+
+def _assert_graph_rows_parity(
+    connection: Any,
+    generation_id: UUID | str,
+    canonical: ProvenanceGraph,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> None:
+    """Compare every ordered relational field without a second graph-sized copy."""
+    try:
+        gap_rows = connection.execute(
+            f"SELECT value FROM {SCHEMA_NAME}.metadata WHERE generation_id=%s AND key=%s",
+            (generation_id, "graph_gaps"),
+        ).fetchall()
+        if len(gap_rows) != 1 or len(gap_rows[0]) != 1 or not isinstance(gap_rows[0][0], str):
+            raise ValueError
+        stored_gaps = json.loads(gap_rows[0][0])
+        if not isinstance(stored_gaps, list) or not all(
+            isinstance(gap, str) for gap in stored_gaps
+        ):
+            raise ValueError
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise IntegrityError("mismatch: graph_gaps metadata") from None
+    if tuple(stored_gaps) != tuple(sorted(canonical.gaps)):
+        raise IntegrityError("mismatch: graph_gaps metadata")
+    expected = _graph_row_iterators(canonical, generation_id)
+    for table, query in _GRAPH_SELECTS.items():
+        actual = _stream_query_rows(connection, query, (generation_id,), batch_size=batch_size)
+        _assert_ordered_rows_equal(table, expected[table], actual)
 
 
 def _load_graph_rows(
-    connection: Any, generation_id: UUID | str, *, topology_only: bool = False
+    connection: Any,
+    generation_id: UUID | str,
+    *,
+    topology_only: bool = False,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
 ) -> GraphRows:
     gaps_row = connection.execute(
         f"SELECT value FROM {SCHEMA_NAME}.metadata WHERE generation_id=%s AND key=%s",
@@ -752,48 +964,15 @@ def _load_graph_rows(
     ).fetchone()
     gaps_value = _scalar(gaps_row)
     gaps = tuple(json.loads(gaps_value)) if isinstance(gaps_value, str) else ()
-    queries = (
-        (
-            "entities",
-            f"""SELECT generation_id, entity_id, entity_type, key_value,
-                dataset_version_id, attributes, broken_reason
-                FROM {SCHEMA_NAME}.entities WHERE generation_id=%s ORDER BY entity_id""",
-        ),
-        (
-            "provenance_edges",
-            f"""SELECT generation_id, edge_id, source_id, target_id, edge_type, attributes
-                FROM {SCHEMA_NAME}.provenance_edges
-                WHERE generation_id=%s ORDER BY edge_id""",
-        ),
-        (
-            "sample_changes",
-            f"""SELECT generation_id, change_id, schema_version, source_id, target_id,
-                from_dataset, from_samples_hash, to_dataset, to_samples_hash, sample_id,
-                change_type, changed_domains, changed_fields, semantic_effects,
-                before_row_hash, after_row_hash
-                FROM {SCHEMA_NAME}.sample_changes
-                WHERE generation_id=%s ORDER BY change_id""",
-        ),
-        (
-            "dataset_edges",
-            f"""SELECT generation_id, source_id, target_id, artifact_id
-                FROM {SCHEMA_NAME}.dataset_edges
-                WHERE generation_id=%s ORDER BY source_id, target_id""",
-        ),
-        (
-            "dataset_edge_changes",
-            f"""SELECT generation_id, source_id, target_id, change_id
-                FROM {SCHEMA_NAME}.dataset_edge_changes
-                WHERE generation_id=%s ORDER BY source_id, target_id, change_id""",
-        ),
-    )
     loaded = {
         name: (
             ()
             if topology_only and name in {"sample_changes", "dataset_edge_changes"}
-            else tuple(connection.execute(query, (generation_id,)).fetchall())
+            else tuple(
+                _stream_query_rows(connection, query, (generation_id,), batch_size=batch_size)
+            )
         )
-        for name, query in queries
+        for name, query in _GRAPH_SELECTS.items()
     }
     return GraphRows(generation_id=generation_id, gaps=gaps, **loaded)
 
@@ -860,6 +1039,34 @@ def _insert_delta(connection: Any, rows: GraphRows) -> ProvenanceGraph:
     return deserialize_graph(GraphRows(generation_id=rows.generation_id, gaps=(), **inserted))
 
 
+def _insert_delta_graph(
+    connection: Any, graph: ProvenanceGraph, generation_id: UUID | str
+) -> ProvenanceGraph:
+    """Insert a delta lazily and retain only domain objects actually added."""
+    inserted = ProvenanceGraph()
+    rows = _graph_row_iterators(graph, generation_id)
+    for row in rows["entities"]:
+        if _insert_immutable(connection, "entities", row):
+            inserted.add_entity(graph.entities[row[1]])
+    for row in rows["provenance_edges"]:
+        if _insert_immutable(connection, "provenance_edges", row):
+            inserted.add_existing_edge(graph.edges[row[1]])
+    for row in rows["sample_changes"]:
+        if _insert_immutable(connection, "sample_changes", row):
+            inserted.changes[row[1]] = graph.changes[row[1]]
+    for row in rows["dataset_edges"]:
+        if _insert_immutable(connection, "dataset_edges", row):
+            inserted.transitions[(row[1], row[2])] = []
+    for row in rows["dataset_edge_changes"]:
+        if not _insert_immutable(connection, "dataset_edge_changes", row):
+            continue
+        transition = (row[1], row[2])
+        if transition not in inserted.transitions:
+            raise IntegrityError(f"mismatch: orphan dataset edge change {row[3]}")
+        inserted.transitions[transition].append(row[3])
+    return inserted
+
+
 def _verify_incremental_evidence(
     connection: Any, generation_id: UUID | str, data_root: Path, configs_root: Path
 ) -> tuple[tuple[str, int, str], ...]:
@@ -910,16 +1117,20 @@ def _write_selected_statuses(
             ON CONFLICT (generation_id, head_id, entity_id) DO UPDATE SET
             status=EXCLUDED.status, reason=EXCLUDED.reason,
             predecessor_id=EXCLUDED.predecessor_id""",
-        [
+        (
             (generation_id, head, ident, record.status.value, record.reason, record.predecessor_id)
             for ident, record in sorted(statuses.items())
-        ],
+        ),
     )
 
 
-def _read_status_rows(
-    connection: Any, generation_id: UUID | str, head_id: str | None = None
-) -> tuple[tuple[Any, ...], ...]:
+def _iter_status_query_rows(
+    connection: Any,
+    generation_id: UUID | str,
+    head_id: str | None = None,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> Iterator[Sequence[Any]]:
     query = f"""SELECT head_id, entity_id, status, reason, predecessor_id
         FROM {SCHEMA_NAME}.entity_status WHERE generation_id=%s"""
     params: tuple[Any, ...] = (generation_id,)
@@ -927,7 +1138,59 @@ def _read_status_rows(
         query += " AND head_id=%s"
         params += (head_id,)
     query += " ORDER BY head_id, entity_id"
-    return tuple(connection.execute(query, params).fetchall())
+    yield from _stream_query_rows(connection, query, params, batch_size=batch_size)
+
+
+def _read_status_rows(
+    connection: Any, generation_id: UUID | str, head_id: str | None = None
+) -> tuple[tuple[Any, ...], ...]:
+    return tuple(_iter_status_query_rows(connection, generation_id, head_id))
+
+
+def _assert_status_rows_parity(
+    connection: Any,
+    generation_id: UUID | str,
+    canonical: ProvenanceGraph,
+    *,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> None:
+    actual_heads = tuple(
+        row[0]
+        for row in _stream_query_rows(
+            connection,
+            f"SELECT DISTINCT head_id FROM {SCHEMA_NAME}.entity_status "
+            "WHERE generation_id=%s ORDER BY head_id",
+            (generation_id,),
+            batch_size=batch_size,
+        )
+    )
+    expected_heads = tuple(_status_heads(canonical))
+    if actual_heads != expected_heads:
+        raise IntegrityError("mismatch: rebuilt PostgreSQL dataset heads")
+    missing = object()
+    columns = ("head_id", "entity_id", "status", "reason", "predecessor_id")
+    for head in expected_heads:
+        statuses = compute_statuses(canonical, head)
+        expected = (
+            (head, ident, record.status.value, record.reason, record.predecessor_id)
+            for ident, record in sorted(statuses.items())
+        )
+        actual = _iter_status_query_rows(connection, generation_id, head, batch_size=batch_size)
+        for row_number, (wanted, present) in enumerate(
+            zip_longest(expected, actual, fillvalue=missing), start=1
+        ):
+            if wanted is missing or present is missing:
+                raise IntegrityError(
+                    f"mismatch: rebuilt PostgreSQL statuses for head {head} row {row_number}"
+                )
+            for index, (wanted_field, present_field) in enumerate(
+                zip(wanted, present, strict=True)
+            ):
+                if wanted_field != present_field:
+                    raise IntegrityError(
+                        "mismatch: rebuilt PostgreSQL statuses for head "
+                        f"{head} row {row_number} field {columns[index]}"
+                    )
 
 
 def _status_dict(rows: Sequence[Sequence[Any]]) -> dict[str, StatusRecord]:
@@ -1117,8 +1380,6 @@ class PostgresProvenanceBackend:
         digest = graph_hash(canonical)
         record_count, record_sum = _generation_fingerprint(canonical)
         snapshot_hash = _snapshot_hash(before)
-        graph_rows = serialize_graph(canonical, generation_id=generation_id)
-        status_rows = _status_rows(canonical, generation_id)
         checkpoint_rows = _checkpoint_rows(generation_id, data_root, configs_root, before)
         artifact_rows = _ingested_artifact_rows(generation_id, canonical, data_root)
         with _connection(self.config, self._psycopg) as connection:
@@ -1143,8 +1404,6 @@ class PostgresProvenanceBackend:
                     record_count,
                     record_sum,
                     snapshot_hash,
-                    graph_rows,
-                    status_rows,
                     checkpoint_rows,
                     artifact_rows,
                 )
@@ -1169,8 +1428,6 @@ class PostgresProvenanceBackend:
         record_count: int,
         record_sum: str,
         snapshot_hash: str,
-        graph_rows: GraphRows,
-        status_rows: Sequence[Sequence[Any]],
         checkpoint_rows: Sequence[Sequence[Any]],
         artifact_rows: Sequence[Sequence[Any]],
     ) -> None:
@@ -1197,16 +1454,12 @@ class PostgresProvenanceBackend:
             (
                 (generation_id, "backend_schema_version", str(POSTGRES_SCHEMA_VERSION)),
                 (generation_id, "build_string", build_string()),
-                (generation_id, "graph_gaps", _json(graph_rows.gaps)),
+                (generation_id, "graph_gaps", _json(tuple(sorted(canonical.gaps)))),
                 (generation_id, "canonical_snapshot", _json(before)),
             ),
         )
-        _write_graph_rows(connection, graph_rows)
-        _execute_many(
-            connection,
-            f"INSERT INTO {SCHEMA_NAME}.entity_status VALUES (%s, %s, %s, %s, %s, %s)",
-            status_rows,
-        )
+        _write_graph(connection, canonical, generation_id)
+        _write_status_rows(connection, canonical, generation_id)
         _execute_many(
             connection,
             f"INSERT INTO {SCHEMA_NAME}.ingest_checkpoints VALUES (%s, %s, %s, %s, %s)",
@@ -1255,11 +1508,7 @@ class PostgresProvenanceBackend:
         record_count: int,
         record_sum: str,
     ) -> None:
-        indexed = deserialize_graph(_load_graph_rows(connection, generation_id))
-        if indexed.normalized() != canonical.normalized():
-            raise IntegrityError("mismatch: rebuilt PostgreSQL provenance graph")
-        if graph_hash(indexed) != digest:
-            raise IntegrityError("mismatch: rebuilt PostgreSQL provenance graph hash")
+        _assert_graph_rows_parity(connection, generation_id, canonical)
         generation = connection.execute(
             f"""SELECT state, schema_version, built_at, graph_hash, graph_record_count,
                 graph_record_sum, canonical_snapshot_hash
@@ -1270,21 +1519,7 @@ class PostgresProvenanceBackend:
             raise IntegrityError("mismatch: rebuilt PostgreSQL generation state")
         if generation[3:6] != (digest, record_count, record_sum):
             raise IntegrityError("mismatch: rebuilt PostgreSQL generation fingerprint")
-        actual_heads = {
-            row[0]
-            for row in connection.execute(
-                f"SELECT DISTINCT head_id FROM {SCHEMA_NAME}.entity_status "
-                "WHERE generation_id=%s ORDER BY head_id",
-                (generation_id,),
-            ).fetchall()
-        }
-        expected_heads = set(_status_heads(canonical))
-        if actual_heads != expected_heads:
-            raise IntegrityError("mismatch: rebuilt PostgreSQL dataset heads")
-        for head in sorted(expected_heads):
-            actual = _status_dict(_read_status_rows(connection, generation_id, head))
-            if actual != compute_statuses(canonical, head):
-                raise IntegrityError(f"mismatch: rebuilt PostgreSQL statuses for head {head}")
+        _assert_status_rows_parity(connection, generation_id, canonical)
 
     def sync(self, data_root: Path, configs_root: Path) -> RebuildResult:
         """PostgreSQL v1 sync deliberately uses the same atomic full publication path."""
@@ -1497,8 +1732,6 @@ class PostgresProvenanceBackend:
                     new_generation = uuid4()
                     digest = graph_hash(canonical)
                     record_count, record_sum = _generation_fingerprint(canonical)
-                    graph_rows = serialize_graph(canonical, generation_id=new_generation)
-                    status_rows = _status_rows(canonical, new_generation)
                     checkpoint_rows = _checkpoint_rows(
                         new_generation, data_root, configs_root, before
                     )
@@ -1519,8 +1752,6 @@ class PostgresProvenanceBackend:
                         record_count,
                         record_sum,
                         _snapshot_hash(before),
-                        graph_rows,
-                        status_rows,
                         checkpoint_rows,
                         artifact_rows,
                     )
@@ -1541,9 +1772,7 @@ class PostgresProvenanceBackend:
                         raise IntegrityError("mismatch: provenance policy changed during ingest")
                     return result
 
-                inserted_delta = _insert_delta(
-                    connection, serialize_graph(delta, generation_id=generation_id)
-                )
+                inserted_delta = _insert_delta_graph(connection, delta, generation_id)
                 dirty = (
                     planned_dirty
                     if semantic
@@ -1702,6 +1931,11 @@ class PostgresProvenanceBackend:
         with self.read_snapshot() as reader:
             return reader.load_graph()
 
+    def assert_graph_parity(self, canonical: ProvenanceGraph) -> None:
+        """Stream-compare the active relational graph with an existing canonical graph."""
+        with self.read_snapshot() as reader:
+            _assert_graph_rows_parity(reader.connection, reader.generation_id, canonical)
+
     def statuses(self, head_id: str) -> dict[str, StatusRecord]:
         with self.read_snapshot() as reader:
             return reader.statuses(head_id)
@@ -1799,11 +2033,12 @@ class _PostgresReader:
         canonical = build_graph(data_root, configs_root)
         issues: list[str] = []
         with self._read() as (connection, generation_id):
-            indexed = deserialize_graph(_load_graph_rows(connection, generation_id))
-            if indexed.normalized() != canonical.normalized():
+            try:
+                _assert_graph_rows_parity(connection, generation_id, canonical)
+            except IntegrityError:
                 issues.append("graph differs from canonical replay")
-            digest = graph_hash(indexed)
-            count, record_sum = _generation_fingerprint(indexed)
+            digest = graph_hash(canonical)
+            count, record_sum = _generation_fingerprint(canonical)
             generation = connection.execute(
                 f"""SELECT state, schema_version, built_at, graph_hash, graph_record_count,
                     graph_record_sum, canonical_snapshot_hash
@@ -1822,23 +2057,15 @@ class _PostgresReader:
                 issues.append("recorded graph record sum differs")
             if generation[6] != _snapshot_hash(canonical_snapshot):
                 issues.append("canonical snapshot differs")
-            actual_heads = {
-                row[0]
-                for row in connection.execute(
-                    f"SELECT DISTINCT head_id FROM {SCHEMA_NAME}.entity_status "
-                    "WHERE generation_id=%s ORDER BY head_id",
-                    (generation_id,),
-                ).fetchall()
-            }
-            expected_heads = set(_status_heads(canonical))
-            if actual_heads != expected_heads:
-                issues.append("dataset heads differ")
-            for head in sorted(expected_heads):
-                wanted = compute_statuses(canonical, head)
-                present = _status_dict(_read_status_rows(connection, generation_id, head))
-                if present != wanted:
-                    issues.append(f"status differs for head {head}")
-        return VerifyIndexResult(not issues, issues, graph_hash(indexed))
+            try:
+                _assert_status_rows_parity(connection, generation_id, canonical)
+            except IntegrityError as error:
+                message = str(error)
+                if "dataset heads" in message:
+                    issues.append("dataset heads differ")
+                else:
+                    issues.append("status differs from canonical replay")
+        return VerifyIndexResult(not issues, issues, digest)
 
 
 __all__ = [

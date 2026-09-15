@@ -337,6 +337,33 @@ def test_full_rebuild_recovers_disposable_index(postgres_harness, roots, damage)
     assert_parity(backend, roots)
 
 
+@pytest.mark.parametrize("stored", [None, "[", "{}", '["unexpected"]'])
+def test_verify_rejects_graph_gap_metadata_drift(postgres_harness, roots, stored):
+    versions(roots)
+    backend = postgres_harness.backend
+    backend.rebuild(roots.data, roots.configs)
+    generation = postgres_harness.reader_generation()
+    with postgres_harness.connect() as connection:
+        if stored is None:
+            connection.execute(
+                "DELETE FROM vcp_provenance.metadata WHERE generation_id=%s AND key='graph_gaps'",
+                (generation,),
+            )
+        else:
+            connection.execute(
+                "UPDATE vcp_provenance.metadata SET value=%s "
+                "WHERE generation_id=%s AND key='graph_gaps'",
+                (stored, generation),
+            )
+
+    verified = backend.verify(roots.data, roots.configs)
+    assert not verified.ok
+    assert "graph differs from canonical replay" in verified.issues
+
+    backend.rebuild(roots.data, roots.configs)
+    assert_parity(backend, roots)
+
+
 def test_reader_sees_old_generation_until_rebuild_commit(postgres_harness, roots):
     versions(roots)
     backend = postgres_harness.backend

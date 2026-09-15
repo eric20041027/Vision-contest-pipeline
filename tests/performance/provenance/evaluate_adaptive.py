@@ -523,7 +523,27 @@ def prepare_workload(workload, policy, evidence):
     )
 
 
-def collect_rows(root, scenarios, *, methods, pg_runtime, policy=None, evidence=None):
+def collect_rows(
+    root,
+    scenarios,
+    *,
+    methods,
+    pg_runtime,
+    policy=None,
+    evidence=None,
+    policy_from=None,
+    isolated=False,
+):
+    if isolated:
+        policy_sha256 = policy_file_sha256(policy_from, policy) if policy is not None else None
+        return benchmark.run_matrix_isolated(
+            root,
+            scenarios,
+            methods=methods,
+            pg_runtime=pg_runtime,
+            policy_from=policy_from,
+            policy_sha256=policy_sha256,
+        )
     rows = []
     for scenario in scenarios:
         with tempfile.TemporaryDirectory(prefix="scenario-", dir=root) as temporary:
@@ -662,21 +682,24 @@ def main(argv=None) -> int:
     parser = SafeArgumentParser(description=__doc__)
     parser.add_argument("--policy-from", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--work-dir", type=Path)
     try:
         args = parser.parse_args(argv)
         if args.output.exists():
             raise ValidationFailed("heldout_output_exists")
         policy, evidence = load_calibration(args.policy_from)
         pg_runtime = benchmark.postgres_preflight()
-        with tempfile.TemporaryDirectory(prefix="vcp-heldout-") as temporary:
-            rows = collect_rows(
-                Path(temporary),
-                scenario_matrix(seeds=HELDOUT_SEEDS),
-                methods=EVALUATION_METHODS,
-                pg_runtime=pg_runtime,
-                policy=policy,
-                evidence=evidence,
-            )
+        work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
+        rows = collect_rows(
+            work_dir,
+            scenario_matrix(seeds=HELDOUT_SEEDS),
+            methods=EVALUATION_METHODS,
+            pg_runtime=pg_runtime,
+            policy=policy,
+            evidence=evidence,
+            policy_from=args.policy_from,
+            isolated=True,
+        )
         result = evaluate_policy(args.policy_from, rows)
         document = {
             "kind": "postgres-provenance-heldout-v1",

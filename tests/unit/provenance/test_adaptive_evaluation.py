@@ -579,6 +579,33 @@ def test_heldout_cli_publishes_honest_gates_on_unit_data(tmp_path, monkeypatch, 
     assert "status=" + ("FAIL" if slow else "OK") in capsys.readouterr().err
 
 
+def test_collect_rows_can_delegate_to_process_isolated_checkpoint_runner(tmp_path, monkeypatch):
+    policy = object()
+    policy_path = tmp_path / "policy.json"
+    observed = {}
+    monkeypatch.setattr(evaluation, "policy_file_sha256", lambda path, value: "a" * 64)
+
+    def isolated(root, scenarios, **kwargs):
+        observed.update(root=root, scenarios=list(scenarios), kwargs=kwargs)
+        return [{"status": "ok"}]
+
+    monkeypatch.setattr(evaluation.benchmark, "run_matrix_isolated", isolated)
+    scenarios = [Scenario(40, 0.5, "chain", strategy.HELDOUT_SEEDS[0])]
+    assert evaluation.collect_rows(
+        tmp_path,
+        scenarios,
+        methods=evaluation.EVALUATION_METHODS,
+        pg_runtime="pg",
+        policy=policy,
+        evidence="evidence",
+        policy_from=policy_path,
+        isolated=True,
+    ) == [{"status": "ok"}]
+    assert observed["root"] == tmp_path
+    assert observed["kwargs"]["policy_from"] == policy_path
+    assert observed["kwargs"]["policy_sha256"] == "a" * 64
+
+
 def test_task10_rows_parse_but_small_smoke_cannot_be_normative(tmp_path):
     rows = []
     for seed in strategy.CALIBRATION_SEEDS:

@@ -120,6 +120,342 @@ def test_six_exact_methods():
     )
 
 
+def test_exact_graph_comparison_is_fieldwise_and_detects_late_mismatch(tmp_path):
+    first = build_scenario(tmp_path / "first", Scenario(40, 0.5, "chain", 20260913))
+    second = build_scenario(tmp_path / "second", Scenario(40, 0.5, "chain", 20260913))
+    assert bench.graphs_equal_exact(first.expected, second.expected)
+    last = sorted(second.expected.entities)[-1]
+    second.expected.entities[last] = second.expected.entities[last].model_copy(
+        update={"broken_reason": "late-mismatch"}
+    )
+    assert not bench.graphs_equal_exact(first.expected, second.expected)
+
+
+def test_checkpoint_is_write_once_manifest_last_and_fail_closed(tmp_path):
+    contract = {
+        "schema_version": 1,
+        "matrix": [{"scenario_hash": "a" * 64}],
+        "methods": ["postgres_full"],
+        "policy_sha256": "b" * 64,
+        "environment_fingerprint": "c" * 64,
+        "vcp_commit": "d" * 40,
+    }
+    store = bench.CheckpointStore(tmp_path / "work", contract)
+    store.initialize()
+    key = bench.SpoolKey("a" * 64, "postgres_full", "sample", 0)
+    payload = {"status": "ok", "samples": [{"maintenance_ms": 1.0}]}
+    store.write(key, payload)
+    record = store.record_path(key)
+    assert sorted(path.name for path in record.iterdir()) == ["manifest.json", "payload.json"]
+    assert record.stat().st_mtime_ns >= (record / "manifest.json").stat().st_mtime_ns
+    assert store.read(key) == payload
+    with pytest.raises(ValueError, match="write-once"):
+        store.write(key, payload)
+    with pytest.raises(ValueError, match="checkpoint contract mismatch"):
+        bench.CheckpointStore(tmp_path / "work", {**contract, "vcp_commit": "e" * 40}).initialize()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("vcp_commit", "e" * 40),
+        ("environment_fingerprint", "e" * 64),
+        ("policy_sha256", "e" * 64),
+        ("matrix", [{"scenario_hash": "f" * 64}]),
+    ],
+)
+def test_checkpoint_resume_rejects_identity_drift(tmp_path, field, value):
+    contract = {
+        "schema_version": 1,
+        "matrix": [{"scenario_hash": "a" * 64}],
+        "methods": ["postgres_full"],
+        "policy_sha256": "b" * 64,
+        "environment_fingerprint": "c" * 64,
+        "vcp_commit": "d" * 40,
+    }
+    bench.CheckpointStore(tmp_path, contract).initialize()
+    with pytest.raises(ValueError, match="checkpoint contract mismatch"):
+        bench.CheckpointStore(tmp_path, {**contract, field: value}).initialize()
+
+
+def test_relevant_source_snapshot_tracks_paths_and_dirty_content_but_not_docs(tmp_path):
+    relevant = (
+        tmp_path / "src/vcp/provenance/backend.py",
+        tmp_path / "src/vcp/data/dataset.py",
+        tmp_path / "src/vcp/core/config.py",
+        tmp_path / "src/vcp/measure/schema.py",
+        tmp_path / "src/vcp/artifact/store.py",
+        tmp_path / "tests/performance/provenance/adaptive_benchmark.py",
+        tmp_path / "pyproject.toml",
+        tmp_path / "uv.lock",
+    )
+    for index, path in enumerate(relevant):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"value = {index}\n", encoding="utf-8", newline="\n")
+
+    first = bench._source_tree_snapshot(tmp_path)
+    assert [row["path"] for row in first["files"]] == sorted(
+        path.relative_to(tmp_path).as_posix() for path in relevant
+    )
+
+    docs = tmp_path / "docs/benchmarks/evidence.json"
+    docs.parent.mkdir(parents=True)
+    docs.write_text("unrelated\n", encoding="utf-8", newline="\n")
+    assert bench._source_tree_snapshot(tmp_path) == first
+
+    for path in relevant:
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original + "dirty\n", encoding="utf-8", newline="\n")
+        assert bench._source_tree_snapshot(tmp_path)["sha256"] != first["sha256"]
+        path.write_text(original, encoding="utf-8", newline="\n")
+
+
+def _runtime_identity(*, cpu="Unit CPU", ram=16 * 1024**3):
+    return {
+        "system": "Windows",
+        "system_release": "11",
+        "system_version": "10.0.26200",
+        "machine": "AMD64",
+        "python_version": "3.12.14",
+        "python_implementation": "CPython",
+        "cpu_count": 8,
+        "cpu_model": cpu,
+        "physical_cpu_cores": 4,
+        "logical_cpu_count": 8,
+        "ram_bytes": ram,
+        "disk_path": "C:\\",
+        "disk_total_bytes": 1_000_000,
+        "disk_free_bytes": 123_456,
+        "sqlite_version": "3.50.4",
+        "vcp_commit": "d" * 40,
+    }
+
+
+def _postgres_identity(*, version=170011, fingerprint="c" * 64):
+    return {
+        "postgresql_major": 17,
+        "postgresql_version": version,
+        "postgresql_server_version": "17.11" if version == 170011 else "17.10",
+        "deployment_kind": "native_portable",
+        "image_digest": None,
+        "image_digest_source": "not_applicable",
+        "operator_declared_image_digest": None,
+        "operator_declared_image_digest_source": None,
+        "environment_fingerprint": fingerprint,
+        "backend_schema_version": 1,
+    }
+
+
+def test_checkpoint_contract_pins_exact_runtime_postgres_and_source_identity(tmp_path, monkeypatch):
+    runtime = _runtime_identity()
+    source = {"schema_version": 1, "files": [], "sha256": "e" * 64}
+    monkeypatch.setattr(bench, "runtime_environment", lambda *_args: dict(runtime))
+    monkeypatch.setattr(bench, "_source_tree_snapshot", lambda: source)
+
+    contract = bench._checkpoint_contract(
+        tmp_path, [], bench.METHODS, 1, "a" * 64, _postgres_identity()
+    )
+    identity = contract["execution_identity"]
+    assert identity["runtime"]["cpu_model"] == "Unit CPU"
+    assert identity["runtime"]["ram_bytes"] == 16 * 1024**3
+    assert "disk_free_bytes" not in identity["runtime"]
+    assert identity["postgresql"]["postgresql_server_version"] == "17.11"
+    assert identity["source_tree"] == source
+    assert contract["execution_identity_sha256"] == bench.sha256_text(bench._json_text(identity))
+
+    postgres_drift = bench._checkpoint_contract(
+        tmp_path, [], bench.METHODS, 1, "a" * 64, _postgres_identity(version=170010)
+    )
+    assert postgres_drift["execution_identity_sha256"] != contract["execution_identity_sha256"]
+    store_root = tmp_path / "checkpoint"
+    bench.CheckpointStore(store_root, contract).initialize()
+    with pytest.raises(ValueError, match="checkpoint contract mismatch"):
+        bench.CheckpointStore(store_root, postgres_drift).initialize()
+
+    monkeypatch.setattr(
+        bench,
+        "runtime_environment",
+        lambda *_args: _runtime_identity(cpu="Other CPU", ram=32 * 1024**3),
+    )
+    hardware_drift = bench._checkpoint_contract(
+        tmp_path, [], bench.METHODS, 1, "a" * 64, _postgres_identity()
+    )
+    assert hardware_drift["execution_identity_sha256"] != contract["execution_identity_sha256"]
+    with pytest.raises(ValueError, match="checkpoint contract mismatch"):
+        bench.CheckpointStore(store_root, hardware_drift).initialize()
+
+
+def test_checkpoint_record_rejects_environment_drift_on_write_and_read(tmp_path):
+    runtime = bench._stable_runtime_identity(_runtime_identity())
+    postgres = _postgres_identity()
+    identity = {
+        "schema_version": 1,
+        "runtime": runtime,
+        "postgresql": postgres,
+        "source_tree": {"schema_version": 1, "files": [], "sha256": "e" * 64},
+    }
+    contract = {
+        "schema_version": 1,
+        "execution_identity": identity,
+        "execution_identity_sha256": bench.sha256_text(bench._json_text(identity)),
+    }
+    store = bench.CheckpointStore(tmp_path, contract)
+    store.initialize()
+    good_environment = {**_runtime_identity(), **postgres}
+    good = bench.SpoolKey("a" * 64, "postgres_full", "sample", 0)
+    store.write(good, {"status": "ok", "environment": good_environment})
+    assert store.read(good)["environment"] == good_environment
+
+    drifted = bench.SpoolKey("a" * 64, "postgres_full", "sample", 1)
+    with pytest.raises(ValueError, match="checkpoint record environment mismatch"):
+        store.write(
+            drifted,
+            {
+                "status": "ok",
+                "environment": {**good_environment, "postgresql_server_version": "17.10"},
+            },
+        )
+
+    payload_path = store.record_path(good) / "payload.json"
+    envelope = json.loads(payload_path.read_text(encoding="utf-8"))
+    envelope["payload"]["environment"]["environment_fingerprint"] = "f" * 64
+    payload_path.write_text(bench._json_text(envelope), encoding="utf-8", newline="\n")
+    manifest_path = store.record_path(good) / "manifest.json"
+    manifest_path.write_text(
+        bench._json_text({"schema_version": 1, "payload_sha256": bench.sha256_file(payload_path)}),
+        encoding="utf-8",
+        newline="\n",
+    )
+    with pytest.raises(ValueError, match="checkpoint record environment mismatch"):
+        store.read(good)
+
+
+def test_checkpoint_rejects_secret_payload_before_claim(tmp_path):
+    store = bench.CheckpointStore(tmp_path, {"schema_version": 1})
+    store.initialize()
+    key = bench.SpoolKey("a" * 64, "postgres_full", "sample", 0)
+    with pytest.raises(ValueError, match="unsafe checkpoint evidence"):
+        store.write(key, {"connection_uri": "postgresql://private"})
+    assert not store.record_path(key).exists()
+
+
+def test_hidden_child_entrypoint_does_not_require_formal_output(tmp_path, monkeypatch):
+    observed = {}
+
+    def child(work_dir, scenario_hash, policy_from):
+        observed.update(
+            work_dir=work_dir,
+            scenario_hash=scenario_hash,
+            policy_from=policy_from,
+        )
+        return 0
+
+    monkeypatch.setattr(bench, "_child_run_scenario", child)
+    assert (
+        bench.main(
+            [
+                "--_child-work-dir",
+                str(tmp_path),
+                "--_child-scenario-hash",
+                "a" * 64,
+            ]
+        )
+        == 0
+    )
+    assert observed == {
+        "work_dir": tmp_path,
+        "scenario_hash": "a" * 64,
+        "policy_from": None,
+    }
+
+
+def test_formal_main_uses_persistent_isolated_checkpoint_runner(tmp_path, monkeypatch):
+    output = tmp_path / "result.json"
+    work_dir = tmp_path / "checkpoint"
+    policy_path = tmp_path / "policy.json"
+    policy = SimpleNamespace(id="unit-policy")
+    observed = {}
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg-runtime")
+    monkeypatch.setattr(bench, "load_frozen_policy", lambda path: (policy, "evidence", "a" * 64))
+    monkeypatch.setattr(bench, "empirical_crossover", lambda evidence: {})
+    monkeypatch.setattr(
+        bench,
+        "run_matrix",
+        lambda *args, **kwargs: pytest.fail("legacy in-process runner used"),
+    )
+
+    def isolated(root, scenarios, **kwargs):
+        observed.update(root=root, scenarios=list(scenarios), kwargs=kwargs)
+        return [{"method": "postgres_full", "status": "ok", "environment": {}}]
+
+    monkeypatch.setattr(bench, "run_matrix_isolated", isolated)
+    assert (
+        bench.main(
+            [
+                "--entities",
+                "40",
+                "--ratios",
+                "0.5",
+                "--seeds",
+                "20260913",
+                "--repetitions",
+                "1",
+                "--policy-from",
+                str(policy_path),
+                "--work-dir",
+                str(work_dir),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert observed["root"] == work_dir
+    assert observed["kwargs"]["policy_from"] == policy_path
+    assert observed["kwargs"]["policy_sha256"] == "a" * 64
+    assert output.exists()
+
+
+def test_postgres_materialized_heads_query_uses_active_generation():
+    queries = []
+
+    class Connection:
+        def execute(self, query):
+            queries.append(query)
+            return [("head",)]
+
+    @contextmanager
+    def connect():
+        yield Connection()
+
+    state = SimpleNamespace(backend=SimpleNamespace(index=None), connect=connect)
+    assert bench._materialized_status_heads(state, "postgres_full", []) == {"head"}
+    assert "vcp_provenance.active_generation" in queries[0]
+
+
+def test_explain_connection_delegates_named_cursor_reads():
+    calls = []
+
+    class Cursor:
+        def execute(self, query, params=()):
+            calls.append((query, params))
+            return self
+
+        def fetchmany(self, size):
+            return [(size,)]
+
+    class Connection:
+        @contextmanager
+        def cursor(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            yield Cursor()
+
+    observed = bench._ExplainConnection(Connection())
+    with observed.cursor(name="parity") as cursor:
+        assert cursor.execute("SELECT 1").fetchmany(4) == [(4,)]
+    assert calls[0] == ((), {"name": "parity"})
+
+
 def test_production_runner_reuses_generator_and_preserves_legacy_result_fields(tmp_path):
     from performance.provenance import workloads
 
@@ -481,14 +817,22 @@ def test_extra_materialized_head_fails_parity_and_excludes_performance(tmp_path,
     @contextmanager
     def extra_head(method, data, **kwargs):
         with original(method, data, **kwargs) as state:
-            normalize = state.backend.normalized
+            rebuild = state.backend.rebuild
 
-            def corrupted():
-                value = normalize()
-                value["statuses"].append({"head_id": "extra-materialized-head"})
-                return value
+            def corrupted(*args, **kwargs):
+                result = rebuild(*args, **kwargs)
+                connection = state.backend.index._open()
+                try:
+                    connection.execute(
+                        "INSERT INTO entity_status VALUES(?,?,?,?,?)",
+                        ("extra-materialized-head", "unit", "CURRENT", "unit", None),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                return result
 
-            state.backend.normalized = corrupted
+            state.backend.rebuild = corrupted
             yield state
 
     monkeypatch.setattr(bench, "fresh_backend", extra_head)
@@ -758,7 +1102,7 @@ def test_every_formal_runner_rejects_sensitive_explain_before_publication(
             lambda path: (SimpleNamespace(id="unit"), object(), "a" * 64),
         )
         monkeypatch.setattr(bench, "empirical_crossover", lambda evidence: {})
-        monkeypatch.setattr(bench, "run_matrix", lambda *args, **kwargs: [unsafe])
+        monkeypatch.setattr(bench, "run_matrix_isolated", lambda *args, **kwargs: [unsafe])
         assert (
             bench.main(
                 [

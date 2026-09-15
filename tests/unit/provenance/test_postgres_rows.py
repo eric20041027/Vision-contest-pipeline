@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from vcp.cli import app
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
+from vcp.provenance import postgres
 from vcp.provenance.backend import BackendConfig, BackendName
 from vcp.provenance.graph import ProvenanceGraph, dataset_version_id
 from vcp.provenance.index import _canonical_snapshot
@@ -101,6 +102,130 @@ def test_graph_rows_round_trip_exactly(tiny_graph):
     assert deserialize_graph(rows).normalized() == tiny_graph.normalized()
 
 
+def test_chunked_batches_cover_empty_boundary_and_partial_tail():
+    assert list(postgres._batches(iter(()), batch_size=2)) == []
+    assert list(postgres._batches(iter(range(4)), batch_size=2)) == [(0, 1), (2, 3)]
+    assert list(postgres._batches(iter(range(5)), batch_size=2)) == [
+        (0, 1),
+        (2, 3),
+        (4,),
+    ]
+
+
+def test_write_graph_rows_limits_every_executemany_batch(tiny_graph):
+    rows = serialize_graph(tiny_graph, generation_id=GENERATION)
+    rows = rows.__class__(
+        generation_id=rows.generation_id,
+        gaps=rows.gaps,
+        entities=rows.entities * 3,
+        provenance_edges=(),
+        sample_changes=(),
+        dataset_edges=(),
+        dataset_edge_changes=(),
+    )
+    connection = _FakeConnection()
+
+    postgres._write_graph_rows(connection, rows, batch_size=2)
+
+    assert [event[1] for event in connection.events if isinstance(event, tuple)] == [2, 2, 2]
+
+
+def test_transaction_rolls_back_rows_written_across_multiple_batches(tiny_graph):
+    rows = serialize_graph(tiny_graph, generation_id=GENERATION)
+    rows = rows.__class__(
+        generation_id=rows.generation_id,
+        gaps=rows.gaps,
+        entities=rows.entities * 3,
+        provenance_edges=(),
+        sample_changes=(),
+        dataset_edges=(),
+        dataset_edge_changes=(),
+    )
+
+    class FailingConnection(_FakeConnection):
+        def executemany(self, query, batch):
+            super().executemany(query, batch)
+            if len([event for event in self.events if isinstance(event, tuple)]) == 3:
+                raise RuntimeError("injected third batch failure")
+
+    connection = FailingConnection()
+
+    with pytest.raises(RuntimeError, match="third batch"):
+        with connection.transaction():
+            postgres._write_graph_rows(connection, rows, batch_size=2)
+
+    assert connection.tables["entities"] == []
+    assert connection.events[-1] == "rollback"
+
+
+def test_streaming_exact_parity_detects_field_mismatch(tiny_graph):
+    rows = serialize_graph(tiny_graph, generation_id=GENERATION)
+    connection = _FakeConnection()
+    connection.tables["metadata"] = [(GENERATION, "graph_gaps", '["broken-but-preserved"]')]
+    connection.tables["entities"] = list(rows.entities)
+    connection.tables["entities"][1] = (
+        *connection.tables["entities"][1][:-1],
+        "wrong-broken-reason",
+    )
+
+    with pytest.raises(IntegrityError, match="entities row 2"):
+        postgres._assert_graph_rows_parity(
+            connection,
+            GENERATION,
+            tiny_graph,
+            batch_size=1,
+        )
+
+    assert connection.events.count("named_cursor") == 1
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        "[",
+        "{}",
+        "[]",
+        '["broken-but-preserved", "unexpected"]',
+        '["unexpected", "broken-but-preserved"]',
+    ],
+    ids=("missing", "invalid-json", "wrong-type", "truncated", "extra", "wrong-order"),
+)
+def test_streaming_exact_parity_rejects_graph_gap_drift(tiny_graph, stored):
+    rows = serialize_graph(tiny_graph, generation_id=GENERATION)
+    connection = _FakeConnection()
+    for table in (
+        "entities",
+        "provenance_edges",
+        "sample_changes",
+        "dataset_edges",
+        "dataset_edge_changes",
+    ):
+        connection.tables[table] = list(getattr(rows, table))
+    if stored is not None:
+        connection.tables["metadata"] = [(GENERATION, "graph_gaps", stored)]
+
+    with pytest.raises(IntegrityError, match="graph_gaps"):
+        postgres._assert_graph_rows_parity(connection, GENERATION, tiny_graph)
+
+
+def test_streaming_exact_parity_accepts_exact_sorted_graph_gaps(tiny_graph):
+    tiny_graph.gaps = ["z-gap", "a-gap"]
+    rows = serialize_graph(tiny_graph, generation_id=GENERATION)
+    connection = _FakeConnection()
+    for table in (
+        "entities",
+        "provenance_edges",
+        "sample_changes",
+        "dataset_edges",
+        "dataset_edge_changes",
+    ):
+        connection.tables[table] = list(getattr(rows, table))
+    connection.tables["metadata"] = [(GENERATION, "graph_gaps", '["a-gap","z-gap"]')]
+
+    postgres._assert_graph_rows_parity(connection, GENERATION, tiny_graph)
+
+
 def test_graph_rows_normalize_dataset_edge_change_ids(tiny_graph):
     second = _change("sample-2")
     tiny_graph.changes[second.change_id] = second
@@ -159,6 +284,16 @@ class _Cursor:
     def fetchall(self):
         return list(self._rows)
 
+    def fetchmany(self, size):
+        rows = self._rows[:size]
+        del self._rows[:size]
+        return rows
+
+    def execute(self, query, params=()):
+        result = self._connection.execute(query, params)
+        self._rows = list(result.fetchall())
+        return self
+
     def executemany(self, query, rows):
         self._connection.executemany(query, rows)
 
@@ -200,12 +335,16 @@ class _FakeConnection:
     def close(self):
         pass
 
-    def cursor(self):
+    def cursor(self, name=None):
+        if name is not None:
+            self.events.append("named_cursor")
         return _Cursor(connection=self)
 
     def executemany(self, query, rows):
+        materialized = tuple(rows)
+        self.events.append(("executemany", len(materialized)))
         table = query.split("INSERT INTO vcp_provenance.", 1)[1].split("(", 1)[0].split()[0]
-        self.tables[table].extend(tuple(row) for row in rows)
+        self.tables[table].extend(tuple(row) for row in materialized)
 
     def execute(self, query, params=()):
         compact = " ".join(query.split())

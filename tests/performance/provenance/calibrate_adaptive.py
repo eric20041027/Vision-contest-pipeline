@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 from vcp.core.atomic import write_once_text
@@ -87,18 +86,20 @@ def publish_calibration(rows, output):
 def main(argv=None) -> int:
     parser = SafeArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--work-dir", type=Path)
     try:
         args = parser.parse_args(argv)
         if args.output.exists():
             raise ValidationFailed("calibration_output_exists")
         pg_runtime = benchmark.postgres_preflight()
-        with tempfile.TemporaryDirectory(prefix="vcp-calibration-") as temporary:
-            rows = collect_rows(
-                Path(temporary),
-                scenario_matrix(seeds=CALIBRATION_SEEDS),
-                methods=FIXED_METHODS,
-                pg_runtime=pg_runtime,
-            )
+        work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
+        rows = collect_rows(
+            work_dir,
+            scenario_matrix(seeds=CALIBRATION_SEEDS),
+            methods=FIXED_METHODS,
+            pg_runtime=pg_runtime,
+            isolated=True,
+        )
         publish_calibration(rows, args.output)
         print("VERDICT cmd=provenance.calibrate status=OK", file=sys.stderr)
         return 0

@@ -21,6 +21,8 @@ policy artifact ID/hash、latency、crossover、adaptive gate pass/fail 或 RSNA
 | `postgres-provenance-calibration-v1.run.json` / `.log.txt` | ABORT `resource_guard_available_ram`：可用 RAM 低於 2 GiB 持續 30 秒；runner private bytes 峰值 16.3 GB；沒有正式 calibration JSON，沒有 policy | `5c60b75c` / `dc71b39e` |
 | `postgres-provenance-1m-memory-gate-v2.json`、`-v3.json`、`-v4.json` | 非正式單場景資源護欄，皆 ABORT `system_available_ram_lt_2_gib_sustained_30s`；v4 的 historical diff streaming 已完成（該階段 private ≈0.52 GiB），止於 `baseline_graph_build`（peak private 5.67 GiB、最低可用 RAM 0.556 GiB）；v1 未保存 | `724634e8` / `4672be87` / `a2c295df` |
 
+| `postgres-provenance-exploratory-v1.json` / `-explain.json` / `.md` | 探路矩陣（非正式）：1K/10K/100K × 9 ratios × 2 topologies × 2 seeds = 108 場景、每場景 1 次、五個固定方法；540/540 parity；ratio > 0 每格 incremental 都快於 full（100K 時為 full 的 13–45%）；1M 與 adaptive 未跑 | `98247c28` / `451550ee` |
+
 完整 SHA-256 以 `sha256sum docs/benchmarks/postgres-provenance-*` 為準。1M 場景的瓶頸不在 fixture
 writer，而在 canonical graph replay 讀取約 41 萬筆 diff 事件時同時常駐文字、lines、pydantic change list
 與 graph；graph replay 已改為串流（`open_dataset_diff`：先整檔驗證、再逐筆重放，`load_dataset_diff`
@@ -115,7 +117,7 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 |---|---|
 | PostgreSQL server version | 17.11（`server_version_num` 170011）live readback；`integration-v3.json` |
 | Live integration | PASS 51/51 at `d8cc334`（`integration-v3`）；Linux CI / Docker Compose host 仍缺 |
-| Six-method scaled result | Absent |
+| Six-method scaled result | Absent（探路版五方法 1K–100K 見 `postgres-provenance-exploratory-v1.md`，非正式） |
 | Large-scale 10K/100K/1M execution | Absent；1M memory gate v2–v4 ABORT 於 `baseline_graph_build`（非正式） |
 | Real/RSNA six-method result | Absent |
 | Calibration result JSON | Absent；v1 嘗試 ABORT（RAM 護欄，`calibration-v1.run.json`） |

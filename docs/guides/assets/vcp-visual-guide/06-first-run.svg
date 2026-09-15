@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="780" viewBox="0 0 1600 780" role="img" aria-labelledby="title desc">
+  <title id="title">第一次跑通比賽的最小閉環</title>
+  <desc id="desc">十個步驟從安裝環境到三個里程碑備份，依資料、訓練與量測、提交治理、備份四個階段上色；每一步以 VERDICT OK 收尾才進下一步。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="780" fill="#f8fafc"/>
+  <text x="800" y="56" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="34" font-weight="700" fill="#14213d">第一次跑通比賽：先把證據鏈走完</text>
+  <text x="800" y="92" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="18" fill="#475569">十步各自以 VERDICT OK 收尾才進下一步；最高分是之後的事</text>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" filter="url(#shadow)">
+    <g transform="translate(60 140)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#1769aa" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#1769aa"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">1</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">安裝核心環境</text>
+      <text x="22" y="90" font-size="15" fill="#334155">一個 venv 給 vcp 本身</text>
+      <text x="22" y="118" font-size="15" fill="#334155">訓練框架各自 venv</text>
+      <text x="22" y="146" font-size="15" fill="#334155">DICOM 資料另加 extra</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#e0f2fe"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#075985">uv sync --extra dicom</text>
+    </g>
+    <g transform="translate(360 140)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#1769aa" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#1769aa"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">2</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">指定資料根目錄</text>
+      <text x="22" y="90" font-size="15" fill="#334155">raw 永不修改</text>
+      <text x="22" y="118" font-size="15" fill="#334155">configs 留在 repo、進 git</text>
+      <text x="22" y="146" font-size="15" fill="#334155">資料與快取都在根目錄下</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#e0f2fe"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#075985">VCP_DATA_ROOT=C:/vcp-data</text>
+    </g>
+    <g transform="translate(660 140)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#1769aa" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#1769aa"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">3</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">匯入並切分</text>
+      <text x="22" y="90" font-size="15" fill="#334155">train 與無標註 test 都匯入</text>
+      <text x="22" y="118" font-size="15" fill="#334155">validate、audit 先過</text>
+      <text x="22" y="146" font-size="15" fill="#334155">group split：同病例不跨子集</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#e0f2fe"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#075985">vcp data import / split</text>
+    </g>
+    <g transform="translate(960 140)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#087f5b" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#087f5b"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">4</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">第一個 checkpoint</text>
+      <text x="22" y="90" font-size="15" fill="#334155">小資料、小 epoch</text>
+      <text x="22" y="118" font-size="15" fill="#334155">單一 baseline，先求跑通</text>
+      <text x="22" y="146" font-size="15" fill="#334155">run.yaml 從一開始就存在</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#dcfce7"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#166534">vcp train run -- …</text>
+    </g>
+    <g transform="translate(1260 140)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#087f5b" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#087f5b"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">5</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">baseline 讀數</text>
+      <text x="22" y="90" font-size="15" fill="#334155">valA、valB 各一份</text>
+      <text x="22" y="118" font-size="15" fill="#334155">ingest → measure → anchor</text>
+      <text x="22" y="146" font-size="15" fill="#334155">sealed 子集現在還不碰</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#dcfce7"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#166534">vcp eval measure --run R</text>
+    </g>
+
+    <g transform="translate(1260 410)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#087f5b" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#087f5b"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">6</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">一個新候選</text>
+      <text x="22" y="90" font-size="15" fill="#334155">先把主張寫死（預登記）</text>
+      <text x="22" y="118" font-size="15" fill="#334155">再 measure、judge</text>
+      <text x="22" y="146" font-size="15" fill="#334155">judge 的 verdict 才是準入</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#dcfce7"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#166534">vcp eval preregister / judge</text>
+    </g>
+    <g transform="translate(960 410)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#b45309" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#b45309"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">7</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">建立 test run</text>
+      <text x="22" y="90" font-size="15" fill="#334155">file 路線：本機產預測檔</text>
+      <text x="22" y="118" font-size="15" fill="#334155">kernel 路線：真實 notebook</text>
+      <text x="22" y="146" font-size="15" fill="#334155">version 與 output 要對得上</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#fef3c7"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#92400e">vcp eval ingest（test 側）</text>
+    </g>
+    <g transform="translate(660 410)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#b45309" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#b45309"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">8</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">stage 與 verify</text>
+      <text x="22" y="90" font-size="15" fill="#334155">四道門全過才產檔</text>
+      <text x="22" y="118" font-size="15" fill="#334155">授權後才 upload / record</text>
+      <text x="22" y="146" font-size="15" fill="#334155">sync / score 把分數寫回台帳</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#fef3c7"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#92400e">vcp submit stage / verify</text>
+    </g>
+    <g transform="translate(360 410)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#b45309" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#b45309"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">9</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">sealed final</text>
+      <text x="22" y="90" font-size="15" fill="#334155">候選固定、至少一發已上傳</text>
+      <text x="22" y="118" font-size="15" fill="#334155">才做一次最終量測</text>
+      <text x="22" y="146" font-size="15" fill="#334155">決選之後封槍（lock）</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#fef3c7"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#92400e">vcp submit final</text>
+    </g>
+    <g transform="translate(60 410)">
+      <rect width="270" height="210" rx="20" fill="#ffffff" stroke="#14213d" stroke-width="3"/>
+      <circle cx="36" cy="38" r="20" fill="#14213d"/><text x="36" y="45" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">10</text>
+      <text x="68" y="45" font-size="19" font-weight="700" fill="#14213d">三個里程碑備份</text>
+      <text x="22" y="90" font-size="15" fill="#334155">訓練、判決、提交各一次</text>
+      <text x="22" y="118" font-size="15" fill="#334155">manifest → push → verify</text>
+      <text x="22" y="146" font-size="15" fill="#334155">從結論反查證據，不整包複製</text>
+      <rect x="16" y="166" width="238" height="32" rx="10" fill="#e2e8f0"/>
+      <text x="135" y="188" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="14" fill="#334155">vcp backup manifest / verify</text>
+    </g>
+  </g>
+
+  <g stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <path d="M334 245 H354"/><path d="M634 245 H654"/><path d="M934 245 H954"/><path d="M1234 245 H1254"/>
+    <path d="M1395 354 V404"/>
+    <path d="M1256 515 H1236"/><path d="M956 515 H936"/><path d="M656 515 H636"/><path d="M356 515 H336"/>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="15" font-weight="700">
+    <rect x="356" y="664" width="180" height="36" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+    <text x="446" y="688" text-anchor="middle" fill="#075985">資料層</text>
+    <rect x="556" y="664" width="180" height="36" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+    <text x="646" y="688" text-anchor="middle" fill="#166534">訓練與量測</text>
+    <rect x="756" y="664" width="180" height="36" rx="18" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+    <text x="846" y="688" text-anchor="middle" fill="#92400e">提交治理</text>
+    <rect x="956" y="664" width="180" height="36" rx="18" fill="#e2e8f0" stroke="#14213d" stroke-width="2"/>
+    <text x="1046" y="688" text-anchor="middle" fill="#334155">備份</text>
+  </g>
+  <text x="800" y="748" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="15" font-weight="700" fill="#475569">成功標準：每一步都留下 VERDICT 與台帳，下一個人能重跑；分數之後再追</text>
+</svg>

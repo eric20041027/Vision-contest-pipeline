@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="780" viewBox="0 0 1440 780" role="img" aria-labelledby="title desc">
+  <title id="title">vcp 六層架構</title>
+  <desc id="desc">資料、訓練、量測、融合、提交、備份六層由左至右串接，每一層都有輸出證據與護欄。</desc>
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#10233f" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect width="1440" height="780" fill="#f7f8fc"/>
+  <text x="720" y="66" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="34" font-weight="700" fill="#14213d">vcp 六層：從原始資料到可恢復的比賽結論</text>
+  <text x="720" y="104" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="18" fill="#475569">每層都產生下一層能驗證的檔案、雜湊或台帳事件</text>
+
+  <g stroke="#334155" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <path d="M238 364 H268"/>
+    <path d="M468 364 H498"/>
+    <path d="M698 364 H728"/>
+    <path d="M928 364 H958"/>
+    <path d="M1158 364 H1188"/>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" filter="url(#shadow)">
+    <g transform="translate(28 178)">
+      <rect width="210" height="372" rx="22" fill="#ffffff" stroke="#1769aa" stroke-width="3"/>
+      <rect width="210" height="82" rx="20" fill="#1769aa"/>
+      <rect y="60" width="210" height="22" fill="#1769aa"/>
+      <text x="105" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#dbeafe">01 DATA</text>
+      <text x="105" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#ffffff">資料</text>
+      <text x="22" y="122" font-size="17" font-weight="700" fill="#14213d">做什麼</text>
+      <text x="22" y="151" font-size="15" fill="#334155">import · validate · audit</text>
+      <text x="22" y="177" font-size="15" fill="#334155">split · materialize · export</text>
+      <line x1="22" y1="200" x2="188" y2="200" stroke="#cbd5e1"/>
+      <text x="22" y="231" font-size="17" font-weight="700" fill="#14213d">留下什麼</text>
+      <text x="22" y="260" font-size="15" fill="#334155">samples.jsonl</text>
+      <text x="22" y="286" font-size="15" fill="#334155">不可變 split plan</text>
+      <line x1="22" y1="309" x2="188" y2="309" stroke="#cbd5e1"/>
+      <text x="22" y="340" font-size="15" font-weight="700" fill="#1769aa">護欄：防同源洩漏</text>
+    </g>
+
+    <g transform="translate(258 178)">
+      <rect width="210" height="372" rx="22" fill="#ffffff" stroke="#7c3aed" stroke-width="3"/>
+      <rect width="210" height="82" rx="20" fill="#7c3aed"/>
+      <rect y="60" width="210" height="22" fill="#7c3aed"/>
+      <text x="105" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#ede9fe">02 TRAIN</text>
+      <text x="105" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#ffffff">訓練</text>
+      <text x="22" y="122" font-size="17" font-weight="700" fill="#14213d">做什麼</text>
+      <text x="22" y="151" font-size="15" fill="#334155">包住任意訓練框架</text>
+      <text x="22" y="177" font-size="15" fill="#334155">登記事件與產物</text>
+      <line x1="22" y1="200" x2="188" y2="200" stroke="#cbd5e1"/>
+      <text x="22" y="231" font-size="17" font-weight="700" fill="#14213d">留下什麼</text>
+      <text x="22" y="260" font-size="15" fill="#334155">command · env · seed</text>
+      <text x="22" y="286" font-size="15" fill="#334155">checkpoint SHA</text>
+      <line x1="22" y1="309" x2="188" y2="309" stroke="#cbd5e1"/>
+      <text x="22" y="340" font-size="15" font-weight="700" fill="#7c3aed">護欄：結果可重現</text>
+    </g>
+
+    <g transform="translate(488 178)">
+      <rect width="210" height="372" rx="22" fill="#ffffff" stroke="#087f5b" stroke-width="3"/>
+      <rect width="210" height="82" rx="20" fill="#087f5b"/>
+      <rect y="60" width="210" height="22" fill="#087f5b"/>
+      <text x="105" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#d1fae5">03 EVAL</text>
+      <text x="105" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#ffffff">量測</text>
+      <text x="22" y="122" font-size="17" font-weight="700" fill="#14213d">做什麼</text>
+      <text x="22" y="151" font-size="15" fill="#334155">ingest · anchor · measure</text>
+      <text x="22" y="177" font-size="15" fill="#334155">preregister · judge</text>
+      <line x1="22" y1="200" x2="188" y2="200" stroke="#cbd5e1"/>
+      <text x="22" y="231" font-size="17" font-weight="700" fill="#14213d">留下什麼</text>
+      <text x="22" y="260" font-size="15" fill="#334155">讀數與不確定性</text>
+      <text x="22" y="286" font-size="15" fill="#334155">PASS / FAIL / INVALID</text>
+      <line x1="22" y1="309" x2="188" y2="309" stroke="#cbd5e1"/>
+      <text x="22" y="340" font-size="15" font-weight="700" fill="#087f5b">護欄：先登記再裁決</text>
+    </g>
+
+    <g transform="translate(718 178)">
+      <rect width="210" height="372" rx="22" fill="#ffffff" stroke="#b45309" stroke-width="3"/>
+      <rect width="210" height="82" rx="20" fill="#b45309"/>
+      <rect y="60" width="210" height="22" fill="#b45309"/>
+      <text x="105" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#fef3c7">04 FUSE</text>
+      <text x="105" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#ffffff">融合</text>
+      <text x="22" y="122" font-size="17" font-weight="700" fill="#14213d">做什麼</text>
+      <text x="22" y="151" font-size="15" fill="#334155">recipe · ablate · build</text>
+      <text x="22" y="177" font-size="15" fill="#334155">比較有它與沒它</text>
+      <line x1="22" y1="200" x2="188" y2="200" stroke="#cbd5e1"/>
+      <text x="22" y="231" font-size="17" font-weight="700" fill="#14213d">留下什麼</text>
+      <text x="22" y="260" font-size="15" fill="#334155">不可變配方</text>
+      <text x="22" y="286" font-size="15" fill="#334155">成員與輸出 SHA</text>
+      <line x1="22" y1="309" x2="188" y2="309" stroke="#cbd5e1"/>
+      <text x="22" y="340" font-size="15" font-weight="700" fill="#b45309">護欄：成員逐一 PASS</text>
+    </g>
+
+    <g transform="translate(948 178)">
+      <rect width="210" height="372" rx="22" fill="#ffffff" stroke="#be123c" stroke-width="3"/>
+      <rect width="210" height="82" rx="20" fill="#be123c"/>
+      <rect y="60" width="210" height="22" fill="#be123c"/>
+      <text x="105" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#ffe4e6">05 SUBMIT</text>
+      <text x="105" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#ffffff">提交</text>
+      <text x="22" y="122" font-size="17" font-weight="700" fill="#14213d">做什麼</text>
+      <text x="22" y="151" font-size="15" fill="#334155">stage · verify · upload</text>
+      <text x="22" y="177" font-size="15" fill="#334155">sync · final</text>
+      <line x1="22" y1="200" x2="188" y2="200" stroke="#cbd5e1"/>
+      <text x="22" y="231" font-size="17" font-weight="700" fill="#14213d">留下什麼</text>
+      <text x="22" y="260" font-size="15" fill="#334155">候選身分與分數</text>
+      <text x="22" y="286" font-size="15" fill="#334155">sealed 決選紀錄</text>
+      <line x1="22" y1="309" x2="188" y2="309" stroke="#cbd5e1"/>
+      <text x="22" y="340" font-size="15" font-weight="700" fill="#be123c">護欄：配額與封槍</text>
+    </g>
+
+    <g transform="translate(1178 178)">
+      <rect width="234" height="372" rx="22" fill="#ffffff" stroke="#3f4a5a" stroke-width="3"/>
+      <rect width="234" height="82" rx="20" fill="#3f4a5a"/>
+      <rect y="60" width="234" height="22" fill="#3f4a5a"/>
+      <text x="117" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#e2e8f0">06 BACKUP</text>
+      <text x="117" y="66" text-anchor="middle" font-size="27" font-weight="700" fill="#ffffff">備份</text>
+      <text x="22" y="122" font-size="17" font-weight="700" fill="#14213d">做什麼</text>
+      <text x="22" y="151" font-size="15" fill="#334155">manifest · push · verify</text>
+      <text x="22" y="177" font-size="15" fill="#334155">pull · status</text>
+      <line x1="22" y1="200" x2="212" y2="200" stroke="#cbd5e1"/>
+      <text x="22" y="231" font-size="17" font-weight="700" fill="#14213d">留下什麼</text>
+      <text x="22" y="260" font-size="15" fill="#334155">結論反向證據清單</text>
+      <text x="22" y="286" font-size="15" fill="#334155">分層驗證台帳</text>
+      <line x1="22" y1="309" x2="212" y2="309" stroke="#cbd5e1"/>
+      <text x="22" y="340" font-size="15" font-weight="700" fill="#3f4a5a">護欄：可驗證地恢復</text>
+    </g>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif">
+    <rect x="44" y="610" width="1352" height="104" rx="20" fill="#14213d"/>
+    <text x="720" y="650" text-anchor="middle" font-size="18" font-weight="700" fill="#ffffff">所有層共同遵守的證據規則</text>
+    <text x="720" y="687" text-anchor="middle" font-size="17" fill="#dbeafe">raw 永不修改　｜　台帳只增不改　｜　預登記與配方改版必須換 ID　｜　平台憑證只交給平台 CLI</text>
+  </g>
+</svg>

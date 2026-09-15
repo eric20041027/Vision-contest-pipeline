@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="900" viewBox="0 0 1500 900" role="img" aria-labelledby="title desc">
+  <title id="title">使用者、agent 與 vcp 的分工</title>
+  <desc id="desc">五種決定各由使用者拍板、agent 在授權內執行、vcp 強制留下證據；底部列出 agent 唯一會停下來詢問的六種情況。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+  <rect width="1500" height="900" fill="#f8fafc"/>
+  <text x="750" y="56" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="34" font-weight="700" fill="#14213d">誰決定、誰執行、誰留證據</text>
+  <text x="750" y="92" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="18" fill="#475569">使用者拍板，agent 在授權範圍內執行，vcp 把每一步變成可重驗的紀錄</text>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="20" font-weight="700">
+    <rect x="60" y="122" width="400" height="46" rx="23" fill="#1769aa"/>
+    <text x="260" y="153" text-anchor="middle" fill="#ffffff">使用者決定</text>
+    <rect x="550" y="122" width="400" height="46" rx="23" fill="#087f5b"/>
+    <text x="750" y="153" text-anchor="middle" fill="#ffffff">Agent 執行</text>
+    <rect x="1040" y="122" width="400" height="46" rx="23" fill="#14213d"/>
+    <text x="1240" y="153" text-anchor="middle" fill="#ffffff">vcp 強制留下</text>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="17" filter="url(#shadow)">
+    <g transform="translate(0 190)">
+      <rect x="60" width="400" height="84" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+      <text x="260" y="50" text-anchor="middle" fill="#075985" font-weight="700">規則、資料權利、metric</text>
+      <rect x="550" width="400" height="84" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+      <text x="750" y="50" text-anchor="middle" fill="#166534">盤點資料，建立可重跑的程式</text>
+      <rect x="1040" width="400" height="84" rx="18" fill="#f1f5f9" stroke="#14213d" stroke-width="2"/>
+      <text x="1240" y="50" text-anchor="middle" fill="#14213d" font-family="Consolas, Cascadia Mono, monospace" font-size="16">provenance、card、manifest</text>
+    </g>
+    <g transform="translate(0 294)">
+      <rect x="60" width="400" height="84" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+      <text x="260" y="50" text-anchor="middle" fill="#075985" font-weight="700">GPU、時間、費用</text>
+      <rect x="550" width="400" height="84" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+      <text x="750" y="50" text-anchor="middle" fill="#166534">在預算內訓練與評估</text>
+      <rect x="1040" width="400" height="84" rx="18" fill="#f1f5f9" stroke="#14213d" stroke-width="2"/>
+      <text x="1240" y="50" text-anchor="middle" fill="#14213d" font-family="Consolas, Cascadia Mono, monospace" font-size="16">run、attempt、checkpoint SHA</text>
+    </g>
+    <g transform="translate(0 398)">
+      <rect x="60" width="400" height="84" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+      <text x="260" y="50" text-anchor="middle" fill="#075985" font-weight="700">外部上傳目的地</text>
+      <rect x="550" width="400" height="84" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+      <text x="750" y="50" text-anchor="middle" fill="#166534">stage、verify 過了才做已授權的上傳</text>
+      <rect x="1040" width="400" height="84" rx="18" fill="#f1f5f9" stroke="#14213d" stroke-width="2"/>
+      <text x="1240" y="50" text-anchor="middle" fill="#14213d" font-family="Consolas, Cascadia Mono, monospace" font-size="16">uploaded / recorded / scored 事件</text>
+    </g>
+    <g transform="translate(0 502)">
+      <rect x="60" width="400" height="84" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+      <text x="260" y="50" text-anchor="middle" fill="#075985" font-weight="700">sealed 最終窗口</text>
+      <rect x="550" width="400" height="84" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+      <text x="750" y="50" text-anchor="middle" fill="#166534">候選固定後只做一次最終量測</text>
+      <rect x="1040" width="400" height="84" rx="18" fill="#f1f5f9" stroke="#14213d" stroke-width="2"/>
+      <text x="1240" y="50" text-anchor="middle" fill="#14213d" font-family="Consolas, Cascadia Mono, monospace" font-size="16">unseal reason、sealed reading、final / lock</text>
+    </g>
+    <g transform="translate(0 606)">
+      <rect x="60" width="400" height="84" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+      <text x="260" y="50" text-anchor="middle" fill="#075985" font-weight="700">備份目的地</text>
+      <rect x="550" width="400" height="84" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+      <text x="750" y="50" text-anchor="middle" fill="#166534">分 tier push、verify、恢復演練</text>
+      <rect x="1040" width="400" height="84" rx="18" fill="#f1f5f9" stroke="#14213d" stroke-width="2"/>
+      <text x="1240" y="50" text-anchor="middle" fill="#14213d" font-family="Consolas, Cascadia Mono, monospace" font-size="16">manifest、copy SHA、verify 台帳</text>
+    </g>
+  </g>
+
+  <g stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <path d="M466 232 H540"/><path d="M956 232 H1030"/>
+    <path d="M466 336 H540"/><path d="M956 336 H1030"/>
+    <path d="M466 440 H540"/><path d="M956 440 H1030"/>
+    <path d="M466 544 H540"/><path d="M956 544 H1030"/>
+    <path d="M466 648 H540"/><path d="M956 648 H1030"/>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif">
+    <rect x="60" y="728" width="1380" height="146" rx="26" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+    <text x="750" y="766" text-anchor="middle" font-size="20" font-weight="700" fill="#14213d">Agent 只在六種情況停下來問；已授權的步驟不再重複確認</text>
+    <g font-size="15" font-weight="700" fill="#9f1239">
+      <rect x="100" y="790" width="200" height="42" rx="21" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+      <text x="200" y="818" text-anchor="middle">規則或權利不明</text>
+      <rect x="320" y="790" width="200" height="42" rx="21" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+      <text x="420" y="818" text-anchor="middle">必要資料缺失</text>
+      <rect x="540" y="790" width="200" height="42" rx="21" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+      <text x="640" y="818" text-anchor="middle">將超出資源上限</text>
+      <rect x="760" y="790" width="200" height="42" rx="21" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+      <text x="860" y="818" text-anchor="middle">新的外傳承諾</text>
+      <rect x="980" y="790" width="200" height="42" rx="21" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+      <text x="1080" y="818" text-anchor="middle">要開 sealed</text>
+      <rect x="1200" y="790" width="200" height="42" rx="21" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+      <text x="1300" y="818" text-anchor="middle">不可逆操作</text>
+    </g>
+    <text x="750" y="858" text-anchor="middle" font-size="14" fill="#475569">停在具體的決定點，把已知資訊與選項一起交給使用者；其他獨立的工作繼續完成</text>
+  </g>
+</svg>

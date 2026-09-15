@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="940" viewBox="0 0 1400 940" role="img" aria-labelledby="title desc">
+  <title id="title">如何閱讀 vcp 的 VERDICT</title>
+  <desc id="desc">每個命令都以 OK、WARN、FAIL 或 ABORT 結束，圖中列出 exit code、意義與下一步；另區分命令狀態與模型裁決。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+  <rect width="1400" height="940" fill="#f8fafc"/>
+  <text x="700" y="58" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="35" font-weight="700" fill="#14213d">如何讀懂每個命令最後一行</text>
+  <text x="700" y="96" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="18" fill="#475569">顏色只是輔助；狀態文字、exit code 與 reason 才是自動化判斷依據</text>
+
+  <g font-family="Consolas, Cascadia Mono, monospace">
+    <rect x="118" y="132" width="1164" height="84" rx="18" fill="#14213d"/>
+    <text x="700" y="184" text-anchor="middle" font-size="19" fill="#ffffff">VERDICT cmd=eval.judge status=OK dataset=demo prereg=p3 verdict=PASS</text>
+  </g>
+  <path d="M700 216 V266" stroke="#475569" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" filter="url(#shadow)">
+    <g transform="translate(50 278)">
+      <rect width="300" height="244" rx="22" fill="#ffffff" stroke="#087f5b" stroke-width="3"/>
+      <rect width="300" height="68" rx="20" fill="#087f5b"/>
+      <rect y="48" width="300" height="20" fill="#087f5b"/>
+      <text x="150" y="44" text-anchor="middle" font-size="25" font-weight="700" fill="#ffffff">OK</text>
+      <text x="24" y="105" font-size="17" font-weight="700" fill="#14213d">exit 0</text>
+      <text x="24" y="139" font-size="15" fill="#334155">命令完成且沒有操作問題</text>
+      <text x="24" y="171" font-size="15" fill="#334155">依欄位讀取產物或裁決</text>
+      <rect x="22" y="194" width="256" height="32" rx="10" fill="#dcfce7"/>
+      <text x="150" y="216" text-anchor="middle" font-size="14" font-weight="700" fill="#166534">下一步：沿流程繼續</text>
+    </g>
+    <g transform="translate(383 278)">
+      <rect width="300" height="244" rx="22" fill="#ffffff" stroke="#b45309" stroke-width="3"/>
+      <rect width="300" height="68" rx="20" fill="#b45309"/>
+      <rect y="48" width="300" height="20" fill="#b45309"/>
+      <text x="150" y="44" text-anchor="middle" font-size="25" font-weight="700" fill="#ffffff">WARN</text>
+      <text x="24" y="105" font-size="17" font-weight="700" fill="#14213d">exit 0</text>
+      <text x="24" y="139" font-size="15" fill="#334155">命令完成，但有需留意條件</text>
+      <text x="24" y="171" font-size="15" fill="#334155">reason= 說明風險或缺項</text>
+      <rect x="22" y="194" width="256" height="32" rx="10" fill="#fef3c7"/>
+      <text x="150" y="216" text-anchor="middle" font-size="14" font-weight="700" fill="#92400e">下一步：讀 reason 再決定</text>
+    </g>
+    <g transform="translate(716 278)">
+      <rect width="300" height="244" rx="22" fill="#ffffff" stroke="#be123c" stroke-width="3"/>
+      <rect width="300" height="68" rx="20" fill="#be123c"/>
+      <rect y="48" width="300" height="20" fill="#be123c"/>
+      <text x="150" y="44" text-anchor="middle" font-size="25" font-weight="700" fill="#ffffff">FAIL</text>
+      <text x="24" y="105" font-size="17" font-weight="700" fill="#14213d">exit 1</text>
+      <text x="24" y="139" font-size="15" fill="#334155">已執行檢查，條件未通過</text>
+      <text x="24" y="171" font-size="15" fill="#334155">已知 dataset / run 仍會保留</text>
+      <rect x="22" y="194" width="256" height="32" rx="10" fill="#ffe4e6"/>
+      <text x="150" y="216" text-anchor="middle" font-size="14" font-weight="700" fill="#9f1239">下一步：修正原因後重跑</text>
+    </g>
+    <g transform="translate(1049 278)">
+      <rect width="300" height="244" rx="22" fill="#ffffff" stroke="#475569" stroke-width="3"/>
+      <rect width="300" height="68" rx="20" fill="#475569"/>
+      <rect y="48" width="300" height="20" fill="#475569"/>
+      <text x="150" y="44" text-anchor="middle" font-size="25" font-weight="700" fill="#ffffff">ABORT</text>
+      <text x="24" y="105" font-size="17" font-weight="700" fill="#14213d">exit 2</text>
+      <text x="24" y="139" font-size="15" fill="#334155">輸入、用法或前置條件錯誤</text>
+      <text x="24" y="171" font-size="15" fill="#334155">操作沒有安全地開始或完成</text>
+      <rect x="22" y="194" width="256" height="32" rx="10" fill="#e2e8f0"/>
+      <text x="150" y="216" text-anchor="middle" font-size="14" font-weight="700" fill="#334155">下一步：修正命令或輸入</text>
+    </g>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif">
+    <rect x="50" y="580" width="1300" height="298" rx="28" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/>
+    <text x="700" y="623" text-anchor="middle" font-size="23" font-weight="700" fill="#14213d">最容易誤讀的情況：命令成功，不代表模型通過</text>
+
+    <rect x="106" y="664" width="410" height="124" rx="18" fill="#e0f2fe" stroke="#1769aa" stroke-width="2"/>
+    <text x="311" y="701" text-anchor="middle" font-size="18" font-weight="700" fill="#075985">命令執行狀態</text>
+    <text x="311" y="737" text-anchor="middle" font-family="Consolas, Cascadia Mono, monospace" font-size="17" fill="#14213d">status=OK　exit 0</text>
+    <text x="311" y="766" text-anchor="middle" font-size="14" fill="#334155">judge 正常讀取資料並完成裁決</text>
+
+    <path d="M516 726 H590" stroke="#475569" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="552" y="708" text-anchor="middle" font-size="14" font-weight="700" fill="#475569">再看</text>
+
+    <rect x="600" y="650" width="258" height="76" rx="18" fill="#dcfce7" stroke="#087f5b" stroke-width="2"/>
+    <text x="729" y="681" text-anchor="middle" font-size="17" font-weight="700" fill="#166534">verdict=PASS</text>
+    <text x="729" y="707" text-anchor="middle" font-size="14" fill="#14532d">候選達到預登記門檻</text>
+
+    <rect x="600" y="744" width="258" height="76" rx="18" fill="#ffe4e6" stroke="#be123c" stroke-width="2"/>
+    <text x="729" y="775" text-anchor="middle" font-size="17" font-weight="700" fill="#9f1239">verdict=FAIL</text>
+    <text x="729" y="801" text-anchor="middle" font-size="14" fill="#881337">裁決完成，但候選未準入</text>
+
+    <rect x="876" y="697" width="372" height="76" rx="18" fill="#f1f5f9" stroke="#475569" stroke-width="2"/>
+    <text x="1062" y="728" text-anchor="middle" font-size="17" font-weight="700" fill="#334155">verdict=INVALID</text>
+    <text x="1062" y="754" text-anchor="middle" font-size="14" fill="#475569">證據不足，不能做有效比較</text>
+
+    <text x="700" y="852" text-anchor="middle" font-size="15" font-weight="700" fill="#475569">使用 --json 時：結果 JSON 在 stdout，VERDICT 在 stderr；腳本可分別解析</text>
+  </g>
+</svg>

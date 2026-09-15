@@ -25,7 +25,7 @@ from vcp.measure.provenance import provenance as run_provenance
 from vcp.measure.runs import load_run, verify_prediction
 from vcp.measure.schema import Judgement, Reading, RunCard
 from vcp.provenance.diff import KIND as DIFF_KIND
-from vcp.provenance.diff import load_dataset_diff
+from vcp.provenance.diff import open_dataset_diff
 from vcp.provenance.schema import ProvenanceEdge, ProvenanceEntity, SampleChange
 from vcp.submit.schema import Staged
 
@@ -596,10 +596,14 @@ def add_artifact(
 
 
 def add_dataset_diff_transition(graph: ProvenanceGraph, data_root: Path, artifact_id: str) -> None:
-    """Add one verified diff transition to a graph whose dataset entities already exist."""
-    loaded = load_dataset_diff(data_root, artifact_id)
-    old = dataset_version_id(loaded.summary.from_dataset, loaded.summary.from_samples_hash)
-    new = dataset_version_id(loaded.summary.to_dataset, loaded.summary.to_samples_hash)
+    """Replay one verified diff transition into a graph whose dataset entities already exist.
+
+    The diff is validated end to end before the first mutation; its events are then streamed
+    one at a time, so replaying a large history never materializes every event twice.
+    """
+    stream = open_dataset_diff(data_root, artifact_id)
+    old = dataset_version_id(stream.summary.from_dataset, stream.summary.from_samples_hash)
+    new = dataset_version_id(stream.summary.to_dataset, stream.summary.to_samples_hash)
     if old not in graph.entities or new not in graph.entities:
         raise ValidationFailed(
             f"missing dataset version for dataset_diff/{artifact_id}; sync or rebuild first"
@@ -614,15 +618,14 @@ def add_dataset_diff_transition(graph: ProvenanceGraph, data_root: Path, artifac
                 queue.append(transition_target)
     if old in reachable:
         raise IntegrityError(f"dataset_cycle: {old} -> {new} closes an evolution cycle")
-    attrs = {"artifact": artifact_id, "total_changes": loaded.summary.total_changes}
+    attrs = {"artifact": artifact_id, "total_changes": stream.summary.total_changes}
     graph.add_edge(old, new, "DERIVED_FROM", attrs)
     previous_transition = graph.transitions.get((old, new))
-    change_ids = [change.change_id for change in loaded.changes]
-    if previous_transition is not None and previous_transition != change_ids:
+    if previous_transition is not None and previous_transition != stream.change_ids:
         raise IntegrityError(f"transition_conflict: {old} -> {new}")
-    graph.transitions[(old, new)] = change_ids
+    graph.transitions[(old, new)] = stream.change_ids
     artifact = entity_id("artifact", f"{DIFF_KIND}/{artifact_id}")
-    for change in loaded.changes:
+    for change in stream.events:
         previous = graph.changes.get(change.change_id)
         if previous is not None and previous != change:
             raise IntegrityError(f"change_conflict: {change.change_id}")

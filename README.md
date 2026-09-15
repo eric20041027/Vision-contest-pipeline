@@ -11,6 +11,8 @@ uv run pytest --cov=vcp
 
 第一次使用或要讓 agent 接手完整比賽時，使用專案 skill `vcp-running-contests`（`.agents/skills/` 與 `.claude/skills/` 皆有鏡像）。它先判定現況，再串起資料、訓練、量測、融合、提交與備份；新比賽 Day 1、資料層細節與新增通用登記項分別交給既有三個專用 skills。
 
+第一次理解整體架構可先讀 [vcp 視覺導覽](docs/guides/VCP_VISUAL_GUIDE.md)：以六張圖與 Mermaid 流程圖說明生命週期、證據位置、VERDICT，以及人與 agent 的分工。
+
 ## 資料層命令
 
 | 命令 | 作用 | 主要選項 |

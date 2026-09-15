@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="980" viewBox="0 0 1500 980" role="img" aria-labelledby="title desc">
+  <title id="title">vcp 證據與檔案地圖</title>
+  <desc id="desc">圖中將檔案分成版本控制設定、資料根目錄、比賽專屬程式三區，並顯示結論如何反向連回證據。</desc>
+  <defs>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect width="1500" height="980" fill="#f8fafc"/>
+  <text x="750" y="58" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="35" font-weight="700" fill="#14213d">證據放在哪裡？怎麼連回最後結論？</text>
+  <text x="750" y="96" text-anchor="middle" font-family="Segoe UI, Microsoft JhengHei, sans-serif" font-size="18" fill="#475569">三個儲存區各有清楚邊界，備份清單從結論反向收齊必要證據</text>
+
+  <g stroke="#475569" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <path d="M750 208 V258"/>
+    <path d="M750 208 C750 235 260 220 260 258"/>
+    <path d="M750 208 C750 235 1240 220 1240 258"/>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif">
+    <rect x="500" y="125" width="500" height="84" rx="42" fill="#14213d"/>
+    <text x="750" y="160" text-anchor="middle" font-size="17" font-weight="700" fill="#93c5fd">你真正想保住的東西</text>
+    <text x="750" y="189" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">submission:ID　／　judgement:ID　／　run:ID</text>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif" filter="url(#shadow)">
+    <g transform="translate(40 258)">
+      <rect width="440" height="510" rx="24" fill="#ffffff" stroke="#7c3aed" stroke-width="3"/>
+      <rect width="440" height="88" rx="22" fill="#7c3aed"/>
+      <rect y="66" width="440" height="22" fill="#7c3aed"/>
+      <text x="28" y="38" font-size="16" font-weight="700" fill="#ede9fe">GIT / VCP_CONFIGS_ROOT</text>
+      <text x="28" y="70" font-size="24" font-weight="700" fill="#ffffff">規則、計畫與治理台帳</text>
+
+      <text x="28" y="127" font-size="17" font-weight="700" fill="#14213d">configs/datasets/&lt;name&gt;/</text>
+      <text x="42" y="158" font-size="15" fill="#334155">dataset.yaml</text>
+      <text x="42" y="184" font-size="15" fill="#334155">splits/&lt;plan-id&gt;.json</text>
+      <text x="42" y="210" font-size="15" fill="#334155">prereg/&lt;id&gt;.yaml</text>
+      <text x="42" y="236" font-size="15" fill="#334155">fuse/&lt;recipe-id&gt;.yaml</text>
+      <text x="42" y="262" font-size="15" fill="#334155">backup/&lt;manifest-id&gt;.json</text>
+      <line x1="28" y1="286" x2="412" y2="286" stroke="#cbd5e1"/>
+      <text x="28" y="320" font-size="17" font-weight="700" fill="#14213d">提交治理</text>
+      <text x="42" y="351" font-size="15" fill="#334155">submit.yaml</text>
+      <text x="42" y="377" font-size="15" fill="#334155">submissions.jsonl</text>
+      <line x1="28" y1="401" x2="412" y2="401" stroke="#cbd5e1"/>
+      <rect x="28" y="426" width="384" height="56" rx="14" fill="#f3e8ff"/>
+      <text x="220" y="451" text-anchor="middle" font-size="15" font-weight="700" fill="#6b21a8">規則：不可變物改版就換 ID</text>
+      <text x="220" y="473" text-anchor="middle" font-size="14" fill="#581c87">台帳只新增事件，不覆蓋歷史</text>
+    </g>
+
+    <g transform="translate(530 258)">
+      <rect width="440" height="510" rx="24" fill="#ffffff" stroke="#1769aa" stroke-width="3"/>
+      <rect width="440" height="88" rx="22" fill="#1769aa"/>
+      <rect y="66" width="440" height="22" fill="#1769aa"/>
+      <text x="28" y="38" font-size="16" font-weight="700" fill="#dbeafe">VCP_DATA_ROOT</text>
+      <text x="28" y="70" font-size="24" font-weight="700" fill="#ffffff">大型資料、預測與產物</text>
+
+      <text x="28" y="127" font-size="17" font-weight="700" fill="#14213d">raw/&lt;name&gt;/</text>
+      <text x="42" y="155" font-size="15" font-weight="700" fill="#be123c">永不修改，也不進備份清單</text>
+      <text x="28" y="194" font-size="17" font-weight="700" fill="#14213d">datasets/&lt;name&gt;/</text>
+      <text x="42" y="225" font-size="15" fill="#334155">samples.jsonl · raw_manifest.txt</text>
+      <text x="42" y="251" font-size="15" fill="#334155">cache/materialize/manifest.jsonl</text>
+      <text x="28" y="291" font-size="17" font-weight="700" fill="#14213d">measure/&lt;name&gt;/runs/&lt;run&gt;/</text>
+      <text x="42" y="322" font-size="15" fill="#334155">run.yaml · predictions/</text>
+      <text x="42" y="348" font-size="15" fill="#334155">train.yaml · train.log.jsonl</text>
+      <text x="42" y="374" font-size="15" fill="#334155">fuse.json</text>
+      <line x1="28" y1="401" x2="412" y2="401" stroke="#cbd5e1"/>
+      <rect x="28" y="426" width="384" height="56" rx="14" fill="#e0f2fe"/>
+      <text x="220" y="451" text-anchor="middle" font-size="15" font-weight="700" fill="#075985">規則：快取可重建，結論證據不可丟</text>
+      <text x="220" y="473" text-anchor="middle" font-size="14" fill="#0c4a6e">checkpoint 留原位，以路徑與 SHA 綁定</text>
+    </g>
+
+    <g transform="translate(1020 258)">
+      <rect width="440" height="510" rx="24" fill="#ffffff" stroke="#087f5b" stroke-width="3"/>
+      <rect width="440" height="88" rx="22" fill="#087f5b"/>
+      <rect y="66" width="440" height="22" fill="#087f5b"/>
+      <text x="28" y="38" font-size="16" font-weight="700" fill="#d1fae5">REPOSITORY</text>
+      <text x="28" y="70" font-size="24" font-weight="700" fill="#ffffff">比賽專屬膠水</text>
+
+      <text x="28" y="127" font-size="17" font-weight="700" fill="#14213d">projects/&lt;contest&gt;/</text>
+      <text x="42" y="158" font-size="15" fill="#334155">train.py</text>
+      <text x="42" y="184" font-size="15" fill="#334155">infer.py / notebook source</text>
+      <text x="42" y="210" font-size="15" fill="#334155">metrics.py / plugins</text>
+      <text x="42" y="236" font-size="15" fill="#334155">RUNBOOK.md · DESIGN.md</text>
+      <line x1="28" y1="267" x2="412" y2="267" stroke="#cbd5e1"/>
+      <text x="28" y="302" font-size="17" font-weight="700" fill="#14213d">核心保持通用</text>
+      <text x="42" y="333" font-size="15" fill="#334155">src/vcp 不放比賽名稱</text>
+      <text x="42" y="359" font-size="15" fill="#334155">新形態透過登記表擴充</text>
+      <text x="42" y="385" font-size="15" fill="#334155">訓練框架使用自己的 venv</text>
+      <line x1="28" y1="408" x2="412" y2="408" stroke="#cbd5e1"/>
+      <rect x="28" y="426" width="384" height="56" rx="14" fill="#dcfce7"/>
+      <text x="220" y="451" text-anchor="middle" font-size="15" font-weight="700" fill="#166534">規則：競賽差異留在專案目錄</text>
+      <text x="220" y="473" text-anchor="middle" font-size="14" fill="#14532d">框架只管理共通生命週期</text>
+    </g>
+  </g>
+
+  <g font-family="Segoe UI, Microsoft JhengHei, sans-serif">
+    <path d="M260 790 V825 H1240 V790" fill="none" stroke="#475569" stroke-width="3" stroke-dasharray="9 7"/>
+    <path d="M750 768 V825" fill="none" stroke="#475569" stroke-width="3" stroke-dasharray="9 7"/>
+    <rect x="300" y="824" width="900" height="106" rx="24" fill="#14213d"/>
+    <text x="750" y="858" text-anchor="middle" font-size="17" font-weight="700" fill="#93c5fd">backup manifest 從結論反向遍歷這三區</text>
+    <text x="750" y="888" text-anchor="middle" font-size="16" fill="#ffffff">收集設定、台帳、預測、權重與專案程式 → 分 tier 推送 → 逐檔驗證</text>
+    <text x="750" y="914" text-anchor="middle" font-size="15" fill="#dbeafe">恢復後仍能回答：這個提交從哪個資料、程式、權重與裁決而來？</text>
+  </g>
+</svg>

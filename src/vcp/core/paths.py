@@ -77,6 +77,14 @@ def artifacts_root(data_root: Path) -> Path:
     return data_root / "artifacts"
 
 
+def indexes_root(data_root: Path) -> Path:
+    return data_root / "indexes"
+
+
+def provenance_index_path(data_root: Path) -> Path:
+    return indexes_root(data_root) / "provenance.sqlite3"
+
+
 def artifact_dir(data_root: Path, kind: str, artifact_id: str) -> Path:
     """``<data_root>/artifacts/<kind>/<id>/``: the only place an artifact can live (spec 5)."""
     validate_name(kind)

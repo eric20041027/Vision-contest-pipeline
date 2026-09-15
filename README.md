@@ -16,6 +16,7 @@ uv run pytest --cov=vcp
 |---|---|---|
 | `vcp data import` | 原始資料 → `dataset.yaml` + `samples.jsonl`；並寫一份 `source_audit`（逐列 sha 索引，VERDICT `source_audit=` `source_audit_state=`） | `--importer`、`--src`、`--name`、`--license`、`--url`、`--downloaded-at`、`--opt k=v`、`--raw-manifest full\|sizes` |
 | `vcp data validate` | 重驗 card、samples 與 hash；產生或重用 `source_audit`（VERDICT `source_audit=` `source_audit_state=created\|reused`） | `--name` |
+| `vcp data diff` | 比較兩個 immutable dataset version，只把 changed samples 發布為 verified `dataset_diff` artifact；no-op 為零事件 summary | `--from`、`--to`、`--id`、`--plugin`、`--policy` |
 | `vcp data audit` | 座標 sanity、近重複與 test 重疊、來源檢查 | `--against`、`--max-bad-boxes`、`--min-box-px`、`--max-aspect`、`--max-cover`、`--hamming`、`--corr` |
 | `vcp data split` | 固定多子集 plan（進 git、不可改） | `--plan-id`、`--subsets`、`--stratify-key`、`--group-key`、`--group-from-audit`、`--strategy` |
 | `vcp data lineage` | 某訓練用了哪些子集 → 哪些驗證集還乾淨 | `--plan`、`--trained-on` |
@@ -23,6 +24,15 @@ uv run pytest --cov=vcp
 | `vcp data materialize` | 每個 view 解碼一次成 npy / png 快取 + manifest | `--mode`、`--resize`、`--stack-seq`、`--window`、`--workers`、`--force`、`--decoder` |
 
 每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。eval / fuse / train / submit / backup 失敗時仍帶命令已知的 dataset / run / recipe / id 等識別欄位；深層錯誤可提供更精確的身分。
+
+## Dataset evolution 與 provenance index
+
+`vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index` 從 canonical
+dataset、plan、run、reading、artifact、fusion、submission 與 backup 建 deterministic graph。SQLite 位於
+`<data_root>/indexes/provenance.sqlite3`，可刪除、可由 canonical records 完整重建，不進 Git。`sync`
+只接受新增 canonical records；既有 evidence 遭刪改、ledger prefix drift 或 diff manifest/payload 不再
+符合會 fail closed。操作、status 語意、repair 與可重跑 benchmark 見
+[`docs/guides/DATASET_EVOLUTION_PROVENANCE.md`](docs/guides/DATASET_EVOLUTION_PROVENANCE.md)。
 
 ## 量測層命令 `vcp eval`
 

@@ -1,0 +1,94 @@
+{
+  "created_at": "2026-09-13T20:06:11.276Z",
+  "mode": "metadata-only temporary copy; source roots opened read-only",
+  "source_data_root": "C:\\Users\\smallfire123123\\Desktop\\RSNA_Knee_Abnormality_Detection\\vcp-data",
+  "source_configs_root": "C:\\Users\\smallfire123123\\Desktop\\RSNA_Knee_Abnormality_Detection\\configs",
+  "diff_summaries": [
+    {
+      "schema_version": 1,
+      "artifact_id": "real-readonly-1",
+      "from_dataset": "rsna-knee-sixslot-r3-20260908",
+      "from_samples_hash": "959848de77c0d67a7ed549385773fc9dcb094f1aa4acafb7de9a8d396706f567",
+      "to_dataset": "rsna-knee-sixslot-r4-20260908",
+      "to_samples_hash": "8f88a7d6bbc9c7567df5ce16fa45df67f9276807cc5fe12298af24c1fd7a7849",
+      "grade": "fallback",
+      "policies": [],
+      "total_changes": 4407,
+      "counts": {
+        "MODIFIED": 4403,
+        "REMOVED": 4
+      },
+      "domain_counts": {
+        "GROUP": 4407,
+        "LABELS": 4,
+        "LABEL_SOURCE": 4,
+        "META": 4,
+        "VIEWS": 4
+      },
+      "effect_counts": {
+        "EVALUATION_AFFECTING": 4,
+        "INPUT_AFFECTING": 4,
+        "SPLIT_AFFECTING": 4407,
+        "TRAINING_AFFECTING": 4
+      }
+    },
+    {
+      "schema_version": 1,
+      "artifact_id": "real-readonly-2",
+      "from_dataset": "rsna-knee-sixslot-r4-20260908",
+      "from_samples_hash": "8f88a7d6bbc9c7567df5ce16fa45df67f9276807cc5fe12298af24c1fd7a7849",
+      "to_dataset": "rsna-knee-sixslot-labelagree-r5-20260909",
+      "to_samples_hash": "155090063dfde863fa662a8a7d1dcb25688a8b8dcbc455797cfd0cbf1e48296d",
+      "grade": "fallback",
+      "policies": [],
+      "total_changes": 4345,
+      "counts": {
+        "MODIFIED": 4345
+      },
+      "domain_counts": {
+        "META": 4345
+      },
+      "effect_counts": {
+        "UNKNOWN": 4345
+      }
+    },
+    {
+      "schema_version": 1,
+      "artifact_id": "real-readonly-3",
+      "from_dataset": "rsna-knee-sixslot-labelagree-r5-20260909",
+      "from_samples_hash": "155090063dfde863fa662a8a7d1dcb25688a8b8dcbc455797cfd0cbf1e48296d",
+      "to_dataset": "rsna-knee-sixslot-labelagree-r6-20260909",
+      "to_samples_hash": "155090063dfde863fa662a8a7d1dcb25688a8b8dcbc455797cfd0cbf1e48296d",
+      "grade": "fallback",
+      "policies": [],
+      "total_changes": 0,
+      "counts": {},
+      "domain_counts": {},
+      "effect_counts": {}
+    }
+  ],
+  "selected_runs": [
+    "knee-dinov2-last6-slothead-report-clean-s42-v2",
+    "knee-dinov2-last6-slothead-report-clean-s42-v3",
+    "knee-dinov2-last6-slothead-s42-v1",
+    "knee-dinov2-sixslot-attn-report-clean-s42-v1",
+    "knee-dinov2-sixslot-attn-report-clean-s42-v2",
+    "knee-dinov2-sixslot-attn-report-clean-s42-v3",
+    "knee-dinov2-sixslot-linear-s42-v1"
+  ],
+  "selected_run_count": 7,
+  "graph": {
+    "entities": 13196,
+    "edges": 17569,
+    "changes": 8752,
+    "gaps": []
+  },
+  "graph_parity": true,
+  "status_parity": true,
+  "status_differences": {},
+  "verify_index": {
+    "ok": true,
+    "issues": [],
+    "graph_hash": "26c219aea6d1c33fe3750a74ff00d33decd19d81517dc88df3f3bc35753c3b4a"
+  }
+}

@@ -54,10 +54,11 @@ API 與 exact parity 不變），下一步是重跑 gate。主機 31 GB RAM 常�
 5. `postgres_incremental`
 6. `postgres_adaptive`
 
-固定 entity scales 為 1K、10K、100K、1M；change ratios 為 0%、0.1%、1%、5%、10%、25%、50%、
+固定 entity scales 為 1K、10K、100K；change ratios 為 0%、0.1%、1%、5%、10%、25%、50%、
 90%、100%；topology 為 chain/branched。Calibration seeds 是 `20260913`、`20260914`，held-out seeds
-是 `20261001`、`20261002`。每個 split 共 144 scenarios；1K/10K 各 7 repetitions，100K/1M 各 3，
-每 method 共 720 measured samples。
+是 `20261001`、`20261002`。每個 split 共 108 scenarios；1K/10K 各 7 repetitions，100K 各 3，
+每 method 共 612 measured samples。1M 已於 2026-09-15 以裁決移出正式矩陣（後記 §1），仍可用
+`--entities 1000000` 臨時跑；`production_benchmark.py` 的 1M 階梯不受影響。
 
 Real track 的來源必須唯讀複製到 temporary metadata root；它不修改 live data。Task 10 runner也可讓
 既有 production/real entrypoint增加 `--six-method`，但本環境沒有執行 live RSNA track。
@@ -71,7 +72,7 @@ absolute temporary file paths。這不是 ordinary VCP/libpq defaults；disposab
 
 ```powershell
 uv run python tests/performance/provenance/adaptive_benchmark.py `
-  --entities 1000 10000 100000 1000000 `
+  --entities 1000 10000 100000 `
   --ratios 0 0.001 0.01 0.05 0.10 0.25 0.50 0.90 1 `
   --seeds 20260913 20260914 `
   --output <NEW_SIX_METHOD_RESULT>
@@ -118,7 +119,7 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 | PostgreSQL server version | 17.11（`server_version_num` 170011）live readback；`integration-v3.json` |
 | Live integration | PASS 51/51 at `d8cc334`（`integration-v3`）；Linux CI / Docker Compose host 仍缺 |
 | Six-method scaled result | Absent |
-| Large-scale 10K/100K/1M execution | Absent；1M memory gate v2–v4 ABORT 於 `baseline_graph_build`（非正式） |
+| Large-scale 10K/100K execution | Absent（1M 已移出正式矩陣；其 memory gate v2–v4 ABORT 於 `baseline_graph_build`，非正式） |
 | Real/RSNA six-method result | Absent |
 | Calibration result JSON | Absent；v1 嘗試 ABORT（RAM 護欄，`calibration-v1.run.json`） |
 | Policy artifact ID | Absent |

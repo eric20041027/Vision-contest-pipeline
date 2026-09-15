@@ -117,7 +117,7 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 |---|---|
 | PostgreSQL server version | 17.11（`server_version_num` 170011）live readback；`integration-v3.json` |
 | Live integration | PASS 51/51 at `d8cc334`（`integration-v3`）；Linux CI / Docker Compose host 仍缺 |
-| Six-method scaled result | Absent（探路版五方法 1K–100K 見 `postgres-provenance-exploratory-v1.md`，非正式） |
+| Six-method scaled result | Absent |
 | Large-scale 10K/100K/1M execution | Absent；1M memory gate v2–v4 ABORT 於 `baseline_graph_build`（非正式） |
 | Real/RSNA six-method result | Absent |
 | Calibration result JSON | Absent；v1 嘗試 ABORT（RAM 護欄，`calibration-v1.run.json`） |

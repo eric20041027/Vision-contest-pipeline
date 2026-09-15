@@ -8,8 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from performance.provenance import adaptive_benchmark as bench
-from performance.provenance import production_benchmark, real_validation
+from performance.provenance import production_benchmark, real_validation, workloads
 from performance.provenance.workloads import Scenario, build_scenario, scenario_matrix
+from vcp.core.paths import DatasetPaths
+from vcp.data.dataset import Dataset
+from vcp.data.schema import DatasetCard, Sample, SourceInfo, View
 from vcp.provenance.graph import build_graph
 
 
@@ -34,6 +37,78 @@ def test_scenario_matrix_is_complete_deterministic_and_disjoint():
     assert not {s.scenario_hash for s in calibration} & {s.scenario_hash for s in heldout}
     assert len({s.scenario_id for s in calibration}) == len(calibration)
     assert all(s.repetitions == (7 if s.entities <= 10_000 else 3) for s in calibration)
+
+
+@pytest.mark.parametrize("target", [False, True])
+def test_streamed_synthetic_dataset_is_byte_identical_to_materialized_writer(tmp_path, target):
+    count = 11
+    changed = {0, 4, 10}
+    revision = 2
+    seed = 20260913
+    created_at = "2026-09-14T00:00:00Z"
+    name = "synthetic-target" if target else "synthetic-source"
+    streamed_paths = DatasetPaths.resolve(
+        name,
+        data_root=tmp_path / "streamed-data",
+        configs_root=tmp_path / "streamed-configs",
+    )
+    materialized_paths = DatasetPaths.resolve(
+        name,
+        data_root=tmp_path / "materialized-data",
+        configs_root=tmp_path / "materialized-configs",
+    )
+    card = DatasetCard(
+        name=name,
+        task="cls",
+        image_root=f"raw/{name}",
+        source=SourceInfo(
+            importer="synthetic",
+            importer_version="1",
+            raw_path="opaque",
+            raw_hash="0" * 64,
+            license="synthetic",
+            url="",
+            downloaded_at=created_at,
+        ),
+        created_at=created_at,
+        sample_count=count,
+        samples_hash="0" * 64,
+    )
+    samples = [
+        Sample(
+            sample_id=f"delta-{index:08d}",
+            views=[View(path=f"opaque/{index}.png")],
+            label_source="none",
+            group=f"changed-{index}" if target and index in changed else f"g-{index % 8}",
+            meta={"display": revision, "seed": seed},
+        )
+        for index in range(count)
+    ]
+    reference = Dataset.from_parts(card, samples)
+    reference.save(materialized_paths)
+
+    streamed = workloads._write_synthetic_dataset(
+        streamed_paths,
+        card,
+        count=count,
+        revision=revision,
+        seed=seed,
+        changed=changed if target else frozenset(),
+    )
+
+    assert streamed == reference.card
+    assert (
+        streamed_paths.samples_jsonl.read_bytes() == materialized_paths.samples_jsonl.read_bytes()
+    )
+    assert streamed_paths.card_yaml.read_bytes() == materialized_paths.card_yaml.read_bytes()
+    assert (
+        Dataset.load(
+            name,
+            data_root=streamed_paths.data_root,
+            configs_root=streamed_paths.configs_root,
+        ).samples
+        == reference.samples
+    )
 
 
 def test_matrix_releases_each_scenario_fixture_before_building_the_next(tmp_path, monkeypatch):

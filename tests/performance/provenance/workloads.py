@@ -12,15 +12,15 @@ import json
 import math
 import random
 import shutil
+from collections.abc import Set
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from vcp.core.config import dump_yaml_model
-from vcp.core.hashing import sha256_text
+from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
-from vcp.data.dataset import Dataset
-from vcp.data.schema import DatasetCard, Sample, SourceInfo, View
+from vcp.data.schema import DatasetCard, Sample, SourceInfo, View, sample_json_line
 from vcp.data.split import SplitPlan, SubsetSpec, save_plan
 from vcp.measure.schema import Reading, RunCard, RunSource
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
@@ -199,6 +199,37 @@ def finish_workload(
     )
 
 
+def _write_synthetic_dataset(
+    paths: DatasetPaths,
+    card: DatasetCard,
+    *,
+    count: int,
+    revision: int,
+    seed: int,
+    changed: Set[int],
+) -> DatasetCard:
+    """Write the already-sorted synthetic samples without retaining them in memory."""
+    if paths.name != card.name:
+        raise ValueError(f"paths name {paths.name!r} != card name {card.name!r}")
+    paths.samples_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    with paths.samples_jsonl.open("w", encoding="utf-8", newline="\n") as stream:
+        for index in range(count):
+            sample = Sample(
+                sample_id=f"delta-{index:08d}",
+                views=[View(path=f"opaque/{index}.png")],
+                label_source="none",
+                group=f"changed-{index}" if index in changed else f"g-{index % 8}",
+                meta={"display": revision, "seed": seed},
+            )
+            stream.write(sample_json_line(sample))
+            stream.write("\n")
+    saved = card.model_copy(
+        update={"sample_count": count, "samples_hash": sha256_file(paths.samples_jsonl)}
+    )
+    dump_yaml_model(saved, paths.card_yaml)
+    return saved
+
+
 def build_scenario(root: Path, scenario: Scenario) -> Workload:
     """Build exact-size graphs using real DatasetCards, plans, runs, readings and diffs.
 
@@ -212,26 +243,13 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
     count = (scenario.entities - 20) // 3
     rng = random.Random(scenario.seed)
     changed = set(rng.sample(range(count), round(count * scenario.change_ratio)))
-    source_dataset = None
+    source_card = None
     for name, revision in (
         ("synthetic-a", 0),
         ("synthetic-b", 1),
         ("synthetic-source", 2),
         ("synthetic-target", 2),
     ):
-        samples = [
-            Sample(
-                sample_id=f"delta-{index:08d}",
-                views=[View(path=f"opaque/{index}.png")],
-                label_source="none",
-                group=f"g-{index % 8}",
-                meta={"display": revision, "seed": scenario.seed},
-            )
-            for index in range(count)
-        ]
-        if name == "synthetic-target":
-            for index in changed:
-                samples[index] = samples[index].model_copy(update={"group": f"changed-{index}"})
         card = DatasetCard(
             name=name,
             task="cls",
@@ -249,34 +267,39 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
             sample_count=count,
             samples_hash="0" * 64,
         )
-        dataset = Dataset.from_parts(card, samples)
-        dataset.save(DatasetPaths.resolve(name, data_root=data, configs_root=configs))
+        card = _write_synthetic_dataset(
+            DatasetPaths.resolve(name, data_root=data, configs_root=configs),
+            card,
+            count=count,
+            revision=revision,
+            seed=scenario.seed,
+            changed=changed if name == "synthetic-target" else frozenset(),
+        )
         if name == "synthetic-source":
-            source_dataset = dataset
+            source_card = card
     transitions = (("synthetic-a", "synthetic-b"), ("synthetic-b", "synthetic-source"))
     if scenario.topology == "branched":
         transitions = (("synthetic-a", "synthetic-source"), ("synthetic-b", "synthetic-source"))
     for index, (before, after) in enumerate(transitions):
         _diff(data, configs, before, after, f"history-{index}")
-    if source_dataset is None:  # pragma: no cover - fixed fixture definition above
+    if source_card is None:  # pragma: no cover - fixed fixture definition above
         raise RuntimeError("synthetic source dataset was not built")
-    dataset = source_dataset
-    paths = DatasetPaths.resolve(dataset.card.name, data_root=data, configs_root=configs)
+    paths = DatasetPaths.resolve(source_card.name, data_root=data, configs_root=configs)
     plan = SplitPlan(
         plan_id="fixed",
-        dataset=dataset.card.name,
-        dataset_hash=dataset.card.samples_hash,
+        dataset=source_card.name,
+        dataset_hash=source_card.samples_hash,
         strategy="fixed",
         params={},
         subsets=[SubsetSpec(name="train", role="train", ratio=1)],
-        assignment={s.sample_id: "train" for s in dataset.samples},
+        assignment={f"delta-{index:08d}": "train" for index in range(count)},
         created_at=stamp(),
     )
     save_plan(plan, paths)
     run = RunCard(
         run_id="r-000000",
-        dataset=dataset.card.name,
-        samples_hash=dataset.card.samples_hash,
+        dataset=source_card.name,
+        samples_hash=source_card.samples_hash,
         plan_id=plan.plan_id,
         trained_on=["train"],
         source=RunSource(),
@@ -285,7 +308,7 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
     dump_yaml_model(run, data / "runs" / run.run_id / "run.yaml")
     # Four datasets, two diff artifacts, three sample versions, one split, one run.
     reading_count = scenario.entities - (3 * count + 8)
-    ledger = data / "measure" / dataset.card.name / "readings.jsonl"
+    ledger = data / "measure" / source_card.name / "readings.jsonl"
     ledger.parent.mkdir(parents=True)
     with ledger.open("w", encoding="utf-8", newline="\n") as stream:
         for index in range(reading_count):

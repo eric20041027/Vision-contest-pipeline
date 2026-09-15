@@ -150,7 +150,7 @@ database、security 與 whole-branch reviews 在 `7eaef001c987af4f341ec8533ca33b
 
 1. 本機原生服務已取得 v3 PASS 51/51（rollback / concurrency / MVCC / parity）；Linux CI evidence 仍要在
    可用 Docker Compose host 跑 `tests/integration/postgres/run.ps1` 取得。
-2. 跑完整 six-method 1K/10K/100K/1M matrix與 real track，保存 machine-readable output與hash（先完成
+2. 跑完整 six-method 1K/10K/100K matrix與 real track（1M 已於 2026-09-15 移出正式矩陣，見 Plan 12 後記 §1），保存 machine-readable output與hash（先完成
    graph loader 的串流 replay，再重跑 1M memory gate）。
 3. 先跑 calibration-only，再於不同 process跑 frozen held-out；記 policy ID、精確 policy file hash、
    environment/version、完整 scenario/sample counts、zero leakage、parity與 honest p50/p95 gate結果。

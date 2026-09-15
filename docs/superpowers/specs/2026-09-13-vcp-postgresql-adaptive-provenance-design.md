@@ -580,3 +580,9 @@ generation pointer與scaled measurement處理。
 - Psycopg binary installation：<https://www.psycopg.org/psycopg3/docs/api/pq.html>
 - Docker Compose networking：<https://docs.docker.com/compose/how-tos/networking/>
 - Docker Official PostgreSQL image：<https://hub.docker.com/_/postgres>
+
+## 20. 補充決定（合併後）
+
+以程式碼為準；每條的完整依據與代價見 `../plans/2026-09-13-vcp-postgresql-adaptive-provenance-followups.md`。
+
+1. **正式矩陣不含 1M**（2026-09-15）：entity scales 為 1K / 10K / 100K，每 split 108 場景、612 次重複、92 個可 fit 觀測、16 個 NO_OP；§13 的「100K/1M 各 3 repetitions」對 1M 的部分不再適用，100K 仍是 3 次。理由是 1M 在 32 GiB 機器上會被 RAM 護欄中止，留著會讓 calibration / held-out 永遠產不出 policy。`production_benchmark.py` 的 1M 階梯（canonical/SQLite）不受影響，1M 也仍可用 `--entities 1000000` 臨時跑。

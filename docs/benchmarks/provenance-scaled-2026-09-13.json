@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-13T19:27:17.535Z",
+  "environment": {
+    "hardware": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "operating_system": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.14",
+    "sqlite": "3.53.1",
+    "vcp_commit": "09af0cc04f35248b8000bf3232285ebe61780980",
+    "seed": 20260913,
+    "warmup": "one prefix materialization before timed repetitions"
+  },
+  "scales": {
+    "1000": {
+      "generator": {
+        "seed": 20260913,
+        "events": 1000,
+        "runs": 15,
+        "subsets": 8,
+        "event_id_stream_sha256": "1e2ee11b7434a6e7ed65fac268e34a0960632737b9a097c97a1bffda1e27c0d1",
+        "database_bytes": 724992,
+        "canonical_metadata_bytes": 369891,
+        "index_to_canonical_ratio": 1.9600152477351436,
+        "no_op_transitions": 1
+      },
+      "repetitions": 7,
+      "full_rebuild_ms": 10.0898,
+      "baselines": {
+        "full_replay": {
+          "p50_ms": 1.238,
+          "p95_ms": 1.2936
+        },
+        "full_sqlite_recompute": {
+          "p50_ms": 0.3925,
+          "p95_ms": 0.5335
+        },
+        "dependency_incremental": {
+          "p50_ms": 0.2781,
+          "p95_ms": 0.3566
+        }
+      },
+      "queries": {
+        "Q1_latest_head": {
+          "p50_ms": 0.0624,
+          "p95_ms": 0.0734
+        },
+        "Q2_diff_summary": {
+          "p50_ms": 0.159,
+          "p95_ms": 0.2223
+        },
+        "Q3_sample_impact": {
+          "p50_ms": 0.0663,
+          "p95_ms": 0.0864
+        },
+        "Q4_dataset_impact": {
+          "p50_ms": 0.0628,
+          "p95_ms": 0.1111
+        },
+        "Q5_stale_runs": {
+          "p50_ms": 0.0631,
+          "p95_ms": 0.0704
+        },
+        "Q6_explain": {
+          "p50_ms": 0.0685,
+          "p95_ms": 0.1211
+        },
+        "Q7_sync_status": {
+          "p50_ms": 0.0779,
+          "p95_ms": 0.1081
+        }
+      },
+      "updates": {
+        "U1_small_diff": {
+          "events": 100,
+          "p50_ms": 0.2664,
+          "p95_ms": 0.3004
+        },
+        "U2_large_diff": {
+          "events": 100,
+          "p50_ms": 0.2781,
+          "p95_ms": 0.3566
+        },
+        "U3_no_op_transition": {
+          "p50_ms": 0.0608,
+          "p95_ms": 0.0643
+        },
+        "U4_new_run_dependencies": {
+          "p50_ms": 0.719,
+          "p95_ms": 0.9208
+        },
+        "U5_artifact_supersession_edge": {
+          "p50_ms": 0.6916,
+          "p95_ms": 0.899
+        },
+        "U6_interrupted_transaction": {
+          "p50_ms": 0.5535,
+          "p95_ms": 0.6007,
+          "recovery_success": true
+        }
+      },
+      "parity_rate": 1.0,
+      "incremental_p95_speedup": 3.627593942793046,
+      "events_per_second_full": 807754.4426494346,
+      "affected_rows_per_input_event": 0.15,
+      "peak_memory": null,
+      "peak_memory_note": "not measured; tracemalloc would omit SQLite native allocations",
+      "crash_recovery_success_rate": 1.0
+    },
+    "10000": {
+      "generator": {
+        "seed": 20260913,
+        "events": 10000,
+        "runs": 34,
+        "subsets": 8,
+        "event_id_stream_sha256": "d0c58e6951a0abf4785ba6184b17b86c669755a725195e492c1330b1d4f94005",
+        "database_bytes": 6836224,
+        "canonical_metadata_bytes": 3672618,
+        "index_to_canonical_ratio": 1.8614035001734457,
+        "no_op_transitions": 1
+      },
+      "repetitions": 7,
+      "full_rebuild_ms": 84.5945,
+      "baselines": {
+        "full_replay": {
+          "p50_ms": 14.68,
+          "p95_ms": 20.574
+        },
+        "full_sqlite_recompute": {
+          "p50_ms": 5.2606,
+          "p95_ms": 5.7885
+        },
+        "dependency_incremental": {
+          "p50_ms": 0.364,
+          "p95_ms": 0.4519
+        }
+      },
+      "queries": {
+        "Q1_latest_head": {
+          "p50_ms": 0.0706,
+          "p95_ms": 0.1552
+        },
+        "Q2_diff_summary": {
+          "p50_ms": 2.9919,
+          "p95_ms": 4.203
+        },
+        "Q3_sample_impact": {
+          "p50_ms": 0.1098,
+          "p95_ms": 0.1707
+        },
+        "Q4_dataset_impact": {
+          "p50_ms": 0.0719,
+          "p95_ms": 0.1144
+        },
+        "Q5_stale_runs": {
+          "p50_ms": 0.0705,
+          "p95_ms": 0.0956
+        },
+        "Q6_explain": {
+          "p50_ms": 0.075,
+          "p95_ms": 0.159
+        },
+        "Q7_sync_status": {
+          "p50_ms": 0.2509,
+          "p95_ms": 0.4097
+        }
+      },
+      "updates": {
+        "U1_small_diff": {
+          "events": 100,
+          "p50_ms": 0.313,
+          "p95_ms": 0.3729
+        },
+        "U2_large_diff": {
+          "events": 100,
+          "p50_ms": 0.364,
+          "p95_ms": 0.4519
+        },
+        "U3_no_op_transition": {
+          "p50_ms": 0.0642,
+          "p95_ms": 0.0794
+        },
+        "U4_new_run_dependencies": {
+          "p50_ms": 0.7612,
+          "p95_ms": 1.1236
+        },
+        "U5_artifact_supersession_edge": {
+          "p50_ms": 0.7453,
+          "p95_ms": 1.0294
+        },
+        "U6_interrupted_transaction": {
+          "p50_ms": 0.66,
+          "p95_ms": 0.7031,
+          "recovery_success": true
+        }
+      },
+      "parity_rate": 1.0,
+      "incremental_p95_speedup": 45.52777163089179,
+      "events_per_second_full": 681198.9100817438,
+      "affected_rows_per_input_event": 0.34,
+      "peak_memory": null,
+      "peak_memory_note": "not measured; tracemalloc would omit SQLite native allocations",
+      "crash_recovery_success_rate": 1.0
+    },
+    "100000": {
+      "generator": {
+        "seed": 20260913,
+        "events": 100000,
+        "runs": 340,
+        "subsets": 8,
+        "event_id_stream_sha256": "f1866cacc99057a88070c533f53c515744783b3767f65a6138ca0542be024033",
+        "database_bytes": 68632576,
+        "canonical_metadata_bytes": 36724836,
+        "index_to_canonical_ratio": 1.8688327430515959,
+        "no_op_transitions": 1
+      },
+      "repetitions": 3,
+      "full_rebuild_ms": 1280.7226,
+      "baselines": {
+        "full_replay": {
+          "p50_ms": 129.0064,
+          "p95_ms": 129.9637
+        },
+        "full_sqlite_recompute": {
+          "p50_ms": 53.5958,
+          "p95_ms": 54.2836
+        },
+        "dependency_incremental": {
+          "p50_ms": 2.1,
+          "p95_ms": 2.2753
+        }
+      },
+      "queries": {
+        "Q1_latest_head": {
+          "p50_ms": 0.0677,
+          "p95_ms": 0.085
+        },
+        "Q2_diff_summary": {
+          "p50_ms": 32.1984,
+          "p95_ms": 33.1309
+        },
+        "Q3_sample_impact": {
+          "p50_ms": 0.0782,
+          "p95_ms": 0.2292
+        },
+        "Q4_dataset_impact": {
+          "p50_ms": 0.0926,
+          "p95_ms": 0.1406
+        },
+        "Q5_stale_runs": {
+          "p50_ms": 0.0881,
+          "p95_ms": 0.1231
+        },
+        "Q6_explain": {
+          "p50_ms": 0.078,
+          "p95_ms": 0.1497
+        },
+        "Q7_sync_status": {
+          "p50_ms": 3.053,
+          "p95_ms": 3.7208
+        }
+      },
+      "updates": {
+        "U1_small_diff": {
+          "events": 100,
+          "p50_ms": 0.9142,
+          "p95_ms": 1.0426
+        },
+        "U2_large_diff": {
+          "events": 1000,
+          "p50_ms": 2.1,
+          "p95_ms": 2.2753
+        },
+        "U3_no_op_transition": {
+          "p50_ms": 0.0718,
+          "p95_ms": 0.081
+        },
+        "U4_new_run_dependencies": {
+          "p50_ms": 0.7796,
+          "p95_ms": 1.6104
+        },
+        "U5_artifact_supersession_edge": {
+          "p50_ms": 0.6145,
+          "p95_ms": 0.6932
+        },
+        "U6_interrupted_transaction": {
+          "p50_ms": 0.5719,
+          "p95_ms": 0.5777,
+          "recovery_success": true
+        }
+      },
+      "parity_rate": 1.0,
+      "incremental_p95_speedup": 57.11936887443413,
+      "events_per_second_full": 775155.3411303624,
+      "affected_rows_per_input_event": 0.34,
+      "peak_memory": null,
+      "peak_memory_note": "not measured; tracemalloc would omit SQLite native allocations",
+      "crash_recovery_success_rate": 1.0
+    },
+    "1000000": {
+      "generator": {
+        "seed": 20260913,
+        "events": 1000000,
+        "runs": 3404,
+        "subsets": 8,
+        "event_id_stream_sha256": "266aeb299ed87a238e9dada55540f0e35e76f07fb36b66561832b191619a8f21",
+        "database_bytes": 687898624,
+        "canonical_metadata_bytes": 367248896,
+        "index_to_canonical_ratio": 1.873112843884492,
+        "no_op_transitions": 1
+      },
+      "repetitions": 3,
+      "full_rebuild_ms": 17804.4043,
+      "baselines": {
+        "full_replay": {
+          "p50_ms": 1304.5136,
+          "p95_ms": 1304.6533
+        },
+        "full_sqlite_recompute": {
+          "p50_ms": 570.5329,
+          "p95_ms": 595.9486
+        },
+        "dependency_incremental": {
+          "p50_ms": 21.5544,
+          "p95_ms": 22.0346
+        }
+      },
+      "queries": {
+        "Q1_latest_head": {
+          "p50_ms": 0.0996,
+          "p95_ms": 0.1846
+        },
+        "Q2_diff_summary": {
+          "p50_ms": 356.4669,
+          "p95_ms": 371.5932
+        },
+        "Q3_sample_impact": {
+          "p50_ms": 0.0878,
+          "p95_ms": 0.2792
+        },
+        "Q4_dataset_impact": {
+          "p50_ms": 0.1848,
+          "p95_ms": 0.3887
+        },
+        "Q5_stale_runs": {
+          "p50_ms": 0.3573,
+          "p95_ms": 0.6224
+        },
+        "Q6_explain": {
+          "p50_ms": 0.0815,
+          "p95_ms": 0.1677
+        },
+        "Q7_sync_status": {
+          "p50_ms": 34.3905,
+          "p95_ms": 37.0569
+        }
+      },
+      "updates": {
+        "U1_small_diff": {
+          "events": 100,
+          "p50_ms": 7.8829,
+          "p95_ms": 8.4809
+        },
+        "U2_large_diff": {
+          "events": 10000,
+          "p50_ms": 21.5544,
+          "p95_ms": 22.0346
+        },
+        "U3_no_op_transition": {
+          "p50_ms": 0.115,
+          "p95_ms": 0.1966
+        },
+        "U4_new_run_dependencies": {
+          "p50_ms": 0.9812,
+          "p95_ms": 1.8127
+        },
+        "U5_artifact_supersession_edge": {
+          "p50_ms": 0.7834,
+          "p95_ms": 0.9551
+        },
+        "U6_interrupted_transaction": {
+          "p50_ms": 0.7185,
+          "p95_ms": 0.7195,
+          "recovery_success": true
+        }
+      },
+      "parity_rate": 1.0,
+      "incremental_p95_speedup": 59.20930264220816,
+      "events_per_second_full": 766569.2408266192,
+      "affected_rows_per_input_event": 0.3404,
+      "peak_memory": null,
+      "peak_memory_note": "not measured; tracemalloc would omit SQLite native allocations",
+      "crash_recovery_success_rate": 1.0
+    }
+  }
+}

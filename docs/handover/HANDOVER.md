@@ -14,14 +14,15 @@
 | 3 | 訓練層 | `src/vcp/train` | `vcp train run\|upload\|status` |
 | 5 | 提交治理 | `src/vcp/submit` | `vcp submit` ×12（init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report） |
 | 6 | 備份審計 | `src/vcp/backup` | `vcp backup manifest\|push\|verify\|pull\|status` |
+| 7 | Dataset evolution provenance | `src/vcp/provenance` | `vcp data diff`、`vcp provenance rebuild\|sync\|ingest\|impact\|stale\|explain\|status\|verify-index` |
 
 起點是賽後報告 `docs/postmortems/2026-08-aidea-marine-debris-detection.md`（§9 藍圖）：public→private 掉分的根因是「只在一個儀器上驗證」「元件準入不一致」「σ_p 太晚估」；框架把這些變成機制（≥2 個互斥驗證集 + 1 個 sealed holdout、護欄先於讀數、預登記 t 門檻、元件準入需 ≥2 個基底、台帳與上傳原子、UTC 時戳）。
 
 ## 2. 現況
 
-- 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`），工作樹乾淨；沒有未合併的分支。
-- 版本：`0.6.0`（tag `v0.6.0`，2026-09-13）= 稽核 Wave 1b-2（`source_audit` 逐列 sha 索引產物、存取器只驗讀到的列、收據 `identity`，VCP-002）；`0.5.0` = Wave 1b-1（角色範圍存取 `DatasetAccess`、`access_receipt` 產物、provenance 三級與四個強制點，VCP-001/003）；`0.4.0` = Wave 1a（不可變產物層）；`0.3.0` = Wave 0；`0.2.0` 是第一個有 tag 的 release。規則與發版步驟在 `CHANGELOG.md` 表頭。`0.2.0` 之前 240 個 commit 都宣告 `0.1.0` 且無 tag——RSNA 早期產物裡的 `"vcp_version": "0.1.0"` 回推不到單一 commit；0.2.0 起產物記 `版本+g<commit>[.dirty]`。下一步是 Wave 1c（程式碼快照與授權，VCP-004/006）；1b-1 / 1b-2 的開放待辦在各自後記；稽核文件副本在 `docs/audits/`。
-- 測試：`uv run pytest --cov=vcp`，覆蓋率約 96.66%；實際最新數字見 RSNA RUNBOOK 驗證紀錄。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
+- 分支：本文件目前描述 local implementation branch `codex/dataset-evolution-provenance`，基底為 `main@09af0cc`；尚未宣稱 merge、push、tag 或 PR。原 `codex/vcp-visual-guide` 工作樹的使用者文件變更未被碰觸。
+- 版本：branch candidate `0.7.0` = Dataset Evolution 與 Incremental Impact Provenance；`0.6.0`（tag `v0.6.0`）= source audit。0.7 新增 immutable `dataset_diff`、canonical graph、disposable SQLite index、8 個 provenance CLI 與 Real+Scaled benchmark。release/tag 步驟仍以 `CHANGELOG.md` 為準，沒有 tag 前不得稱為已發版。
+- 測試：本 branch `uv run pytest --cov=vcp` 為 1,202 passed / 16 skipped、coverage 95.05%。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
 - 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。
 
@@ -41,12 +42,21 @@ src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）ti
 src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
 src/vcp/artifact  schema（pydantic 模型、check_file_name）ledger（supersession.jsonl 讀寫）store（load/reuse/verify）
                   writer（ArtifactWriter：claim/write/commit）lineage（chain/successors/head/forks）clean（scan/clean）
+src/vcp/provenance schema/policy/diff（dataset_diff artifact）graph/views（full oracle）index（SQLite cache）
 src/vcp/cli*.py   每層一個 typer app（含 cli_artifact.py 的 `vcp artifact` 群：create/show/verify/lineage/status/
                   relink/clean）；cli_common.run_command 統一 VERDICT / exit code / --json / context
 projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
 tests/            unit/<layer>、integration（真資料）、helpers.py、submit_fixtures.py、backup_fixtures.py
 configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git
 ```
+
+Dataset provenance 的操作、修復、status 語意與基準命令見
+`docs/guides/DATASET_EVOLUTION_PROVENANCE.md`；設計與執行計畫為
+`docs/superpowers/specs/2026-09-13-vcp-dataset-evolution-provenance-design.md` 與
+`docs/superpowers/plans/2026-09-13-vcp-plan11-dataset-evolution-provenance.md`。真實驗證只在 temporary
+metadata copy 寫 diff/index，live RSNA roots 僅讀取。
+完整實作範圍、review 修正、驗證數字與下一位 agent 的接手清單見
+`docs/handover/DATASET_EVOLUTION_PROVENANCE_HANDOFF.md`。
 
 十二個變異軸都是登記表（任務、匯入器、匯出器、解碼器、切分策略、稽核、轉換器、指標、σ_p 方法、融合器、輸出格式、平台）：加一種形態 = 加一個登記項，不改 schema、不改 CLI；比賽自己的指標 / 格式用 `--plugin projects.<contest>.metrics`。
 

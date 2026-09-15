@@ -15,6 +15,28 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.7.0] - 2026-09-13
+
+Dataset Evolution 與 Incremental Impact Provenance。MINOR 的理由：新增 `dataset_diff` canonical
+artifact、`vcp data diff` 與 `vcp provenance` CLI 契約、status/reason 字彙及衍生 SQLite schema。
+
+### Added
+- `SampleChange` strict event、deterministic ID、ADDED/REMOVED/MODIFIED/no-op summary、通用
+  field-domain/effect policy 與外部 plugin registry。
+- verified immutable `dataset_diff` artifact；兩端 samples/source-audit identity pin、stable order、
+  fallback provenance grade、commit-last manifest。
+- canonical full-replay graph與 `VALID|STALE|REVIEW|BROKEN` impact semantics，涵蓋 dataset、changed
+  sample version、split、export pin、materialized cache、run/access receipt/prediction、append-only
+  judgement event、fusion、artifact supersession、submission、backup。
+- disposable WAL SQLite index、transactional idempotent diff ingest、canonical append sync、dirty closure、
+  prefix/manifest checkpoint、atomic verified rebuild與 full parity verifier。
+- CLI `data diff`、`provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index`。
+- real metadata-copy validation、固定 seed 1k/10k/100k/1M algorithm microbenchmark，以及直接走
+  production schema / `ProvenanceIndex.ingest_diff()` 的正式 benchmark runner/result。
+
+### Changed
+- package version升為 `0.7.0`；README、AGENTS與 handover 補上 storage authority、repair、benchmark。
+
 ## [0.6.0] - 2026-09-13
 
 稽核 **Wave 1b-2**：來源稽核與選取列存取——VCP-002（大型來源每個 job 都整檔 hash，與 train-only 列存取衝突）。MINOR 的理由：新產物 kind `source_audit`、收據與 `run.yaml` / `train.yaml` 的 `AccessRef` 多 `identity` / `source_audit`、`import` / `validate` / `measure` / `export` / `stage` / `train run` 的新 VERDICT 欄位與 WARN 字彙 `source_audit=missing`、備份角色 `source_audit`。

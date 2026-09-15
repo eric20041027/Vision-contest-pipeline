@@ -23,8 +23,8 @@ policy artifact ID/hash、latency、crossover、adaptive gate pass/fail 或 RSNA
 
 完整 SHA-256 以 `sha256sum docs/benchmarks/postgres-provenance-*` 為準。1M 場景的瓶頸不在 fixture
 writer，而在 canonical graph replay 讀取約 41 萬筆 diff 事件時同時常駐文字、lines、pydantic change list
-與 graph；下一步是 production graph loader 的串流 replay（`load_dataset_diff` API 與 exact parity 不變），
-再重跑 gate。主機 31 GB RAM 常態只剩約 7 GB 可用，跑 1M 前先清出記憶體。
+與 graph；graph replay 已改為串流（`open_dataset_diff`：先整檔驗證、再逐筆重放，`load_dataset_diff`
+API 與 exact parity 不變），下一步是重跑 gate。主機 31 GB RAM 常態只剩約 7 GB 可用，跑 1M 前先清出記憶體。
 
 目前可引用的 Task 9–11 evidence：
 

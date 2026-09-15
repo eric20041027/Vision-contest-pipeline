@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
@@ -332,10 +333,98 @@ def _compare_dataset_versions(
     return before, after, DatasetComparison(artifact_id, summary, changes)
 
 
-def load_dataset_diff(
-    data_root: Path, artifact_id: str, *, verify_inputs: bool = False
-) -> DatasetDiffResult:
-    """Verify a committed diff and load its strict summary/event records."""
+class DatasetDiffStream(NamedTuple):
+    """A committed diff validated end to end whose events are replayed one at a time.
+
+    ``change_ids`` is the complete, validated id list from the first pass. ``events`` is a
+    second pass over the same bytes that yields one :class:`SampleChange` at a time and fails
+    closed if the file changed between the passes, so no consumer ever holds every event.
+    """
+
+    artifact_id: str
+    summary: DatasetDiffSummary
+    artifact_dir: Path
+    change_ids: list[str]
+    events: Iterator[SampleChange]
+
+
+def _raw_lines(directory: Path) -> Iterator[bytes]:
+    try:
+        with (directory / CHANGES_FILE).open("rb") as handle:
+            yield from handle
+    except OSError as e:
+        raise ValidationFailed(f"bad dataset diff: {e}", location=str(directory)) from e
+
+
+def _parse_change(raw: bytes, directory: Path) -> SampleChange:
+    try:
+        return SampleChange.model_validate_json(raw.decode("utf-8"))
+    except (ValidationError, ValueError) as e:
+        raise ValidationFailed(f"bad dataset diff: {e}", location=str(directory)) from e
+
+
+def _stream_changes(
+    directory: Path, artifact_id: str, summary: DatasetDiffSummary, digest: Any | None
+) -> Iterator[SampleChange]:
+    """Yield ``changes.jsonl`` in file order with the same integrity checks as a full load.
+
+    Row invariants (sorted order, unique ids, shared endpoints) are enforced as each row
+    arrives; the aggregate invariants (event total, summary counters) after the last row. Only
+    ids and counters stay in memory, and ``digest`` (when given) absorbs every raw byte.
+    """
+    endpoints = (
+        summary.from_dataset,
+        summary.from_samples_hash,
+        summary.to_dataset,
+        summary.to_samples_hash,
+    )
+    previous: tuple[str, str] | None = None
+    seen: set[str] = set()
+    counts: Counter[str] = Counter()
+    domains: Counter[str] = Counter()
+    effects: Counter[str] = Counter()
+    for raw in _raw_lines(directory):
+        if digest is not None:
+            digest.update(raw)
+        if not raw.strip():
+            continue
+        change = _parse_change(raw, directory)
+        key = (change.sample_id, change.change_type.value)
+        if previous is not None and key < previous:
+            raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} changes are not sorted")
+        previous = key
+        if change.change_id in seen:
+            raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} has duplicate change ids")
+        seen.add(change.change_id)
+        if (
+            change.from_dataset,
+            change.from_samples_hash,
+            change.to_dataset,
+            change.to_samples_hash,
+        ) != endpoints:
+            raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} event endpoints disagree")
+        counts[change.change_type.value] += 1
+        for domain in change.changed_domains:
+            domains[domain.value] += 1
+        for effect in change.semantic_effects:
+            effects[effect.value] += 1
+        yield change
+    if summary.total_changes != len(seen):
+        raise IntegrityError(
+            f"mismatch: dataset diff summary does not match artifact/events for {artifact_id!r}"
+        )
+    if (
+        summary.counts != dict(sorted(counts.items()))
+        or summary.domain_counts != dict(sorted(domains.items()))
+        or summary.effect_counts != dict(sorted(effects.items()))
+    ):
+        raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} summary counts disagree")
+
+
+def _verify_committed_diff(
+    data_root: Path, artifact_id: str, *, verify_inputs: bool
+) -> tuple[Path, DatasetDiffSummary]:
+    """Verify the artifact files, summary and spec pins; the events are checked by the stream."""
     res = store.verify(data_root, KIND, artifact_id)
     if res.failed:
         raise IntegrityError(
@@ -349,58 +438,12 @@ def load_dataset_diff(
         summary = DatasetDiffSummary.model_validate_json(
             (directory / SUMMARY_FILE).read_text(encoding="utf-8")
         )
-        changes = [
-            SampleChange.model_validate_json(line)
-            for line in (directory / CHANGES_FILE).read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
     except (OSError, ValidationError, ValueError) as e:
         raise ValidationFailed(f"bad dataset diff: {e}", location=str(directory)) from e
-    if summary.artifact_id != artifact_id or summary.total_changes != len(changes):
+    if summary.artifact_id != artifact_id:
         raise IntegrityError(
             f"mismatch: dataset diff summary does not match artifact/events for {artifact_id!r}"
         )
-    if changes != sorted(changes, key=lambda event: (event.sample_id, event.change_type.value)):
-        raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} changes are not sorted")
-    ids = [change.change_id for change in changes]
-    if len(set(ids)) != len(ids):
-        raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} has duplicate change ids")
-    endpoints = (
-        summary.from_dataset,
-        summary.from_samples_hash,
-        summary.to_dataset,
-        summary.to_samples_hash,
-    )
-    if any(
-        (
-            change.from_dataset,
-            change.from_samples_hash,
-            change.to_dataset,
-            change.to_samples_hash,
-        )
-        != endpoints
-        for change in changes
-    ):
-        raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} event endpoints disagree")
-    expected_counts = dict(sorted(Counter(change.change_type.value for change in changes).items()))
-    expected_domains = dict(
-        sorted(
-            Counter(domain.value for change in changes for domain in change.changed_domains).items()
-        )
-    )
-    expected_effects = dict(
-        sorted(
-            Counter(
-                effect.value for change in changes for effect in change.semantic_effects
-            ).items()
-        )
-    )
-    if (
-        summary.counts != expected_counts
-        or summary.domain_counts != expected_domains
-        or summary.effect_counts != expected_effects
-    ):
-        raise IntegrityError(f"mismatch: dataset diff {artifact_id!r} summary counts disagree")
     params = manifest.spec.params
     expected_params = {
         "from_dataset": summary.from_dataset,
@@ -437,4 +480,41 @@ def load_dataset_diff(
                     location=str(path),
                     fields={"artifact": artifact_id, "input": ref.name},
                 )
+    return directory, summary
+
+
+def open_dataset_diff(
+    data_root: Path, artifact_id: str, *, verify_inputs: bool = False
+) -> DatasetDiffStream:
+    """Validate a committed diff completely, then replay it one event at a time.
+
+    The first pass runs every check :func:`load_dataset_diff` runs but keeps only ids and
+    counters; the second pass (``events``) re-reads the same bytes for consumers that mutate a
+    graph or index per event and fails closed if the file changed in between.
+    """
+    directory, summary = _verify_committed_diff(data_root, artifact_id, verify_inputs=verify_inputs)
+    first = hashlib.sha256()
+    change_ids = [
+        change.change_id for change in _stream_changes(directory, artifact_id, summary, first)
+    ]
+    expected = first.hexdigest()
+
+    def events() -> Iterator[SampleChange]:
+        second = hashlib.sha256()
+        yield from _stream_changes(directory, artifact_id, summary, second)
+        if second.hexdigest() != expected:
+            raise IntegrityError(
+                f"mismatch: dataset diff {artifact_id!r} changed while it was being replayed",
+                fields={"artifact": artifact_id},
+            )
+
+    return DatasetDiffStream(artifact_id, summary, directory, change_ids, events())
+
+
+def load_dataset_diff(
+    data_root: Path, artifact_id: str, *, verify_inputs: bool = False
+) -> DatasetDiffResult:
+    """Verify a committed diff and load its strict summary/event records."""
+    directory, summary = _verify_committed_diff(data_root, artifact_id, verify_inputs=verify_inputs)
+    changes = list(_stream_changes(directory, artifact_id, summary, None))
     return DatasetDiffResult(artifact_id, summary, changes, directory)

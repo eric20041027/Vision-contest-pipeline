@@ -1,0 +1,2551 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="51" failures="0" skipped="0" tests="51" time="261.937" timestamp="2026-09-14T16:27:27.041583-04:00" hostname="DESKTOP-I2H022E"><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_auto_executes_both_policy_selected_paths[INCREMENTAL]" time="5.216"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FF788E90&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_auto_executes_both_policy_selected_paths[FULL]" time="5.098"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC070E0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_every_strategy_matches_canonical_and_sqlite[incremental]" time="5.086"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC06AB0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_every_strategy_matches_canonical_and_sqlite[full]" time="5.105"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC06F30&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_every_strategy_matches_canonical_and_sqlite[auto]" time="5.106"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6C080&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_late_zero_event_edge_propagates_existing_semantics[incremental]" time="5.105"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC075C0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_late_zero_event_edge_propagates_existing_semantics[full]" time="5.104"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC06990&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_late_zero_event_edge_propagates_existing_semantics[auto]" time="5.086"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6D160&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_zero_event_is_topology_only_and_duplicate_is_no_op[incremental]" time="5.084"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6E3C0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_zero_event_is_topology_only_and_duplicate_is_no_op[full]" time="5.112"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6F290&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_zero_event_is_topology_only_and_duplicate_is_no_op[auto]" time="5.093"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC075F0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[sample_changes-incremental]" time="5.096"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC060C0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[sample_changes-full]" time="5.080"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC88F80&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[sample_changes-auto]" time="5.092"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC05AF0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[entity_status-incremental]" time="5.100"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC886B0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[entity_status-full]" time="5.097"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC880E0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[entity_status-auto]" time="5.087"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC8B140&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[maintenance_decisions-incremental]" time="5.090"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC8A450&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[maintenance_decisions-full]" time="5.081"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6FC50&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[maintenance_decisions-auto]" time="5.100"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE46E0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[ingest_checkpoints-incremental]" time="5.091"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE51C0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[ingest_checkpoints-full]" time="5.110"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6FB30&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_injected_rollback_preserves_every_table[ingest_checkpoints-auto]" time="5.104"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE5130&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_missing_mutated_evidence_fails_and_restored_evidence_rebuilds[missing]" time="5.096"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE6000&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_missing_mutated_evidence_fails_and_restored_evidence_rebuilds[manifest]" time="5.099"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE7CE0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_missing_mutated_evidence_fails_and_restored_evidence_rebuilds[payload]" time="5.100"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE4620&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_missing_mutated_evidence_fails_and_restored_evidence_rebuilds[input]" time="5.079"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC8A900&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_conflicting_immutable_row_fails_without_partial_writes" time="5.082"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7D700&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_cycle_rejection_preserves_generation" time="5.088"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7E030&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_full_rebuild_recovers_disposable_index[delete]" time="5.089"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE6EA0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_full_rebuild_recovers_disposable_index[index_drift]" time="5.107"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC889B0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_full_rebuild_recovers_disposable_index[ledger_drift]" time="5.079"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6D370&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_reader_sees_old_generation_until_rebuild_commit" time="5.088"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFBBEFC0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_advisory_lock_serializes_concurrent_duplicate_writers" time="5.085"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCE5C40&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.generations SET schema_version=2-23514]" time="5.104"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6FC50&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.generations SET graph_hash='invalid'-23514]" time="5.104"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC89430&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.entity_status SET status='UNKNOWN'-23514]" time="5.101"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7E9F0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.sample_changes SET semantic_effects=ARRAY['INVALID']-23514]" time="5.105"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7EA80&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.sample_changes SET before_row_hash=NULL-23514]" time="5.090"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFBBF020&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.ingest_checkpoints SET consumed_bytes=-1-23514]" time="5.083"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7CCE0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-UPDATE vcp_provenance.provenance_edges SET target_id='absent'-23503]" time="5.101"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7FF20&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[fresh-INSERT INTO vcp_provenance.entities SELECT * FROM vcp_provenance.entities-23505]" time="5.099"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCDC5F0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.generations SET schema_version=2-23514]" time="5.088"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC7EBA0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.generations SET graph_hash='invalid'-23514]" time="5.095"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCDC830&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.entity_status SET status='UNKNOWN'-23514]" time="5.106"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCDD7C0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.sample_changes SET semantic_effects=ARRAY['INVALID']-23514]" time="5.102"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCDF5F0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.sample_changes SET before_row_hash=NULL-23514]" time="5.101"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCDE720&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.ingest_checkpoints SET consumed_bytes=-1-23514]" time="5.097"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC6E1E0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-UPDATE vcp_provenance.provenance_edges SET target_id='absent'-23503]" time="5.107"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC80DD0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_schema_constraints_rollback[existing-INSERT INTO vcp_provenance.entities SELECT * FROM vcp_provenance.entities-23505]" time="5.094"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFC809E0&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase><testcase classname="tests.integration.provenance.test_postgres_backend" name="test_real_backend_fixture" time="5.094"><error message="failed on setup with &quot;vcp.core.errors.ValidationFailed: database_connection_failed&quot;">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000292FFCDE720&gt;
+
+    @pytest.fixture
+    def postgres_harness(monkeypatch):
+        driver, service = configured_driver()
+        factory = HarnessFactory(driver, service)
+        original = postgres._connection
+    
+        @contextmanager
+        def connect(config, driver):
+            for _, clone in factory.clones:
+                if clone is not None and config is clone.backend.config:
+                    with clone.connect() as connection:
+                        yield ObservedConnection(connection, clone)
+                    return
+            with original(config, driver) as connection:
+                yield connection
+    
+        monkeypatch.setattr(postgres, "_connection", connect)
+        try:
+&gt;           yield factory.create()
+                  ^^^^^^^^^^^^^^^^
+
+tests\integration\provenance\conftest.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\integration\provenance\conftest.py:190: in create
+    with self.connect() as admin:
+         ^^^^^^^^^^^^^^
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+tests\integration\provenance\conftest.py:182: in connect
+    with postgres.connection_lifecycle(
+..\..\..\..\..\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+src\vcp\provenance\postgres.py:599: in connection_lifecycle
+    raise_redacted_database_error(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+error = ConnectionTimeout('connection timeout expired')
+
+    def raise_redacted_database_error(error: BaseException) -&gt; None:
+        """Raise a stable database failure without exposing driver-provided text."""
+&gt;       raise ValidationFailed(
+            "database_connection_failed",
+            fields={"backend": BackendName.POSTGRESQL.value, "sqlstate": _safe_sqlstate(error)},
+        ) from None
+E       vcp.core.errors.ValidationFailed: database_connection_failed
+
+src\vcp\provenance\postgres.py:509: ValidationFailed</error></testcase></testsuite></testsuites>

@@ -22,6 +22,7 @@ from time import perf_counter_ns
 
 from vcp.artifact.schema import ArtifactSpec, InputRef
 from vcp.artifact.writer import ArtifactWriter
+from vcp.core.atomic import write_once_text
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.time import stamp
 from vcp.provenance.diff import CHANGES_FILE, KIND, SUMMARY_FILE
@@ -44,49 +45,14 @@ from vcp.provenance.schema import (
     DatasetDiffSummary,
     EntityStatus,
     ProvenanceEntity,
-    SampleChange,
     SemanticEffect,
-    make_change_id,
 )
 from vcp.provenance.views import compute_statuses
 
-SEED = 20260913
-SCALES = (1_000, 10_000, 100_000, 1_000_000)
-
-
-def _change(
-    index: int,
-    before: str,
-    after: str,
-    *,
-    prefix: str,
-    effect: SemanticEffect = SemanticEffect.DISPLAY_ONLY,
-) -> SampleChange:
-    sample_id = f"{prefix}-{index:08d}"
-    row_before = sha256_text(f"before:{sample_id}")
-    row_after = sha256_text(f"after:{sample_id}")
-    return SampleChange(
-        change_id=make_change_id(
-            before, after, sample_id, ChangeType.MODIFIED, row_before, row_after
-        ),
-        from_dataset="synthetic-source",
-        from_samples_hash=before,
-        to_dataset="synthetic-target",
-        to_samples_hash=after,
-        sample_id=sample_id,
-        change_type=ChangeType.MODIFIED,
-        changed_domains=[
-            ChangeDomain.LABEL_SOURCE
-            if effect == SemanticEffect.TRAINING_AFFECTING
-            else ChangeDomain.META
-        ],
-        changed_fields=[
-            "label_source" if effect == SemanticEffect.TRAINING_AFFECTING else "meta.display"
-        ],
-        semantic_effects=[effect],
-        before_row_hash=row_before,
-        after_row_hash=row_after,
-    )
+if __package__:
+    from .workloads import SCALES, SEED, _change
+else:
+    from workloads import SCALES, SEED, _change
 
 
 def _record_value(record: dict[str, object]) -> int:
@@ -408,11 +374,40 @@ def run_scale(root: Path, count: int) -> dict[str, object]:
     }
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--scales", type=int, nargs="+", default=list(SCALES))
+    parser.add_argument(
+        "--six-method",
+        action="store_true",
+        help="add the entity-count adaptive matrix; requires the disposable test service",
+    )
+    parser.add_argument("--policy-from", type=Path)
     args = parser.parse_args()
+    if args.output.exists():
+        raise ValueError("benchmark output is write-once")
+    if args.six_method:
+        if __package__:
+            from .adaptive_benchmark import (
+                empirical_crossover,
+                load_frozen_policy,
+                postgres_preflight,
+                run_matrix,
+            )
+            from .workloads import scenario_matrix
+        else:
+            from adaptive_benchmark import (
+                empirical_crossover,
+                load_frozen_policy,
+                postgres_preflight,
+                run_matrix,
+            )
+            from workloads import scenario_matrix
+        runtime = postgres_preflight()
+        if args.policy_from is None:
+            raise ValueError("six-method benchmark requires a frozen policy")
+        policy, evidence, policy_sha256 = load_frozen_policy(args.policy_from)
     with tempfile.TemporaryDirectory(prefix="vcp-production-provenance-") as temporary:
         root = Path(temporary)
         scales = [run_scale(root, count) for count in args.scales]
@@ -428,10 +423,36 @@ def main() -> None:
         "warmup": "OS cache naturally warm after deterministic fixture generation; no timed warmup",
         "scales": scales,
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8", newline="\n")
+    if args.six_method:
+        with tempfile.TemporaryDirectory(prefix="vcp-production-six-method-") as temporary:
+            result["six_method_benchmark"] = run_matrix(
+                Path(temporary),
+                scenario_matrix(entities=args.scales),
+                pg_runtime=runtime,
+                policy=policy,
+                evidence=evidence,
+                policy_sha256=policy_sha256,
+            )
+        result["policy_id"] = policy.id
+        result["policy_sha256"] = policy_sha256
+        result["empirical_crossover"] = empirical_crossover(evidence)
+        result["postgresql_environment"] = next(
+            (
+                row["environment"]
+                for row in result["six_method_benchmark"]
+                if row.get("method", "").startswith("postgres_") and row["status"] == "ok"
+            ),
+            None,
+        )
+    if __package__:
+        from .adaptive_benchmark import validate_publication_explain
+    else:
+        from adaptive_benchmark import validate_publication_explain
+    validate_publication_explain(result)
+    write_once_text(args.output, json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
+    return int(any(row["status"] != "ok" for row in result.get("six_method_benchmark", [])))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

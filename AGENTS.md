@@ -21,6 +21,7 @@
 - `artifacts/access_receipt/<id>/receipt.json` 是存取器留下的收據（train 下 `<run>-a<attempt>-<n>`，其他 `<purpose>-<dataset>-<plan>-<stamp>-<nonce>`）：只有授權子集的列會被解析，未授權 → `denied:` 並計數；`run.yaml` / `train.yaml` 的 `access` 列出掛上的收據，等級 `receipt > export > declared` 讀取時算出。measure 的乾淨基底 = `trained_on ∪ 觀測`；judge 讀過主張子集 → `INVALID contaminated`；`submit.yaml` 的 `require_provenance` 決定 gate。
 - `artifacts/source_audit/src-<dataset>-<hash16>/`（`audit.json` + `index.jsonl`）是 `vcp data import` / `validate` 留的逐列 sha 索引（內容定址、同內容重用、不做 supersedes）：存取器有它就不掃 `samples.jsonl`、只驗讀到的列；壞掉 → `mismatch:` FAIL；缺席 → 退回整檔 hash 並 WARN `source_audit=missing`；收據 `identity` 記用了哪條路。壞掉的稽核沒有 supersedes：搬走目錄再 `validate` 重建。
 - `artifacts/dataset_diff/<id>/`（`changes.jsonl` + `summary.json`）是 dataset version 的 immutable explicit edge；unchanged 不寫 event，未知 `meta.*` 預設 REVIEW。`indexes/provenance.sqlite3` 是可刪除衍生索引，絕不進 Git；新 canonical row 用 `provenance sync`，新 diff 用 `ingest`，既有 evidence 消失/改寫或 ledger prefix drift 必須 fail closed 後人工查明或 rebuild。
+- PostgreSQL provenance 是 optional、noncanonical 衍生索引；未指定 `--backend` 永遠仍用 SQLite。PostgreSQL v1 一個 database 對一個 active index，透過 libpq service 連線，VCP 不接受連線 URI 或憑證欄位、不讀 credential file。writer 以 transaction advisory lock 序列化；full rebuild 用 generation pointer 原子發布，incremental/auto 的 decision 是 derived telemetry。schema 不相容時換乾淨 database 後 rebuild，不做 silent migration。
 
 ## 常用命令
 - `uv sync` / `uv run vcp --help` / `uv run pytest --cov=vcp` / `uv run ruff check .`
@@ -35,7 +36,7 @@
 - `uv run vcp artifact create --kind K --id I --file PATH… [--input name=PATH…] [--supersedes OLD --reason R] [--id-pattern RE]` / `uv run vcp artifact verify --kind K --id I` / `uv run vcp artifact lineage --kind K --id I` / `uv run vcp artifact status [--kind K]`（唯讀）/ `uv run vcp artifact clean [--older-than 24h] [--apply]`；程式內用 `vcp.artifact.writer.ArtifactWriter`、重用用 `vcp.artifact.store.reuse`
 - `uv run vcp eval ingest --run R … --receipt ID` 掛外部收據；訓練迴圈 `with MaterializedReader(…, plan_id=P, subset="train") as reader:` 或 `Session.current().access(subsets={"train"})` 才會有收據；`vcp eval status --dataset D` 看每個 run 的 provenance
 - `uv run vcp data validate --name X` 也負責產 / 重用 `source_audit`（VERDICT `source_audit=` `source_audit_state=`）；`uv run vcp artifact status --kind source_audit` 看現有稽核
-- `uv run vcp data diff --from A --to B [--id I] [--plugin M --policy P]` / `uv run vcp provenance rebuild|sync|status|verify-index` / `uv run vcp provenance ingest --artifact I` / `uv run vcp provenance impact --dataset D [--sample S]` / `uv run vcp provenance stale --head D` / `uv run vcp provenance explain --entity type:id`
+- `uv run vcp data diff --from A --to B [--id I] [--plugin M --policy P]` / `uv run vcp provenance rebuild|sync|status|verify-index [--backend sqlite|postgresql] [--pg-service S]` / `uv run vcp provenance ingest --artifact I [--backend postgresql --pg-service S --strategy incremental|full|auto --policy ID]` / `uv run vcp provenance impact --dataset D [--sample S] [--backend ...]` / `uv run vcp provenance stale --head D [--backend ...]` / `uv run vcp provenance explain --entity type:id [--backend ...]`
 
 ## 版本
 - SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1 落地。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。
@@ -43,6 +44,7 @@
 
 ## 文件
 - RSNA Knee 實際基準流程：`projects/rsna-knee/RUNBOOK.md`（真實命令、讀數、外部待續條件）；設計與裁決：同目錄 `DESIGN.md`。Windows 訓練命令使用獨立 venv 的絕對 interpreter；checkpoint 綁定的前處理 / 模型檔不可在訓練後靜默改動。
+- PostgreSQL provenance 操作與安全邊界：`docs/guides/POSTGRESQL_PROVENANCE.md`；研究方法、live 證據與尚缺證據：`docs/benchmarks/postgres-provenance-v1.md`；交接：`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`
 - 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。
 

@@ -1,0 +1,79 @@
+{
+  "abort_reason": "system_available_ram_lt_2_gib_sustained_30s",
+  "created_at": "2026-09-15T03:08:45.656Z",
+  "duration_seconds": 95.5820872,
+  "evidence_id": "postgres-provenance-1m-memory-gate-v2",
+  "explain": {
+    "count": 0,
+    "raw_plan_included": false,
+    "scope": "not_captured; scenario aborted during workload generation before maintenance instrumentation"
+  },
+  "kind": "postgres-provenance-1m-memory-gate-v1",
+  "method": "postgres_full",
+  "metrics": {
+    "database_bytes": null,
+    "index_bytes": null,
+    "maintenance_p50_ms": null,
+    "maintenance_p95_ms": null,
+    "provenance_total_relation_bytes": null,
+    "throughput_samples_per_second": null
+  },
+  "normative": false,
+  "parity": {
+    "graph_hash_parity": null,
+    "graph_parity": null,
+    "head_parity": null,
+    "status": "not_evaluated",
+    "status_parity": null
+  },
+  "predecessor": {
+    "evidence_id": "postgres-provenance-1m-memory-gate-v1",
+    "preserved": true,
+    "reason": "stale_pg_service_alias_database_connection_failed_before_scenario_child",
+    "status": "FAIL",
+    "work_dir": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v1"
+  },
+  "purpose": "non-normative single-scenario resource-safety gate; not a formal benchmark result",
+  "repetitions": 1,
+  "resource_gate": {
+    "available_ram_abort_bytes": 2147483648,
+    "minimum_c_free_bytes": 149095333888,
+    "minimum_system_available_ram_bytes": 811180032,
+    "peak_scenario_child_private_bytes": 7551094784,
+    "peak_scenario_child_working_set_bytes": 7056449536,
+    "private_abort_bytes": 25769803776,
+    "sample_interval_seconds": 15,
+    "sustained_seconds": 30
+  },
+  "scenario": {
+    "change_ratio": 0.1,
+    "entities": 1000000,
+    "repetitions": 1,
+    "scenario_hash": "43d49aea9e24d9262497fca16bbb78c3c89bd9023317a9d7e91f71546f9cc2bd",
+    "scenario_id": "scaled-20260913-1000000-43d49aea9e24d926",
+    "seed": 20260913,
+    "topology": "chain",
+    "track": "scaled",
+    "variant": "v1"
+  },
+  "schema_version": 1,
+  "service_state_after_gate": "running",
+  "source": {
+    "head": "3bde664837abf941f6e453a2ececf38641a9ff58",
+    "runtime_metadata_sha256": "e504653b7dfd14b8ae92da9fa5f2f13e05aa7535ceba8f07bd635b110b78adf6",
+    "runtime_vcp_commit": "3bde664837abf941f6e453a2ececf38641a9ff58",
+    "source_tree_sha256": "1a9a36ca6490d37663307d9f2e4c3021f86bd95e75340f255394c2637c87f66e"
+  },
+  "status": "ABORT",
+  "telemetry": {
+    "path": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v2.telemetry.json",
+    "samples": 7,
+    "sha256": "78d18b62597004c242d3d30bc7f1e271526a3af766a93fd42789eed09c928580"
+  },
+  "work_dir_contract": {
+    "checkpoint_file_sha256": "e813439eb02a9940dc99abab27a5542e4165b9ba1028b73a9a3c9707e39dcf34",
+    "execution_id": "d6c0988d2f625cbbad5683f00a0b993d",
+    "execution_identity_sha256": "af889b22769ff608d70c100bc6c78c1e4b2be68c3dd326d10ee0f82db27771d8",
+    "path": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v2"
+  }
+}

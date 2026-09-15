@@ -23,6 +23,7 @@ dicom = [
   "pylibjpeg-openjpeg>=2.0",
 ]
 eval = ["pycocotools>=2.0.8"]
+postgres = ["psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
 vcp = "vcp.cli:app"
@@ -37,6 +38,7 @@ dev = [
   "pylibjpeg-libjpeg>=2.0",
   "pylibjpeg-openjpeg>=2.0",
   "pycocotools>=2.0.8",
+  "psycopg[binary]>=3.2,<4",
 ]
 
 [build-system]
@@ -71,7 +73,10 @@ select = ["E", "F", "I", "UP", "B", "TID"]
 testpaths = ["tests"]
 pythonpath = ["tests"]
 addopts = "-q"
-markers = ["realdata: needs real datasets under VCP_DATA_ROOT; skipped otherwise"]
+markers = [
+  "realdata: needs real datasets under VCP_DATA_ROOT; skipped otherwise",
+  "postgres: needs explicitly configured PostgreSQL integration service; skipped otherwise",
+]
 
 [tool.coverage.run]
 source = ["vcp"]

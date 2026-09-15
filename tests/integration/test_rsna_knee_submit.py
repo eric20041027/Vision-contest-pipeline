@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 
 import pytest
 
-from conftest import load_real
+from integration_helpers import load_real
 from vcp.data.dataset import Dataset
 from vcp.measure.schema import Prediction, payload_field
 from vcp.submit.writers import get_writer

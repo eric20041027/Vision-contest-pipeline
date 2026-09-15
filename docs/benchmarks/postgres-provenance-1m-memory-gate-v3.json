@@ -1,0 +1,91 @@
+{
+  "abort_reason": "system_available_ram_lt_2_gib_sustained_30s",
+  "created_at": "2026-09-15T03:23:13.529Z",
+  "duration_seconds": 80.6306803,
+  "evidence_id": "postgres-provenance-1m-memory-gate-v3",
+  "explain": {
+    "count": 0,
+    "raw_plan_included": false,
+    "scope": "not_captured; scenario aborted during workload generation before maintenance instrumentation"
+  },
+  "kind": "postgres-provenance-1m-memory-gate-v1",
+  "method": "postgres_full",
+  "metrics": {
+    "database_bytes": null,
+    "index_bytes": null,
+    "maintenance_p50_ms": null,
+    "maintenance_p95_ms": null,
+    "provenance_total_relation_bytes": null,
+    "throughput_samples_per_second": null
+  },
+  "normative": false,
+  "parity": {
+    "graph_hash_parity": null,
+    "graph_parity": null,
+    "head_parity": null,
+    "status": "not_evaluated",
+    "status_parity": null
+  },
+  "predecessor": {
+    "evidence_id": "postgres-provenance-1m-memory-gate-v2",
+    "preserved": true,
+    "reason": "system_available_ram_lt_2_gib_sustained_30s",
+    "status": "ABORT"
+  },
+  "purpose": "non-normative single-scenario resource-safety gate; not a formal benchmark result",
+  "repetitions": 1,
+  "resource_gate": {
+    "available_ram_abort_bytes": 2147483648,
+    "host_isolation": "not_asserted",
+    "minimum_c_free_bytes": 131649761280,
+    "minimum_system_available_ram_bytes": 684646400,
+    "peak_scenario_child_private_bytes": 6088671232,
+    "peak_scenario_child_working_set_bytes": 5595766784,
+    "private_abort_bytes": 25769803776,
+    "sample_interval_seconds": 15,
+    "sustained_seconds": 30
+  },
+  "runner": {
+    "result_published": false,
+    "stderr_sha256": "3e2f777239e8875796a6a61feebd144090ede865f96db1df16a9bbcefd597d90",
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "scenario": {
+    "change_ratio": 0.1,
+    "entities": 1000000,
+    "repetitions": 1,
+    "scenario_hash": "43d49aea9e24d9262497fca16bbb78c3c89bd9023317a9d7e91f71546f9cc2bd",
+    "scenario_id": "scaled-20260913-1000000-43d49aea9e24d926",
+    "seed": 20260913,
+    "topology": "chain",
+    "track": "scaled",
+    "variant": "v1"
+  },
+  "schema_version": 1,
+  "service_post_state": {
+    "port": 55432,
+    "postgresql_version": "17.11",
+    "process_count": 6,
+    "state": "running"
+  },
+  "source": {
+    "head": "d0a0dcc7c9fcf09584cb5c69e5368ade5b3471d8",
+    "runtime_metadata_sha256": "e504653b7dfd14b8ae92da9fa5f2f13e05aa7535ceba8f07bd635b110b78adf6",
+    "runtime_vcp_commit": "d0a0dcc7c9fcf09584cb5c69e5368ade5b3471d8",
+    "source_tree_sha256": "4d56d8171ab0eecfe5352a6750c1ffd5730ae23eb49af9cc358f62203dcc2a91"
+  },
+  "status": "ABORT",
+  "task": "Task 17",
+  "telemetry": {
+    "path": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v3.telemetry.json",
+    "samples": 6,
+    "sha256": "fe596dcc0cf02260ab0200c5e957506fbf57d3cbc47c50adca53abfb4b8b9a54"
+  },
+  "work_dir_contract": {
+    "checkpoint_file_sha256": "12c0e72af5af0944cc52cb3f440f8856ef178d663c7b9556bfa7fdd17d67c0ab",
+    "execution_id": "0f4e0d2e3cea8efd3a6be8f384da68c1",
+    "execution_identity_sha256": "88032dfe4b0aaa8a11ed3f362b9dc8d4d034dcd31c66f4988c12b92b1acaa41b",
+    "path": "C:\\vcp-data\\benchmarks\\memory-gate-1m-v3",
+    "retained_bytes_at_publication": 647932362
+  }
+}

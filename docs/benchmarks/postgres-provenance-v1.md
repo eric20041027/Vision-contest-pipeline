@@ -2,14 +2,34 @@
 
 ## 結論與證據邊界
 
-此文件目前是可重跑方法與 pending acceptance record，不是 PostgreSQL 效能報告。本環境沒有可用的
-Docker/PostgreSQL runtime，因此沒有 **live PostgreSQL**、**large-scale**、**calibration** 或
-**held-out** outcomes；也沒有 policy artifact ID/hash、server version 回讀、latency、crossover、
-adaptive gate pass/fail 或 RSNA six-method數字。這些欄位不可從 offline doubles 或 SQLite 結果推導。
+此文件目前是可重跑方法與 pending acceptance record，不是 PostgreSQL 效能報告。2026-09-14 起本機有
+原生 PostgreSQL 17.11（使用者排程工作 `VCP-PostgreSQL-17.11`，只聽 `127.0.0.1:55432`，service
+`vcp-pg17-evidence`；佈建紀錄在 `C:/vcp-data/services/postgresql-17.11-vcp/`，不進 git），因此有
+**live integration** 證據；仍沒有 **large-scale**、**calibration** 或 **held-out** outcomes，也沒有
+policy artifact ID/hash、latency、crossover、adaptive gate pass/fail 或 RSNA six-method 數字。這些欄位
+不可從 offline doubles 或 SQLite 結果推導。
+
+## Live evidence（2026-09-14，本機原生 PostgreSQL 17.11）
+
+每個檔案寫一次不改；後續嘗試以新的 `-vN` 檔案接續並在 `predecessor` 欄位指回前一版。
+
+| 檔案 | 結果 | SHA-256（前 8 碼） |
+|---|---|---|
+| `postgres-provenance-integration-v1.json` / `.xml` | FAIL：39 passed、4 behavior failures（checkpoint 測試與 schema 修正前） | `b9d289dd` / `24726f40` |
+| `postgres-provenance-integration-v2.json` / `.xml` | ERROR：51 setup errors（PostgreSQL 程序在跑前被回收） | `04be858b` / `367e0460` |
+| `postgres-provenance-integration-v3.json` / `.xml` | PASS 51/51 at `d8cc334`：rollback 28、concurrency 1、MVCC 1、canonical/SQLite/PostgreSQL parity 3；server 17.11（170011） | `b55f34fd` / `b50ada0f` |
+| `postgres-provenance-calibration-v1.run.json` / `.log.txt` | ABORT `resource_guard_available_ram`：可用 RAM 低於 2 GiB 持續 30 秒；runner private bytes 峰值 16.3 GB；沒有正式 calibration JSON，沒有 policy | `5c60b75c` / `dc71b39e` |
+| `postgres-provenance-1m-memory-gate-v2.json`、`-v3.json`、`-v4.json` | 非正式單場景資源護欄，皆 ABORT `system_available_ram_lt_2_gib_sustained_30s`；v4 的 historical diff streaming 已完成（該階段 private ≈0.52 GiB），止於 `baseline_graph_build`（peak private 5.67 GiB、最低可用 RAM 0.556 GiB）；v1 未保存 | `724634e8` / `4672be87` / `a2c295df` |
+
+完整 SHA-256 以 `sha256sum docs/benchmarks/postgres-provenance-*` 為準。1M 場景的瓶頸不在 fixture
+writer，而在 canonical graph replay 讀取約 41 萬筆 diff 事件時同時常駐文字、lines、pydantic change list
+與 graph；下一步是 production graph loader 的串流 replay（`load_dataset_diff` API 與 exact parity 不變），
+再重跑 gate。主機 31 GB RAM 常態只剩約 7 GB 可用，跑 1M 前先清出記憶體。
 
 目前可引用的 Task 9–11 evidence：
 
-- 43 個 opt-in PostgreSQL integration cases 在 service 未配置時全部 `skipped`；這不是 database pass。
+- opt-in PostgreSQL integration cases 在 service 未配置時全部 `skipped`；這不是 database pass。Live pass
+  只有上表 v3 那一份。
 - Task 10 的 offline 1K smoke 只跑 canonical full、SQLite full、SQLite incremental：12 個
   method/scenario rows、24 個 fresh timed samples，graph/hash/status/head exact parity。PostgreSQL 未跑。
 - unit tests 使用明示 synthetic fixtures 驗證 schema/query orchestration、六方法 result contract、
@@ -93,11 +113,12 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 
 | Field | Current state |
 |---|---|
-| PostgreSQL server version | Pending；image pin 是 17.11，不是 live server readback |
+| PostgreSQL server version | 17.11（`server_version_num` 170011）live readback；`integration-v3.json` |
+| Live integration | PASS 51/51 at `d8cc334`（`integration-v3`）；Linux CI / Docker Compose host 仍缺 |
 | Six-method scaled result | Absent |
-| Large-scale 10K/100K/1M execution | Absent |
+| Large-scale 10K/100K/1M execution | Absent；1M memory gate v2–v4 ABORT 於 `baseline_graph_build`（非正式） |
 | Real/RSNA six-method result | Absent |
-| Calibration result JSON | Absent |
+| Calibration result JSON | Absent；v1 嘗試 ABORT（RAM 護欄，`calibration-v1.run.json`） |
 | Policy artifact ID | Absent |
 | Exact policy file SHA-256 | Absent |
 | Held-out result JSON | Absent |

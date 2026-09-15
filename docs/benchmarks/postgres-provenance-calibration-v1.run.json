@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "run_id": "postgres-provenance-calibration-v1-attempt-1",
+  "status": "ABORT",
+  "started_at_utc": "2026-09-14T20:40:30.361723+00:00",
+  "ended_at_utc": "2026-09-14T20:51:04.823580+00:00",
+  "duration_seconds": 634.34,
+  "git_commit": "d8cc334a268907e952c0ae251de1bd043df2629f",
+  "command": "uv run python tests/performance/provenance/calibrate_adaptive.py --output docs/benchmarks/postgres-provenance-calibration-v1.json",
+  "command_exit_code": -1,
+  "termination": {
+    "reason": "resource_guard_available_ram",
+    "runner_pid": 47380,
+    "runner_identity_verified": true,
+    "runner_name": "python.exe",
+    "runner_command_match": "tests/performance/provenance/calibrate_adaptive.py",
+    "only_exact_runner_pid_terminated": true,
+    "guard": {
+      "private_bytes_limit": 25769803776,
+      "available_ram_floor_bytes": 2147483648,
+      "required_sustained_seconds": 30
+    },
+    "first_breach_sample": {
+      "runner_private_bytes": 14479519744,
+      "runner_working_set_bytes": 13733584896,
+      "available_ram_bytes": 557453312,
+      "private_limit_breached": false,
+      "available_ram_floor_breached": true
+    },
+    "confirmation_sample_after_30_seconds": {
+      "runner_private_bytes": 16265056256,
+      "runner_working_set_bytes": 14702157824,
+      "available_ram_bytes": 967794688,
+      "private_limit_breached": false,
+      "available_ram_floor_breached": true
+    },
+    "observed_extrema": {
+      "runner_private_bytes_max": 16265056256,
+      "runner_working_set_bytes_max": 14702157824,
+      "available_ram_bytes_min": 132165632
+    }
+  },
+  "preflight_resources": {
+    "memory_total_bytes": 33454329856,
+    "memory_free_bytes": 6130843648,
+    "disk_c_size_bytes": 998704672768,
+    "disk_c_free_bytes": 163453026304
+  },
+  "post_termination_resources": {
+    "memory_free_bytes": 16008314880,
+    "pagefile_free_bytes": 25612070912,
+    "disk_c_free_bytes": 159048413184
+  },
+  "progress_evidence": {
+    "formal_output_published": false,
+    "artifact_root_published": false,
+    "largest_observed_synthetic_samples_jsonl_bytes": 52776465,
+    "scale_interpretation": "The observed fixture size was consistent with approximately the 100K entity workload; there was no evidence that the runner reached 1M scale.",
+    "completed_scenario_count": null,
+    "completed_method_count": null
+  },
+  "expected_calibration_matrix": {
+    "seeds": [20260913, 20260914],
+    "entity_scales": [1000, 10000, 100000, 1000000],
+    "change_ratios": [0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.9, 1.0],
+    "topologies": ["chain", "branched"],
+    "fixed_methods": ["postgres_full", "postgres_incremental"],
+    "expected_scenarios": 144,
+    "expected_rows": 288
+  },
+  "publication_validation": {
+    "calibration_scenarios_and_seeds": "NOT_AVAILABLE",
+    "policy_id": null,
+    "policy_json_sha256": null,
+    "manifest_published_last": false,
+    "manifest_sha256": null,
+    "no_op_coverage": "NOT_AVAILABLE",
+    "fit_observations": "NOT_AVAILABLE",
+    "empirical_crossover": "NOT_AVAILABLE"
+  },
+  "postgresql": {
+    "service": "vcp-pg17-evidence",
+    "version": "17.11",
+    "server_version_num": "170011",
+    "server_address": "127.0.0.1",
+    "server_port": 55432,
+    "task_name": "VCP-PostgreSQL-17.11",
+    "task_state_after_termination": "Running"
+  },
+  "runtime_metadata": {
+    "path": "C:\\vcp-data\\services\\postgresql-17.11-vcp\\runtime-metadata.json",
+    "sha256": "e504653b7dfd14b8ae92da9fa5f2f13e05aa7535ceba8f07bd635b110b78adf6"
+  },
+  "artifacts": {
+    "formal_output": "docs/benchmarks/postgres-provenance-calibration-v1.json",
+    "formal_output_exists": false,
+    "artifact_root": "docs/benchmarks/postgres-provenance-calibration-v1-artifacts",
+    "artifact_root_exists": false,
+    "log": "docs/benchmarks/postgres-provenance-calibration-v1.log.txt"
+  }
+}

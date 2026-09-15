@@ -1,0 +1,5 @@
+Calibration runner produced no stdout or stderr before termination.
+The controller resource guard was evaluated twice, 30 seconds apart.
+Available RAM remained below 2 GiB, so the exact verified calibration runner PID 47380 was terminated.
+No formal calibration JSON or sibling artifact directory had been published.
+VERDICT cmd=provenance.calibrate status=ABORT reason=resource_guard_available_ram

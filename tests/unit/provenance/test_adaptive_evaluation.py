@@ -219,6 +219,8 @@ def benchmark_rows(seeds, policy=None):
                 total_changes=600 + changed,
                 environment=dict(
                     system="Windows",
+                    system_release="11",
+                    system_version="10.0.26200",
                     machine="AMD64",
                     python_version="3.12.10",
                     python_implementation="CPython",
@@ -952,3 +954,34 @@ def test_heldout_cannot_reuse_excluded_calibration_noop_workload(tmp_path):
     with pytest.raises(ValidationFailed, match="workload_leakage") as error:
         evaluation.evaluate_policy(path, heldout)
     assert error.value.fields["overlap_count"] == 1
+
+
+def test_every_runtime_environment_key_is_accepted_by_the_row_model(tmp_path):
+    """Producer/consumer contract: whatever runtime_environment() emits must validate.
+
+    The live calibration of 2026-09-16 collected all 1,224 measurements and then failed at
+    publication because runtime_environment() had grown ``system_release`` and
+    ``system_version`` while the strict ``_Environment`` model had not. Synthetic fixtures
+    never exercised the real producer, so nothing offline could catch it. This does.
+    """
+    from performance.provenance import adaptive_benchmark as bench
+
+    emitted = bench.runtime_environment(tmp_path)
+    postgres_keys = {
+        "postgresql_major": 17,
+        "postgresql_version": 170011,
+        "postgresql_server_version": "17.11",
+        "deployment_kind": "native_portable",
+        "image_digest": None,
+        "image_digest_source": "not_applicable",
+        "operator_declared_image_digest": None,
+        "operator_declared_image_digest_source": None,
+        "environment_fingerprint": "a" * 64,
+        "backend_schema_version": 1,
+    }
+    declared = set(evaluation._Environment.model_fields)
+    assert set(emitted) | set(postgres_keys) == declared, {
+        "emitted_but_undeclared": sorted((set(emitted) | set(postgres_keys)) - declared),
+        "declared_but_never_emitted": sorted(declared - set(emitted) - set(postgres_keys)),
+    }
+    evaluation._Environment.model_validate({**emitted, **postgres_keys})

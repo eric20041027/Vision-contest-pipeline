@@ -62,6 +62,10 @@ class _Strict(BaseModel):
 
 class _Environment(_Strict):
     system: Literal["Windows", "Linux", "Darwin"]
+    # OS release and build, as emitted by runtime_environment(); free text because every
+    # platform formats them differently (Windows "11" / "10.0.26200", Linux kernel strings).
+    system_release: str = Field(min_length=1)
+    system_version: str = Field(min_length=1)
     machine: Literal["AMD64", "x86_64", "arm64", "aarch64", "ARM64"]
     python_version: str = Field(pattern=r"^3\.12\.\d+$")
     python_implementation: Literal["CPython"]

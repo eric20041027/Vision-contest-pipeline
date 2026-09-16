@@ -49,19 +49,21 @@ def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
     for absent_row in (
         "| Six-method scaled result | Absent |",
         "| Real/RSNA six-method result | Absent |",
-        "| Policy artifact ID | Absent |",
-        "| Exact policy file SHA-256 | Absent |",
         "| Held-out result JSON | Absent |",
     ):
         assert absent_row in benchmark
+    # The 2026-09-16 calibration is the first policy; both records must name it exactly.
+    for present in (
+        "postgres-adaptive-v1-9f4e58346529",
+        "a22d70672aba450ff6a71823ad9921f572ec5dff9c86755b26d61ff9103a2d78",
+        "not_observed",
+    ):
+        assert present in benchmark
     assert "0.8.0" in handoff and "v0.8.0" in handoff
     assert "不要填 crossover" in handoff
     assert "Linux CI" in handoff
-    for still_absent in (
-        "| Live RSNA six-method | Absent |",
-        "| Policy ID / exact policy hash | Absent |",
-    ):
-        assert still_absent in handoff
+    assert "| Live RSNA six-method | Absent |" in handoff
+    assert "postgres-adaptive-v1-9f4e58346529" in handoff
 
 
 def test_benchmark_reproduction_has_its_own_secret_safe_opt_in_preflight():

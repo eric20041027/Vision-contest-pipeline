@@ -21,6 +21,7 @@ policy artifact ID/hash、latency、crossover、adaptive gate pass/fail 或 RSNA
 | `postgres-provenance-calibration-v1.run.json` / `.log.txt` | ABORT `resource_guard_available_ram`：可用 RAM 低於 2 GiB 持續 30 秒；runner private bytes 峰值 16.3 GB；沒有正式 calibration JSON，沒有 policy | `5c60b75c` / `dc71b39e` |
 | `postgres-provenance-1m-memory-gate-v2.json`、`-v3.json`、`-v4.json` | 非正式單場景資源護欄，皆 ABORT `system_available_ram_lt_2_gib_sustained_30s`；v4 的 historical diff streaming 已完成（該階段 private ≈0.52 GiB），止於 `baseline_graph_build`（peak private 5.67 GiB、最低可用 RAM 0.556 GiB）；v1 未保存 | `724634e8` / `4672be87` / `a2c295df` |
 
+| `postgres-provenance-calibration-v2.json` / `-artifacts/` / `.provenance.json` | **正式 calibration**（2026-09-16，14.5 小時，護欄未觸發，最低可用 RAM 2.63 GiB）：108 場景 × postgres_full / postgres_incremental × 7/7/3 次 = 1224 次量測，全部 ok；92 個 fit 觀測 → policy `postgres-adaptive-v1-9f4e58346529`，`policy.json` SHA-256 `a22d7067…03a2d78`；**12 個切片全部 `not_observed`、`global_threshold: null`**（incremental 在每個非零 ratio 都快，100K 時 p50 為 full 的 13–50%）。量測在 `b1512ae`；發布時只有消費端 `evaluate_adaptive.py` 改了（見 §發布註記），`.provenance.json` 記 168 個生產端檔案逐一比對相同 | `43d213e4` / `a22d7067` |
 | `postgres-provenance-exploratory-v1.json` / `-explain.json` / `.md` | 探路矩陣（非正式）：1K/10K/100K × 9 ratios × 2 topologies × 2 seeds = 108 場景、每場景 1 次、五個固定方法；540/540 parity；ratio > 0 每格 incremental 都快於 full（100K 時為 full 的 13–45%）；1M 與 adaptive 未跑 | `98247c28` / `451550ee` |
 
 完整 SHA-256 以 `sha256sum docs/benchmarks/postgres-provenance-*` 為準。1M 場景的瓶頸不在 fixture
@@ -62,6 +63,23 @@ API 與 exact parity 不變），下一步是重跑 gate。主機 31 GB RAM 常�
 
 Real track 的來源必須唯讀複製到 temporary metadata root；它不修改 live data。Task 10 runner也可讓
 既有 production/real entrypoint增加 `--six-method`，但本環境沒有執行 live RSNA track。
+
+## 發布註記：calibration v2 是從 checkpoint 發布的
+
+正式 calibration 在 2026-09-16 跑完全部 1224 次量測後，`calibrate_adaptive.py` 在發布階段回 FAIL：
+`runtime_environment()` 自 `3bde664` 起輸出 `system_release` / `system_version`，但 `evaluate_adaptive.py`
+的 strict `_Environment` 模型沒宣告這兩個欄位，`BenchmarkRow.model_validate` 對 216 列全部 `extra_forbidden`。
+離線測試用手寫的合成環境，所以從未撞到；`test_every_runtime_environment_key_is_accepted_by_the_row_model`
+現在把這條生產者／消費者契約釘死。
+
+處置：補上模型欄位後，**不重跑**量測，改以 `publish_from_checkpoints.py`（保存在 `C:/vcp-data/bench/`，不進
+repo）從同一個 checkpoint store 發布。發布前它逐檔比對 run 合約釘住的 168 個原始檔雜湊與當下的樹：只有
+`tests/performance/provenance/evaluate_adaptive.py` 不同，`src/vcp/**`、`adaptive_benchmark.py`、
+`workloads.py`、`calibrate_adaptive.py`、`pyproject.toml`、`uv.lock` 全部逐位元相同，216 列都在 `b1512ae`
+量到，才呼叫未改動的 `publish_calibration`。比對結果與 launcher 摘要記在 `.provenance.json`。
+
+代價：runner 的「resume 時原始樹必須完全一致」守門被一次性繞過；若日後懷疑量測程式在跑的期間變過，
+`.provenance.json` 的逐檔比對就是反證，否則只能重跑 14.5 小時。
 
 ## 可重跑命令
 
@@ -121,14 +139,14 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 | Six-method scaled result | Absent |
 | Large-scale 10K/100K execution | Absent（1M 已移出正式矩陣；其 memory gate v2–v4 ABORT 於 `baseline_graph_build`，非正式） |
 | Real/RSNA six-method result | Absent |
-| Calibration result JSON | Absent；v1 嘗試 ABORT（RAM 護欄，`calibration-v1.run.json`） |
-| Policy artifact ID | Absent |
-| Exact policy file SHA-256 | Absent |
+| Calibration result JSON | `postgres-provenance-calibration-v2.json`（SHA-256 `43d213e4…88f9239`）；v1 嘗試曾 ABORT（RAM 護欄） |
+| Policy artifact ID | `postgres-adaptive-v1-9f4e58346529`（`calibration_sha256` = `9f4e5834…`，`environment_fingerprint` = `f29fc1bb…`） |
+| Exact policy file SHA-256 | `a22d70672aba450ff6a71823ad9921f572ec5dff9c86755b26d61ff9103a2d78`（`-artifacts/artifacts/provenance_policy/…/policy.json`） |
 | Held-out result JSON | Absent |
-| Calibration/held-out overlap | Pending live evidence；offline contract要求 0 |
+| Calibration/held-out overlap | Pending（held-out 尚未跑）；offline contract要求 0 |
 | Every-scenario correctness parity | Pending live evidence |
 | Adaptive aggregate p50/p95 gates | Pending live evidence；未裁決 pass/fail |
-| PostgreSQL latency/crossover/storage | Pending；不得填入估計值 |
+| PostgreSQL latency/crossover/storage | Crossover：calibration 12/12 切片 `not_observed`（fixed methods）；latency/storage 的六方法正式數字仍 pending，不得填入估計值 |
 
 填寫時必須記 command、commit、environment fingerprint、PostgreSQL numeric server version、result file
 SHA、policy ID/精確 `policy.json` SHA、scenario/sample counts、parity、gate outcomes與任何 failed rows。

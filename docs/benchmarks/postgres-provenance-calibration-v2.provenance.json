@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "kind": "calibration-publication-provenance",
+  "output": "postgres-provenance-calibration-v2.json",
+  "output_sha256": "43d213e4ddc57cb554ccc55bf153b3f7ec7ca7e34364568300ef1cfdf88f9239",
+  "policy_id": "postgres-adaptive-v1-9f4e58346529",
+  "measured_at_vcp_commit": "b1512ae4101611e9e7e642d460f1f59c065a3bdc",
+  "checkpoint_contract_sha256": "b57962cbe237aac2c51a3d5cdafc9483cc92d0ccc09713a5f010fcf3ad7d3eb0",
+  "rows_published": 216,
+  "published_from_checkpoints_because": "the run completed every measurement but the publication step rejected the rows: runtime_environment() emits system_release/system_version, which the strict _Environment model in evaluate_adaptive.py did not declare (introduced by 3bde664). The model was fixed; no producer file changed.",
+  "source_files_differing_from_run": [
+    "tests/performance/provenance/evaluate_adaptive.py"
+  ],
+  "producer_files_verified_identical": 167,
+  "launcher": {
+    "command": [
+      "uv",
+      "run",
+      "--frozen",
+      "python",
+      "tests/performance/provenance/calibrate_adaptive.py",
+      "--output",
+      "docs/benchmarks/postgres-provenance-calibration-v2.json",
+      "--work-dir",
+      "C:/vcp-data/bench/calibration-v2-work"
+    ],
+    "started_utc": "2026-09-16T05:01:19.394627+00:00",
+    "elapsed_seconds": 52193.391,
+    "returncode": 1,
+    "abort_reason": null,
+    "min_available_gib": 2.628,
+    "start_available_gib": 7.63,
+    "total_gib": 31.157,
+    "watchdog": {
+      "min_available_gib": 2.0,
+      "sustain_seconds": 30.0,
+      "poll_seconds": 5.0
+    }
+  },
+  "artifacts_dir": "postgres-provenance-calibration-v2-artifacts",
+  "policy_artifact_files": [
+    "artifacts\\provenance_policy\\postgres-adaptive-v1-9f4e58346529\\calibration.json",
+    "artifacts\\provenance_policy\\postgres-adaptive-v1-9f4e58346529\\manifest.json",
+    "artifacts\\provenance_policy\\postgres-adaptive-v1-9f4e58346529\\policy.json",
+    "artifacts\\provenance_policy\\postgres-adaptive-v1-9f4e58346529\\spec.json",
+    "inputs\\calibration.json"
+  ]
+}

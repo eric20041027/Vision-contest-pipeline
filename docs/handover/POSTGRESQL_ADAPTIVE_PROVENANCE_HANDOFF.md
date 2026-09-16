@@ -133,8 +133,8 @@ current full regression:
 | Live integration | PASS 51/51 at `d8cc334`（integration-v3；rollback 28、concurrency 1、MVCC 1、parity 3）；Linux CI 仍缺 |
 | Six-method scaled/large-scale | Absent；1M memory gate v2–v4 ABORT（非正式） |
 | Live RSNA six-method | Absent |
-| Calibration artifact | Absent；v1 嘗試 ABORT（RAM 護欄） |
-| Policy ID / exact policy hash | Absent |
+| Calibration artifact | `postgres-provenance-calibration-v2.json` + `-artifacts/`（2026-09-16，1224 次量測，從 checkpoint 發布，見 evidence record 發布註記） |
+| Policy ID / exact policy hash | `postgres-adaptive-v1-9f4e58346529` / `policy.json` SHA-256 `a22d7067…03a2d78` |
 | Held-out evaluation | Absent |
 | Calibration/held-out separation | Offline tests enforce disjoint ID/hash/workload sets；無 live outputs可比較 |
 | Adaptive p50/p95 gates | 未執行、未裁決 |

@@ -1,0 +1,32 @@
+{
+ "spec": {
+  "kind": "provenance_policy",
+  "id": "postgres-adaptive-v1-9f4e58346529",
+  "dataset": null,
+  "plan_id": null,
+  "seed": null,
+  "params": {
+   "policy_version": "postgres-adaptive-v1",
+   "backend": "postgresql",
+   "backend_schema_version": "1",
+   "postgresql_major": "17",
+   "benchmark_schema_version": "1",
+   "environment_fingerprint": "f29fc1bbf397de87030c90ead9614d5093572bbf8ff5208bf1ffb25b19f7217f",
+   "calibration_sha256": "9f4e5834652945c879ae785aa175cca31aa073c6d1332bb0300036a44118b84f",
+   "policy_sha256": "a22d70672aba450ff6a71823ad9921f572ec5dff9c86755b26d61ff9103a2d78"
+  },
+  "inputs": [
+   {
+    "name": "calibration_result",
+    "path": "inputs/calibration.json",
+    "sha256": "9f4e5834652945c879ae785aa175cca31aa073c6d1332bb0300036a44118b84f"
+   }
+  ],
+  "id_pattern": null,
+  "supersedes": null,
+  "supersedes_reason": null,
+  "notes": ""
+ },
+ "opened_at": "2026-09-16T19:36:32.295Z",
+ "vcp_version": "0.8.0+gb1512ae4101611e9e7e642d460f1f59c065a3bdc.dirty"
+}

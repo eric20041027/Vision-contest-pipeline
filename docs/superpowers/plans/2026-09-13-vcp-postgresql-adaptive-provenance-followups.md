@@ -25,3 +25,17 @@
 3. **Linux CI / Docker Compose host** 的 integration evidence 仍缺（本機是原生 Windows 服務）。
 4. **EXPLAIN 覆蓋面**：目前只涵蓋每種 DML SQL 形狀的第一列，不含 `status` / `impact` / `explain` 查詢自身的計畫（runner 既有限制）。
 5. **`docs/benchmarks/postgres-provenance-v1.md` 的 pending 表**：只有拿到 machine-readable 結果回讀後才准填；探路數字不得填入。
+
+## 4. 裁決：calibration v2 從 checkpoint 發布（2026-09-16）
+
+**發生的事**：正式 calibration 跑完 1224 次量測（14.5 小時，RAM 護欄未觸發）後，發布階段 FAIL。原因是生產者／消費者 schema 漂移：`3bde664` 讓 `runtime_environment()` 多輸出 `system_release` / `system_version`，同一個 commit 同步進了 `test_adaptive_benchmark.py` 的合成環境，卻沒進 `evaluate_adaptive.py` 的 strict `_Environment`，也沒進 `test_adaptive_evaluation.py` 的合成環境。兩邊的測試各自用自己的手寫字典，所以離線全綠，live 第一次就炸。
+
+**決定**：補上兩個欄位；新增契約測試 `test_every_runtime_environment_key_is_accepted_by_the_row_model`，直接拿真的 `runtime_environment()` 輸出去驗 `_Environment`（對舊模型正好報出那兩個欄位）；量測**不重跑**，以外部腳本從 checkpoint store 發布，前提是逐檔證明生產端程式碼與 run 合約釘住的快照完全一致。
+
+**依據**：量測資料本身正確且完整（216 列全 ok、同一 commit `b1512ae`、同一環境指紋）；改的是消費端模型，不影響任何量測值；`.provenance.json` 記下 168 個原始檔中只有 `evaluate_adaptive.py` 不同。重跑要再佔用機器 14.5 小時，換到的是同一組數字加雜訊。
+
+**代價**：runner 的 resume 守門（原始樹必須逐位元一致）被一次性繞過。若有人日後主張量測程式在跑的期間被改過，`.provenance.json` 的逐檔比對是反證；若連這份比對都不信，就只能重跑。
+
+**結果**：policy `postgres-adaptive-v1-9f4e58346529`，`policy.json` SHA-256 `a22d70672aba450ff6a71823ad9921f572ec5dff9c86755b26d61ff9103a2d78`，92 個 fit 觀測。fit 出的成本模型（非負線性、截距 0）：`incremental_ms ≈ 1.16·changed_samples + 0.118·total_edges`，`full_ms ≈ 0.704·total_edges + 0.097·historical_changes`（`dirty_entities`、`dirty_ratio`、`head_count`、`total_entities` 係數被非負約束壓到 0）。RMSE：incremental 2286 ms、full 5057 ms，量級由 100K 主導。**12 個切片全部沒有交會點**：因為 changed_samples 最多約 0.25·edges，而 full 比 incremental 多出 0.586·edges 的固定成本，所以在這個 workload 產生器下 `auto` 對任何非零工作永遠選 INCREMENTAL——§3-2 預告的退化成立，且現在是正式證據而不是探路推測。
+
+**開放**：held-out 若重現同樣結果，adaptive 的 p50/p95 gate 會 trivially 通過（它就是 incremental）；報告要寫清楚這代表「這個 workload 結構下 full 沒有效能上的存在理由」，而不是 selector 有多聰明。

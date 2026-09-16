@@ -1,0 +1,44 @@
+{
+ "policy_version": "postgres-adaptive-v1",
+ "backend": "postgresql",
+ "backend_schema_version": 1,
+ "postgresql_major": 17,
+ "benchmark_schema_version": 1,
+ "environment_fingerprint": "f29fc1bbf397de87030c90ead9614d5093572bbf8ff5208bf1ffb25b19f7217f",
+ "calibration_sha256": "9f4e5834652945c879ae785aa175cca31aa073c6d1332bb0300036a44118b84f",
+ "incremental_model": {
+  "feature_order": [
+   "changed_samples",
+   "dirty_entities",
+   "dirty_ratio",
+   "total_edges",
+   "head_count"
+  ],
+  "coefficients": {
+   "changed_samples": 1.1623959021257992,
+   "dirty_entities": 0.0,
+   "dirty_ratio": 0.0,
+   "total_edges": 0.11822421013846966,
+   "head_count": 0.0
+  },
+  "intercept_ms": 0.0
+ },
+ "full_model": {
+  "feature_order": [
+   "total_entities",
+   "total_edges",
+   "historical_changes",
+   "head_count"
+  ],
+  "coefficients": {
+   "total_entities": 0.0,
+   "total_edges": 0.7036995934170819,
+   "historical_changes": 0.09682061540122211,
+   "head_count": 0.0
+  },
+  "intercept_ms": 0.0
+ },
+ "incremental_rmse_ms": 2286.313157010564,
+ "full_rmse_ms": 5057.359011941265,
+ "training_row_count": 92
+}

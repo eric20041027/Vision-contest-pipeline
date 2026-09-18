@@ -40,14 +40,14 @@ def test_postgres_guide_covers_supported_operations_and_safe_setup():
 def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
     benchmark = BENCHMARK.read_text(encoding="utf-8")
     handoff = HANDOFF.read_text(encoding="utf-8")
-    # Live integration (2026-09-14) is the only PostgreSQL evidence; the aborted attempts stay
-    # visible and every other acceptance field stays explicitly absent.
+    # Live integration (2026-09-14), calibration v2 (2026-09-16) and six-method v1 (2026-09-18) are
+    # the PostgreSQL evidence; the aborted attempts stay visible and the fields that still have no
+    # machine-readable result stay explicitly absent.
     for present_evidence in ("live integration", "PASS 51/51", "170011", "ABORT", "skipped"):
         assert present_evidence in benchmark
     for missing_evidence in ("large-scale", "calibration", "held-out"):
         assert missing_evidence in benchmark
     for absent_row in (
-        "| Six-method scaled result | Absent |",
         "| Real/RSNA six-method result | Absent |",
         "| Held-out result JSON | Absent |",
     ):
@@ -59,10 +59,22 @@ def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
         "not_observed",
     ):
         assert present in benchmark
+    # Six-method v1 is recorded from its machine-readable output, including the finding that
+    # the frozen policy falls back to FULL at 1K; the gate verdict itself stays with held-out.
+    for six_method in (
+        "| Six-method scaled result | `postgres-provenance-six-method-v1.json`",
+        "47bc10ab19f20882e1afbb128290329d75bbb1565ec7ebef6dff03689be7395c",
+        "648/648",
+        "1K 全部選 FULL",
+        "正式裁決 pending held-out",
+    ):
+        assert six_method in benchmark
     assert "0.8.0" in handoff and "v0.8.0" in handoff
     assert "不要填 crossover" in handoff
     assert "Linux CI" in handoff
     assert "| Live RSNA six-method | Absent |" in handoff
+    assert "| Held-out evaluation | Absent |" in handoff
+    assert "| Six-method scaled/large-scale | `postgres-provenance-six-method-v1.json`" in handoff
     assert "postgres-adaptive-v1-9f4e58346529" in handoff
 
 

@@ -64,8 +64,10 @@ benchmark/calibration/held-out命令見 `docs/guides/POSTGRESQL_PROVENANCE.md`�
 `docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。本機自 2026-09-14 起有原生 PostgreSQL 17.11
 （使用者排程工作 `VCP-PostgreSQL-17.11`、只聽 `127.0.0.1:55432`、service `vcp-pg17-evidence`；佈建紀錄在
 `C:/vcp-data/services/postgresql-17.11-vcp/`，憑證檔只能以路徑指給 `PGSERVICEFILE` / `PGPASSFILE`，不讀
-不抄）；live integration v3 PASS 51/51，但 large-scale、calibration、held-out、policy ID/hash 與 RSNA
-six-method 結果仍缺（calibration v1 與 1M memory gate v2–v4 被 RAM 護欄中止）。
+不抄）；live integration v3 PASS 51/51、正式 calibration v2（policy `postgres-adaptive-v1-9f4e58346529`）與正式
+six-method v1（2026-09-18，1K–100K，648 列全 ok、parity 648/648、無交會點；adaptive 在 1K 因絕對 RMSE 信心帶
+全部落入 FULL，見 Plan 12 後記 §5）都已保存；held-out 與 RSNA six-method 結果仍缺（calibration v1 與 1M memory
+gate v2–v4 被 RAM 護欄中止）。
 
 十二個變異軸都是登記表（任務、匯入器、匯出器、解碼器、切分策略、稽核、轉換器、指標、σ_p 方法、融合器、輸出格式、平台）：加一種形態 = 加一個登記項，不改 schema、不改 CLI；比賽自己的指標 / 格式用 `--plugin projects.<contest>.metrics`。
 
@@ -99,7 +101,7 @@ six-method 結果仍缺（calibration v1 與 1M memory gate v2–v4 被 RAM 護�
 5. **RSNA Knee 已實跑本機基準**：200 study 固定切分、PNG256、兩個種子訓練、預登記 / macro AUC / judge、平均融合消融、test profile、離線 bundle 已完成；讀數與命令見 `projects/rsna-knee/RUNBOOK.md`。seed 43 與融合均未準入，第一個 seed 42 是 baseline。**尚未完成外部里程碑**：指定私有 Kaggle dataset 上傳待核准，notebook 執行 / 提交 / scored / sealed final 未發生；備份目的地未提供。不要把手冊中待執行命令當成已完成，也不要先解封 holdout。
 6. **Windows 命令解析**：裸 `python` 可啟動到 venv 以外，即使 `--venv` 探針正確；專案已用絕對 interpreter 完成訓練，通用解析修復另列 Plan 5 §10，與效能回合分開。
 7. **本機證據已備份**：`knee-local-v1` 結論 `all`、51 項驗證成功；兩份權重、notebook bundle、Git source bundle 均已存 `C:/vcp-backup/rsna-knee`。這是同機副本；異機撤離仍待目的地，先將權重 upload 到該遠端後再產新清單，勿把指著 C 槽的 remote_copy 當異機證據。
-8. **PostgreSQL Adaptive Provenance 外部驗收待續（接手點）**：live integration 已過（v3）。依序：(1) production graph loader 的 canonical replay 改串流——已完成（`open_dataset_diff`：先整檔驗證、再逐筆重放，API 與 exact parity 不變；Codex 2026-09-14 量到 1M 場景在 `baseline_graph_build` 把約 41 萬筆 diff 事件全部常駐，peak 5.7 GiB）；(2) 探路矩陣已跑完（`docs/benchmarks/postgres-provenance-exploratory-v1.md`：1K–100K 五方法各 1 次，8.5 小時，parity 全過，incremental 在每個非零 ratio 都快於 full）；(3) 1M 已於 2026-09-15 裁決移出正式矩陣（Plan 12 後記 §1；每 split 108 場景 / 612 次重複），calibration 已完成（2026-09-16，14.5 小時，policy `postgres-adaptive-v1-9f4e58346529`，12/12 切片沒有交會點；發布時撞到生產者／消費者 schema 漂移，處置見 evidence record 的發布註記與 Plan 12 後記 §4）；(4) six-method 含 adaptive 與 real RSNA track（都要 `--policy-from docs/benchmarks/postgres-provenance-calibration-v2.json`）；(5) 另一 process 的 frozen held-out。保存 machine-readable outputs、PostgreSQL numeric server version、policy ID / 精確 policy SHA、parity 與 honest p50/p95 gate 結果；不得用 skips、offline doubles 或 held-out refit 替代。跑 1M 前先清出記憶體（主機 31 GB，常態只剩約 7 GB 可用）。Linux CI（Docker Compose host）證據仍缺。
+8. **PostgreSQL Adaptive Provenance 外部驗收待續（接手點）**：live integration 已過（v3）。依序：(1) production graph loader 的 canonical replay 改串流——已完成（`open_dataset_diff`：先整檔驗證、再逐筆重放，API 與 exact parity 不變；Codex 2026-09-14 量到 1M 場景在 `baseline_graph_build` 把約 41 萬筆 diff 事件全部常駐，peak 5.7 GiB）；(2) 探路矩陣已跑完（`docs/benchmarks/postgres-provenance-exploratory-v1.md`：1K–100K 五方法各 1 次，8.5 小時，parity 全過，incremental 在每個非零 ratio 都快於 full）；(3) 1M 已於 2026-09-15 裁決移出正式矩陣（Plan 12 後記 §1；每 split 108 場景 / 612 次重複），calibration 已完成（2026-09-16，14.5 小時，policy `postgres-adaptive-v1-9f4e58346529`，12/12 切片沒有交會點；發布時撞到生產者／消費者 schema 漂移，處置見 evidence record 的發布註記與 Plan 12 後記 §4）；(4) six-method 含 adaptive 已完成（2026-09-18，`docs/benchmarks/postgres-provenance-six-method-v1.json`：648 列全 ok、parity 648/648、crossover 12/12 `not_observed`；adaptive 在 10K/100K 永遠 INCREMENTAL、在 1K 因絕對 RMSE 信心帶永遠 FULL——policy 凍結不改，Plan 12 後記 §5；PostgreSQL full rebuild 100K 75–140 s、重建後 dead tuples 使 storage 約 2 倍），real RSNA track 仍缺（`real_validation.py --six-method --policy-from docs/benchmarks/postgres-provenance-calibration-v2.json`）；(5) 另一 process 的 frozen held-out（`evaluate_adaptive.py --policy-from …calibration-v2.json --output docs/benchmarks/postgres-provenance-heldout-v1.json`）。長跑用 `C:/vcp-data/bench/supervise.py`（不進 repo）看管：機器空閒才跑、遊戲或低記憶體即停並丟棄進行中場景；主機閒置時可用記憶體可能只剩 5 GB（驅動 nonpaged pool 洩漏，重開機可解）。保存 machine-readable outputs、PostgreSQL numeric server version、policy ID / 精確 policy SHA、parity 與 honest p50/p95 gate 結果；不得用 skips、offline doubles 或 held-out refit 替代。Linux CI（Docker Compose host）證據仍缺。
 
 ## 7. 開發流程（這個 repo 一直這樣做）
 

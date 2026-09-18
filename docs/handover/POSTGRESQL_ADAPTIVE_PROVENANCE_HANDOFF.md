@@ -19,10 +19,11 @@ Tasks 1–11 每一輪 task-scoped independent review 的 finding 已修正並 r
 security 與 whole-branch reviews 在 code head `7eaef001c987af4f341ec8533ca33b4d9e00fed9` 均為 code-clean。
 這是 source-level review 結論，不等於完整 spec acceptance 或 external evidence completion。
 
-外部證據部分完成：2026-09-14 起本機有原生 PostgreSQL 17.11（非 Docker），live integration v3 PASS 51/51
-（`docs/benchmarks/postgres-provenance-integration-v3.json`）；仍沒有完整 large-scale matrix、calibration、
-held-out、policy artifact、live RSNA run 或效能 gate 裁決（calibration v1 與 1M memory gate v2–v4 被 RAM
-護欄中止，證據與下一步見 `docs/benchmarks/postgres-provenance-v1.md`）。分支已於 2026-09-15 經使用者授權以
+外部證據大部分完成：2026-09-14 起本機有原生 PostgreSQL 17.11（非 Docker），live integration v3 PASS 51/51
+（`docs/benchmarks/postgres-provenance-integration-v3.json`）；2026-09-16 正式 calibration v2 產出 policy
+`postgres-adaptive-v1-9f4e58346529`；2026-09-18 正式 six-method v1（1K–100K 完整 matrix、648 列全 ok、parity
+648/648）。仍沒有 held-out、live RSNA run 或效能 gate 的正式裁決（calibration v1 與 1M memory gate v2–v4 被 RAM
+護欄中止；證據、數字與下一步見 `docs/benchmarks/postgres-provenance-v1.md`）。分支已於 2026-09-15 經使用者授權以
 PR 合併並 tag `v0.8.0`。
 
 ## 2. 功能與安全邊界
@@ -131,16 +132,17 @@ current full regression:
 |---|---|
 | PostgreSQL version | 17.11 / 170011 live readback（原生 Windows 服務）；Compose image 仍 pin `17.11-bookworm` |
 | Live integration | PASS 51/51 at `d8cc334`（integration-v3；rollback 28、concurrency 1、MVCC 1、parity 3）；Linux CI 仍缺 |
-| Six-method scaled/large-scale | Absent；1M memory gate v2–v4 ABORT（非正式） |
+| Six-method scaled/large-scale | `postgres-provenance-six-method-v1.json`（2026-09-18，commit `6ab2b7a`，SHA-256 `47bc10ab…`）：1K/10K/100K × 9 ratios × chain/branched × 2 seeds，6 方法 × 7/7/3 次 = 648 列全 ok、parity 648/648；crossover 12/12 `not_observed`；adaptive 在 10K/100K 選 INCREMENTAL、在 1K 因絕對 RMSE 信心帶全部落入 FULL（後記 §5）；1M 已移出正式矩陣（memory gate v2–v4 ABORT，非正式） |
 | Live RSNA six-method | Absent |
 | Calibration artifact | `postgres-provenance-calibration-v2.json` + `-artifacts/`（2026-09-16，1224 次量測，從 checkpoint 發布，見 evidence record 發布註記） |
 | Policy ID / exact policy hash | `postgres-adaptive-v1-9f4e58346529` / `policy.json` SHA-256 `a22d7067…03a2d78` |
 | Held-out evaluation | Absent |
 | Calibration/held-out separation | Offline tests enforce disjoint ID/hash/workload sets；無 live outputs可比較 |
-| Adaptive p50/p95 gates | 未執行、未裁決 |
+| Adaptive p50/p95 gates | 正式裁決要等 held-out；calibration split 的預覽（aggregate p50 1.010 / p95 0.932；every-scenario 31/92 > 1.05）只是診斷，不是裁決 |
 
-不要填 crossover、latency、policy version result、pass/fail 或 RSNA numbers。performance-related execution
-只有 Task 10 small offline SQLite/canonical smoke 與上述被中止的嘗試，沒有任何 PostgreSQL 效能數字。
+不要填 crossover、latency、policy version result、pass/fail 或 RSNA numbers 到 held-out 或 RSNA 的格子；
+six-method 的正式數字只從 `postgres-provenance-six-method-v1.json` 回讀（逐格表在 evidence record
+§六方法正式結果），不得從探路矩陣或 calibration 推導。
 
 ## 7. 驗收與尚缺項目
 
@@ -150,10 +152,12 @@ database、security 與 whole-branch reviews 在 `7eaef001c987af4f341ec8533ca33b
 
 1. 本機原生服務已取得 v3 PASS 51/51（rollback / concurrency / MVCC / parity）；Linux CI evidence 仍要在
    可用 Docker Compose host 跑 `tests/integration/postgres/run.ps1` 取得。
-2. 跑完整 six-method 1K/10K/100K matrix與 real track（1M 已於 2026-09-15 移出正式矩陣，見 Plan 12 後記 §1），保存 machine-readable output與hash（先完成
-   graph loader 的串流 replay，再重跑 1M memory gate）。
-3. 先跑 calibration-only，再於不同 process跑 frozen held-out；記 policy ID、精確 policy file hash、
-   environment/version、完整 scenario/sample counts、zero leakage、parity與 honest p50/p95 gate結果。
+2. six-method 1K/10K/100K matrix 已於 2026-09-18 完成（`postgres-provenance-six-method-v1.json`；1M 已於
+   2026-09-15 移出正式矩陣，見 Plan 12 後記 §1）；real track（`real_validation.py --six-method
+   --policy-from …calibration-v2.json`）仍缺，保存 machine-readable output 與 hash。
+3. calibration-only 已完成（v2）；仍要於不同 process 跑 frozen held-out（seeds 20261001/20261002）；記 policy
+   ID、精確 policy file hash、environment/version、完整 scenario/sample counts、zero leakage、parity 與 honest
+   p50/p95 gate 結果。已知 1K 會因絕對 RMSE 信心帶落入 FULL（後記 §5）：照跑、照報，不得為此改 policy 或 selector。
 4. push / PR / merge / tag 已於 2026-09-15 經使用者授權完成；後續證據工作在 `main` 之後的新分支進行。
 
 ## 8. 下一位 operator

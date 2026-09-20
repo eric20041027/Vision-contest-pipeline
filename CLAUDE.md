@@ -43,7 +43,7 @@
 - `src/vcp/__init__.py` 的 `__version__` 是唯一來源（`pyproject.toml` 動態讀它）。產物的 `vcp_version` 是 `vcp.core.build.build_string()`——版本 + commit + dirty（`0.2.0+g<sha>.dirty`），`vcp version` 印同一字串；每個 release 一個 `vX.Y.Z` annotated tag。`0.1.0` 是未發版的開發期，該時期的產物回推不到單一 commit（CHANGELOG 有說明）。
 
 ## 文件
-- PostgreSQL provenance 操作與安全邊界：`docs/guides/POSTGRESQL_PROVENANCE.md`；研究方法、live 證據與尚缺證據：`docs/benchmarks/postgres-provenance-v1.md`；交接：`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。
+- PostgreSQL provenance 操作與安全邊界：`docs/guides/POSTGRESQL_PROVENANCE.md`；研究方法、live 證據與尚缺證據：`docs/benchmarks/postgres-provenance-v1.md`；十項證據總結（給課程與外部讀者）：`docs/benchmarks/postgres-provenance-report-v1.md`；交接：`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。
 - 命令參考：`docs/reference/cli.md`（原 README 的完整命令表；README 自 2026-09-15 起只放概觀與 quickstart，英文主檔 + `README.zh-TW.md`）。可執行的入門範例：`examples/quickstart.py`（CI 會跑）。
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`
 - 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。`AGENTS.md` 是本檔給 Codex 的同步版本，改一邊要改另一邊。

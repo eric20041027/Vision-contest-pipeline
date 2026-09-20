@@ -20,12 +20,12 @@
 
 ## 3. 開放的待辦
 
-1. **正式 calibration（完成，§4）→ six-method（完成，§5）→ held-out（完成，§6）→ real RSNA**（依序，都要 frozen policy）。real RSNA：`real_validation.py --data-root … --configs-root … --six-method --policy-from docs/benchmarks/postgres-provenance-calibration-v2.json`，來源唯讀複製；跑之前先清出記憶體（§5 的執行紀錄：桌面程式加驅動洩漏可把 31 GiB 主機壓到 2 GiB 以下），`bench_launch` 的護欄要保留（可用 RAM < 2 GiB 持續 30 秒即中止，runner 的逐列 checkpoint 可續跑），看管腳本 `C:/vcp-data/bench/supervise.py` 只在機器空閒時跑、偵測到遊戲或低記憶體就停並丟棄進行中場景。
+1. **正式 calibration（§4）→ six-method（§5）→ held-out（§6）→ real RSNA（§7）全部完成（2026-09-16 → 09-20）。** 重跑任何一段前先清出記憶體（§5 的執行紀錄：桌面程式加驅動洩漏可把 31 GiB 主機壓到 2 GiB 以下），`bench_launch` 的護欄要保留（可用 RAM < 2 GiB 持續 30 秒即中止，runner 的逐列 checkpoint 可續跑），看管腳本 `C:/vcp-data/bench/supervise.py` 只在機器空閒時跑、偵測到遊戲或低記憶體就停並丟棄進行中場景。
 2. **adaptive 退化的處置**：正式結果是「部分退化」——10K/100K 永遠 INCREMENTAL（full 從不最快），1K 卻永遠 FULL（§5 的信心帶問題）。報告要兩件都明說：full 的存在理由是 diff 損毀、index 漂移與 schema 不相容時的重建路徑，不是效能選項；而 1K 的 FULL 是 selector 的保守分支在小規模失效，不是 full 在 1K 較快。
 3. **Linux CI / Docker Compose host** 的 integration evidence 仍缺（本機是原生 Windows 服務）。
 4. **EXPLAIN 覆蓋面**：目前只涵蓋每種 DML SQL 形狀的第一列，不含 `status` / `impact` / `explain` 查詢自身的計畫（runner 既有限制）。
-5. **`docs/benchmarks/postgres-provenance-v1.md` 的 acceptance 表**：只有拿到 machine-readable 結果回讀後才准填；探路數字不得填入。six-method（2026-09-18）、held-out 與 gate 裁決（2026-09-20）已填；只剩 RSNA。
-6. **policy v2：規模相對的信心帶**（spec 變更，§5）。`select_strategy` 的絕對 RMSE 帶要改成相對於預估值的帶（或按 `total_edges` 分層的 RMSE），並重跑 calibration → six-method → held-out；v1 的 policy 與三份證據不改。
+5. **`docs/benchmarks/postgres-provenance-v1.md` 的 acceptance 表**：只有拿到 machine-readable 結果回讀後才准填；探路數字不得填入。2026-09-20 起沒有空格（six-method、held-out、gate 裁決、real RSNA 都已回讀填入）。
+6. **policy v2：規模相對的信心帶**（spec 變更，§5、§7）。`select_strategy` 的絕對 RMSE 帶要改成相對於預估值的帶（或按 `total_edges` 分層的 RMSE），並重跑 calibration → six-method → held-out → real；v1 的 policy 與五份證據不改。真實資料的 r4→r5（8.8K entities、98.7% 變更、預估差距 5.7 s）也中了這個問題，所以 v2 的門檻不能只看規模，要看預估差距對預估值的比例。
 7. **全量重建後的 dead tuples**（§5 觀察 4）：`_publish_generation` 刪除舊 generation 後不 VACUUM，storage 約 2 倍、`status` 變慢直到 autovacuum 追上。是否在 full rebuild 收尾加 `VACUUM`（不能在交易內）或記錄為操作指南事項，待裁決；量測口徑（`pg_total_relation_size`）不改。
 
 ## 4. 裁決：calibration v2 從 checkpoint 發布（2026-09-16）
@@ -71,3 +71,15 @@
 **裁決 6-3：看管程式的自己人判定**。`supervise.py` 改成：`python` / `uv` 只有命令列含 `supervise.py` / `bench_launch` / `adaptive_benchmark` / `evaluate_adaptive` / `calibrate_adaptive` / `vcp-data` 之一才算自己人；其他 python ≥ `--big`（4 GiB）持續 30 秒即停 benchmark 並丟棄進行中場景。這樣訓練程序會在吃掉主機前先觸發停機，保住 timing 的乾淨。runner 本身的常駐量每 5 分鐘取樣（`heldout-v1.memory-samples.log`），峰值 2.04 GiB，沒有洩漏跡象；六方法期間的多次 RAM 中止應歸因於主機的 nonpaged pool 洩漏與桌面程式，不是 runner。
 
 **執行紀錄**：三次啟動（20:39 / 17:46 / 18:12 UTC），DONE 19:49 UTC；最後一次最低可用 RAM 13.79 GiB；每次續跑 runner 驗證 168 個原始檔雜湊，原始樹整段未變；輸出由 runner 直接發布（含 evaluator 的 `validate_rows` 與 108 個 decision 的重算比對）。
+
+## 7. Real RSNA six-method 結果（2026-09-20）
+
+**結果**：`docs/benchmarks/postgres-provenance-real-rsna-v1.json`（commit `32f0f65`，SHA-256 `78487fc5…`，19 分鐘）。`rsna-knee-sixslot` r3→r4→r5→r6 唯讀複製（metadata-only），canonical 圖 13,196 entities / 17,569 edges / 8,752 changes，SQLite 對 canonical `graph_parity` / `status_parity` true、`verify_index ok`；3 個 transition × 6 方法 = 18 列全 ok、每列 parity true。真實變更比例 100% / 98.7% / 0%（sixslot 各版本整批重生）。
+
+**觀察**：(a) adaptive 選 FULL / FULL / NO_OP。r3→r4 是全部證據中唯一 full 不比 incremental 慢的量測（5.6 s 對 6.1 s：前圖 38 個 entity、100% 變更，incremental 無物可省），選 FULL 沒有損失。r4→r5 選錯：預估差距 5.7 s 落在 7.3 s 的絕對信心帶內 → FULL 10.5 s，incremental 只要 5.9 s（1.79 倍）。(b) 13K entities 的 NO_OP 驗證在 PostgreSQL 要 1.3–1.4 s。(c) 速度排序與合成矩陣一致：SQLite incremental 最快，PostgreSQL incremental 為其 2.8–3.6 倍。
+
+**裁決 7-1：信心帶問題的敘述改為「預估差距」而非「小圖」**。§5 把問題寫成 1K 的規模問題；真實資料證明只要 `full − incremental` 的預估差距小於 `incremental_rmse + full_rmse`（7,343 ms），不論規模都會落入 FULL——r4→r5 有 8.8K entities 也中。§3-6 的 policy v2 設計要以「差距 / 預估值」或分層 RMSE 為準；evidence record §Real RSNA six-method 觀察 2 與操作指南的建議（小圖直接 `--strategy incremental`）補一句：接近全量變更的 transition 也一樣。
+
+**裁決 7-2：真實證據的適用範圍**。這組真實資料只覆蓋變更比例的兩端（≈100% 與 0%）；合成矩陣的中段沒有真實對應樣本。報告要寫清楚：合成矩陣負責覆蓋比例軸，真實資料負責證明 parity 與端點行為，兩者互補而非互相替代。
+
+**狀態**：五份證據（integration v3、calibration v2、six-method v1、held-out v1、real RSNA v1）齊全，acceptance 表無空格；開放待辦剩 §3-3（Linux CI）、§3-4（EXPLAIN 覆蓋面）、§3-6（policy v2）、§3-7（full rebuild 後的 dead tuples）。

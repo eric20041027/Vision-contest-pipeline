@@ -23,8 +23,9 @@ security 與 whole-branch reviews 在 code head `7eaef001c987af4f341ec8533ca33b4
 （`docs/benchmarks/postgres-provenance-integration-v3.json`）；2026-09-16 正式 calibration v2 產出 policy
 `postgres-adaptive-v1-9f4e58346529`；2026-09-18 正式 six-method v1（1K–100K 完整 matrix、648 列全 ok、parity
 648/648）；2026-09-20 正式 held-out v1（seeds 20261001/20261002、324 列全 ok、overlap 0、**aggregate gate PASS**
-p50 1.018 / p95 1.017，every-scenario diagnostic 在 1K FAIL）。仍沒有 live RSNA run（calibration v1 與 1M memory
-gate v2–v4 被 RAM 護欄中止；證據、數字與下一步見 `docs/benchmarks/postgres-provenance-v1.md`）。分支已於 2026-09-15 經使用者授權以
+p50 1.018 / p95 1.017，every-scenario diagnostic 在 1K FAIL）；同日 real RSNA six-method（3 個真實 transition、18
+列全 ok、parity 18/18；adaptive 在 98.7% 變更的 8.8K 圖上選錯 FULL，慢 1.79 倍）。acceptance 表已無空格（calibration v1
+與 1M memory gate v2–v4 被 RAM 護欄中止的紀錄保留；證據與數字見 `docs/benchmarks/postgres-provenance-v1.md`）。分支已於 2026-09-15 經使用者授權以
 PR 合併並 tag `v0.8.0`。
 
 ## 2. 功能與安全邊界
@@ -134,16 +135,17 @@ current full regression:
 | PostgreSQL version | 17.11 / 170011 live readback（原生 Windows 服務）；Compose image 仍 pin `17.11-bookworm` |
 | Live integration | PASS 51/51 at `d8cc334`（integration-v3；rollback 28、concurrency 1、MVCC 1、parity 3）；Linux CI 仍缺 |
 | Six-method scaled/large-scale | `postgres-provenance-six-method-v1.json`（2026-09-18，commit `6ab2b7a`，SHA-256 `47bc10ab…`）：1K/10K/100K × 9 ratios × chain/branched × 2 seeds，6 方法 × 7/7/3 次 = 648 列全 ok、parity 648/648；crossover 12/12 `not_observed`；adaptive 在 10K/100K 選 INCREMENTAL、在 1K 因絕對 RMSE 信心帶全部落入 FULL（後記 §5）；1M 已移出正式矩陣（memory gate v2–v4 ABORT，非正式） |
-| Live RSNA six-method | Absent |
+| Live RSNA six-method | `postgres-provenance-real-rsna-v1.json`（2026-09-20，commit `32f0f65`，SHA-256 `78487fc5…`）：`rsna-knee-sixslot` r3→r4→r5→r6 唯讀複製，3 個 transition × 6 方法 = 18 列全 ok、parity 18/18、`verify_index ok`；真實變更比例 100% / 98.7% / 0%；adaptive FULL / FULL / NO_OP，第二個選錯（evidence record §Real RSNA six-method） |
 | Calibration artifact | `postgres-provenance-calibration-v2.json` + `-artifacts/`（2026-09-16，1224 次量測，從 checkpoint 發布，見 evidence record 發布註記） |
 | Policy ID / exact policy hash | `postgres-adaptive-v1-9f4e58346529` / `policy.json` SHA-256 `a22d7067…03a2d78` |
 | Held-out evaluation | `postgres-provenance-heldout-v1.json`（2026-09-20，commit `2644e83`，SHA-256 `6d7efe24…`）：seeds 20261001/20261002、108 場景 × 3 PostgreSQL 方法、324 列全 ok、parity 324/324、`VERDICT status=OK`；被使用者的訓練程序中止一次、一個場景因汙染跡象重量（evidence record §Held-out 正式結果） |
 | Calibration/held-out separation | Live：evaluator `overlap_count` 0（scenario_id / scenario_hash / workload_hash 三種身分）；offline tests 同樣 enforce disjoint sets |
 | Adaptive p50/p95 gates | **PASS**（held-out aggregate：adaptive p50 / 較佳 fixed = 1.018 ≤ 1.05，p95 1.017 ≤ 1.10，`performance_pass: true`）；every-scenario diagnostic FAIL 36/92（1K 全部 28 個 1.82–4.26 倍，信心帶問題，後記 §5）——兩者都要報，不得互相取代 |
 
-不要填 crossover、latency、policy version result、pass/fail 或 RSNA numbers 到 RSNA 的格子；six-method 與
-held-out 的正式數字只從 `postgres-provenance-six-method-v1.json` / `postgres-provenance-heldout-v1.json` 回讀
-（逐格表在 evidence record §六方法正式結果、§Held-out 正式結果），不得從探路矩陣或 calibration 推導。
+不要填 crossover、latency、policy version result、pass/fail 或 RSNA numbers 到任何格子，除非從對應的
+machine-readable 輸出回讀：six-method、held-out 與 real RSNA 的正式數字分別只來自
+`postgres-provenance-six-method-v1.json` / `-heldout-v1.json` / `-real-rsna-v1.json`（逐格表在 evidence record
+§六方法正式結果、§Held-out 正式結果、§Real RSNA six-method），不得從探路矩陣或 calibration 推導。
 
 ## 7. 驗收與尚缺項目
 
@@ -154,8 +156,8 @@ database、security 與 whole-branch reviews 在 `7eaef001c987af4f341ec8533ca33b
 1. 本機原生服務已取得 v3 PASS 51/51（rollback / concurrency / MVCC / parity）；Linux CI evidence 仍要在
    可用 Docker Compose host 跑 `tests/integration/postgres/run.ps1` 取得。
 2. six-method 1K/10K/100K matrix 已於 2026-09-18 完成（`postgres-provenance-six-method-v1.json`；1M 已於
-   2026-09-15 移出正式矩陣，見 Plan 12 後記 §1）；real track（`real_validation.py --six-method
-   --policy-from …calibration-v2.json`）仍缺，保存 machine-readable output 與 hash。
+   2026-09-15 移出正式矩陣，見 Plan 12 後記 §1）；real track 已於 2026-09-20 完成
+   （`postgres-provenance-real-rsna-v1.json`，machine-readable output 與 hash 都在 evidence record）。
 3. calibration-only（v2）與 frozen held-out（v1，另一 process、另一 worktree）都已完成：policy ID、精確 policy
    file hash、environment/version、108/324/1836 counts、`overlap_count` 0、parity 324/324 與 honest gate 結果
    （aggregate PASS、every-scenario FAIL 於 1K）都在 evidence record。1K 的 FULL 照報、未改 policy 或 selector。

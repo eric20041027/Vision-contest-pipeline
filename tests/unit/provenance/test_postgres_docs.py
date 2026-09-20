@@ -40,14 +40,21 @@ def test_postgres_guide_covers_supported_operations_and_safe_setup():
 def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
     benchmark = BENCHMARK.read_text(encoding="utf-8")
     handoff = HANDOFF.read_text(encoding="utf-8")
-    # Live integration (2026-09-14), calibration v2 (2026-09-16), six-method v1 (2026-09-18) and
-    # held-out v1 (2026-09-20) are the PostgreSQL evidence; the aborted attempts stay visible and
-    # the one field that still has no machine-readable result stays explicitly absent.
+    # Live integration (2026-09-14), calibration v2 (2026-09-16), six-method v1 (2026-09-18),
+    # held-out v1 and real RSNA v1 (2026-09-20) are the PostgreSQL evidence; the aborted attempts
+    # stay visible and every acceptance field is filled from a machine-readable output.
     for present_evidence in ("live integration", "PASS 51/51", "170011", "ABORT", "skipped"):
         assert present_evidence in benchmark
-    for missing_evidence in ("large-scale", "calibration", "held-out"):
-        assert missing_evidence in benchmark
-    assert "| Real/RSNA six-method result | Absent |" in benchmark
+    for evidence_kind in ("large-scale", "calibration", "held-out"):
+        assert evidence_kind in benchmark
+    assert "| Absent |" not in benchmark
+    for real in (
+        "| Real/RSNA six-method result | `postgres-provenance-real-rsna-v1.json`",
+        "78487fc51db2847dd4afe8d79f4cd61ff7ab99d5de8b3f5b2971238f02830560",
+        "18/18",
+        "metadata-only temporary copy; source roots opened read-only",
+    ):
+        assert real in benchmark
     # The 2026-09-16 calibration is the first policy; both records must name it exactly.
     for present in (
         "postgres-adaptive-v1-9f4e58346529",
@@ -79,7 +86,8 @@ def test_postgres_benchmark_and_handoff_preserve_evidence_boundaries():
     assert "0.8.0" in handoff and "v0.8.0" in handoff
     assert "不要填 crossover" in handoff
     assert "Linux CI" in handoff
-    assert "| Live RSNA six-method | Absent |" in handoff
+    assert "| Live RSNA six-method | `postgres-provenance-real-rsna-v1.json`" in handoff
+    assert "| Absent |" not in handoff
     assert "| Held-out evaluation | `postgres-provenance-heldout-v1.json`" in handoff
     assert "| Adaptive p50/p95 gates | **PASS**" in handoff
     assert "| Six-method scaled/large-scale | `postgres-provenance-six-method-v1.json`" in handoff

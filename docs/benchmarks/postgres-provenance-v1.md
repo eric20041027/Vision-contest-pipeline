@@ -8,8 +8,9 @@
 **live integration**（v3）、**正式 calibration**（v2，policy `postgres-adaptive-v1-9f4e58346529`）、
 **正式 six-method / large-scale**（1K–100K，2026-09-18，§六方法正式結果）與 **正式 held-out**（seeds
 20261001/20261002，2026-09-20，§Held-out 正式結果：aggregate gate **PASS**，every-scenario diagnostic
-FAIL 於 1K）四份證據；仍沒有 RSNA six-method 數字。這些欄位不可從 offline doubles、SQLite 結果或
-calibration split 推導。
+FAIL 於 1K）與 **real RSNA six-method**（2026-09-20，§Real RSNA six-method）五份證據；acceptance 表沒有
+空格了。每一格都只從對應的 machine-readable 輸出回讀，不可從 offline doubles、SQLite 結果或 calibration
+split 推導。
 
 ## Live evidence（2026-09-14，本機原生 PostgreSQL 17.11）
 
@@ -27,6 +28,7 @@ calibration split 推導。
 | `postgres-provenance-exploratory-v1.json` / `-explain.json` / `.md` | 探路矩陣（非正式）：1K/10K/100K × 9 ratios × 2 topologies × 2 seeds = 108 場景、每場景 1 次、五個固定方法；540/540 parity；ratio > 0 每格 incremental 都快於 full（100K 時為 full 的 13–45%）；1M 與 adaptive 未跑 | `98247c28` / `451550ee` |
 | `postgres-provenance-six-method-v1.json` | **正式 six-method**（2026-09-17/18，calibration split，frozen policy `postgres-adaptive-v1-9f4e58346529`）：108 場景 × 6 方法 × 7/7/3 次 = 648 列、3672 次量測，全部 `ok`、0 failure；graph / hash / head parity 648/648；12 個切片 crossover 仍 `not_observed`；adaptive 在 10K/100K 選 INCREMENTAL（64 列）、在 1K 全部選 FULL（28 列，信心帶問題，見 §六方法正式結果）、NO_OP 16 列。量測在 `6ab2b7a`，runner 直接發布（未經 checkpoint 外部發布）。EXPLAIN 內嵌於 324 個 PostgreSQL 列 | `47bc10ab` |
 | `postgres-provenance-heldout-v1.json` | **正式 held-out**（2026-09-19/20，seeds 20261001/20261002，frozen policy `postgres-adaptive-v1-9f4e58346529`，不 fit）：108 場景 × postgres_full / postgres_incremental / postgres_adaptive × 7/7/3 次 = 324 列、1836 次量測，全部 `ok`；graph / hash / head / status parity 324/324；`overlap_count` 0；**aggregate gate PASS**（adaptive p50 / 較佳 fixed p50 = 1.018 ≤ 1.05；p95 1.017 ≤ 1.10；`VERDICT status=OK`）；every-scenario diagnostic FAIL（1K 的 28 個非 NO_OP 場景 1.82–4.26 倍，同六方法的信心帶問題）；crossover 12/12 `not_observed`。量測在 `2644e83`，runner 直接發布。執行中被使用者的訓練程序中止一次、一個場景因汙染跡象重量（見 §Held-out 正式結果） | `6d7efe24` |
+| `postgres-provenance-real-rsna-v1.json` | **Real RSNA six-method**（2026-09-20，commit `32f0f65`，frozen policy）：四個 `rsna-knee-sixslot` 資料集（r3→r4→r5→r6）唯讀複製後 3 個 transition × 6 方法 = 18 列全 `ok`、7/7/3 次；graph / hash / head / status parity 18/18，整體 `graph_parity` / `status_parity` true、`verify_index ok`；真實變更比例 100% / 98.7% / 0%；adaptive 選 FULL / FULL / NO_OP——第二個 transition（8,849 entities）是信心帶的真實案例，FULL 比 incremental 慢 1.79 倍 | `78487fc5` |
 
 完整 SHA-256 以 `sha256sum docs/benchmarks/postgres-provenance-*` 為準。1M 場景的瓶頸不在 fixture
 writer，而在 canonical graph replay 讀取約 41 萬筆 diff 事件時同時常駐文字、lines、pydantic change list
@@ -66,8 +68,8 @@ API 與 exact parity 不變），下一步是重跑 gate。主機 31 GB RAM 常�
 每 method 共 612 measured samples。1M 已於 2026-09-15 以裁決移出正式矩陣（後記 §1），仍可用
 `--entities 1000000` 臨時跑；`production_benchmark.py` 的 1M 階梯不受影響。
 
-Real track 的來源必須唯讀複製到 temporary metadata root；它不修改 live data。Task 10 runner也可讓
-既有 production/real entrypoint增加 `--six-method`，但本環境沒有執行 live RSNA track。
+Real track 的來源必須唯讀複製到 temporary metadata root；它不修改 live data。`real_validation.py --six-method`
+已於 2026-09-20 在本機對 RSNA 資料執行（§Real RSNA six-method）。
 
 ## 發布註記：calibration v2 是從 checkpoint 發布的
 
@@ -305,6 +307,68 @@ bytes，兩者物理口徑不同。
    `impact` 7.0–7.6 s；relation 全量重建後 2,445 MiB、incremental 1,188 MiB；throughput full 52 / incr 233 / adaptive
    216 samples/s——與六方法一致（dead tuples 的 2 倍儲存再現）。
 
+## Real RSNA six-method（2026-09-20，唯讀複製的真實資料）
+
+### 執行事實
+
+- 命令：`uv run --frozen python tests/performance/provenance/real_validation.py --data-root
+  C:/Users/smallfire123123/Desktop/RSNA_Knee_Abnormality_Detection/vcp-data --configs-root …/configs --six-method
+  --policy-from docs/benchmarks/postgres-provenance-calibration-v2.json --output
+  docs/benchmarks/postgres-provenance-real-rsna-v1.json`，經 `bench_launch.py`；19 分鐘，最低可用 RAM 15.37 GiB。
+- 模式：`metadata-only temporary copy; source roots opened read-only`——四個資料集的 `dataset.yaml` / splits 與
+  `samples.jsonl`、7 個可載入的 run card、measure 台帳複製到暫存目錄；來源 `raw/` 與 live data 不動。量測 commit
+  `32f0f6552263cc7895974a08d043fa7294511e9f`；policy `postgres-adaptive-v1-9f4e58346529`（SHA-256 `a22d7067…`）；
+  PostgreSQL 17.11、environment fingerprint `f29fc1bb…`。輸出 SHA-256
+  `78487fc51db2847dd4afe8d79f4cd61ff7ab99d5de8b3f5b2971238f02830560`（0.76 MB，含 9 個 PostgreSQL 列的 EXPLAIN，115 個計畫）。
+- Canonical 圖：13,196 entities、17,569 edges、8,752 changes、0 gaps；SQLite index 對 canonical `graph_parity` /
+  `status_parity` true（0 個 status 差異）、`verify_index ok`（graph hash `26c219ae…`）。
+- 三個 transition 的真實 diff：r3→r4 4,407 changes（4,403 MODIFIED 全在 GROUP domain = split 群組換了、4 REMOVED）；
+  r4→r5 4,345 changes（全是 META domain、effect UNKNOWN → REVIEW）；r5→r6 0 changes（samples hash 相同）。所以真實
+  變更比例是 100% / 98.7% / 0%，落在合成矩陣的兩端。
+- 18 列全 `ok`、0 failure，每列 graph / graph_hash / head / status parity true；1K/10K 級的 transition 7 次、13K 級 3 次。
+
+### 結果（maintenance p50 / p95，ms；`entities` = transition 前的圖大小）
+
+| transition | entities → changed | method | selected | maint p50 / p95 | status p50 | impact p50 | storage MiB | samples/s |
+|---|---|---|---|---|---|---|---|---|
+| r3→r4 | 38 → 4,407（100%） | canonical_full | FULL | 782 / 854 | 279 | 470 | — | 5,635 |
+| | | sqlite_full | FULL | 2,250 / 2,366 | 26 | 200 | 59 | 1,959 |
+| | | sqlite_incremental | INCREMENTAL | 1,688 / 1,735 | 25 | 353 | 59 | 2,611 |
+| | | postgres_full | FULL | 5,625 / 6,500 | 81 | 566 | 113 | 784 |
+| | | postgres_incremental | INCREMENTAL | 6,056 / 6,476 | 97 | 470 | 142 | 728 |
+| | | postgres_adaptive | **FULL** | 5,768 / 5,908 | 99 | 449 | 136 | 764 |
+| r4→r5 | 8,849 → 4,345（98.7%） | canonical_full | FULL | 1,337 / 1,541 | 784 | 827 | — | 3,251 |
+| | | sqlite_full | FULL | 3,683 / 3,767 | 41 | 576 | 97 | 1,180 |
+| | | sqlite_incremental | INCREMENTAL | 2,107 / 2,167 | 34 | 576 | 96 | 2,062 |
+| | | postgres_full | FULL | 10,320 / 11,164 | 118 | 735 | 290 | 421 |
+| | | postgres_incremental | INCREMENTAL | 5,865 / 7,097 | 117 | 878 | 208 | 741 |
+| | | postgres_adaptive | **FULL** | 10,502 / 10,707 | 102 | 732 | 290 | 414 |
+| r5→r6 | 13,195 → 0（0%） | canonical_full | FULL | 1,353 / 1,545 | 770 | 494 | — | — |
+| | | sqlite_full | FULL | 3,365 / 3,465 | 37 | 535 | 97 | — |
+| | | sqlite_incremental | NO_OP | 913 / 926 | 36 | 594 | 97 | — |
+| | | postgres_full | NO_OP | 1,318 / 1,359 | 71 | 799 | 179 | — |
+| | | postgres_incremental | NO_OP | 1,421 / 1,454 | 68 | 715 | 179 | — |
+| | | postgres_adaptive | NO_OP | 1,363 / 1,406 | 66 | 698 | 179 | — |
+
+### 觀察
+
+1. **parity 在真實資料上成立**：三種 backend 對三個 transition 的 graph、hash、heads 與每個 materialized status
+   完全一致；`status_differences` 為空。這是 §量測與驗收口徑第 5 條在真實資料上的證據。
+2. **adaptive 在真實資料上選了 FULL / FULL / NO_OP。** r3→r4：估計 incremental 6,172 ms 對 full 6,244 ms，幾乎打平
+   → 落入不確定分支選 FULL；實測 FULL 5,625 ms 對 INCREMENTAL 6,056 ms，FULL 反而略快（1.08 倍）——這是所有證據中
+   唯一一個 full 不比 incremental 慢的量測：前圖只有 38 個 entity、而 100% 的 sample 都變，incremental 沒有東西可以
+   省。r4→r5：估計 7,127 對 12,788（差 5.7 s < 7.3 s 的絕對信心帶）→ FULL；實測 10,502 ms 對 5,865 ms，**選錯，慢
+   1.79 倍**。這把 §六方法正式結果觀察 2 的信心帶問題從合成 1K 延伸到真實資料的 8.8K entities / 98.7% 變更：不是
+   只有「小圖」會中，而是任何「預估差距 < 7.3 s」的 workload 都會中。r5→r6：`verified_zero_semantic_changes` → NO_OP。
+3. **NO_OP 不是免費的**：13K entities 的零變更驗證在 PostgreSQL 要 1.3–1.4 s（dirty closure + 零變更驗證），SQLite
+   0.9 s；canonical 重建 1.35 s、SQLite full 3.4 s。
+4. **速度排序與合成矩陣一致**：SQLite incremental 最快（1.7–2.1 s），PostgreSQL incremental 是它的 2.8–3.6 倍，
+   PostgreSQL full 在 98.7% 變更時是 incremental 的 1.76 倍；storage 全量重建後 290 MiB 對 incremental 208 MiB
+   （dead tuples）。
+5. 真實 transition 的變更比例極端（100% / 98.7% / 0%），因為 sixslot 各版本是整批重生（split 群組換掉、label
+   agreement 中繼資料全部加上）。合成矩陣的中段（0.1%–25%）在這組真實資料裡沒有對應樣本，這是真實證據的適用範圍
+   邊界，不是合成矩陣的缺陷。
+
 ## 可重跑命令
 
 先依 `docs/guides/POSTGRESQL_PROVENANCE.md` 完成 benchmark/calibration/held-out 的 separate opt-in
@@ -363,7 +427,7 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 | Live integration | PASS 51/51 at `d8cc334`（`integration-v3`）；Linux CI / Docker Compose host 仍缺 |
 | Six-method scaled result | `postgres-provenance-six-method-v1.json`（SHA-256 `47bc10ab…e7395c`，commit `6ab2b7a`，2026-09-18）：108 場景 × 6 方法，648 列全 ok、3672 次量測，parity 648/648 |
 | Large-scale 10K/100K execution | 在 six-method v1 內完成（10K 各 7 次、100K 各 3 次；1M 已移出正式矩陣，其 memory gate v2–v4 ABORT 於 `baseline_graph_build`，非正式） |
-| Real/RSNA six-method result | Absent |
+| Real/RSNA six-method result | `postgres-provenance-real-rsna-v1.json`（SHA-256 `78487fc5…830560`，commit `32f0f65`，2026-09-20）：3 個真實 transition × 6 方法 = 18 列全 ok，parity 18/18；adaptive FULL / FULL / NO_OP，第二個 transition 選錯慢 1.79 倍（信心帶）；見 §Real RSNA six-method |
 | Calibration result JSON | `postgres-provenance-calibration-v2.json`（SHA-256 `43d213e4…88f9239`）；v1 嘗試曾 ABORT（RAM 護欄） |
 | Policy artifact ID | `postgres-adaptive-v1-9f4e58346529`（`calibration_sha256` = `9f4e5834…`，`environment_fingerprint` = `f29fc1bb…`） |
 | Exact policy file SHA-256 | `a22d70672aba450ff6a71823ad9921f572ec5dff9c86755b26d61ff9103a2d78`（`-artifacts/artifacts/provenance_policy/…/policy.json`） |

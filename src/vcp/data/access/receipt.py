@@ -39,8 +39,12 @@ class ReceiptBinding(Protocol):
 
 
 def standalone_receipt_id(purpose: str, dataset: str, plan_id: str) -> str:
-    """A receipt nobody bound: purpose, dataset, plan, a UTC stamp and a nonce."""
-    return f"{purpose}-{dataset}-{plan_id}-{utc_now():%Y%m%dT%H%M%S}-{os.urandom(2).hex()}"
+    """A receipt nobody bound: purpose, dataset, plan, a UTC stamp and a nonce.
+
+    The stamp has one-second resolution, so the nonce alone separates receipts claimed in
+    the same second; 64 bits keeps that collision-free in practice (16 bits collided in CI).
+    """
+    return f"{purpose}-{dataset}-{plan_id}-{utc_now():%Y%m%dT%H%M%S}-{os.urandom(8).hex()}"
 
 
 def receipt_spec(

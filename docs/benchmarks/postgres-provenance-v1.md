@@ -5,10 +5,11 @@
 此文件是可重跑方法與 acceptance record：每一格只在 machine-readable 結果回讀後才填。2026-09-14 起本機有
 原生 PostgreSQL 17.11（使用者排程工作 `VCP-PostgreSQL-17.11`，只聽 `127.0.0.1:55432`，service
 `vcp-pg17-evidence`；佈建紀錄在 `C:/vcp-data/services/postgresql-17.11-vcp/`，不進 git）。目前已有
-**live integration**（v3）、**正式 calibration**（v2，policy `postgres-adaptive-v1-9f4e58346529`）與
-**正式 six-method / large-scale**（1K–100K，2026-09-18，§六方法正式結果）三份證據；仍沒有 **held-out**
-outcome、adaptive gate 的正式 pass/fail 裁決與 RSNA six-method 數字。這些欄位不可從 offline doubles、
-SQLite 結果或 calibration split 推導。
+**live integration**（v3）、**正式 calibration**（v2，policy `postgres-adaptive-v1-9f4e58346529`）、
+**正式 six-method / large-scale**（1K–100K，2026-09-18，§六方法正式結果）與 **正式 held-out**（seeds
+20261001/20261002，2026-09-20，§Held-out 正式結果：aggregate gate **PASS**，every-scenario diagnostic
+FAIL 於 1K）四份證據；仍沒有 RSNA six-method 數字。這些欄位不可從 offline doubles、SQLite 結果或
+calibration split 推導。
 
 ## Live evidence（2026-09-14，本機原生 PostgreSQL 17.11）
 
@@ -25,6 +26,7 @@ SQLite 結果或 calibration split 推導。
 | `postgres-provenance-calibration-v2.json` / `-artifacts/` / `.provenance.json` | **正式 calibration**（2026-09-16，14.5 小時，護欄未觸發，最低可用 RAM 2.63 GiB）：108 場景 × postgres_full / postgres_incremental × 7/7/3 次 = 1224 次量測，全部 ok；92 個 fit 觀測 → policy `postgres-adaptive-v1-9f4e58346529`，`policy.json` SHA-256 `a22d7067…03a2d78`；**12 個切片全部 `not_observed`、`global_threshold: null`**（incremental 在每個非零 ratio 都快，100K 時 p50 為 full 的 13–50%）。量測在 `b1512ae`；發布時只有消費端 `evaluate_adaptive.py` 改了（見 §發布註記），`.provenance.json` 記 168 個生產端檔案逐一比對相同 | `43d213e4` / `a22d7067` |
 | `postgres-provenance-exploratory-v1.json` / `-explain.json` / `.md` | 探路矩陣（非正式）：1K/10K/100K × 9 ratios × 2 topologies × 2 seeds = 108 場景、每場景 1 次、五個固定方法；540/540 parity；ratio > 0 每格 incremental 都快於 full（100K 時為 full 的 13–45%）；1M 與 adaptive 未跑 | `98247c28` / `451550ee` |
 | `postgres-provenance-six-method-v1.json` | **正式 six-method**（2026-09-17/18，calibration split，frozen policy `postgres-adaptive-v1-9f4e58346529`）：108 場景 × 6 方法 × 7/7/3 次 = 648 列、3672 次量測，全部 `ok`、0 failure；graph / hash / head parity 648/648；12 個切片 crossover 仍 `not_observed`；adaptive 在 10K/100K 選 INCREMENTAL（64 列）、在 1K 全部選 FULL（28 列，信心帶問題，見 §六方法正式結果）、NO_OP 16 列。量測在 `6ab2b7a`，runner 直接發布（未經 checkpoint 外部發布）。EXPLAIN 內嵌於 324 個 PostgreSQL 列 | `47bc10ab` |
+| `postgres-provenance-heldout-v1.json` | **正式 held-out**（2026-09-19/20，seeds 20261001/20261002，frozen policy `postgres-adaptive-v1-9f4e58346529`，不 fit）：108 場景 × postgres_full / postgres_incremental / postgres_adaptive × 7/7/3 次 = 324 列、1836 次量測，全部 `ok`；graph / hash / head / status parity 324/324；`overlap_count` 0；**aggregate gate PASS**（adaptive p50 / 較佳 fixed p50 = 1.018 ≤ 1.05；p95 1.017 ≤ 1.10；`VERDICT status=OK`）；every-scenario diagnostic FAIL（1K 的 28 個非 NO_OP 場景 1.82–4.26 倍，同六方法的信心帶問題）；crossover 12/12 `not_observed`。量測在 `2644e83`，runner 直接發布。執行中被使用者的訓練程序中止一次、一個場景因汙染跡象重量（見 §Held-out 正式結果） | `6d7efe24` |
 
 完整 SHA-256 以 `sha256sum docs/benchmarks/postgres-provenance-*` 為準。1M 場景的瓶頸不在 fixture
 writer，而在 canonical graph replay 讀取約 41 萬筆 diff 事件時同時常駐文字、lines、pydantic change list
@@ -41,8 +43,8 @@ API 與 exact parity 不變），下一步是重跑 gate。主機 31 GB RAM 常�
   exact matrix/sample coverage、NO_OP exclusion、policy byte hash、calibration/held-out leakage 與 no-refit；
   synthetic timings 不是 empirical research result。
 - 在 opt-in preflight 未配置的環境，live runner、benchmark、calibrator、evaluator 都 fail closed，不留 result
-  JSON 或 policy artifact；本機已配置，benchmark（six-method v1）與 calibrator（calibration v2）的結果見上表，
-  evaluator（held-out）尚未執行。
+  JSON 或 policy artifact；本機已配置，benchmark（six-method v1）、calibrator（calibration v2）與 evaluator
+  （held-out v1）的結果見上表。
 
 歷史 SQLite production benchmark 曾在同一專案顯示 1K 較 full 慢、10K 到 100K 間有 crossover；它只
 是 PostgreSQL 研究動機，不是這個 backend 的 crossover 或 adaptive policy 結論。
@@ -226,6 +228,83 @@ bytes，兩者物理口徑不同。
    allowlisted/sanitized 兩份）；`explain_p50/p95_ms` 是 CLI `explain` 查詢本身的延遲，不是計畫。`status` /
    `impact` 查詢自身的計畫仍未涵蓋（後記 §3-4）。
 
+## Held-out 正式結果（2026-09-20，seeds 20261001/20261002，frozen policy）
+
+### 執行事實
+
+- 命令：`uv run --frozen python tests/performance/provenance/evaluate_adaptive.py --policy-from
+  docs/benchmarks/postgres-provenance-calibration-v2.json --output
+  docs/benchmarks/postgres-provenance-heldout-v1.json --work-dir C:/vcp-data/bench/heldout-v1-work`，經
+  `bench_launch.py`（同六方法）。另一個 process、另一個 worktree（`.claude/worktrees/heldout`，自 main `2644e83`）；
+  evaluator 只載入已驗的 immutable policy，不呼叫 fit。
+- 量測 commit `2644e8301eb3289940039fdf46fc65f963543fd7`（324 列同一 commit）；policy
+  `postgres-adaptive-v1-9f4e58346529`，`policy.json` SHA-256 `a22d7067…03a2d78`；environment fingerprint
+  `f29fc1bb…`；PostgreSQL 17.11（170011）。輸出 `postgres-provenance-heldout-v1.json` SHA-256
+  `6d7efe24a0e30ba2bdafa710e2ee5c8728aaa795d61e033c5166e46589597bbb`（24.1 MB，含 324 列的 EXPLAIN，共 4236 個計畫）。
+- 108 場景（`expected_scenarios(HELDOUT_SEEDS)` 完整覆蓋）× 3 個 PostgreSQL 方法 = 324 列，全部 `status=ok`、
+  `failure=null`；每方法 612 個 timed samples（1K/10K 各 7 次、100K 3 次），共 1836 次。graph / graph_hash /
+  head / status parity 324/324，`parity_rate` 1.0。**`overlap_count` 0**：evaluator 以 scenario_id、scenario_hash
+  與 workload_hash 三種身分比對 calibration split，沒有任何重疊。runner 回 `VERDICT cmd=provenance.evaluate
+  status=OK`、exit 0。
+- 執行過程：由 `supervise.py` 看管，啟動 3 次。09-19 20:39 UTC 開始；09-20 14:56 launcher 護欄中止（可用 RAM 最低
+  1.46 GiB）——原因是使用者誤啟動了另一個專案的訓練（一個 16 GB 的 python 程序；看管程式當時把所有 python 視為自己
+  人，沒能在 30 秒內先停，只有 RAM 護欄擋下）。進行中的 100K 場景 `5e8afd12…` 依規則丟棄；中止後沒有任何 record 被
+  寫入（最後一筆 14:47:17）。17:46 訓練程序結束後自動續跑；18:12 由 operator 主動停下重啟一次，用來 (a) 丟棄最後一個
+  完成的場景 `42e973f9…`（10K、ratio 0.01、chain、seed 20261002，14:42–14:46 量到）並重量——它是唯一帶汙染跡象的場
+  景：同場景 adaptive / incremental = 1.15、與另一 seed 的對照 1.21，都超出六方法在 10K 觀察到的最大值（1.06、1.15），
+  其餘 100 個已完成場景都在 0.83–1.20 的正常變異內（六方法的 sibling max/min：10K 1.16、100K 1.41）；(b) 換上修正後
+  的看管程式（python / uv 只有命令列帶 bench 標記才算自己人，其他 python ≥ 4 GiB 即 30 秒內停）。最後一次 18:12–19:49
+  重播 100 個場景後量完 8 個，最低可用 RAM 13.79 GiB；runner 本身的常駐量每 5 分鐘取樣，峰值 2.04 GiB。三次合計約
+  21.5 小時（含兩次續跑重播）；每次續跑 runner 都驗證 168 個原始檔雜湊，原始樹整段未變。
+
+### Normative gate（pool 92 個非 NO_OP 場景的 raw samples）
+
+| 指標 | postgres_full | postgres_incremental | postgres_adaptive | adaptive / 較佳 fixed | 門檻 | 結果 |
+|---|---|---|---|---|---|---|
+| aggregate p50 ms | 6,029 | 998 | 1,017 | **1.018** | ≤ 1.05 | PASS |
+| aggregate p95 ms | 106,290 | 34,070 | 34,664 | **1.017** | ≤ 1.10 | PASS |
+
+`performance_pass: true`。`every_scenario_pass: false`：每場景 adaptive p50 / 較佳 fixed p50 > 1.05 者 36/92——1K 的
+28 個全部（1.82–4.26；p95 1.42–4.60），10K 2 個（最大 1.06），100K 6 個（最大 1.28，3 次重複的雜訊；p95 比 0.24–1.32）。
+16 個 NO_OP 場景 0.88–1.19（三個方法都只做零變更驗證，比值只是雜訊）。**正式裁決是 aggregate 的 PASS**；every-scenario
+只是 diagnostic，兩者依 §量測與驗收口徑都要報，不得互相取代。
+
+### Held-out 對 calibration split（maintenance p50，ms；每格為四個場景的中位數；括號 = held-out / six-method）
+
+| scale | ratio | pg_full | pg_incr | pg_adaptive | adaptive 選擇 |
+|---|---|---|---|---|---|
+| 1K | 0.01 | 604 (0.91) | 151 (0.83) | 612 (0.88) | FULL ×4 |
+| 1K | 0.1 | 598 (0.85) | 175 (0.82) | 619 (0.90) | FULL ×4 |
+| 1K | 0.5 | 693 (0.91) | 268 (0.83) | 705 (0.90) | FULL ×4 |
+| 1K | 1.0 | 793 (0.91) | 424 (0.95) | 817 (0.91) | FULL ×4 |
+| 10K | 0.001 | 6,098 (0.96) | 980 (0.93) | 985 (0.92) | INCREMENTAL ×4 |
+| 10K | 0.05 | 6,428 (0.95) | 1,144 (0.91) | 1,167 (0.93) | INCREMENTAL ×4 |
+| 10K | 0.25 | 6,778 (0.95) | 1,847 (0.97) | 1,853 (0.94) | INCREMENTAL ×4 |
+| 10K | 1.0 | 9,061 (0.97) | 4,094 (0.96) | 4,128 (0.97) | INCREMENTAL ×4 |
+| 100K | 0.001 | 86,268 (0.97) | 11,460 (0.95) | 11,482 (0.98) | INCREMENTAL ×4 |
+| 100K | 0.05 | 84,528 (0.96) | 14,222 (0.98) | 14,298 (0.97) | INCREMENTAL ×4 |
+| 100K | 0.25 | 104,999 (1.09) | 26,012 (1.02) | 25,661 (1.04) | INCREMENTAL ×4 |
+| 100K | 1.0 | 132,862 (1.10) | 55,093 (1.09) | 56,089 (1.01) | INCREMENTAL ×4 |
+
+（其餘 ratio 在 JSON；ratio 0 與 1K ratio 0.001 為 NO_OP。）
+
+### 觀察
+
+1. **policy 在未見過的 seeds 上重現同樣的決策模式**：1K 28 個非 NO_OP 全部 FULL、10K/100K 64 個全部 INCREMENTAL、
+   16 個 NO_OP——與 calibration split 一模一樣，因為決策只依賴 verified features 與凍結的線性模型，seeds 不改變
+   `total_edges` 的量級。108 個 adaptive decision 全由 evaluator 以 `select_strategy("auto", …)` 重算比對通過。
+2. **沒有交會點（12/12 `not_observed`）**：held-out 的 postgres_incremental / postgres_full p50 為 1K 22–54%（中位
+   34%）、10K 15–49%（23%）、100K 13–47%（22%），與 calibration split（27–56% / 16–50% / 13–52%）一致。
+3. **絕對時間比 calibration split 略快**（非 NO_OP 格的中位數比：1K 0.82–0.95、10K 0.91–1.00、100K 0.91–1.10）：held-out 幾乎全程在重開機
+   後、驅動洩漏清掉的主機上跑，six-method 則有 29 小時在 nonpaged pool 7.6 GiB 的狀態下跑。這是主機狀態差異，不是
+   seeds 的效應；gate 用比值所以不受影響，但跨檔案比較絕對毫秒時要記得。
+4. **1K 的 adaptive 在 held-out 更差**（1.82–4.26 倍，calibration split 1.82–3.97）：機器變快讓 incremental 的絕對
+   時間縮得比 full 多，FULL 的錯誤選擇相對更貴。aggregate gate 仍過，因為 pool 的 p50 落在 10K 區間、p95 落在 100K
+   區間，1K 的 196 個 sample（38%）拉不動它。這正是 §量測與驗收口徑要求同時報 every-scenario diagnostic 的原因。
+5. 查詢延遲與儲存（非 NO_OP 中位數）：100K `status` p50 pg_full 2,133 ms / pg_incr 726 ms / adaptive 686 ms；
+   `impact` 7.0–7.6 s；relation 全量重建後 2,445 MiB、incremental 1,188 MiB；throughput full 52 / incr 233 / adaptive
+   216 samples/s——與六方法一致（dead tuples 的 2 倍儲存再現）。
+
 ## 可重跑命令
 
 先依 `docs/guides/POSTGRESQL_PROVENANCE.md` 完成 benchmark/calibration/held-out 的 separate opt-in
@@ -288,11 +367,11 @@ performance gate 失敗，命令 exit 1；不得把失敗/缺列排除後再宣�
 | Calibration result JSON | `postgres-provenance-calibration-v2.json`（SHA-256 `43d213e4…88f9239`）；v1 嘗試曾 ABORT（RAM 護欄） |
 | Policy artifact ID | `postgres-adaptive-v1-9f4e58346529`（`calibration_sha256` = `9f4e5834…`，`environment_fingerprint` = `f29fc1bb…`） |
 | Exact policy file SHA-256 | `a22d70672aba450ff6a71823ad9921f572ec5dff9c86755b26d61ff9103a2d78`（`-artifacts/artifacts/provenance_policy/…/policy.json`） |
-| Held-out result JSON | Absent |
-| Calibration/held-out overlap | Pending（held-out 尚未跑）；offline contract要求 0 |
-| Every-scenario correctness parity | six-method v1 648/648、calibration v2 1224/1224（graph / hash / head / status exact parity）；held-out pending |
-| Adaptive aggregate p50/p95 gates | 正式裁決 pending held-out。Calibration split 預覽：aggregate p50 1.010（≤ 1.05）、p95 0.932（≤ 1.10），every-scenario diagnostic 31/92 > 1.05（1K 全部 28 個因信心帶落入 FULL） |
-| PostgreSQL latency/crossover/storage | Crossover：calibration 12/12、six-method 12/12 切片 `not_observed`。100K maintenance p50：pg_incr 11.3–65.5 s、pg_full 75–140 s、sqlite_incr 7.5–19.8 s、canonical 9.3–14.9 s；`status` p50 pg_incr 0.73 s / pg_full 2.1 s；storage 100K pg_incr 1.07–1.57 GiB、pg_full 2.05–2.90 GiB（含 dead tuples）。逐格見 §六方法正式結果 |
+| Held-out result JSON | `postgres-provenance-heldout-v1.json`（SHA-256 `6d7efe24…597bbb`，commit `2644e83`，2026-09-20）：108 場景 × 3 方法，324 列全 ok、1836 次量測，`VERDICT status=OK` |
+| Calibration/held-out overlap | `overlap_count` 0（evaluator 以 scenario_id / scenario_hash / workload_hash 三種身分比對 calibration split）；seeds 20260913/20260914 對 20261001/20261002 |
+| Every-scenario correctness parity | six-method v1 648/648、calibration v2 1224/1224、held-out v1 324/324（graph / hash / head / status exact parity） |
+| Adaptive aggregate p50/p95 gates | **PASS（held-out）**：adaptive aggregate p50 / 較佳 fixed p50 = 1.018（≤ 1.05）、p95 = 1.017（≤ 1.10），`performance_pass: true`。Every-scenario diagnostic FAIL：36/92 > 1.05，其中 1K 的 28 個全部（1.82–4.26 倍，信心帶落入 FULL）、10K 2 個（≤ 1.06）、100K 6 個（≤ 1.28）。Calibration split 預覽曾為 1.010 / 0.932、31/92 |
+| PostgreSQL latency/crossover/storage | Crossover：calibration 12/12、six-method 12/12、held-out 12/12 切片 `not_observed`。100K maintenance p50：pg_incr 11.3–65.5 s、pg_full 75–140 s、sqlite_incr 7.5–19.8 s、canonical 9.3–14.9 s；`status` p50 pg_incr 0.73 s / pg_full 2.1 s；storage 100K pg_incr 1.07–1.57 GiB、pg_full 2.05–2.90 GiB（含 dead tuples）。逐格見 §六方法正式結果與 §Held-out 正式結果 |
 
 填寫時必須記 command、commit、environment fingerprint、PostgreSQL numeric server version、result file
 SHA、policy ID/精確 `policy.json` SHA、scenario/sample counts、parity、gate outcomes與任何 failed rows。

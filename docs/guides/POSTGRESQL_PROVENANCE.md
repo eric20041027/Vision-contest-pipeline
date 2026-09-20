@@ -83,8 +83,10 @@ SQLite 只支援預設 incremental request，不接受 full、auto 或 policy。
 - 明示 incremental/full 時，非零 semantic work 走指定演算法。
 - auto 加 verified policy 時，使用 frozen cost models 與 RMSE noise band 決定。noise band 是絕對毫秒
   （policy `postgres-adaptive-v1-9f4e58346529`：2286 + 5057 ms），所以小圖（約 1K entities、預估差距不到
-  7.3 s）永遠落入保守的 FULL，實測比 incremental 慢 2–4 倍；這種規模請直接用 `--strategy incremental`，
-  `auto` 留給 10K 以上（`docs/benchmarks/postgres-provenance-v1.md` §六方法正式結果、Plan 12 後記 §5）。
+  7.3 s）永遠落入保守的 FULL，實測比 incremental 慢 2–4 倍；接近全量變更的 transition 也會（真實 RSNA 資料
+  8.8K entities、98.7% 變更時預估差距 5.7 s → FULL，慢 1.79 倍）。這兩種情況請直接用 `--strategy incremental`，
+  `auto` 留給 10K 以上、變更比例不極端的 index（`docs/benchmarks/postgres-provenance-v1.md` §六方法正式結果、
+  §Real RSNA six-method，Plan 12 後記 §5、§7）。
 - auto 未加 policy 時，非零 semantic work 安全選 FULL，命令回 WARN。
 - full rebuild 以新 generation 原子發布後刪除舊 generation，但 PostgreSQL 在 VACUUM 前不回收那些 dead
   tuples：重建後 relation/index 約為 incremental 維護的 2 倍，`status` 也變慢，直到 autovacuum 追上。

@@ -500,3 +500,19 @@ def test_two_accesses_share_one_audit(roots):
         ids.append(access.receipt.source_audit)
     assert ids == [res.artifact_id, res.artifact_id]
     assert len([p for p in (roots.data / "artifacts" / AUDIT_KIND).iterdir() if p.is_dir()]) == 1
+
+
+def test_standalone_receipt_ids_do_not_collide_within_one_second(monkeypatch):
+    # Several stages within the same second used to draw a 16-bit nonce; the birthday bound
+    # made two of them share an id often enough to break CI (PR #14, 2026-09-20). Freeze the
+    # stamp so only the nonce separates the ids.
+    from datetime import UTC, datetime
+
+    frozen = datetime(2026, 9, 20, 20, 47, 13, tzinfo=UTC)
+    monkeypatch.setattr("vcp.data.access.receipt.utc_now", lambda: frozen)
+    ids = {standalone_receipt_id("submit", "beach-test", "all-v1") for _ in range(3000)}
+    assert len(ids) == 3000
+    sample = next(iter(ids))
+    prefix, nonce = sample.rsplit("-", 1)
+    assert prefix == "submit-beach-test-all-v1-20260920T204713"
+    assert len(nonce) == 16 and int(nonce, 16) >= 0

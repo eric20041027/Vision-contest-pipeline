@@ -20,11 +20,11 @@
 
 ## 3. 開放的待辦
 
-1. **正式 calibration（完成，§4）→ six-method（完成，§5）→ held-out → real RSNA**（依序，後兩者都要 frozen policy）。held-out 另開 process、seeds 20261001/20261002；跑之前先清出記憶體（§5 的執行紀錄：桌面程式加驅動洩漏可把 31 GiB 主機壓到 2 GiB 以下），`bench_launch` 的護欄要保留（可用 RAM < 2 GiB 持續 30 秒即中止，runner 的逐列 checkpoint 可續跑），看管腳本 `C:/vcp-data/bench/supervise.py` 只在機器空閒時跑、偵測到遊戲或低記憶體就停並丟棄進行中場景。
+1. **正式 calibration（完成，§4）→ six-method（完成，§5）→ held-out（完成，§6）→ real RSNA**（依序，都要 frozen policy）。real RSNA：`real_validation.py --data-root … --configs-root … --six-method --policy-from docs/benchmarks/postgres-provenance-calibration-v2.json`，來源唯讀複製；跑之前先清出記憶體（§5 的執行紀錄：桌面程式加驅動洩漏可把 31 GiB 主機壓到 2 GiB 以下），`bench_launch` 的護欄要保留（可用 RAM < 2 GiB 持續 30 秒即中止，runner 的逐列 checkpoint 可續跑），看管腳本 `C:/vcp-data/bench/supervise.py` 只在機器空閒時跑、偵測到遊戲或低記憶體就停並丟棄進行中場景。
 2. **adaptive 退化的處置**：正式結果是「部分退化」——10K/100K 永遠 INCREMENTAL（full 從不最快），1K 卻永遠 FULL（§5 的信心帶問題）。報告要兩件都明說：full 的存在理由是 diff 損毀、index 漂移與 schema 不相容時的重建路徑，不是效能選項；而 1K 的 FULL 是 selector 的保守分支在小規模失效，不是 full 在 1K 較快。
 3. **Linux CI / Docker Compose host** 的 integration evidence 仍缺（本機是原生 Windows 服務）。
 4. **EXPLAIN 覆蓋面**：目前只涵蓋每種 DML SQL 形狀的第一列，不含 `status` / `impact` / `explain` 查詢自身的計畫（runner 既有限制）。
-5. **`docs/benchmarks/postgres-provenance-v1.md` 的 acceptance 表**：只有拿到 machine-readable 結果回讀後才准填；探路數字不得填入。six-method 那幾格已於 2026-09-18 填入；held-out、RSNA、gate 裁決仍空。
+5. **`docs/benchmarks/postgres-provenance-v1.md` 的 acceptance 表**：只有拿到 machine-readable 結果回讀後才准填；探路數字不得填入。six-method（2026-09-18）、held-out 與 gate 裁決（2026-09-20）已填；只剩 RSNA。
 6. **policy v2：規模相對的信心帶**（spec 變更，§5）。`select_strategy` 的絕對 RMSE 帶要改成相對於預估值的帶（或按 `total_edges` 分層的 RMSE），並重跑 calibration → six-method → held-out；v1 的 policy 與三份證據不改。
 7. **全量重建後的 dead tuples**（§5 觀察 4）：`_publish_generation` 刪除舊 generation 後不 VACUUM，storage 約 2 倍、`status` 變慢直到 autovacuum 追上。是否在 full rebuild 收尾加 `VACUUM`（不能在交易內）或記錄為操作指南事項，待裁決；量測口徑（`pg_total_relation_size`）不改。
 
@@ -52,8 +52,22 @@
 
 **依據**：spec 禁止用 held-out 或 six-method 的結果回頭調 selector（那就是 leakage）；1K 的絕對代價是 0.5 s 一次、方向錯但不影響正確性（FULL 永遠正確，parity 648/648）；aggregate gate 的預覽（calibration split：p50 1.010、p95 0.932）顯示 pooled 口徑不會因此翻盤，every-scenario diagnostic（31/92 > 1.05）本來就是要暴露這種事的。
 
-**代價**：v1 的 adaptive 在小圖上比 `--strategy incremental` 慢 2–4 倍；操作指南應建議 1K 級別的 index 直接指定 `incremental`，`auto` 留給 10K 以上。若 held-out 的 aggregate gate 因 1K 的樣本數（7 次 × 28 場景 = 196 個 sample，佔 pool 的 38%）而失敗，那是 v1 的真實結果，不得以「已知問題」為由排除。
+**代價**：v1 的 adaptive 在小圖上比 `--strategy incremental` 慢 2–4 倍；操作指南應建議 1K 級別的 index 直接指定 `incremental`，`auto` 留給 10K 以上。若 held-out 的 aggregate gate 因 1K 的樣本數（7 次 × 28 場景 = 196 個 sample，佔 pool 的 38%）而失敗，那是 v1 的真實結果，不得以「已知問題」為由排除。（2026-09-20 結果：held-out aggregate gate PASS 1.018 / 1.017，1K 的 196 個 sample 沒有拉動 pooled p50/p95；every-scenario diagnostic 在 1K 全部 FAIL，1.82–4.26 倍，比 calibration split 更差——見 §6。）
 
 **其他量到的事（細節在 evidence record §六方法正式結果）**：PostgreSQL 全量重建在 100K 要 75–140 s，是 canonical replay 的 7.4–10.1 倍、SQLite full 的 3.0–4.1 倍；重建後舊 generation 的 dead tuples 讓 storage 約 2 倍、`status` p50 2.1 s（incremental 後 0.73 s）（§3-7）。SQLite incremental 是每個規模最快的維護路徑（100K 7.5–19.8 s），postgres_incremental 是它的 1.5–3.5 倍——PostgreSQL 在單 writer 主機上的價值是併發、MVCC 與原子發布，不是速度。
 
 **執行紀錄**：由 `C:/vcp-data/bench/supervise.py`（不進 repo）看管，啟動 5 次、停 4 次（NVIDIA Overlay 誤判一次、遊戲一次、RAM 護欄兩次），每次停止刪除進行中場景的 checkpoint 並 drop 用完即棄的 database；主機核心 nonpaged pool 洩漏到 7.6 GiB 是低記憶體的根因，重開機後 2 小時 16 分跑完最後 5 個場景。runner 每次續跑都驗證 168 個原始檔雜湊；原始樹整段未變，輸出由 runner 直接發布。
+
+## 6. Held-out 正式結果與執行事故（2026-09-20）
+
+**結果**：`docs/benchmarks/postgres-provenance-heldout-v1.json`（commit `2644e83`，SHA-256 `6d7efe24…`）。seeds 20261001/20261002 的 108 場景 × 3 個 PostgreSQL 方法 = 324 列全 ok、parity 324/324、`overlap_count` 0。**Normative aggregate gate PASS**：adaptive p50 / 較佳 fixed p50 = 1.018（≤ 1.05）、p95 = 1.017（≤ 1.10），`performance_pass: true`、`VERDICT status=OK`。every-scenario diagnostic FAIL：36/92 個非 NO_OP 場景 > 1.05，其中 1K 的 28 個全部（1.82–4.26 倍）、10K 2 個（≤ 1.06）、100K 6 個（≤ 1.28，3 次重複的雜訊）。policy 的決策模式在未見過的 seeds 上與 calibration split 完全相同（1K FULL ×28、10K/100K INCREMENTAL ×64、NO_OP ×16），crossover 12/12 `not_observed`。絕對時間比 six-method 略快（非 NO_OP 中位數比 1K 0.82–0.95、10K 0.91–1.00、100K 0.91–1.10）：主機在重開機後、驅動洩漏清除的狀態下跑，不是 seeds 效應。
+
+**裁決 6-1：gate 的正式讀法**。spec 的 normative gate 是 aggregate（pool raw samples），held-out 通過；every-scenario 是 diagnostic，同時報、不取代。報告必須把兩件事並列：「v1 policy 通過 held-out 的 aggregate gate」與「v1 policy 在 1K 每個場景都選錯，慢 2–4 倍」。只講前者是誤導，只講後者是漏報。§3-6（policy v2 的相對信心帶）維持為下一版的 spec 變更；v1 的 policy、selector 與四份證據都不改。
+
+**事故**：09-19 20:39 UTC 開跑，09-20 14:56 被 launcher 的 RAM 護欄中止（最低可用 1.46 GiB）。原因是使用者誤啟動了另一個專案的訓練（一個 16 GB 的 python 程序）；看管程式 `supervise.py` 當時把所有 `python` / `uv` 都視為自己人，沒能在 30 秒內先停 benchmark，直到記憶體耗盡才由 RAM 護欄擋下。中止後沒有 record 被寫入（最後一筆 14:47:17）；進行中的 100K 場景依規則丟棄。
+
+**裁決 6-2：丟棄並重量一個已完成場景**。中止前最後完成的場景 `42e973f9…`（10K、ratio 0.01、chain、seed 20261002，14:42–14:46 量到）帶汙染跡象：同場景 adaptive / incremental = 1.15、與另一 seed 的對照 = 1.21，兩者都超出六方法在 10K 觀察到的最大值（1.06、1.15）。其餘 100 個已完成場景與對照的比值都在正常變異內（0.83–1.20；六方法的 sibling max/min 在 10K 為 1.16、100K 為 1.41）。處置：停下續跑、刪除該場景的 checkpoint、重新啟動讓 runner 以同一合約重量它（連同其餘 7 個）。依據：訓練程序的啟動時間無法回推，但汙染會先出現在最後完成的場景；用六方法的實測變異當門檻是唯一不依賴主觀判斷的準則。代價：多花約 30 分鐘（重播 100 個場景 + 重量一個 10K 場景）；若訓練其實更早開始，前一個場景（1K，14:41–14:42，比值 1.02–1.05）也可能受影響，但它在門檻內，保留。
+
+**裁決 6-3：看管程式的自己人判定**。`supervise.py` 改成：`python` / `uv` 只有命令列含 `supervise.py` / `bench_launch` / `adaptive_benchmark` / `evaluate_adaptive` / `calibrate_adaptive` / `vcp-data` 之一才算自己人；其他 python ≥ `--big`（4 GiB）持續 30 秒即停 benchmark 並丟棄進行中場景。這樣訓練程序會在吃掉主機前先觸發停機，保住 timing 的乾淨。runner 本身的常駐量每 5 分鐘取樣（`heldout-v1.memory-samples.log`），峰值 2.04 GiB，沒有洩漏跡象；六方法期間的多次 RAM 中止應歸因於主機的 nonpaged pool 洩漏與桌面程式，不是 runner。
+
+**執行紀錄**：三次啟動（20:39 / 17:46 / 18:12 UTC），DONE 19:49 UTC；最後一次最低可用 RAM 13.79 GiB；每次續跑 runner 驗證 168 個原始檔雜湊，原始樹整段未變；輸出由 runner 直接發布（含 evaluator 的 `validate_rows` 與 108 個 decision 的重算比對）。

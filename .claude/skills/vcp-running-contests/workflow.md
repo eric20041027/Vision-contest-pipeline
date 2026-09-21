@@ -16,10 +16,11 @@
 | 階段 | 主要命令或動作 | 完成證據 / 進下一階段的條件 |
 |---|---|---|
 | 0. 現況與規則 | 讀文件、盤點 roots/configs/projects | 規則、metric、分組單位、預算與授權範圍寫進 RUNBOOK |
-| 1. 資料 | `data import`, `validate`, `audit --against` | card、`samples.jsonl`、manifest 自洽；重複/壞列已有裁決 |
+| 1. 資料 | `data import`, `validate`, `audit --against` | card、`samples.jsonl`、manifest 自洽；`source_audit` 存在（VERDICT `source_audit=`）；重複/壞列已有裁決 |
+| 1b. 資料改版（分支） | 新版 `import` + `validate`, `data diff --from --to`, `provenance ingest`, `stale --head`, `impact` | `dataset_diff` artifact；每個既有 run 相對新 head 的 VALID/STALE/REVIEW/BROKEN 已知，重跑清單由它決定 |
 | 2. 固定切分 | `data split`, `lineage` | 不可變 plan；通常 train + 至少兩個互斥 eval + sealed，group 不跨子集 |
 | 3. 訓練輸入 | `data materialize` 或 `data export` | cache manifest 或 export manifest 可由訓練程式讀取 |
-| 4. baseline | `train run`, `train status`, `eval ingest`, `measure`, `anchor` | checkpoint 有 sha；valA/valB baseline 讀數與 anchors 存在 |
+| 4. baseline | `train run`（迴圈用 `MaterializedReader` / `Session.access`）, `train status --verify`, `eval ingest`, `measure`, `anchor` | checkpoint 有 sha 與副本；run 的 provenance 等級 `receipt`（`eval status` 顯示）；valA/valB baseline 讀數與 anchors 存在 |
 | 5. 候選 | `eval sigma`（tuning）、`preregister`, `measure`, `judge --strict` | 預登記早於候選讀數；`verdict=PASS` 才準入 |
 | 6. 融合 | `fuse recipe`, `ablate --preregister`, `eval measure/judge`, `fuse build` | 每位成員的「有它 vs 沒它」判決都 PASS；配方與成員 sha 固定 |
 | 7a. file test 推論 | 專案推論、`eval ingest` | eval/test run 的權重或融合身分匹配；test run 可重產 |
@@ -41,7 +42,7 @@
 
 不要自行創造 legacy/emergency kind。舊 artifact 只能按真實身分記錄；若要用正式 `baseline` waiver，先以目前 `--help` 與 gate 核對必要證據及理由。
 
-## 六組命令的角色
+## 八組命令的角色
 
 - `vcp data import|validate|audit|split|lineage|export|materialize`：建立可追蹤且防洩漏的資料輸入。
 - `vcp train run|upload|status`：包住任意框架，記命令、環境、checkpoint 與副本；vcp 不替你定義模型。
@@ -49,8 +50,10 @@
 - `vcp fuse recipe|ablate|build`：固定配方並證明每位成員的增益。
 - `vcp submit init|stage|verify|upload|record|score|sync|final|lock|unlock|status|report`：治理候選身分、配額、平台事實與決選。
 - `vcp backup manifest|push|verify|pull|status`：從結論反向收集證據並驗證恢復能力。
+- `vcp artifact create|show|verify|lineage|status|relink|clean`：不可變產物（收據、source audit、dataset diff、policy、比賽自訂 kind）的建立與稽核。
+- `vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index`：資料改版後判定哪些 run 還有效；SQLite 預設、PostgreSQL optional。
 
-選項與例子以根目錄 `README.md` 和 `--help` 為準。不要從這張地圖拼出未驗證命令。
+選項與例子以 `docs/reference/cli.md` 和 `--help` 為準。不要從這張地圖拼出未驗證命令。
 
 ## 主要持久產物
 
@@ -61,6 +64,8 @@
 | `$VCP_DATA_ROOT/runs/<run>/` | run card、預測、train/fuse 證據 | 指定 replace/resume 才換寫，必須留 history/log |
 | `$VCP_DATA_ROOT/measure/<name>/` | readings、judgements、sigma、anchors | 台帳只增；anchor 換寫前先留 log |
 | `$VCP_DATA_ROOT/submit/<test>/<id>/` | submission、stage card | 寫一次不改 |
+| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、provenance_policy、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
+| `$VCP_DATA_ROOT/indexes/` | provenance 的 SQLite 索引 | 衍生品，可刪可 rebuild，不進 git |
 | `configs/datasets/<name>/` | dataset card、splits、prereg、fuse、submit、backup | 進 git；不可變物換 id |
 | `projects/<contest>/` | 模型、轉換器、metric、writer、notebook、RUNBOOK | 比賽專屬且可重跑 |
 

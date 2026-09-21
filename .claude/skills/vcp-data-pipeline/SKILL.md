@@ -13,6 +13,7 @@ WARN 是「要你看一眼再決定」，FAIL 是「資料有問題，命令沒�
 ## 標準流程（一場比賽）
 ```bash
 uv run vcp data import --importer csv_boxes --src <raw dir> --name <ds> --license "<文字>" --url <url> --downloaded-at <UTC 日期> --opt csv=<檔> --opt images=<目錄> --opt categories=<json> --opt on_bad_row=skip
+uv run vcp data validate --name <ds>          # 重驗 card + samples + hash；產生或重用 source_audit
 uv run vcp data audit --name <ds> --against <test ds> [--max-bad-boxes <rows_skipped>]
 uv run vcp data split --name <ds> --plan-id fixed-v1 --group-from-audit
 uv run vcp data export --name <ds> --plan fixed-v1 --subset train --format yolo --out <空目錄>
@@ -31,9 +32,15 @@ uv run vcp data lineage --name <ds> --plan fixed-v1 --trained-on train,valA
 | import WARN `exif_rotated=N` | 有 EXIF 方向 ≠ 1 的圖 | 抽幾張人工核對框在哪個空間；政策見 reference |
 | import WARN `plans_invalidated=N` | 重匯改了 samples_hash，舊 plan 失效 | 用新的 `--plan-id` 重切 |
 | split WARN `empty_subsets=` | 樣本太少撐不起四個子集 | `--subsets train:train:0.8,val:eval:0.2` 之類 |
+| validate WARN `source_audit=missing` | 沒有逐列 sha 索引，存取器退回整檔 hash | 再跑一次 `validate` 讓它 `created` |
+| validate / 存取器 FAIL `mismatch:` | source_audit 與 `samples.jsonl` 不符：資料被動過 | 搬走 `artifacts/source_audit/src-<ds>-*/` 後 `validate` 重建；先查是誰改了資料 |
 | export WARN `images=copied` | Windows 無 symlink 權限，已自動複製 | 正常；`--opt copy=true` 可直接複製 |
 | export ABORT `pass --opt view=` | 多 view 樣本 | `--opt view=<索引或 role>` |
 | lineage `clean=` | 這個模型還能用哪些驗證集 | holdout 帶 `(sealed)`：只能 `--unseal --reason` 開一次並留痕 |
+
+## 收據與改版
+- 每次 `export` 留一份 `access_receipt`（manifest 的 `receipt`）；訓練迴圈用 `vcp.train.MaterializedReader(name, mode, plan_id=, subset=)` 讀 materialize 快取，只有授權子集的列會被解析，關閉時寫收據——這是 run 拿到 `receipt` 等級 provenance 的唯一方法（詳見 vcp-eval-and-fuse / vcp-train-submit-backup）。
+- 資料集改版不覆寫：新版另取名匯入 + `validate`，`vcp data diff --from A --to B` 發布 `dataset_diff` artifact，之後交給 vcp-provenance。
 
 ## 無標註資料（test 集）
 沒有匯入器直接吃「純影像資料夾、無標籤」。正確做法是 jsonl 直通、`label_source: none`（食譜在 reference.md），不要用空 CSV 走 csv_boxes（那會變成 gold 的負樣本）。

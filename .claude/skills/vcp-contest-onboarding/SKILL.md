@@ -10,16 +10,17 @@ description: Use on day 1 of a new image contest (Kaggle, AIdea, any organiser d
 命令與判決的細節在 vcp-data-pipeline，這裡只定順序與決定。
 
 ## 檢查清單（照順序）
+0. **環境**：比賽用釘在 tag 的 worktree（`git worktree add --detach ../Vision-contest-pipeline-v<XYZ>-<contest> v<X.Y.Z>` → `uv sync --frozen [--extra dicom]`）；比賽工作區的核心 venv 與訓練 venv 以 `uv pip install --no-deps -e "<worktree>[dicom]"` 指向它，路徑寫進工作區的 `ENVIRONMENT.md`。不要用主 checkout 的 `.venv` 跑比賽（vcp-release-and-environments）。
 1. **讀組織方文件**：授權、來源 URL、格式、評分方式、test 有無標籤。記下你「實際下載的 UTC 日期」（`--downloaded-at` 用這個，不是文件上的日期）。
-2. **環境**：`uv sync`（DICOM 加 `--extra dicom`）；Windows 沒有 symlink 權限是常態，匯出會自動複製。
+2. **Windows 注意**：沒有 symlink 權限是常態，匯出會自動複製；訓練用專案 venv 的絕對 interpreter。
 3. **放資料**：組織方下載複製到 `<VCP_DATA_ROOT>/raw/<name>/`，之後不再動它（card 會存相對路徑，跨機器可用）。太大搬不動時 `--src` 直接指向原位置也合法（card 存絕對路徑），Kaggle notebook 端就是這樣用。
 4. **命名**：資料集名 = 比賽 slug 的 kebab-case（`beach-trash`）；無標註 test 集 `<name>-test`；plan id 用 `fixed-v1`，改切分就 `fixed-v2`（plan 寫入後不可改）。
-5. **建 `projects/<contest>/`**：`README.md`（重現命令、資料品質發現、決定與理由）+ 轉換腳本（例如 `classes.txt` → categories JSON、比賽格式 → `samples.jsonl`）。腳本要有 docstring 與可重跑的命令列。
+5. **建 `projects/<contest>/`**：`README.md`（重現命令、資料品質發現、決定與理由）、`RUNBOOK.md`（每個真實 id、命令、VERDICT、判決；失敗也留）、`DESIGN.md`（模型與實驗設計）、`prepare.py`（比賽格式 → `samples.jsonl` / categories）、`train.py` / `predict.py`、`metrics.py`（官方計分器與格式轉換，以 `--plugin projects.<contest>.metrics` 登記 `register_metric` / `register_converter`）、`requirements-*.txt`（`uv pip freeze`）。腳本要有 docstring 與可重跑的命令列；比賽名只出現在這裡，不進 `src/vcp`。
 6. **匯入訓練集**：帶 `--license`、`--url`、`--downloaded-at`；壞列先 `on_bad_row=skip` 看清楚再決定；`--notes` 記下壞列數與處置。真實比賽的標註錯誤要回報主辦方，回報紀錄寫進 README。
 7. **匯入 test 集**（無標註）：jsonl 食譜、`label_source: none`，不要用空 CSV 假裝成 gold 負樣本。
 8. **稽核**：`audit --against <name>-test`；overlap 與近重複數字寫進 README；壞列數用 `--max-bad-boxes` 明確承認。
 9. **切分**：`split --plan-id fixed-v1 --group-from-audit`。預設四子集（train / valA / valB / holdout sealed）需要每個子集都撐得起評估；樣本少（每類不到幾十張）就 `--subsets train:train:0.8,val:eval:0.2` 並在 README 註明理由。
-10. **驗證**：`validate` 與 `lineage --trained-on train`，確認 git 裡的 card + plan 自洽。
+10. **驗證**：`validate`（同時產生 `source_audit`，VERDICT 帶 `source_audit=` `source_audit_state=created|reused`）與 `lineage --trained-on train`，確認 git 裡的 card + plan 自洽。test 集也 `validate`。
 11. **commit**：`configs/datasets/<name>/dataset.yaml`、`configs/datasets/<name>/splits/fixed-v1.json`、`configs/datasets/<name>-test/dataset.yaml`（test 集的 card 也進 git）、`projects/<contest>/`。訊息 `feat(<contest>): 資料集卡、fixed-v1 切分與匯入筆記`。不 commit 任何 `datasets/`、`raw/`、匯出目錄。
     正常作業不要設 `VCP_CONFIGS_ROOT`：它預設就是 repo 的 `configs/`，card 與 plan 會直接落在 git 追蹤的位置。若為了隔離把它指到別處（試跑、測試），commit 前要把 `configs/datasets/<name>/` 整個目錄複製回 repo。
 
@@ -34,3 +35,5 @@ description: Use on day 1 of a new image contest (Kaggle, AIdea, any organiser d
 - 手改 plan 檔或 card；要改就重匯入 / 新 plan id。
 - 把 test 集留在框架外面（之後 audit 就查不到與 train 的重疊）。
 - 把比賽專屬欄名或流程塞進 `src/vcp`。
+- 用主 checkout 的 venv 跑比賽，之後框架一更新訓練就跟著變。
+- 資料集改版時覆寫舊版：新版另取名匯入，走 vcp-provenance 的 `data diff` → `ingest` → `stale`。

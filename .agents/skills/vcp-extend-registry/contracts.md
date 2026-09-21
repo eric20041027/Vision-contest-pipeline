@@ -1,4 +1,4 @@
-# 六個登記軸的契約
+# 登記軸的契約（資料層六軸詳述；其餘六軸見文末）
 
 所有簽名以 `src/vcp` 現況為準；本檔只告訴你去哪裡看與框架替你做了什麼。
 
@@ -53,3 +53,18 @@
 - [ ] `uv run ruff check . && uv run ruff format --check .`
 - [ ] `cli.py` 的 help 字串、`README.md` 表（含 `rows_read` 語意）、必要時 `CLAUDE.md`
 - [ ] `src/vcp` 無比賽名稱與比賽欄名
+
+## 其餘六軸（量測、融合、提交、provenance）
+契約以各自 `base.py` 的 Protocol 為準，這裡只記入口與慣例：
+
+| 軸 | Protocol / 登記 | 內建範例 | 比賽專屬放哪 |
+|---|---|---|---|
+| 轉換器（框架輸出 → 標準預測 jsonl） | `src/vcp/measure/converters/base.py` `register_converter` | `jsonl`、`coco_results`、`yolo_txt`、`scores_csv` | `projects/<contest>/metrics.py` |
+| 指標 | `src/vcp/measure/metrics/base.py` `register_metric`（`name`、適用 task、`--params`） | `coco_map`、`macro_auc` 等 | 同上，官方計分器包一層 |
+| σ_p 方法 | `src/vcp/measure/sigma.py` `register_sigma_method(name, fn)` | `splithalf`、`bootstrap`、`prior` | 同上 |
+| 融合器 | `src/vcp/fuse/fusers/base.py` `register_fuser` | `wbf`、`mean`、`rank_mean` | `projects/<contest>/fusers.py` |
+| 輸出格式 writer | `src/vcp/submit/writers/base.py` `register_writer` | 內建 csv 類 | `projects/<contest>/writers.py`（`submit init --writer`） |
+| 平台 | `src/vcp/submit/platforms/base.py` `register_platform` | `manual`、`kaggle` | 新平台才進 `src/vcp` |
+| impact policy | `src/vcp/provenance/policy.py` `register_impact_policy(name, classifier, version=)` | 預設 fallback | `projects/<contest>/impact.py`（`data diff --plugin --policy`） |
+
+慣例同資料層：使用者資料問題 → `ValidationFailed`（FAIL）、缺套件 / 程式錯 → `VcpError`（ABORT）；取時只用 `vcp.core.time`；寫檔 UTF-8 + LF；每個登記項有 `name`（進 manifest / 台帳的字面值，改了等於新東西）。`--plugin` 匯入的模組在 import 時登記，不能依賴 CLI 啟動順序。

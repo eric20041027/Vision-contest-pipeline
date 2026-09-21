@@ -15,6 +15,39 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.8.1] - 2026-09-21
+
+PostgreSQL adaptive provenance 的五份 live 證據落地後、RSNA 訓練開跑前的 PATCH release；tag `v0.8.1`
+打在 PR 的合併 commit 上。PATCH 的理由：沒有任何產物／台帳欄位的語意或 CLI 契約改變（命令、VERDICT
+欄位、exit code、`reason=` 字彙、登記項都不動）。
+
+### Added
+- `python -m vcp` 可用（`src/vcp/__main__.py`），與 `vcp` 入口同一個 CLI。
+- 可執行的入門範例 `examples/quickstart.py`（CI 會跑）；MIT 授權與開源專案規格檔（CONTRIBUTING、
+  CODE_OF_CONDUCT、SECURITY、issue / PR 模板、CI 在 ubuntu + windows）。
+
+### Changed
+- canonical graph replay 改為串流（`open_dataset_diff`：先整檔驗證、再逐筆重放，兩遍 SHA-256 互驗）；
+  `load_dataset_diff` 的 API、錯誤型別與訊息不變，exact parity 不變。
+- 正式 adaptive 矩陣的 entity scales 由 1K/10K/100K/1M 縮為 1K/10K/100K（`workloads.SCALES`；
+  `production_benchmark.py` 另用 `PRODUCTION_SCALES` 保留 1M）；裁決在 Plan 12 後記 §1。
+- README 改為開源門面（英文主檔 + `README.zh-TW.md`），完整命令表移到 `docs/reference/cli.md`。
+
+### Fixed
+- standalone access receipt id 的 nonce 由 16 bit 加寬到 64 bit：同一秒內建立多張收據時不再撞號；
+  id 形狀 `<purpose>-<dataset>-<plan>-<stamp>-<nonce>` 不變，舊 id 仍可讀。
+- `evaluate_adaptive.py` 的 strict 環境模型接受 `runtime_environment()` 新增的 `system_release` /
+  `system_version`；契約測試直接以真的 `runtime_environment()` 輸出驗模型。
+- CLI `--help` 測試在 `GITHUB_ACTIONS` 下強制關閉 typer 的色彩與樣式。
+
+### Evidence（不改程式碼，記在 `docs/benchmarks/postgres-provenance-v1.md`）
+- 正式 calibration v2（policy `postgres-adaptive-v1-9f4e58346529`）、six-method v1（648 列、parity
+  648/648）、held-out v1（aggregate gate PASS 1.018 / 1.017；every-scenario diagnostic 在 1K FAIL）、
+  real RSNA v1（18 列、parity 18/18）；acceptance 表自 2026-09-20 起沒有 Absent 格。十項總結在
+  `postgres-provenance-report-v1.md`，課程簡報素材在 `postgres-provenance-course-brief-v1.md`。
+- 已知限制（不是 0.8.1 修的）：`auto` 的信心帶是絕對毫秒，小圖與接近全量變更的 transition 會落入 FULL
+  （操作指南建議這兩種情況直接 `--strategy incremental`）；1M 未量。
+
 ## [0.8.0] - 2026-09-13
 
 PostgreSQL Adaptive Provenance；tag `v0.8.0` 打在 PR 的合併 commit 上。MINOR 的理由：八個

@@ -1,97 +1,57 @@
 # vcp — vision contest pipeline
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version 0.8.1](https://img.shields.io/badge/version-0.8.1-informational.svg)](CHANGELOG.md)
+[![Tests 1612](https://img.shields.io/badge/tests-1612%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**A command-line pipeline for image competitions where every number you report stays traceable to the exact data, code and weights that produced it.**
+**Keep training with PyTorch, Ultralytics or whatever you like. vcp wraps the rest of an image competition — data splits, readings, claims, ensembles, submissions, backups — so that every number you report stays traceable to the exact data, code and weights that produced it, and the model you pick is the one that actually generalises.**
 
-Most competition tooling helps you train faster. vcp helps you avoid the other failure: a model that looks better on your screen, gets picked, and then collapses on the private leaderboard. It does that by making the evidence chain mechanical rather than remembered — split plans you cannot quietly edit, claims written down before the candidate is measured, readings that refuse to be produced when a guardrail moved, and a backup manifest generated backwards from the conclusion you need to defend.
+```text
+$ uv run python examples/quickstart.py
+VERDICT cmd=split status=OK plan=fixed-v1 train=120 valA=60 valB=60 seed=42
+VERDICT cmd=eval.preregister status=OK dataset=demo prereg=p1 candidate=candidate baseline=baseline metric=accuracy subsets=valA,valB …
+valA  baseline=0.6833333333333333 candidate=0.8833333333333333 delta=0.19999999999999996 t=2.98
+valB  baseline=0.6833333333333333 candidate=0.9333333333333333 delta=0.25 t=4.01
+VERDICT cmd=eval.judge status=OK dataset=demo prereg=p1 verdict=PASS bases_positive=2 provenance=declared
+```
+
+The claim on line two was written down *before* the candidate was measured; the verdict on the last line is what admits it — on two independent bases, never on the best of N.
 
 繁體中文版：[README.zh-TW.md](README.zh-TW.md)
 
-## The failure it was built for
+## Who it is for
 
-It comes out of a post-mortem on a marine-debris detection contest where a submission that led the public board fell apart on the private one. Three causes, each now a mechanism instead of a habit:
+- **A solo Kaggle / AIdea competitor** who has been burned by a public-board leader that collapsed on the private board, and wants the "did this really improve?" question answered by a rule instead of a feeling.
+- **A team** that needs one ledger of what was trained on what, which ensemble members earned their place, and what was uploaded when — readable by a teammate or an AI agent picking the work up cold.
+- **A course or research project** that has to hand in evidence: immutable split plans, pre-registered claims, verdicts with the numbers that produced them, and a backup manifest that proves the conclusion can be rebuilt.
 
-| What went wrong | What vcp does about it |
-|---|---|
-| The model was only ever validated on one slice of data | A split plan needs at least two mutually exclusive eval subsets plus a sealed holdout; a judgement needs the candidate to win on at least two of them |
-| Ensemble members were admitted by feel, not by evidence | Admission is "with it versus without it": each member gets its own pre-registered claim and its own verdict |
-| Run-to-run noise was estimated after the fact, to taste | σ_p is a pre-registered input, and a tuning claim without one is refused |
+What it is **not**: it does not train models, it is not an experiment tracker (no dashboards, no sweeps), and it never touches your platform credentials — the Kaggle CLI, rclone and your training framework stay yours.
 
-## Install
+## 60-second demo
 
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/eric20041027/Vision-contest-pipeline
-cd Vision-contest-pipeline
-uv sync                       # core
-uv sync --extra dicom         # DICOM importers and decoders
-uv sync --extra postgres      # optional PostgreSQL provenance backend
-uv run vcp --help
-```
-
-Or install the CLI straight from git:
-
-```bash
-pip install git+https://github.com/eric20041027/Vision-contest-pipeline
-```
-
-## Quickstart
-
-One command, about a minute, no downloads. It builds a synthetic 240-image dataset in a temporary directory, then walks the whole loop from raw files to a judged claim:
-
-```bash
+git clone https://github.com/eric20041027/Vision-contest-pipeline && cd Vision-contest-pipeline
+uv sync
 uv run python examples/quickstart.py
 ```
 
-It runs these twelve steps and prints the `VERDICT` line each one ends with:
+One command, about a minute, no downloads: it builds a 240-image synthetic dataset in a temporary directory and walks the whole loop — import, validate, split, two fake models, ingest, measure, anchor, **pre-register**, measure, **judge**, report — printing the `VERDICT` line each step ends with. The last lines are the ones shown above.
 
-1. make a tiny image-folder dataset
-2. **import** — raw files become a dataset card, a canonical `samples.jsonl`, and a per-row source audit
-3. **validate** — re-verify the card, the rows and their hashes
-4. **split** — one immutable plan with two independent eval subsets
-5. generate two fake models' predictions, one right ~70% of the time and one ~93%
-6. **ingest** — framework output becomes the canonical prediction file (hashed, recorded)
-7. **measure** the baseline — guardrails first, then one reading per subset and metric
-8. **anchor** — freeze that reading as the guardrail every later run is checked against
-9. **preregister** — the claim is written down *before* the candidate is measured
-10. **measure** the candidate
-11. **judge** — paired bootstrap on every base; admission needs t ≥ 2.0 on at least two of them
-12. **report** — the ledger
+Now open `examples/quickstart.py`, lower `CANDIDATE_ACCURACY` to about `0.80`, and run it again. The candidate still looks better on the screen, but the verdict flips to `FAIL` because one of the two evaluation bases misses the pre-registered threshold. That is the entire point of the tool.
 
-The last verdict looks like this:
+## How it works
 
-```text
-valA  baseline=0.683 candidate=0.883 delta=0.200 t=2.98
-valB  baseline=0.683 candidate=0.933 delta=0.250 t=4.01
-VERDICT cmd=eval.judge status=OK dataset=demo prereg=p1 verdict=PASS bases_positive=2
-```
+Every step is a command that ends with a machine-readable verdict, and the files it leaves behind are the evidence:
 
-Now open `examples/quickstart.py`, drop `CANDIDATE_ACCURACY` to about `0.80`, and run it again. The gap still looks convincing, but the verdict flips to `FAIL` because one of the two bases misses the threshold. That is the entire point of the tool.
-
-## The layers
-
-Each layer is a command group. You can adopt one without adopting the rest.
-
-| Group | What it owns | Key commands |
-|---|---|---|
-| `vcp data` | Dataset cards, canonical rows, split plans, entry audit, decode cache | `import`, `validate`, `split`, `audit`, `export`, `materialize`, `diff` |
-| `vcp eval` | Readings, guardrails, σ_p, pre-registration, verdicts | `ingest`, `measure`, `anchor`, `sigma`, `preregister`, `judge`, `status`, `report` |
-| `vcp fuse` | Ensemble recipes and member admission | `recipe`, `build`, `ablate` |
-| `vcp train` | Wraps any training command and records what it actually read and produced | `run`, `upload`, `status` |
-| `vcp submit` | Quota, deadline, candidate identity, final selection, lock | `init`, `stage`, `upload`, `record`, `sync`, `final`, `verify`, `status` |
-| `vcp backup` | Evidence manifests generated backwards from a conclusion, tiered push and verify | `manifest`, `push`, `verify`, `pull`, `status` |
-| `vcp artifact` | The immutable-artifact primitive the layers above are built on | `create`, `show`, `verify`, `lineage`, `status`, `clean` |
-| `vcp provenance` | Dataset evolution and downstream impact index | `rebuild`, `sync`, `ingest`, `impact`, `stale`, `explain`, `verify-index` |
-
-Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.md). If you prefer pictures first, read [the visual guide](docs/guides/VCP_VISUAL_GUIDE.md).
-
-## Running a contest with vcp
-
-The whole contest is one chain of gated steps. Each arrow is a command whose `VERDICT` you read before moving on; the dashed branch is what happens when the organiser ships a new version of the data.
+- **`VERDICT cmd=… status=OK|WARN|FAIL|ABORT k=v…`** ends every command (exit `0/0/1/2`; `--json` puts the result on stdout and the verdict on stderr). Commands never prompt.
+- **Written-once files stay written once.** Split plans, pre-registrations, fusion recipes and backup manifests are immutable — to change one you change its id, so old evidence keeps meaning what it meant. Ledgers (readings, judgements, submissions) only grow.
+- **Claims come before measurements.** A candidate is admitted only if its pre-registered claim wins on at least two independent evaluation bases; a sealed holdout is opened once, with a recorded reason, for the final pick.
+- **Reads are proven, not declared.** A training loop that reads through vcp's accessor leaves an access receipt naming the subsets it touched; "this model never saw the holdout" becomes checkable.
+- **Competition code stays out of the core.** `src/vcp` never contains a contest name; your metrics, converters, fusers and output formats register themselves through `--plugin projects.<contest>.<module>`.
 
 ```mermaid
 flowchart TD
@@ -112,68 +72,55 @@ flowchart TD
     N -.-> E
 ```
 
-Gates that cannot be reordered: `audit` before a split that uses its groups; baseline `measure`/`anchor` before any candidate; `preregister` before the candidate's first `measure`; `verdict=PASS` before `stage --kind candidate`; `stage`/`verify` before any upload; at least one real upload before the sealed final window; a real conclusion before its backup manifest. The sealed holdout is opened once, with `--unseal --reason`, and the reason is recorded.
+The gates cannot be reordered: audit before a split that uses its groups; a baseline reading before any candidate; the claim before the candidate's first measurement; `verdict=PASS` before a candidate is staged; stage and verify before any upload; a real upload before the sealed final; a real conclusion before its backup manifest.
 
-## Working with an agent: the skills and when they fire
+## Use it for a real contest
 
-The repository ships nine skills (`.claude/skills/` for Claude Code, mirrored to `.agents/skills/` for Codex). They are how an agent learns the rules above instead of guessing them. Load `vcp-orientation` first in any session; then the lifecycle entry routes to a specialist skill for the step you are on.
+1. **Pin a version.** Make a detached worktree at a release tag and give the contest its own venvs, editable-installed against that worktree — so development on `main` can never change a run under your feet. (`.claude/skills/vcp-release-and-environments` has the exact commands.)
+2. **Put contest code in `projects/<contest>/`**: `prepare.py` (organiser format → `samples.jsonl`), `train.py` / `predict.py`, `metrics.py` (official scorer, registered via `--plugin`), a `RUNBOOK.md` that records every real id, command and verdict — failures included.
+3. **Walk the chart above**, reading each verdict before the next command. The worked example is the RSNA Knee track: DICOM multi-sequence studies, 12-label macro AUC, notebook-only inference — see [`projects/rsna-knee/RUNBOOK.md`](projects/rsna-knee/RUNBOOK.md).
 
-```mermaid
-flowchart LR
-    O["vcp-orientation<br/>read first, every session:<br/>layers, ledgers, VERDICT, what counts as proof"] --> R["vcp-running-contests<br/>lifecycle entry: start, resume, hand off"]
-    R --> S1["vcp-contest-onboarding<br/>Day 1 checklist"]
-    R --> S2["vcp-data-pipeline<br/>import / audit / split / export,<br/>any data WARN · FAIL · ABORT"]
-    R --> S3["vcp-eval-and-fuse<br/>readings, claims, verdicts,<br/>fusion admission"]
-    R --> S4["vcp-train-submit-backup<br/>train run, submissions, backups,<br/>where to stop for authorisation"]
-    R --> S5["vcp-provenance<br/>new dataset versions, index,<br/>PostgreSQL, benchmarks"]
-    O --> S6["vcp-release-and-environments<br/>releases, tagged worktrees + venvs,<br/>what not to touch during a live run"]
-    O --> S7["vcp-extend-registry<br/>new importer / metric / fuser / writer"]
-```
+Working with an AI agent? The repository ships nine skills that teach it these rules — which one fires when, and the prompt to delegate a whole contest, are in [docs/guides/AGENT_SKILLS.md](docs/guides/AGENT_SKILLS.md).
 
-| When | Skill | What it stops you from doing wrong |
+## The layers
+
+Each layer is a command group; you can adopt one without the rest.
+
+| Group | What it owns | Key commands |
 |---|---|---|
-| Any new session, or someone asks "what is this?" | `vcp-orientation` | Treating a RUNBOOK line as evidence; reading `judge status=OK` as admission; editing a ledger |
-| Starting, resuming or handing off a contest | `vcp-running-contests` | Reordering the gates; reporting a pending command as done |
-| First day of a new contest | `vcp-contest-onboarding` | Wrong `--downloaded-at`; test set left outside the framework; running from the development checkout |
-| Importing, auditing, splitting, exporting | `vcp-data-pipeline` | Tuning options to silence a WARN; splitting without audit groups; faking labels for a test set |
-| Predictions → readings → claims → verdicts; ensembles | `vcp-eval-and-fuse` | Post-hoc pre-registration (including re-ingesting measured weights under a new run id); measuring on a contaminated base; opening the holdout casually |
-| Wrapping training, staging and uploading, backing up | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup |
-| The organiser changes the data | `vcp-provenance` | Overwriting the old version; hand-editing the index; using `auto` where the policy is known to pick wrong |
-| Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
-| Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
+| `vcp data` | Dataset cards, canonical rows, split plans, entry audit, decode cache, dataset diffs | `import`, `validate`, `split`, `audit`, `export`, `materialize`, `diff` |
+| `vcp eval` | Readings, guardrails, σ_p, pre-registration, verdicts | `ingest`, `measure`, `anchor`, `sigma`, `preregister`, `judge`, `status`, `report` |
+| `vcp fuse` | Ensemble recipes and member admission | `recipe`, `build`, `ablate` |
+| `vcp train` | Wraps any training command; records what it read and produced | `run`, `upload`, `status` |
+| `vcp submit` | Quota, deadline, candidate identity, final selection, lock | `init`, `stage`, `verify`, `upload`, `record`, `sync`, `final`, `status` |
+| `vcp backup` | Evidence manifests generated backwards from a conclusion; tiered push and verify | `manifest`, `push`, `verify`, `pull`, `status` |
+| `vcp artifact` | The immutable-artifact primitive the layers above are built on | `create`, `show`, `verify`, `lineage`, `status`, `clean` |
+| `vcp provenance` | Dataset evolution and downstream impact index (SQLite; PostgreSQL optional) | `rebuild`, `sync`, `ingest`, `impact`, `stale`, `explain`, `verify-index` |
 
-For a person, the same order applies: the [visual guide](docs/guides/VCP_VISUAL_GUIDE.md) is the orientation, [docs/reference/cli.md](docs/reference/cli.md) is the specialist, and the contest's `projects/<contest>/RUNBOOK.md` is the ledger of what was actually done. To delegate a whole contest, use the prompt template in `.claude/skills/vcp-running-contests/operator-guide.md`.
+Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.md). Pictures first: [the visual guide](docs/guides/VCP_VISUAL_GUIDE.md).
 
-## Design rules worth knowing before you start
+## Status and roadmap
 
-- **Every command ends with a `VERDICT` line.** `status=OK|WARN|FAIL|ABORT`, exit code `0/0/1/2`, machine-readable `key=value` fields. With `--json` the result goes to stdout and the VERDICT to stderr. Commands never prompt.
-- **Written-once files stay written once.** Split plans, pre-registrations, fusion recipes and backup manifests are immutable. To change one, you change its id — so the old evidence keeps meaning what it meant.
-- **Ledgers only grow.** Readings, judgements, σ_p and submissions are append-only. Run cards are rewritten but the previous hash goes to `history.jsonl` first.
-- **Guardrails run before readings.** If an anchored reading no longer reproduces, `measure` aborts and writes nothing rather than recording a number under changed conditions.
-- **Reads are proven, not declared.** A training loop that reads through vcp's accessor leaves an access receipt naming exactly which subsets it touched, so "this model never saw the holdout" becomes checkable instead of promised.
-- **vcp never touches your credentials.** No token options, no credential fields, no reading of rclone or Kaggle config. Third-party CLI output is redacted before it lands anywhere.
-- **Competition-specific code stays out of the core.** `src/vcp` never contains a contest name; your metrics, converters and formats register themselves through `--plugin`.
+`0.8.1`, pre-1.0: artifact and ledger formats are stable enough to build on; the CLI contract can still change on a minor version ([CHANGELOG.md](CHANGELOG.md) says what each bump means).
+
+- **Proven end to end** on a local RSNA knee subset — data, training, judgement, staging, backup — and in use for that competition now.
+- **PostgreSQL provenance backend**: five live evidence sets (integration 51/51; a 1,224-measurement calibration; a 3,672-measurement six-method benchmark at 1K–100K entities; a held-out evaluation whose aggregate gate passes at 1.018 / 1.017; a real-data track), with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured, and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. Details: [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).
+- **Next**: audit wave 1c (code snapshot and authorisation receipts) is the last item before `1.0.0`; then adaptive policy v2.
 
 ## Documentation
 
 | Where | What |
 |---|---|
 | [docs/guides/VCP_VISUAL_GUIDE.md](docs/guides/VCP_VISUAL_GUIDE.md) | Six diagrams: the layers, the lifecycle, where evidence lives, reading a VERDICT, who decides what |
-| [.claude/skills/](.claude/skills/) | The nine agent skills above (mirrored in `.agents/skills/` for Codex); `vcp-orientation` is also the fastest human-readable summary of the rules |
-| [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md) | The PostgreSQL adaptive-provenance evidence in ten items (versions, integration, six-method, held-out gate, real data, latency, storage, EXPLAIN, parity) |
+| [docs/guides/AGENT_SKILLS.md](docs/guides/AGENT_SKILLS.md) | The nine agent skills, when each fires, and how to delegate a contest |
 | [docs/reference/cli.md](docs/reference/cli.md) | Every command, option and worked flow |
 | [docs/guides/](docs/guides/) | Dataset evolution provenance, PostgreSQL backend |
+| [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md) | The PostgreSQL evidence in ten items |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Design documents, one per layer |
-| [docs/postmortems/](docs/postmortems/) | The contest write-up this project came from |
+| [docs/postmortems/](docs/postmortems/) | The marine-debris contest write-up this project came from |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, the rules the test suite enforces, how to send a change |
 
 Most documents under `docs/` are in Traditional Chinese; the code, CLI help and this README are in English.
-
-## Project status
-
-`0.8.1`, pre-1.0: the artifact and ledger formats are stable enough to build on, but the CLI contract can still change on a minor version. See [CHANGELOG.md](CHANGELOG.md) for what each bump means.
-
-Honest boundaries: the pipeline has been run end to end on a local RSNA knee subset (data, training, judgement, staging, backup) and is being used for that competition now. The optional PostgreSQL provenance backend has five live evidence sets — integration 51/51, a 1,224-measurement calibration, a 3,672-measurement six-method benchmark at 1K–100K entities, a held-out evaluation whose aggregate gate passes (1.018 / 1.017), and a real-data track — with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured (there is no crossover), and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. The 1M-entity scale is out of the normative matrix by a recorded ruling. See [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).
 
 ## Contributing
 

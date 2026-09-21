@@ -9,9 +9,9 @@ description: Use when starting, resuming, operating, auditing, handing off, or e
 
 `vcp` 管的是流程、身分、證據與治理；模型、訓練迴圈、推論程式和比賽格式放在 `projects/<contest>/`。目標不是只產出一個 submission，而是能證明它來自哪份資料、哪個模型、哪次判決，並能在另一台機器恢復。
 
-操作前依序讀 `AGENTS.md`、`docs/handover/HANDOVER.md`、`README.md`、該比賽的 `projects/<contest>/RUNBOOK.md`（若存在）。修改框架時再讀該層 spec 與 followups。README 與 `uv run vcp <group> <command> --help` 是參數權威，不憑記憶猜選項。
+第一次進這個 repo 先讀 **vcp-orientation**（層、台帳、VERDICT、不可變等級、文件地圖）。操作前依序讀 `AGENTS.md`、`docs/handover/HANDOVER.md`、該比賽工作區的 `AGENTS.md` / `ENVIRONMENT.md` / `projects/<contest>/RUNBOOK.md`（若存在）。修改框架時再讀該層 spec 與 followups。`uv run vcp <group> <command> --help` 與 `docs/reference/cli.md` 是參數權威，不憑記憶猜選項。
 
-新比賽必須再用 **vcp-contest-onboarding**；資料匯入、稽核、切分、匯出或 WARN/FAIL/ABORT 排查必須再用 **vcp-data-pipeline**；只有新增通用形態才用 **vcp-extend-registry**。
+分工：新比賽 Day 1 → **vcp-contest-onboarding**；匯入 / 稽核 / 切分 / 匯出與 data 命令的 WARN/FAIL/ABORT → **vcp-data-pipeline**；預測 → 讀數 → 預登記 → 判決與融合準入 → **vcp-eval-and-fuse**；訓練包裝、checkpoint、提交、備份 → **vcp-train-submit-backup**；資料集改版、provenance 索引、PostgreSQL → **vcp-provenance**；發版、venv / worktree、訓練中能不能動框架、PR → **vcp-release-and-environments**；只有新增通用形態才用 **vcp-extend-registry**。
 
 ## 每次接手先判定狀態
 
@@ -26,9 +26,9 @@ description: Use when starting, resuming, operating, auditing, handing off, or e
 
 ## 固定生命週期
 
-依序走：**規則與來源 → 匯入/驗證/稽核 → 固定切分 → materialize/export → baseline 訓練 → ingest/measure/anchor → 候選預登記/measure/judge → 融合消融準入 → file test 推論或 kernel 實跑 → stage/verify → upload/record + sync/score → sealed final → submission manifest/verify**。訓練、重要判決與提交後都要建立當下適用的備份或已驗證 checkpoint 副本，不把備份全拖到最後。
+依序走：**規則與來源 → 釘版 worktree 與 venv → 匯入/validate（source audit）/稽核 → 固定切分 → materialize/export → baseline 訓練（帶 access receipt）→ ingest/measure/anchor → 候選預登記/measure/judge → 融合消融準入 → file test 推論或 kernel 實跑 → stage/verify → upload/record + sync/score → sealed final → submission manifest/verify**。資料集改版（新的 raw、修標註）是分支事件：新版另匯入、`data diff` → `provenance ingest` → `stale` 看哪些 run 失效，再決定重跑什麼；不覆寫舊版。訓練、重要判決與提交後都要建立當下適用的備份或已驗證 checkpoint 副本，不把備份全拖到最後。
 
-不能倒置的關係：audit 先於使用 audit group 的 split；baseline 先 measure/anchor，再開始候選；候選與融合完整配方量測前先 preregister；candidate 只有 `verdict=PASS` 才準入；file/kernel 證據先備妥，stage/verify 先於外部提交；至少一個候選或 baseline 真實 uploaded/recorded 後，才進 sealed 最終窗口；真實結論存在後才以它建立備份清單。
+不能倒置的關係：audit 先於使用 audit group 的 split；baseline 先 measure/anchor，再開始候選；候選與融合完整配方量測前先 preregister；candidate 只有 `verdict=PASS` 才準入；資料改版後先 diff / ingest / stale 才重量，不憑印象判定哪些 run 還有效；file/kernel 證據先備妥，stage/verify 先於外部提交；至少一個候選或 baseline 真實 uploaded/recorded 後，才進 sealed 最終窗口；真實結論存在後才以它建立備份清單。
 
 ## 一步一證據的操作迴圈
 
@@ -44,7 +44,7 @@ description: Use when starting, resuming, operating, auditing, handing off, or e
 
 - `raw/` 不修改；台帳只能由正式操作追加，不手改、刪列或重寫；plan、預登記、融合配方與 backup manifest 寫後不改，改設計就換 id。
 - 不事後預登記、不用 sealed holdout 挑模型、不把 FAIL/INVALID 說成通過、不把尚未執行的外部步驟說成完成。
-- 核心 venv 只跑 vcp；訓練框架用獨立 venv 並 editable 安裝 vcp；量測環境凍結後不 install。
+- 核心 venv 只跑 vcp；訓練框架用獨立 venv 並 editable 安裝 vcp；量測環境凍結後不 install。比賽的 venv 指向釘在 tag 的 worktree，訓練或量測進行中不在被指到的 checkout 上 pull / merge / reinstall（見 vcp-release-and-environments）。
 - 不讓 `src/vcp` 出現比賽名；比賽專屬輸入轉換、metric、writer、模型與 notebook 都放 `projects/<contest>/`。
 - vcp 不讀寫平台憑證。不要要求使用者貼 token，也不要將 token 放入設定、命令、log 或台帳；平台 CLI 自己取憑證。
 - 外部上傳、正式提交、sealed 解封、超出既定算力/費用、`--forget-remote` 或其他不可逆動作，僅在既有授權涵蓋時執行。若未涵蓋，先完成 stage、verify、dry-run 等可審查結果，再提出一個具體決定點。

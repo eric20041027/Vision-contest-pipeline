@@ -80,7 +80,23 @@ The gates cannot be reordered: audit before a split that uses its groups; a base
 2. **Put contest code in `projects/<contest>/`**: `prepare.py` (organiser format → `samples.jsonl`), `train.py` / `predict.py`, `metrics.py` (official scorer, registered via `--plugin`), a `RUNBOOK.md` that records every real id, command and verdict — failures included.
 3. **Walk the chart above**, reading each verdict before the next command. The worked example is the RSNA Knee track: DICOM multi-sequence studies, 12-label macro AUC, notebook-only inference — see [`projects/rsna-knee/RUNBOOK.md`](projects/rsna-knee/RUNBOOK.md).
 
-Working with an AI agent? The repository ships nine skills that teach it these rules — which one fires when, and the prompt to delegate a whole contest, are in [docs/guides/AGENT_SKILLS.md](docs/guides/AGENT_SKILLS.md).
+### Working with an AI agent
+
+The repository ships nine skills (`.claude/skills/` for Claude Code, mirrored to `.agents/skills/` for Codex) that teach an agent these rules instead of letting it guess. Load `vcp-orientation` first in any session; the lifecycle entry then routes to the specialist for the step you are on:
+
+| When | Skill | What it stops the agent from doing wrong |
+|---|---|---|
+| Any new session, or "what is this?" | `vcp-orientation` | Treating a RUNBOOK line as evidence; reading `judge status=OK` as admission; editing a ledger |
+| Starting, resuming or handing off a contest | `vcp-running-contests` | Reordering the gates; reporting a pending command as done |
+| First day of a new contest | `vcp-contest-onboarding` | Wrong `--downloaded-at`; test set left outside the framework; running from the development checkout |
+| Importing, auditing, splitting, exporting | `vcp-data-pipeline` | Tuning options to silence a WARN; splitting without audit groups; faking labels for a test set |
+| Predictions → readings → claims → verdicts; ensembles | `vcp-eval-and-fuse` | Post-hoc pre-registration; measuring on a contaminated base; opening the holdout casually |
+| Wrapping training, staging and uploading, backing up | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup |
+| The organiser changes the data | `vcp-provenance` | Overwriting the old version; hand-editing the index; using `auto` where the policy is known to pick wrong |
+| Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
+| Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
+
+The routing diagram, the prompt to delegate a whole contest, and how the skills are kept honest are in [docs/guides/AGENT_SKILLS.md](docs/guides/AGENT_SKILLS.md).
 
 ## The layers
 

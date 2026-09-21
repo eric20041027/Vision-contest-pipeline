@@ -1,10 +1,10 @@
-# vcp 交接文件（2026-09-07）
+# vcp 交接文件（2026-09-21 更新）
 
 給接手開發的人或代理（Codex）。讀完這份就能不靠對話紀錄繼續做。搭配根目錄的 `AGENTS.md` / `CLAUDE.md`（機械鐵則與常用命令）、`README.md`（每層的命令表）。
 
 ## 1. 這是什麼
 
-`vcp`（vision contest pipeline）：給 Kaggle / 台灣視覺比賽用的通用框架，六個子專案全部交付：
+`vcp`（vision contest pipeline）：給 Kaggle / 台灣視覺比賽用的通用框架，八層全部交付（六個子專案 + 不可變產物 + provenance）：
 
 | 子專案 | 層 | 套件 | CLI 群 |
 |---|---|---|---|
@@ -15,6 +15,7 @@
 | 5 | 提交治理 | `src/vcp/submit` | `vcp submit` ×12（init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report） |
 | 6 | 備份審計 | `src/vcp/backup` | `vcp backup manifest\|push\|verify\|pull\|status` |
 | 7 | Dataset evolution provenance | `src/vcp/provenance` | `vcp data diff`、`vcp provenance rebuild\|sync\|ingest\|impact\|stale\|explain\|status\|verify-index` |
+| 稽核 Wave 1a/1b | 不可變產物、access receipt、source audit | `src/vcp/artifact`、`src/vcp/data/access`、`src/vcp/data/source_audit.py` | `vcp artifact create\|show\|verify\|lineage\|status\|relink\|clean`；收據與稽核由 export / train / validate 自動留下 |
 
 起點是賽後報告 `docs/postmortems/2026-08-aidea-marine-debris-detection.md`（§9 藍圖）：public→private 掉分的根因是「只在一個儀器上驗證」「元件準入不一致」「σ_p 太晚估」；框架把這些變成機制（≥2 個互斥驗證集 + 1 個 sealed holdout、護欄先於讀數、預登記 t 門檻、元件準入需 ≥2 個基底、台帳與上傳原子、UTC 時戳）。
 
@@ -22,9 +23,10 @@
 
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`）。Codex 的 `codex/dataset-evolution-provenance`（0.7.0）與 `codex/postgresql-adaptive-provenance`（0.8.0）已各以一個 PR 合併，tag 打在合併 commit；沒有其他未合併的 Codex 分支。
 - 版本：`0.8.1`（tag `v0.8.1`，2026-09-21，PATCH：串流 replay、`python -m vcp`、receipt nonce 加寬、開源門面；五份 provenance 證據齊全後、RSNA 訓練開跑前發）；`0.8.0`（tag `v0.8.0`）= PostgreSQL Adaptive Provenance：未給 `--backend` 仍是 SQLite，PostgreSQL 是 optional、noncanonical、可重建的 derived index；`0.7.0`（tag `v0.7.0`）= Dataset Evolution 與 Incremental Impact Provenance；`0.6.0`（tag `v0.6.0`）= 稽核 Wave 1b-2 source audit；`0.5.0` = Wave 1b-1；`0.4.0` = Wave 1a；規則與發版步驟在 `CHANGELOG.md` 表頭。下一步：先把 provenance 的 live 證據補齊（§6-8），再回到稽核 Wave 1c（程式碼快照與授權，VCP-004/006）。
-- 測試：`uv run pytest --cov=vcp` 在 0.8.0 合併前的分支頭 `fd92de2` = 1597 passed / 76 skipped，覆蓋率 94.82%（PostgreSQL 整合案例未配置 service 時 skip）。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
+- 測試：`uv run pytest --cov=vcp` 在 0.8.1（`5b61200`）= 1612 passed / 76 skipped，覆蓋率 94.85%（PostgreSQL 整合案例未配置 service 時 skip；CI 的 ubuntu `postgres` job 有 Docker Compose 的 17.11）。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
-- 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。訓練 venv 為 `projects/rsna-knee/.venv`，torch 2.11.0+cu128。
+- 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。RSNA 比賽在獨立工作區 `C:/Users/smallfire123123/Desktop/RSNA_Knee_Abnormality_Detection`（自己的 `vcp-data`、`configs`、`projects/rsna-knee`、核心 venv 與訓練 venv），兩個 venv 自 2026-09-21 起 editable 指向釘在 tag `v0.8.1` 的 detached worktree `Vision-contest-pipeline-v081-rsna`（規則見 `vcp-release-and-environments` skill）；repo 內的 `projects/rsna-knee/.venv` 仍指 main，是開發用。torch 2.11.0+cu128。
+- Skills：`.claude/skills/` 九個（`vcp-orientation` 入口 + 八個），鏡射到 `.agents/skills/`；路由與時機在 README「Working with an agent」一節與 CLAUDE.md / AGENTS.md 的「文件」。
 
 ## 3. 程式碼地圖
 

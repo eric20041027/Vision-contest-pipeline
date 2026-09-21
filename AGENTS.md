@@ -51,6 +51,6 @@
 
 ## 給 Codex / 其他代理
 - 先讀本檔與 `docs/handover/HANDOVER.md`，再讀要改的那一層的 spec 與後記；spec 的「補充決定」以程式碼為準。
-- 開始、接續、操作、交接或向使用者介紹完整比賽時，以 `vcp-running-contests` skill 為入口；它會再指向 Day 1、資料層與登記表的專用 skills。
+- Skills（`.claude/skills/`，`.agents/skills/` 是給 Codex 的鏡射，改一邊要 `cp -r` 到另一邊）：任何 session 先讀 `vcp-orientation`（層、台帳、VERDICT、不可變等級、文件地圖與 skill 路由）；跑或接手比賽以 `vcp-running-contests` 為入口，它再指向 `vcp-contest-onboarding`（Day 1）、`vcp-data-pipeline`（資料層）、`vcp-eval-and-fuse`（量測與融合準入）、`vcp-train-submit-backup`（訓練、提交、備份）、`vcp-provenance`（資料改版、索引、PostgreSQL、基準量測）、`vcp-release-and-environments`（發版、venv / worktree、訓練中的禁區、PR 慣例）、`vcp-extend-registry`（十二個登記軸）。
 - 一件事一個分支一個 commit（`type(scope): 說明`），不用 `git add -A`；每個行為變更先寫失敗的測試；commit 前 `uv run ruff check . && uv run ruff format --check .`，合併前全套 `uv run pytest --cov=vcp`。
 - 裁決（spec 沒說的決定）與處置寫進該層後記的最後一節；不對 markdown 跑 `ruff format`；測試重寫台帳 / 卡一律 `newline="\n"`。

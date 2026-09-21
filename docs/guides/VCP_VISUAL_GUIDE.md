@@ -59,7 +59,7 @@ flowchart TD
 | stage + verify | 平台提交 | 先確認身分、格式、SHA 與可重現性 |
 | uploaded/recorded + 候選固定 | sealed final | holdout 只服務最後決選，不能拿來調參 |
 
-## 六層分別做什麼
+## 八層分別做什麼
 
 | 層 | 主要命令 | 輸入 | 主要產物 | 進入下一層的條件 |
 |---|---|---|---|---|
@@ -69,6 +69,8 @@ flowchart TD
 | 融合 | `fuse recipe/ablate/build` | 多個已量測 run | 不可變 recipe、消融 run、`fuse.json` | 每位融合成員均有 PASS 準入 |
 | 提交 | `submit init/stage/verify/upload/record/sync/score/final` | eval/test 身分或 kernel version | submission、stage card、只增台帳、final/lock | 平台事實已回讀，最終選擇有 sealed 讀數 |
 | 備份 | `backup manifest/push/verify/pull/status` | run、judgement 或 submission 結論 | 不可變 manifest、逐檔 SHA、副本台帳 | 所需 tier 在真正目的地驗證成功 |
+| 產物 | `artifact create/show/verify/lineage/status/relink/clean` | 任何要寫一次不改的檔案（收據、source audit、dataset diff、policy、自訂 kind） | `artifacts/<kind>/<id>/manifest.json`（有它才是產物）、supersession 台帳 | `verify` 無 mismatch / missing |
+| provenance | `data diff`、`provenance rebuild/sync/ingest/impact/stale/explain/status/verify-index` | 兩個資料集版本、既有 run | `dataset_diff` artifact、可刪除的衍生索引（SQLite 預設、PostgreSQL optional） | `stale --head` 的 VALID/STALE/REVIEW/BROKEN 已讀過，重跑清單由它決定 |
 
 融合是可選步驟；baseline 也能以 `--kind baseline --reason ...` 明確記錄準入豁免。正式 `candidate` 仍然必須有 PASS judgement；`probe` 只供探索，永不進 final。
 
@@ -167,8 +169,8 @@ Tier 1 是決策與小型證據，Tier 2 是重現資料與預測，Tier 3 是�
 
 ## 接著讀什麼
 
-- [README](../../README.md)：所有命令、主要選項與一次流程。
-- [vcp-running-contests skill](../../.agents/skills/vcp-running-contests/SKILL.md)：Agent 操作完整比賽的入口。
+- [README](../../README.md)：比賽流程圖、skill 用法與時機、每層的命令表；完整選項在 [docs/reference/cli.md](../reference/cli.md)。
+- [vcp-orientation skill](../../.claude/skills/vcp-orientation/SKILL.md)：三分鐘理解 vcp 與 skill 路由；[vcp-running-contests skill](../../.claude/skills/vcp-running-contests/SKILL.md)：Agent 操作完整比賽的入口。
 - [交接文件](../handover/HANDOVER.md)：程式碼地圖、現況、陷阱與開放待辦。
 - [RSNA Knee RUNBOOK](../../projects/rsna-knee/RUNBOOK.md)：DICOM 多序列比賽的實際案例與真實讀數。
 

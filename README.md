@@ -89,6 +89,61 @@ Each layer is a command group. You can adopt one without adopting the rest.
 
 Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.md). If you prefer pictures first, read [the visual guide](docs/guides/VCP_VISUAL_GUIDE.md).
 
+## Running a contest with vcp
+
+The whole contest is one chain of gated steps. Each arrow is a command whose `VERDICT` you read before moving on; the dashed branch is what happens when the organiser ships a new version of the data.
+
+```mermaid
+flowchart TD
+    A["Day 1 — rules, licence, raw data<br/>projects/&lt;contest&gt;/, tagged worktree + venv"] --> B["vcp data import · validate · audit<br/>card, canonical rows, source audit, near-duplicates, test overlap"]
+    B --> C["vcp data split — immutable plan<br/>train + valA + valB + sealed holdout"]
+    C --> D["vcp data materialize / export"]
+    D --> E["vcp train run -- your training command<br/>access receipt, checkpoint sha, env snapshot"]
+    E --> F["vcp eval ingest · measure · anchor<br/>baseline readings + guardrail"]
+    F --> G["vcp eval preregister → measure → judge<br/>claim written BEFORE the candidate is measured"]
+    G -- "verdict=PASS" --> H["vcp fuse recipe · ablate · judge each member<br/>optional: with-it vs without-it admission"]
+    G -- "FAIL / INVALID" --> E
+    H --> I["test inference → vcp eval ingest (test run)"]
+    I --> J["vcp submit stage · verify<br/>four gates; nothing is written on failure"]
+    J --> K["vcp submit upload / record · sync / score<br/>only with explicit authorisation"]
+    K --> L["vcp eval measure --unseal holdout → vcp submit final<br/>sealed reading picks, then lock"]
+    L --> M["vcp backup manifest → push tier 1 / 2 / 3 → verify"]
+    B -. "dataset changes" .-> N["vcp data diff → vcp provenance ingest → stale<br/>which runs must be redone"]
+    N -.-> E
+```
+
+Gates that cannot be reordered: `audit` before a split that uses its groups; baseline `measure`/`anchor` before any candidate; `preregister` before the candidate's first `measure`; `verdict=PASS` before `stage --kind candidate`; `stage`/`verify` before any upload; at least one real upload before the sealed final window; a real conclusion before its backup manifest. The sealed holdout is opened once, with `--unseal --reason`, and the reason is recorded.
+
+## Working with an agent: the skills and when they fire
+
+The repository ships nine skills (`.claude/skills/` for Claude Code, mirrored to `.agents/skills/` for Codex). They are how an agent learns the rules above instead of guessing them. Load `vcp-orientation` first in any session; then the lifecycle entry routes to a specialist skill for the step you are on.
+
+```mermaid
+flowchart LR
+    O["vcp-orientation<br/>read first, every session:<br/>layers, ledgers, VERDICT, what counts as proof"] --> R["vcp-running-contests<br/>lifecycle entry: start, resume, hand off"]
+    R --> S1["vcp-contest-onboarding<br/>Day 1 checklist"]
+    R --> S2["vcp-data-pipeline<br/>import / audit / split / export,<br/>any data WARN · FAIL · ABORT"]
+    R --> S3["vcp-eval-and-fuse<br/>readings, claims, verdicts,<br/>fusion admission"]
+    R --> S4["vcp-train-submit-backup<br/>train run, submissions, backups,<br/>where to stop for authorisation"]
+    R --> S5["vcp-provenance<br/>new dataset versions, index,<br/>PostgreSQL, benchmarks"]
+    O --> S6["vcp-release-and-environments<br/>releases, tagged worktrees + venvs,<br/>what not to touch during a live run"]
+    O --> S7["vcp-extend-registry<br/>new importer / metric / fuser / writer"]
+```
+
+| When | Skill | What it stops you from doing wrong |
+|---|---|---|
+| Any new session, or someone asks "what is this?" | `vcp-orientation` | Treating a RUNBOOK line as evidence; reading `judge status=OK` as admission; editing a ledger |
+| Starting, resuming or handing off a contest | `vcp-running-contests` | Reordering the gates; reporting a pending command as done |
+| First day of a new contest | `vcp-contest-onboarding` | Wrong `--downloaded-at`; test set left outside the framework; running from the development checkout |
+| Importing, auditing, splitting, exporting | `vcp-data-pipeline` | Tuning options to silence a WARN; splitting without audit groups; faking labels for a test set |
+| Predictions → readings → claims → verdicts; ensembles | `vcp-eval-and-fuse` | Post-hoc pre-registration (including re-ingesting measured weights under a new run id); measuring on a contaminated base; opening the holdout casually |
+| Wrapping training, staging and uploading, backing up | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup |
+| The organiser changes the data | `vcp-provenance` | Overwriting the old version; hand-editing the index; using `auto` where the policy is known to pick wrong |
+| Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
+| Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
+
+For a person, the same order applies: the [visual guide](docs/guides/VCP_VISUAL_GUIDE.md) is the orientation, [docs/reference/cli.md](docs/reference/cli.md) is the specialist, and the contest's `projects/<contest>/RUNBOOK.md` is the ledger of what was actually done. To delegate a whole contest, use the prompt template in `.claude/skills/vcp-running-contests/operator-guide.md`.
+
 ## Design rules worth knowing before you start
 
 - **Every command ends with a `VERDICT` line.** `status=OK|WARN|FAIL|ABORT`, exit code `0/0/1/2`, machine-readable `key=value` fields. With `--json` the result goes to stdout and the VERDICT to stderr. Commands never prompt.
@@ -104,6 +159,8 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 | Where | What |
 |---|---|
 | [docs/guides/VCP_VISUAL_GUIDE.md](docs/guides/VCP_VISUAL_GUIDE.md) | Six diagrams: the layers, the lifecycle, where evidence lives, reading a VERDICT, who decides what |
+| [.claude/skills/](.claude/skills/) | The nine agent skills above (mirrored in `.agents/skills/` for Codex); `vcp-orientation` is also the fastest human-readable summary of the rules |
+| [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md) | The PostgreSQL adaptive-provenance evidence in ten items (versions, integration, six-method, held-out gate, real data, latency, storage, EXPLAIN, parity) |
 | [docs/reference/cli.md](docs/reference/cli.md) | Every command, option and worked flow |
 | [docs/guides/](docs/guides/) | Dataset evolution provenance, PostgreSQL backend |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | Design documents, one per layer |
@@ -114,9 +171,9 @@ Most documents under `docs/` are in Traditional Chinese; the code, CLI help and 
 
 ## Project status
 
-`0.8.0`, pre-1.0: the artifact and ledger formats are stable enough to build on, but the CLI contract can still change on a minor version. See [CHANGELOG.md](CHANGELOG.md) for what each bump means.
+`0.8.1`, pre-1.0: the artifact and ledger formats are stable enough to build on, but the CLI contract can still change on a minor version. See [CHANGELOG.md](CHANGELOG.md) for what each bump means.
 
-Honest boundaries: the pipeline has been run end to end on a local 200-study RSNA knee subset, and the optional PostgreSQL provenance backend has passing live integration tests but no large-scale benchmark evidence yet. Anything not demonstrated is recorded as pending in `docs/benchmarks/` rather than claimed here.
+Honest boundaries: the pipeline has been run end to end on a local RSNA knee subset (data, training, judgement, staging, backup) and is being used for that competition now. The optional PostgreSQL provenance backend has five live evidence sets — integration 51/51, a 1,224-measurement calibration, a 3,672-measurement six-method benchmark at 1K–100K entities, a held-out evaluation whose aggregate gate passes (1.018 / 1.017), and a real-data track — with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured (there is no crossover), and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. The 1M-entity scale is out of the normative matrix by a recorded ruling. See [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).
 
 ## Contributing
 

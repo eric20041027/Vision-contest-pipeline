@@ -7,18 +7,18 @@ vcp 是影像比賽的流程與證據管理框架：它不取代 PyTorch、Ultra
 對新使用者介紹時依序說明：
 
 1. 它降低 public→private 掉分、單一驗證集過擬合、模型/提交身分混淆與機器回收後無法復原的風險，並保留可稽核證據。
-2. 六層各自的輸入、輸出和閘門；特別說明 `judge status=OK` 與 `verdict=PASS` 的差異。
+2. 八層各自的輸入、輸出和閘門（資料、量測、融合、訓練、提交、備份、產物、provenance）；特別說明 `judge status=OK` 與 `verdict=PASS` 的差異，以及「文件記載 ≠ 證據」。
 3. 模型與比賽膠水由 `projects/<contest>/` 提供，vcp 負責治理和證據。
 4. 一次比賽的固定順序、第一次跑通的最小路徑、sealed holdout 和外部提交的界線。
 5. 展示該比賽 RUNBOOK 的「已完成 / 待完成」，不要把範例命令當成真實完成紀錄。
 
 ## 第一次使用的最短路徑
 
-1. 安裝 uv 與核心環境：`uv sync`；DICOM 用 `uv sync --extra dicom`。確認 `uv run vcp --help`。
+1. 安裝 uv；開一個釘在最新 tag 的 worktree（`git worktree add --detach ../Vision-contest-pipeline-v<XYZ>-<contest> v<X.Y.Z>`），在裡面 `uv sync --frozen`（DICOM 加 `--extra dicom`），確認 `.venv/Scripts/vcp.exe version`。之後這場比賽只從它啟動 vcp（vcp-release-and-environments）。
 2. 設定 `VCP_DATA_ROOT`（預設 Windows `C:/vcp-data`、Linux `~/vcp-data`）；通常不設定 `VCP_CONFIGS_ROOT`，讓 configs 直接進 repo。
 3. 選一個小型、可在當天完成的 baseline；先跑 `vcp-contest-onboarding` 的 Day 1 流程。
 4. 跑資料層到固定 plan 與 materialize/export；確認 train、兩個 eval、sealed 的 group 不洩漏。
-5. 在 `projects/<contest>/.venv` 建訓練環境並 editable 安裝 vcp；以 `vcp train run -- ...` 包住專案訓練命令。
+5. 在 `projects/<contest>/.venv` 建訓練環境並 editable 安裝那個 worktree 的 vcp；訓練迴圈用 `MaterializedReader` 讀資料（留 access receipt）；以 `vcp train run -- ...` 包住專案訓練命令，開跑前先 commit 專案程式。
 6. 先把 baseline 的 valA/valB 預測 ingest、measure、anchor。要驗候選時先 preregister 再 measure/judge；只跑通最小流程時可把 baseline 以 `--kind baseline --reason` 明確豁免，不能稱為 PASS candidate。
 7. file submission 為同一權重產生並 ingest test run；kernel submission 先在授權範圍內取得真正成功的 notebook version/output，再綁 notebook/version/weights。完成 submit init、stage、verify 後才 upload/record，再 sync/score。probe 要寫理由且不進 final。
 8. 最後候選固定後才解封 sealed、final；以實際 submission 或 judgement 建 manifest，推送並 verify。
@@ -53,7 +53,7 @@ data/config roots：<paths or defaults>
 已授權外部操作：<exact destinations/actions; otherwise pending>
 sealed：保持封存，除非我已明確開啟最後評估窗口。
 
-先讀 AGENTS.md、HANDOVER、README 與現有 RUNBOOK，核對實際台帳和檔案後回報目前階段。依固定生命週期完成所有已授權工作；比賽專屬程式只放 projects/<contest>/。每步保留 VERDICT、產物與決定，更新 RUNBOOK。不要事後預登記、改不可變紀錄、用 sealed 挑模型、記錄憑證或把待執行命令說成已完成。外部提交、解封、超預算或未授權目的地前，先做完可審查的 stage/verify/dry-run，再提出一個具體決定點。
+先讀 vcp-orientation、AGENTS.md、HANDOVER 與現有 RUNBOOK / ENVIRONMENT，核對實際台帳和檔案後回報目前階段。從比賽釘版 worktree 的 vcp.exe 執行命令，不動主 checkout。依固定生命週期完成所有已授權工作；比賽專屬程式只放 projects/<contest>/。每步保留 VERDICT、產物與決定，更新 RUNBOOK。不要事後預登記、改不可變紀錄、用 sealed 挑模型、記錄憑證或把待執行命令說成已完成。外部提交、解封、超預算或未授權目的地前，先做完可審查的 stage/verify/dry-run，再提出一個具體決定點。
 ```
 
 ## agent 應如何回報與交接

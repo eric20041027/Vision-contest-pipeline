@@ -15,6 +15,39 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.9.0] - 2026-09-23
+
+把 provenance 索引畫成圖；tag `v0.9.0` 打在 PR 的合併 commit 上。MINOR 的理由：新增 CLI 命令
+`vcp provenance graph`，連同它的 VERDICT 欄位與 `reason=` 字彙（`unsupported_format:`、
+`out_in_data_root:`、`out_not_absolute:`、`exists:`、`not_a_file:`、`unsupported_detail:`、
+`scope_conflict:`）。沒有任何
+產物或台帳欄位的語意改變，索引 schema 不變。
+
+### Added
+- `vcp provenance graph --out FILE [--dataset D | --entity type:id] [--head D] [--detail overview|full]`：
+  把 provenance 索引（SQLite 或 `--backend postgresql`）畫成 Mermaid 圖，副檔名決定格式——`.html`
+  （瀏覽器直接開；Mermaid 11.17.2 從 jsDelivr 載入、以 SRI 驗證）、`.md`（GitHub 會渲染）、`.mmd`。
+  只讀索引、只寫 `--out`：`--out` 不能落在 data root，也只覆寫檔頭帶標記的舊圖。`overview` 把 reading
+  摺進 run → judgement 的箭頭，收據 / export / 解碼快取 / source audit / diff / backup 變成 run 的
+  provenance 等級、粗框與改版箭頭的標籤，比賽自訂的 artifact kind 每種併成一個帶計數的節點；節點取
+  相對各現行 head 最差的狀態（或 `--head` 指定）。範圍內有 BROKEN / REVIEW、或 `.md` / `.mmd` 超過
+  Mermaid 預設上限時 WARN；`--json` 的 result 是摺好的節點與邊。vcp 自己加在節點與邊上的文字一律
+  ASCII；索引裡沒有任何 dataset 時，BROKEN 仍沿著邊傳給下游。
+- `vcp.provenance.render`（範圍、摺疊、狀態合併，純函式）與 `vcp.provenance.render_mermaid`（Mermaid
+  文字、三種檔案、輸出路徑護欄、原子換寫）。
+- skill `vcp-provenance-graph`（`.claude/skills/`，鏡射 `.agents/skills/`）：找比賽的 data / configs
+  root、確認索引、畫圖、交付、怎麼讀顏色與往下追；路由表、`docs/guides/AGENT_SKILLS.md` 與 README 的
+  時機表各加一列。
+
+### Fixed
+- 所有命令：輸出行含終端機 code page 編不出的字元時（例如管線化的 Windows stdout 是 cp950、run id 是
+  簡體字），改印 ASCII 跳脫，`--json` 改印 ASCII 跳脫的同一份 JSON；以前會在工作做完後丟出
+  `UnicodeEncodeError`，VERDICT 印不出來（`vcp provenance stale` 也會）。
+
+### Evidence
+- RSNA Knee 的真實索引（217 個實體、347 條邊）以 overview 畫成 63 個節點、69 條邊，`.html` 在瀏覽器
+  由 Mermaid 11.17.2 完整渲染（9 個 dataset 框、0 個渲染錯誤）；`.md` 約 10 KB，在 GitHub 的上限內。
+
 ## [0.8.1] - 2026-09-21
 
 PostgreSQL adaptive provenance 的五份 live 證據落地後、RSNA 訓練開跑前的 PATCH release；tag `v0.8.1`

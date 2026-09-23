@@ -142,6 +142,7 @@ def test_postgres_auto_without_policy_is_warn(monkeypatch, roots):
         ("impact", ["--dataset", "dataset-1"]),
         ("stale", ["--head", "dataset-1"]),
         ("explain", ["--entity", "run:1"]),
+        ("graph", ["--out", "graph.html"]),
         ("status", []),
         ("verify-index", []),
     ],

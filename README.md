@@ -1,8 +1,8 @@
 # vcp — vision contest pipeline
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.8.1](https://img.shields.io/badge/version-0.8.1-informational.svg)](CHANGELOG.md)
-[![Tests 1612](https://img.shields.io/badge/tests-1612%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.9.0](https://img.shields.io/badge/version-0.9.0-informational.svg)](CHANGELOG.md)
+[![Tests 1677](https://img.shields.io/badge/tests-1677%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -82,7 +82,7 @@ The gates cannot be reordered: audit before a split that uses its groups; a base
 
 ### Working with an AI agent
 
-The repository ships nine skills (`.claude/skills/` for Claude Code, mirrored to `.agents/skills/` for Codex) that teach an agent these rules instead of letting it guess. Load `vcp-orientation` first in any session; the lifecycle entry then routes to the specialist for the step you are on:
+The repository ships ten skills (`.claude/skills/` for Claude Code, mirrored to `.agents/skills/` for Codex) that teach an agent these rules instead of letting it guess. Load `vcp-orientation` first in any session; the lifecycle entry then routes to the specialist for the step you are on:
 
 | When | Skill | What it stops the agent from doing wrong |
 |---|---|---|
@@ -93,6 +93,7 @@ The repository ships nine skills (`.claude/skills/` for Claude Code, mirrored to
 | Predictions → readings → claims → verdicts; ensembles | `vcp-eval-and-fuse` | Post-hoc pre-registration; measuring on a contaminated base; opening the holdout casually |
 | Wrapping training, staging and uploading, backing up | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup |
 | The organiser changes the data | `vcp-provenance` | Overwriting the old version; hand-editing the index; using `auto` where the policy is known to pick wrong |
+| You want to see the contest's provenance (a check, a handover, slides) | `vcp-provenance-graph` | Rebuilding and re-verifying the index "to be safe"; drawing the default data root instead of the contest's; writing the picture into the data root |
 | Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
 | Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
 
@@ -111,13 +112,13 @@ Each layer is a command group; you can adopt one without the rest.
 | `vcp submit` | Quota, deadline, candidate identity, final selection, lock | `init`, `stage`, `verify`, `upload`, `record`, `sync`, `final`, `status` |
 | `vcp backup` | Evidence manifests generated backwards from a conclusion; tiered push and verify | `manifest`, `push`, `verify`, `pull`, `status` |
 | `vcp artifact` | The immutable-artifact primitive the layers above are built on | `create`, `show`, `verify`, `lineage`, `status`, `clean` |
-| `vcp provenance` | Dataset evolution and downstream impact index (SQLite; PostgreSQL optional) | `rebuild`, `sync`, `ingest`, `impact`, `stale`, `explain`, `verify-index` |
+| `vcp provenance` | Dataset evolution and downstream impact index (SQLite; PostgreSQL optional) | `rebuild`, `sync`, `ingest`, `impact`, `stale`, `explain`, `graph`, `verify-index` |
 
 Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.md). Pictures first: [the visual guide](docs/guides/VCP_VISUAL_GUIDE.md).
 
 ## Status and roadmap
 
-`0.8.1`, pre-1.0: artifact and ledger formats are stable enough to build on; the CLI contract can still change on a minor version ([CHANGELOG.md](CHANGELOG.md) says what each bump means).
+`0.9.0`, pre-1.0: artifact and ledger formats are stable enough to build on; the CLI contract can still change on a minor version ([CHANGELOG.md](CHANGELOG.md) says what each bump means).
 
 - **Proven end to end** on a local RSNA knee subset — data, training, judgement, staging, backup — and in use for that competition now.
 - **PostgreSQL provenance backend**: five live evidence sets (integration 51/51; a 1,224-measurement calibration; a 3,672-measurement six-method benchmark at 1K–100K entities; a held-out evaluation whose aggregate gate passes at 1.018 / 1.017; a real-data track), with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured, and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. Details: [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).

@@ -1,4 +1,6 @@
+import io
 import json
+import sys
 
 import pytest
 import typer
@@ -346,6 +348,53 @@ def test_run_command_reports_a_keyboard_interrupt_as_an_abort(capsys):
     assert ei.value.exit_code == 2
     v = _last_verdict(capsys.readouterr().out)
     assert "status=ABORT" in v and "reason=interrupted" in v and "run=r1" in v
+
+
+def _code_page_streams(monkeypatch):
+    """stdout / stderr as a piped Windows process sees them: the locale code page, strict."""
+    streams = {}
+    for name in ("stdout", "stderr"):
+        raw = io.BytesIO()
+        streams[name] = raw
+        monkeypatch.setattr(sys, name, io.TextIOWrapper(raw, encoding="cp950", errors="strict"))
+    return streams
+
+
+def _decoded(raw: io.BytesIO) -> str:
+    return raw.getvalue().decode("cp950")
+
+
+def test_a_code_page_stdout_gets_escapes_not_a_missing_verdict(monkeypatch):
+    """A name the console cannot encode (simplified Chinese on a Big5 code page) used to raise
+    UnicodeEncodeError after the work was done, so the command ended with no VERDICT."""
+    streams = _code_page_streams(monkeypatch)
+
+    def drawn() -> CmdResult:
+        return "OK", {"run": "数据"}, None, ["drew run 数据"]
+
+    with pytest.raises(typer.Exit) as ei:
+        run_command("t.encoding", False, None, drawn)
+    sys.stdout.flush()
+
+    out = _decoded(streams["stdout"])
+    assert ei.value.exit_code == 0
+    assert "drew run " + "\u6570\u636e".encode("ascii", "backslashreplace").decode("ascii") in out
+    assert out.splitlines()[-1].startswith("VERDICT cmd=t.encoding status=OK")
+
+
+def test_a_code_page_stdout_still_gets_parseable_json(monkeypatch):
+    streams = _code_page_streams(monkeypatch)
+
+    def drawn() -> CmdResult:
+        return "OK", {"run": "数据"}, {"label": "数据"}, []
+
+    with pytest.raises(typer.Exit):
+        run_command("t.encoding", True, None, drawn)
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    assert json.loads(_decoded(streams["stdout"]))["result"]["label"] == "数据"
+    assert "VERDICT cmd=t.encoding status=OK" in _decoded(streams["stderr"])
 
 
 def test_parse_opts_and_render_table():

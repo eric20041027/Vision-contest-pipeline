@@ -9,21 +9,38 @@ from typing import Annotated, Any
 import typer
 
 from vcp.cli_common import CmdResult, ConfigsRootOpt, DataRootOpt, JsonOpt, run_command
+from vcp.core.build import build_string
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status, format_value
 from vcp.core.paths import resolve_configs_root, resolve_data_root
+from vcp.core.time import stamp
 from vcp.provenance.backend import (
     BackendConfig,
     BackendName,
     MaintenanceResult,
     ProvenanceBackend,
+    ProvenanceReader,
     RequestedStrategy,
     make_backend,
     parse_backend,
 )
 from vcp.provenance.graph import ProvenanceGraph
-from vcp.provenance.index import dataset_heads
-from vcp.provenance.schema import EntityStatus
+from vcp.provenance.index import dataset_heads, graph_hash
+from vcp.provenance.render import (
+    GraphView,
+    build_view,
+    fallback_statuses,
+    validate_detail,
+    view_payload,
+    worst_statuses,
+)
+from vcp.provenance.render_mermaid import (
+    DocumentMeta,
+    prepare_output,
+    render_document,
+    write_document,
+)
+from vcp.provenance.schema import EntityStatus, StatusRecord
 from vcp.provenance.views import explain, impact
 
 provenance_app = typer.Typer(no_args_is_help=True, help="derived impact provenance index")
@@ -327,6 +344,134 @@ def explain_cmd(
         return "OK", fields, _payload(index, result.model_dump(mode="json")), human
 
     run_command("provenance.explain", json_mode, data_root, fn, context={"entity": entity})
+
+
+_GRAPH_ROWS = 10
+_REASON_WIDTH = 120
+
+
+def _graph_statuses(
+    reader: ProvenanceReader, graph: ProvenanceGraph, head: str | None
+) -> tuple[str | None, dict[str, StatusRecord]]:
+    """Statuses relative to ``head``, or the worst over every current head when none is given;
+    with no dataset at all, broken evidence alone (still spread to its dependents)."""
+    heads = dataset_heads(graph)
+    if head is None:
+        if not heads:
+            return None, fallback_statuses(graph)
+        return None, worst_statuses(reader.statuses(item) for item in heads)
+    head_id = _dataset_id(graph, head)
+    if head_id not in heads:
+        raise ValidationFailed(f"not_a_head: {head_id}; choose one of {heads}")
+    return head_id, reader.statuses(head_id)
+
+
+def _graph_human(view: GraphView, oversize: bool) -> list[str]:
+    lines = [
+        f"{len(view.nodes)} nodes, {len(view.edges)} edges "
+        f"({view.folded} of {view.entities} entities not drawn on their own)"
+    ]
+    rows = [
+        f"{node.status.value}  {node.members[0] if len(node.members) == 1 else node.label[0]}  "
+        f"{node.reason[:_REASON_WIDTH]}"
+        for node in view.nodes
+        if node.status != EntityStatus.VALID
+    ]
+    rows += [
+        f"{record.status.value}  {record.entity_id} (not drawn)  {record.reason[:_REASON_WIDTH]}"
+        for record in view.hidden_alerts
+    ]
+    lines += rows[:_GRAPH_ROWS]
+    if len(rows) > _GRAPH_ROWS:
+        lines.append(f"... {len(rows) - _GRAPH_ROWS} more in --json")
+    if oversize:
+        lines.append(
+            "the diagram is past Mermaid's default limits (500 edges / 50,000 characters): "
+            "write .html, or narrow it with --dataset / --entity"
+        )
+    return lines
+
+
+@provenance_app.command("graph")
+def graph_cmd(
+    out: Annotated[
+        Path, typer.Option("--out", help="file to write: .html, .md or .mmd, outside the data root")
+    ],
+    dataset: Annotated[
+        str | None,
+        typer.Option("--dataset", help="only this dataset's versions and what they connect to"),
+    ] = None,
+    entity: Annotated[
+        str | None,
+        typer.Option("--entity", help="only this entity's ancestors and descendants (run:X)"),
+    ] = None,
+    head: Annotated[
+        str | None,
+        typer.Option("--head", help="statuses relative to this head; default: worst of all heads"),
+    ] = None,
+    detail: Annotated[
+        str, typer.Option("--detail", help="overview (folds readings, receipts...) or full")
+    ] = "overview",
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+    backend: BackendOpt = "sqlite",
+    pg_service: PgServiceOpt = None,
+) -> None:
+    """Draw the indexed provenance graph as Mermaid; reads the index, writes only --out."""
+
+    def fn() -> CmdResult:
+        validate_detail(detail)
+        root, index = _backend(data_root, backend, pg_service)
+        target, fmt = prepare_output(out, root)
+        with index.read_snapshot() as reader:
+            graph = reader.load_graph()
+            head_id, statuses = _graph_statuses(reader, graph, head)
+        view = build_view(graph, statuses, dataset=dataset, entity=entity, detail=detail)
+        digest = graph_hash(graph)[:12]
+        meta = DocumentMeta(
+            build=build_string(),
+            backend=index.name.value,
+            index_hash=digest,
+            head=head_id,
+            generated=stamp(),
+        )
+        document = render_document(view, fmt, meta)
+        write_document(target, document.text)
+        counts = view.counts
+        fields: dict[str, FieldValue] = {
+            "backend": index.name.value,
+            "out": str(target),
+            "format": fmt,
+            "detail": view.detail,
+            "scope": view.scope,
+            "nodes": len(view.nodes),
+            "edges": len(view.edges),
+            "folded": view.folded,
+            "broken": counts["BROKEN"],
+            "stale": counts["STALE"],
+            "review": counts["REVIEW"],
+            "hash": digest,
+        }
+        if head_id is not None:
+            fields["head"] = head_id
+        if document.oversize:
+            fields["oversize"] = True
+        payload = {
+            "backend": index.name.value,
+            "hash": digest,
+            "format": fmt,
+            "out": str(target),
+            "head": head_id,
+            "oversize": document.oversize,
+            **view_payload(view),
+        }
+        warn = counts["BROKEN"] or counts["REVIEW"] or document.oversize
+        status: Status = "WARN" if warn else "OK"
+        human = [f"wrote {target}", *_graph_human(view, document.oversize)]
+        return status, fields, payload, human
+
+    run_command("provenance.graph", json_mode, data_root, fn, context={"out": str(out)})
 
 
 @provenance_app.command("status")

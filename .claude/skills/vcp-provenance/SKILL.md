@@ -11,6 +11,7 @@ description: Use when a dataset gets a new version and existing runs must be re-
 - 既有 evidence 消失、改寫或 ledger prefix drift → 命令 **fail closed**，不做 silent repair；人工查明後 `rebuild`。
 - PostgreSQL 只透過 libpq **service** 連線（`--pg-service`，`PGSERVICEFILE` / `PGPASSFILE` 以路徑指），沒有 host / port / URI / 憑證 flag，vcp 不讀憑證檔；一個 database 一個 index；schema 不相容就換乾淨 database 重建。
 - 選項以 `--help` 為準；status 語意、strategy reason、證據檔見 [reference.md](reference.md)。
+- 要把索引畫成圖（全比賽、單一 run、相對某個 head）→ `vcp-provenance-graph`。
 
 ## 資料改版的標準流程
 ```bash

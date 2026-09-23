@@ -11,7 +11,7 @@ description: Use when starting, resuming, operating, auditing, handing off, or e
 
 第一次進這個 repo 先讀 **vcp-orientation**（層、台帳、VERDICT、不可變等級、文件地圖）。操作前依序讀 `AGENTS.md`、`docs/handover/HANDOVER.md`、該比賽工作區的 `AGENTS.md` / `ENVIRONMENT.md` / `projects/<contest>/RUNBOOK.md`（若存在）。修改框架時再讀該層 spec 與 followups。`uv run vcp <group> <command> --help` 與 `docs/reference/cli.md` 是參數權威，不憑記憶猜選項。
 
-分工：新比賽 Day 1 → **vcp-contest-onboarding**；匯入 / 稽核 / 切分 / 匯出與 data 命令的 WARN/FAIL/ABORT → **vcp-data-pipeline**；預測 → 讀數 → 預登記 → 判決與融合準入 → **vcp-eval-and-fuse**；訓練包裝、checkpoint、提交、備份 → **vcp-train-submit-backup**；資料集改版、provenance 索引、PostgreSQL → **vcp-provenance**；發版、venv / worktree、訓練中能不能動框架、PR → **vcp-release-and-environments**；只有新增通用形態才用 **vcp-extend-registry**。
+分工：新比賽 Day 1 → **vcp-contest-onboarding**；匯入 / 稽核 / 切分 / 匯出與 data 命令的 WARN/FAIL/ABORT → **vcp-data-pipeline**；預測 → 讀數 → 預登記 → 判決與融合準入 → **vcp-eval-and-fuse**；訓練包裝、checkpoint、提交、備份 → **vcp-train-submit-backup**；資料集改版、provenance 索引、PostgreSQL → **vcp-provenance**；要一張全比賽的 provenance 圖（交接、檢查、簡報）→ **vcp-provenance-graph**；發版、venv / worktree、訓練中能不能動框架、PR → **vcp-release-and-environments**；只有新增通用形態才用 **vcp-extend-registry**。
 
 ## 每次接手先判定狀態
 

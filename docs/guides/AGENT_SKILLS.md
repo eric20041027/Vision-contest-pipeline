@@ -1,6 +1,6 @@
 # Working with an agent: the vcp skills and when they fire
 
-The repository ships nine skills — `.claude/skills/` for Claude Code, mirrored byte-for-byte to `.agents/skills/` for Codex. They are how an agent learns the contest rules instead of guessing them. Load `vcp-orientation` first in any session; the lifecycle entry then routes to a specialist skill for the step you are on.
+The repository ships ten skills — `.claude/skills/` for Claude Code, mirrored byte-for-byte to `.agents/skills/` for Codex. They are how an agent learns the contest rules instead of guessing them. Load `vcp-orientation` first in any session; the lifecycle entry then routes to a specialist skill for the step you are on.
 
 ```mermaid
 flowchart LR
@@ -10,6 +10,7 @@ flowchart LR
     R --> S3["vcp-eval-and-fuse<br/>readings, claims, verdicts,<br/>fusion admission"]
     R --> S4["vcp-train-submit-backup<br/>train run, submissions, backups,<br/>where to stop for authorisation"]
     R --> S5["vcp-provenance<br/>new dataset versions, index,<br/>PostgreSQL, benchmarks"]
+    S5 --> S8["vcp-provenance-graph<br/>draw the index as one picture:<br/>what is broken or stale"]
     O --> S6["vcp-release-and-environments<br/>releases, tagged worktrees + venvs,<br/>what not to touch during a live run"]
     O --> S7["vcp-extend-registry<br/>new importer / metric / fuser / writer"]
 ```
@@ -25,6 +26,7 @@ flowchart LR
 | Predictions → readings → claims → verdicts; ensembles | `vcp-eval-and-fuse` | Post-hoc pre-registration (including re-ingesting measured weights under a new run id); measuring on a contaminated base; opening the holdout casually |
 | Wrapping training, staging and uploading, backing up | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup |
 | The organiser changes the data | `vcp-provenance` | Overwriting the old version; hand-editing the index; using `auto` where the policy is known to pick wrong |
+| Someone wants to see the contest's provenance (a check, a handover, slides) | `vcp-provenance-graph` | Rebuilding and re-verifying the index "to be safe" (two full scans that replace an index another session may be using); drawing the default data root instead of the contest's; writing the picture into the data root |
 | Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
 | Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
 
@@ -38,4 +40,4 @@ The same order applies without an agent: the [visual guide](VCP_VISUAL_GUIDE.md)
 
 ## Keeping the skills honest
 
-Skills describe contracts that live in code. When a command, VERDICT field or ruling changes, update the matching skill in the same PR, keep `SKILL.md` under ~450 words with details in its reference file, and copy the directory to `.agents/skills/`. The set was last verified on 2026-09-21 by giving each new skill a realistic scenario to a fresh agent that had read nothing else.
+Skills describe contracts that live in code. When a command, VERDICT field or ruling changes, update the matching skill in the same PR, keep `SKILL.md` under ~450 words with details in its reference file, and copy the directory to `.agents/skills/`. The set was last verified on 2026-09-21 by giving each new skill a realistic scenario to a fresh agent that had read nothing else; `vcp-provenance-graph` was added on 2026-09-23 after the same scenario was first run by an agent without it.

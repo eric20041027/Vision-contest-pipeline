@@ -106,13 +106,27 @@ def run_command(
     logger.info(verdict.line(), extra={"vcp": {"cmd": cmd, "status": status}})
     if json_mode:
         doc = {"cmd": cmd, "status": status, "fields": fields, "result": payload}
-        typer.echo(json.dumps(doc, ensure_ascii=False, default=str))
+        try:
+            typer.echo(json.dumps(doc, ensure_ascii=False, default=str))
+        except UnicodeEncodeError:
+            typer.echo(json.dumps(doc, ensure_ascii=True, default=str))  # same JSON, \u escapes
         for line in human:
             if line.startswith("VERDICT "):
-                typer.echo(line, err=True)
-        typer.echo(verdict.line(), err=True)
+                _echo(line, err=True)
+        _echo(verdict.line(), err=True)
     else:
         for line in human:
-            typer.echo(line)
-        typer.echo(verdict.line())
+            _echo(line)
+        _echo(verdict.line())
     raise typer.Exit(code=exit_code(status))
+
+
+def _echo(line: str, *, err: bool = False) -> None:
+    """``typer.echo`` that cannot cost a command its VERDICT. A piped Windows stdout encodes with
+    the locale code page, so a name it has no character for (a simplified-Chinese run id on
+    cp950) raised after the work was done; such a line is written with ASCII escapes instead.
+    The encoder fails before anything is written, so the retry never duplicates output."""
+    try:
+        typer.echo(line, err=err)
+    except UnicodeEncodeError:
+        typer.echo(line.encode("ascii", errors="backslashreplace").decode("ascii"), err=err)

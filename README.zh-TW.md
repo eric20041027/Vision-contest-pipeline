@@ -1,8 +1,8 @@
 # vcp — vision contest pipeline
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.8.1](https://img.shields.io/badge/version-0.8.1-informational.svg)](CHANGELOG.md)
-[![Tests 1612](https://img.shields.io/badge/tests-1612%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.9.0](https://img.shields.io/badge/version-0.9.0-informational.svg)](CHANGELOG.md)
+[![Tests 1677](https://img.shields.io/badge/tests-1677%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -82,7 +82,7 @@ flowchart TD
 
 ### 讓 AI agent 幫忙
 
-repo 內建九個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的 `.agents/skills/`），讓 agent 學到這些規則而不是猜。任何 session 先讀 `vcp-orientation`，再由生命週期入口依你所在的步驟轉到專用 skill：
+repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的 `.agents/skills/`），讓 agent 學到這些規則而不是猜。任何 session 先讀 `vcp-orientation`，再由生命週期入口依你所在的步驟轉到專用 skill：
 
 | 時機 | Skill | 它擋掉 agent 的哪種錯 |
 |---|---|---|
@@ -93,6 +93,7 @@ repo 內建九個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 | 預測 → 讀數 → 主張 → 判決；融合 | `vcp-eval-and-fuse` | 事後預登記；在被汙染的基底上量；隨手開 holdout |
 | 包訓練、stage / 上傳、備份 | `vcp-train-submit-backup` | 把 FAIL 的候選 stage 上去；沒授權就上傳；把本機副本當異機備份 |
 | 主辦方換了資料 | `vcp-provenance` | 覆寫舊版；手改索引；在已知會選錯的情境用 `auto` |
+| 想看整場比賽的 provenance 圖（檢查、交接、簡報） | `vcp-provenance-graph` | 為了「保險」先 rebuild 再 verify；畫到預設 root 而不是這場比賽的；把圖寫進 data root |
 | 發版、建 venv、訓練跑的時候動框架 | `vcp-release-and-environments` | 為 `projects/` 的改動發版；把 `main` 拉進訓練正在用的 checkout |
 | 新增格式、指標、融合器 | `vcp-extend-registry` | 比賽名進 `src/vcp`；登記了卻沒更新 CLI help 與參考文件 |
 
@@ -111,13 +112,13 @@ repo 內建九個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 | `vcp submit` | 配額、截止、候選身分、決選與封槍 | `init`、`stage`、`verify`、`upload`、`record`、`sync`、`final`、`status` |
 | `vcp backup` | 從結論反向生成證據清單，分層推送與驗證 | `manifest`、`push`、`verify`、`pull`、`status` |
 | `vcp artifact` | 上面各層共用的不可變產物原語 | `create`、`show`、`verify`、`lineage`、`status`、`clean` |
-| `vcp provenance` | 資料集演進與下游影響索引（SQLite；PostgreSQL 可選） | `rebuild`、`sync`、`ingest`、`impact`、`stale`、`explain`、`verify-index` |
+| `vcp provenance` | 資料集演進與下游影響索引（SQLite；PostgreSQL 可選） | `rebuild`、`sync`、`ingest`、`impact`、`stale`、`explain`、`graph`、`verify-index` |
 
 完整選項表與範例流程：[docs/reference/cli.md](docs/reference/cli.md)。想先看圖：[視覺導覽](docs/guides/VCP_VISUAL_GUIDE.md)。
 
 ## 狀態與路線
 
-`0.8.1`，尚未到 1.0：產物與台帳格式已經穩定到可以在上面蓋東西；CLI 契約在 minor 版本仍可能改變（每次 bump 的意義見 [CHANGELOG.md](CHANGELOG.md)）。
+`0.9.0`，尚未到 1.0：產物與台帳格式已經穩定到可以在上面蓋東西；CLI 契約在 minor 版本仍可能改變（每次 bump 的意義見 [CHANGELOG.md](CHANGELOG.md)）。
 
 - **端到端驗證**：本機 RSNA 膝關節子集——資料、訓練、判決、stage、備份——目前正用於該比賽。
 - **PostgreSQL provenance 後端**：五份 live 證據（整合測試 51/51；1,224 次量測的 calibration；1K–100K 的 3,672 次六方法基準；aggregate gate 以 1.018 / 1.017 通過的 held-out；真實資料軌），全程對 canonical replay 完全一致。兩個發現如實列為限制而不是藏起來：incremental 在量到的每個變更比例都贏 full rebuild，以及 v1 adaptive policy 在小圖與接近全量變更時會選錯 FULL。細節：[docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md)。

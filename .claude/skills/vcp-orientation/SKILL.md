@@ -18,7 +18,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 提交 | `vcp submit init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report` | `submit.yaml`、`submissions.jsonl`、`stage.json` |
 | 備份 | `vcp backup manifest/push/verify/pull/status` | manifest（git）、`backup.log.jsonl` |
 | 產物 | `vcp artifact create/show/verify/lineage/status/relink/clean` | `artifacts/<kind>/<id>/manifest.json`（有它才是產物） |
-| provenance | `vcp provenance rebuild/sync/ingest/impact/stale/explain/status/verify-index` | 可刪除的衍生索引（SQLite 預設；PostgreSQL optional） |
+| provenance | `vcp provenance rebuild/sync/ingest/impact/stale/explain/graph/status/verify-index` | 可刪除的衍生索引（SQLite 預設；PostgreSQL optional）；`graph` 把它畫成 Mermaid 圖 |
 
 ## 三條鐵則與 VERDICT
 1. 取時只用 `vcp.core.time.utc_now()/stamp()`。
@@ -48,5 +48,6 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 預測 → 讀數 → 預登記 → 判決；融合準入 | `vcp-eval-and-fuse` |
 | 訓練包裝、checkpoint、提交、備份 | `vcp-train-submit-backup` |
 | 資料集改版、provenance 索引、PostgreSQL、基準量測 | `vcp-provenance` |
+| 看 / 畫 / 交出比賽的 provenance 圖（lineage、哪些壞了或過期） | `vcp-provenance-graph` |
 | 發版、venv / worktree、訓練中能不能動 main、PR 慣例 | `vcp-release-and-environments` |
 | 新增匯入器 / 指標 / 融合器等登記項 | `vcp-extend-registry` |

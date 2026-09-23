@@ -360,3 +360,67 @@ def test_verify_checks_fingerprint_accumulator_metadata(roots):
 
     assert result.ok is False
     assert "recorded graph record count differs" in result.issues
+
+
+def _invalid_artifact(roots, name: str) -> None:
+    directory = roots.data / "artifacts" / "test" / name
+    directory.mkdir(parents=True)
+    (directory / "manifest.json").write_text("{}\n", encoding="utf-8", newline="\n")
+
+
+def test_rebuild_preserves_canonical_gaps_and_verifies(roots):
+    _dataset(roots, "idx-old", det_samples(2, seed=7))
+    _invalid_artifact(roots, "broken-a")
+    canonical = build_graph(roots.data, roots.configs)
+    assert canonical.gaps == ["test/broken-a: invalid manifest"]
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+
+    index.rebuild(roots.data, roots.configs)
+
+    assert index.load_graph().normalized() == canonical.normalized()
+    assert index.verify(roots.data, roots.configs).ok is True
+
+
+def test_sync_persists_new_canonical_gap(roots):
+    _dataset(roots, "idx-old", det_samples(2, seed=7))
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index.rebuild(roots.data, roots.configs)
+    _invalid_artifact(roots, "broken-b")
+
+    index.sync(roots.data, roots.configs)
+
+    assert index.load_graph().normalized() == build_graph(roots.data, roots.configs).normalized()
+    assert index.verify(roots.data, roots.configs).ok is True
+
+
+def test_verify_rejects_tampered_gap_metadata(roots):
+    _dataset(roots, "idx-old", det_samples(2, seed=7))
+    _invalid_artifact(roots, "broken-c")
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index.rebuild(roots.data, roots.configs)
+    connection = sqlite3.connect(index.path)
+    with connection:
+        assert connection.execute("SELECT value FROM metadata WHERE key='graph_gaps'").fetchone()
+        connection.execute("UPDATE metadata SET value='[]' WHERE key='graph_gaps'")
+    connection.close()
+
+    result = index.verify(roots.data, roots.configs)
+
+    assert result.ok is False
+    assert "graph differs from canonical replay" in result.issues
+
+
+def test_legacy_index_missing_gap_metadata_requires_rebuild(roots):
+    _dataset(roots, "idx-old", det_samples(2, seed=7))
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index.rebuild(roots.data, roots.configs)
+    connection = sqlite3.connect(index.path)
+    with connection:
+        connection.execute("DELETE FROM metadata WHERE key='graph_gaps'")
+    connection.close()
+
+    with pytest.raises(IntegrityError, match="graph_gaps metadata; rebuild required"):
+        index.verify(roots.data, roots.configs)
+
+    index.rebuild(roots.data, roots.configs)
+    assert index.verify(roots.data, roots.configs).ok is True

@@ -37,6 +37,8 @@ graph entity attributes 中。無法證明時不猜成 VALID。
 - 新 run/reading/artifact 等 canonical record：`provenance sync`。只允許新增；既有 indexed record
   消失或改寫會 fail closed，要求人工查明後 `rebuild`。
 - `verify-index` 會以 full canonical replay 比 graph、每個 head 的 status 與 recorded graph hash。
+- SQLite 索引的 `graph_gaps` metadata 保存 canonical replay 的缺口清單。舊索引若缺少此欄位會
+  fail closed；用 `provenance rebuild` 重建衍生索引即可，不需要修改 card、artifact 或台帳。
 - ledger checkpoint 記 consumed bytes/prefix SHA；既有 prefix 被改會 `prefix_drift`。
 - rebuild 在 temporary SQLite 完成 graph/status parity 與 snapshot recheck 後才 atomic replace。
 - 任一 ingest transaction 中斷皆 rollback；刪除整個 SQLite 後執行 `rebuild` 可恢復。

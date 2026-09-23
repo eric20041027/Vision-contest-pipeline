@@ -221,6 +221,7 @@ def _seed_index(path: Path, count: int, source_hash: str, target_hash: str) -> N
             (f"{record_sum:064x}",),
         )
         connection.execute("INSERT OR REPLACE INTO metadata VALUES('graph_hash',?)", (digest,))
+        connection.execute("INSERT OR REPLACE INTO metadata VALUES('graph_gaps',?)", (_json([]),))
     connection.close()
 
 

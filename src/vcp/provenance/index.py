@@ -270,7 +270,7 @@ def _load_graph(
     include_change_ids: bool = True,
     include_transitions: bool = True,
 ) -> ProvenanceGraph:
-    graph = ProvenanceGraph()
+    graph = ProvenanceGraph(gaps=_load_gaps(connection))
     for row in connection.execute("SELECT * FROM entities ORDER BY entity_id"):
         graph.add_entity(
             ProvenanceEntity(
@@ -306,6 +306,21 @@ def _load_graph(
     return graph
 
 
+def _load_gaps(connection: sqlite3.Connection) -> list[str]:
+    row = connection.execute("SELECT value FROM metadata WHERE key='graph_gaps'").fetchone()
+    try:
+        if row is None:
+            raise ValueError
+        gaps = json.loads(row["value"])
+        if not isinstance(gaps, list) or not all(isinstance(gap, str) for gap in gaps):
+            raise ValueError
+        if gaps != sorted(gaps):
+            raise ValueError
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise IntegrityError("mismatch: graph_gaps metadata; rebuild required") from None
+    return gaps
+
+
 def _store_fingerprint(connection: sqlite3.Connection, graph: ProvenanceGraph) -> str:
     count, total = _fingerprint(graph)
     digest = _fingerprint_hash(count, total)
@@ -316,6 +331,9 @@ def _store_fingerprint(connection: sqlite3.Connection, graph: ProvenanceGraph) -
         "INSERT OR REPLACE INTO metadata VALUES('graph_record_sum',?)", (f"{total:064x}",)
     )
     connection.execute("INSERT OR REPLACE INTO metadata VALUES('graph_hash',?)", (digest,))
+    connection.execute(
+        "INSERT OR REPLACE INTO metadata VALUES('graph_gaps',?)", (_json(sorted(graph.gaps)),)
+    )
     return digest
 
 
@@ -948,6 +966,7 @@ class ProvenanceIndex:
             metadata = {
                 row["key"]: row["value"]
                 for row in connection.execute("SELECT key,value FROM metadata ORDER BY key")
+                if row["key"] != "graph_gaps"
             }
             return {**counts, **metadata, "bytes": self.path.stat().st_size}
         finally:

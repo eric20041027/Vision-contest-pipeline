@@ -1,8 +1,8 @@
 # vcp — vision contest pipeline
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.9.0](https://img.shields.io/badge/version-0.9.0-informational.svg)](CHANGELOG.md)
-[![Tests 1677](https://img.shields.io/badge/tests-1677%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.9.1](https://img.shields.io/badge/version-0.9.1-informational.svg)](CHANGELOG.md)
+[![Tests 1685](https://img.shields.io/badge/tests-1685%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -97,6 +97,8 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 | 發版、建 venv、訓練跑的時候動框架 | `vcp-release-and-environments` | 為 `projects/` 的改動發版；把 `main` 拉進訓練正在用的 checkout |
 | 新增格式、指標、融合器 | `vcp-extend-registry` | 比賽名進 `src/vcp`；登記了卻沒更新 CLI help 與參考文件 |
 
+**在別的專案用**：同一組 skill 也是 Claude Code plugin `vcp`。先把這個 repo 加成 marketplace（只要一次）——本機 checkout（`claude plugin marketplace add C:/path/to/Vision-contest-pipeline`，原地載入，`git pull` 就更新 skill）或 GitHub（`claude plugin marketplace add eric20041027/Vision-contest-pipeline`）——再執行 `claude plugin install vcp@vision-contest-pipeline`。之後在任何專案用 `/vcp:<skill>` 呼叫，例如 `/vcp:vcp-provenance-graph`；桌面版也可以從輸入框旁的 **+ → Slash commands** 挑。
+
 路由圖、委派整場比賽的 prompt、以及 skill 怎麼維護，在 [docs/guides/AGENT_SKILLS.md](docs/guides/AGENT_SKILLS.md)。
 
 ## 八層
@@ -118,7 +120,7 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 
 ## 狀態與路線
 
-`0.9.0`，尚未到 1.0：產物與台帳格式已經穩定到可以在上面蓋東西；CLI 契約在 minor 版本仍可能改變（每次 bump 的意義見 [CHANGELOG.md](CHANGELOG.md)）。
+`0.9.1`，尚未到 1.0：產物與台帳格式已經穩定到可以在上面蓋東西；CLI 契約在 minor 版本仍可能改變（每次 bump 的意義見 [CHANGELOG.md](CHANGELOG.md)）。
 
 - **端到端驗證**：本機 RSNA 膝關節子集——資料、訓練、判決、stage、備份——目前正用於該比賽。
 - **PostgreSQL provenance 後端**：五份 live 證據（整合測試 51/51；1,224 次量測的 calibration；1K–100K 的 3,672 次六方法基準；aggregate gate 以 1.018 / 1.017 通過的 held-out；真實資料軌），全程對 canonical replay 完全一致。兩個發現如實列為限制而不是藏起來：incremental 在量到的每個變更比例都贏 full rebuild，以及 v1 adaptive policy 在小圖與接近全量變更時會選錯 FULL。細節：[docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md)。

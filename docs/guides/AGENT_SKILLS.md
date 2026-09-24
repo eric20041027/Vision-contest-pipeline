@@ -30,6 +30,21 @@ flowchart LR
 | Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
 | Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
 
+## Using the skills in other projects
+
+Project skills load only in sessions opened in this repository. The same directory is also the Claude Code plugin `vcp`: `.claude/` is the plugin root (`.claude/.claude-plugin/plugin.json`, skills in `.claude/skills/`) and the repository root is the marketplace `vision-contest-pipeline` (`.claude-plugin/marketplace.json`). Add the marketplace once, then install:
+
+| Source | Add the marketplace | Keeps up to date by |
+|---|---|---|
+| A local checkout (your own machine) | `claude plugin marketplace add C:/path/to/Vision-contest-pipeline` | Loading in place: after `git pull`, the next session has the new skills |
+| GitHub (another machine, other people) | `claude plugin marketplace add eric20041027/Vision-contest-pipeline` (append `@v0.9.1` to pin a release) | `claude plugin marketplace update vision-contest-pipeline`; the plugin's `version` follows `__version__` |
+
+```bash
+claude plugin install vcp@vision-contest-pipeline --scope user
+```
+
+`--scope project` records the plugin in one project's `.claude/settings.json` instead. Plugin skills are namespaced: `/vcp:vcp-orientation`, `/vcp:vcp-provenance-graph`, and so on; in the desktop app they are also under **+ → Slash commands**. In this repository itself a user-scope install shows both `/vcp-orientation` (project) and `/vcp:vcp-orientation` (plugin); they are the same files. Personal skills in `~/.claude/skills/` would outrank project skills, which is why the skills are not linked there.
+
 ## How to delegate a whole contest
 
 Give the agent the rules URL, raw-data location, task and metric, grouping unit (patient / study / source), compute and time budget, data and config roots, backup destination, exactly which external uploads are already authorised, and whether the sealed holdout may be opened. The ready-to-paste prompt is in [`.claude/skills/vcp-running-contests/operator-guide.md`](../../.claude/skills/vcp-running-contests/operator-guide.md); the agent will read `vcp-orientation`, verify the ledgers, report the current stage, and stop only at real decision points (external submission, unsealing, unauthorised destinations, budget).

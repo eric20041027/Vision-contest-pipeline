@@ -12,6 +12,7 @@ description: Use when a dataset gets a new version and existing runs must be re-
 - PostgreSQL 只透過 libpq **service** 連線（`--pg-service`，`PGSERVICEFILE` / `PGPASSFILE` 以路徑指），沒有 host / port / URI / 憑證 flag，vcp 不讀憑證檔；一個 database 一個 index；schema 不相容就換乾淨 database 重建。
 - 選項以 `--help` 為準；status 語意、strategy reason、證據檔見 [reference.md](reference.md)。
 - 要把索引畫成圖（全比賽、單一 run、相對某個 head）→ `vcp-provenance-graph`。
+- 0.9.1 起 SQLite 索引另存 canonical graph 的 gaps；0.9.0 以前建的索引讀取時 FAIL `mismatch: graph_gaps metadata; rebuild required`——不是資料壞了，`rebuild` 一次（先講時間）。
 
 ## 資料改版的標準流程
 ```bash

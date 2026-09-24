@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "vision-contest-pipeline",
+  "description": "The vcp skills as a Claude Code plugin: the rules of a leakage-proof vision contest, for use in any project.",
+  "owner": {
+    "name": "eric20041027",
+    "url": "https://github.com/eric20041027"
+  },
+  "plugins": [
+    {
+      "name": "vcp",
+      "source": "./.claude",
+      "description": "Skills that teach an agent to run a vision contest with vcp: orientation, the contest lifecycle, data, measurement and fusion admission, training / submission / backup, provenance and its graph, releases and environments, registry extensions.",
+      "homepage": "https://github.com/eric20041027/Vision-contest-pipeline",
+      "license": "MIT",
+      "keywords": ["vision", "contest", "kaggle", "provenance", "evaluation", "skills"]
+    }
+  ]
+}

@@ -47,6 +47,7 @@ Get-ChildItem "$data/runs", "$data/measure", "$data/artifacts", "$data/submit" -
 | `status=WARN broken=N` | 範圍內有 N 個 BROKEN 實體；圖照樣寫出 | 讀 human 列的原因：證據壞修證據，索引舊了 `sync` |
 | `oversize=true` | `.md` / `.mmd` 超過 Mermaid 預設 500 邊 / 50,000 字 | 改寫 `.html`，或用 `--dataset` / `--entity` 縮小 |
 | `FAIL … provenance index … run vcp provenance rebuild` | 還沒建索引 | `rebuild`（先講要花的時間） |
+| `FAIL mismatch: graph_gaps metadata; rebuild required` | 索引是 0.9.0 以前的 vcp 建的 | `rebuild` 一次；重建後舊版 vcp 也讀得動 |
 | `FAIL exists:` | `--out` 是別人的檔 | 換路徑；不要刪對方的檔 |
 | `FAIL out_in_data_root:` | 圖指到 data root 裡 | 寫到比賽 repo（例如 `reports/`） |
 | `FAIL out_not_absolute:` | `--out` 解析不成絕對路徑（例如 Windows 長路徑前綴打錯） | 給一般的絕對路徑 |

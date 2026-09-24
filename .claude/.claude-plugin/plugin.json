@@ -1,0 +1,13 @@
+{
+  "name": "vcp",
+  "version": "0.9.1",
+  "description": "Skills that teach an agent to run a vision contest with vcp: orientation, the contest lifecycle, data, measurement and fusion admission, training / submission / backup, provenance and its graph, releases and environments, registry extensions.",
+  "author": {
+    "name": "eric20041027",
+    "url": "https://github.com/eric20041027"
+  },
+  "homepage": "https://github.com/eric20041027/Vision-contest-pipeline",
+  "repository": "https://github.com/eric20041027/Vision-contest-pipeline",
+  "license": "MIT",
+  "keywords": ["vision", "contest", "kaggle", "provenance", "evaluation", "skills"]
+}

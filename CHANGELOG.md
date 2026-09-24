@@ -9,11 +9,34 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
 - **`1.0.0`**：留給 2026-09-11 稽核的 Wave 1（role-scoped access、immutable artifact writer、access receipt、code snapshot）落地之後——屆時產物契約才是可以對外承諾的契約。
 - **產物記的 `vcp_version` 是 build string**，不只是版本號：`<version>`（已發版的 wheel，或 git 未追蹤的副本）、`<version>+g<40 hex commit>`（從 checkout 執行）、`<version>+g<commit>.dirty`（該 checkout 的 repo 有未提交變更——刻意過度回報，因為 commit 已不能完整描述跑過的程式碼）。`vcp version` 印同一字串；`vcp.core.build.parse_build_string` 解析它。
 - **發版步驟**（一個 commit 一個 tag）：
-  1. 改 `src/vcp/__init__.py` 的 `__version__`——它是唯一來源，`pyproject.toml` 以 `[tool.hatch.version]` 動態讀它，`uv.lock` 不記版本字面值。
+  1. 改 `src/vcp/__init__.py` 的 `__version__`——它是唯一來源，`pyproject.toml` 以 `[tool.hatch.version]` 動態讀它，`uv.lock` 不記版本字面值。同一個 commit 把 Claude Code plugin 的 `.claude/.claude-plugin/plugin.json` 的 `version` 改成同一個號碼（`tests/unit/test_skills_plugin.py` 會擋住不一致），別的專案才會收到新版 skill。
   2. 在本檔最上方加一條 `## [x.y.z] - YYYY-MM-DD`，列 Added / Changed / Fixed / Removed 與影響的層。
   3. `uv sync --reinstall-package vcp`（editable 安裝的 metadata 不會因 `__init__.py` 改動自動重建），再 `uv run pytest --cov=vcp`（`tests/unit/test_package.py` 會擋住 `__version__`、安裝 metadata 與本檔最新條目三者不一致）與 `uv run ruff check . && uv run ruff format --check .`。
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
+
+## [0.9.1] - 2026-09-24
+
+vcp 的 skill 變成可在任何專案使用的 Claude Code plugin，並帶上 0.9.0 之後合併的 SQLite gaps 修正（PR #21）；
+tag `v0.9.1` 打在 PR 的合併 commit 上。PATCH 的理由：CLI 命令、VERDICT 欄位、exit code、`reason=`
+字彙與產物 / 台帳內容都沒變；改的是衍生索引的 metadata 與打包。
+
+### Added
+- Claude Code plugin `vcp`：`.claude/` 是 plugin 根（`.claude/.claude-plugin/plugin.json`，skill 就是現有的
+  `.claude/skills/`，不複製），repo 根的 `.claude-plugin/marketplace.json` 是 marketplace
+  `vision-contest-pipeline`。在別的專案以 `/vcp:<skill>` 呼叫（例如 `/vcp:vcp-orientation`）。安裝：
+  `claude plugin marketplace add <本機 checkout 或 eric20041027/Vision-contest-pipeline>`，再
+  `claude plugin install vcp@vision-contest-pipeline`；本機 marketplace 原地載入，`git pull` 後下一個
+  session 就是新版 skill。
+- `tests/unit/test_skills_plugin.py`：plugin 版本 = `__version__`、marketplace 指向的根確實有 skill、每個
+  skill 的 `name` 等於目錄名且 description 是觸發句、`.agents/skills` 與 `.claude/skills` 逐位元組相同
+  （以前只靠人記得 `cp -r`）。
+
+### Fixed
+- SQLite provenance 索引把 canonical graph 的 gaps 存進 metadata，`verify-index` 能逐項比對（PR #21）。
+  **升級注意**：0.9.0 以前建的 SQLite 索引在 0.9.1 讀取時會 FAIL
+  `mismatch: graph_gaps metadata; rebuild required`，每個 data root 要 `vcp provenance rebuild` 一次
+  （RSNA 規模約 3 分鐘）；重建後的索引舊版 vcp 仍讀得動。PostgreSQL 後端不受影響。
 
 ## [0.9.0] - 2026-09-23
 

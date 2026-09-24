@@ -1,8 +1,8 @@
 # vcp — vision contest pipeline
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.9.0](https://img.shields.io/badge/version-0.9.0-informational.svg)](CHANGELOG.md)
-[![Tests 1677](https://img.shields.io/badge/tests-1677%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.9.1](https://img.shields.io/badge/version-0.9.1-informational.svg)](CHANGELOG.md)
+[![Tests 1685](https://img.shields.io/badge/tests-1685%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -97,6 +97,8 @@ The repository ships ten skills (`.claude/skills/` for Claude Code, mirrored to 
 | Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |
 | Adding a format, metric or fuser | `vcp-extend-registry` | Putting a contest name into `src/vcp`; registering without updating the CLI help and reference |
 
+**In other projects**, the same skills ship as the Claude Code plugin `vcp`. Add this repository as a marketplace once — a local checkout (`claude plugin marketplace add C:/path/to/Vision-contest-pipeline`, loaded in place, so `git pull` updates the skills) or GitHub (`claude plugin marketplace add eric20041027/Vision-contest-pipeline`) — then run `claude plugin install vcp@vision-contest-pipeline`. In any project the skills answer to `/vcp:<skill>`, for example `/vcp:vcp-provenance-graph`; the desktop app also lists them under **+ → Slash commands**.
+
 The routing diagram, the prompt to delegate a whole contest, and how the skills are kept honest are in [docs/guides/AGENT_SKILLS.md](docs/guides/AGENT_SKILLS.md).
 
 ## The layers
@@ -118,7 +120,7 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 
 ## Status and roadmap
 
-`0.9.0`, pre-1.0: artifact and ledger formats are stable enough to build on; the CLI contract can still change on a minor version ([CHANGELOG.md](CHANGELOG.md) says what each bump means).
+`0.9.1`, pre-1.0: artifact and ledger formats are stable enough to build on; the CLI contract can still change on a minor version ([CHANGELOG.md](CHANGELOG.md) says what each bump means).
 
 - **Proven end to end** on a local RSNA knee subset — data, training, judgement, staging, backup — and in use for that competition now.
 - **PostgreSQL provenance backend**: five live evidence sets (integration 51/51; a 1,224-measurement calibration; a 3,672-measurement six-method benchmark at 1K–100K entities; a held-out evaluation whose aggregate gate passes at 1.018 / 1.017; a real-data track), with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured, and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. Details: [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).

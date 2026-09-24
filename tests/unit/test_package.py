@@ -7,7 +7,7 @@ import vcp
 
 ROOT = Path(__file__).resolve().parents[2]
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
-EXPECTED_CANDIDATE_VERSION = "0.9.0"
+EXPECTED_CANDIDATE_VERSION = "0.9.1"
 
 
 def test_version_is_semver_and_single_sourced():

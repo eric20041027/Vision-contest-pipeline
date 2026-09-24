@@ -38,4 +38,4 @@
 `src/vcp/__init__.py` 的 `__version__` 是唯一來源。產物寫 `vcp.core.build.build_string()`：`0.8.1`（發版 wheel）、`0.8.1+g<commit>`（checkout）、`…dirty`（有未提交變更）。`vcp version` 印同一字串。MINOR = 產物／台帳內容或 CLI 契約改變；PATCH = 其餘。
 
 ## 歷史（看 CHANGELOG 才是權威）
-0.2 資料層 → 0.3 量測 → 0.4 不可變產物（Wave 1a）→ 0.5 access receipt（1b-1）→ 0.6 source audit（1b-2）→ 0.7 dataset evolution provenance → 0.8 PostgreSQL adaptive provenance → 0.8.1 串流 replay、`python -m vcp`、receipt nonce、開源門面。Wave 1c（程式碼快照與授權）尚未做。
+0.2 資料層 → 0.3 量測 → 0.4 不可變產物（Wave 1a）→ 0.5 access receipt（1b-1）→ 0.6 source audit（1b-2）→ 0.7 dataset evolution provenance → 0.8 PostgreSQL adaptive provenance → 0.8.1 串流 replay、`python -m vcp`、receipt nonce、開源門面 → 0.9.0 `vcp provenance graph` 與 graph skill → 0.9.1 skill 打包成 Claude Code plugin `vcp`（別的專案用 `/vcp:<skill>`）、SQLite 索引保存 graph gaps（舊索引 rebuild 一次）。Wave 1c（程式碼快照與授權）尚未做。

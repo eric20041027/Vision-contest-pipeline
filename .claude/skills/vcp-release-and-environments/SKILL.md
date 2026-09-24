@@ -11,7 +11,7 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 - `src/vcp/__init__.py` 的 `__version__` 是唯一來源；產物寫 build string `X.Y.Z[+g<commit>[.dirty]]`。發版前的產物帶 `+g<sha>` 是合法的，不必為了「好看」發版；為比賽開跑前發一個 PATCH 讓產物寫乾淨版號是可以的。
 
 ## 發版四步（一個 commit 一個 tag）
-1. 改 `__version__`；**同步改 `tests/unit/test_package.py` 的 `EXPECTED_CANDIDATE_VERSION`**。
+1. 改 `__version__`；**同步改 `tests/unit/test_package.py` 的 `EXPECTED_CANDIDATE_VERSION` 與 Claude Code plugin 的 `.claude/.claude-plugin/plugin.json` `version`**（別的專案靠它收到新版 skill）。
 2. `CHANGELOG.md` 最上方加 `## [x.y.z] - YYYY-MM-DD`，寫 MINOR/PATCH 的理由與 Added / Changed / Fixed。
 3. `uv sync --frozen --reinstall-package vcp`（editable metadata 不會自動更新）→ `uv run pytest --cov=vcp`（`test_package` 擋三者不一致）→ `uv run ruff check . && uv run ruff format --check .`。
 4. commit `chore(release): vx.y.z` → PR → CI 綠 → merge → 在**合併 commit** 上 `git tag -a vx.y.z -m "vcp x.y.z"` → `git push origin vx.y.z`。main 有 branch protection（三個 required checks、strict），所以走 PR。
@@ -36,6 +36,6 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 - 測試永不碰真實資料根（用 `roots` fixture 與 `tests/helpers.py`）；覆蓋率門檻 80%。
 
 ## 常見錯誤
-- 只改 `__version__` 不改 `EXPECTED_CANDIDATE_VERSION` 或 CHANGELOG → `test_package` 紅。
+- 只改 `__version__` 不改 `EXPECTED_CANDIDATE_VERSION` 或 CHANGELOG → `test_package` 紅；不改 `plugin.json` 的 `version` → `test_skills_plugin` 紅。
 - 在訓練跑的時候把 main 合併進被 editable 指到的 checkout（2026-09-21 發生過一次，紀錄在 HANDOVER）。
 - 用 `Vision-contest-pipeline/projects/rsna-knee/.venv`（repo 內的專案 venv）當比賽工作區的 venv：它指 main。

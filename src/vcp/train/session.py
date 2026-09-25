@@ -44,10 +44,9 @@ class Session:
         for this run, else the record's running attempt. Receipt ids (``<run>-a<n>-<seq>``) and
         events use the same number."""
         exported = os.environ.get("VCP_ATTEMPT", "")
-        if os.environ.get("VCP_RUN_ID") == self.run_id and exported.isdecimal():
-            n = int(exported)
-            if n > 0:
-                return n
+        ours = os.environ.get("VCP_RUN_ID") == self.run_id
+        if ours and exported.isascii() and exported.isdigit() and int(exported) > 0:
+            return int(exported)
         return current_attempt(load_record(self.data_root, self.run_id))
 
     def _attempt(self) -> int:
@@ -59,7 +58,7 @@ class Session:
         if not file.is_file():
             raise ValidationFailed(f"checkpoint is not a file: {file}")
         record = load_record(self.data_root, self.run_id)
-        n = current_attempt(record)
+        n = self.attempt  # one answer everywhere: events, checkpoints and receipts
         # 5-5: one read of what may be a multi-GB file; `register` takes the sha rather than
         # hashing the same bytes again.
         stored, digest = store_path(file, self.data_root), sha256_file(file)
@@ -125,7 +124,7 @@ class SessionBinding:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.run_id = session.run_id
-        self.attempt = current_attempt(load_record(session.data_root, session.run_id))
+        self.attempt = session.attempt
 
     def receipt_id(self, seq: int) -> str:
         return f"{self.run_id}-a{self.attempt}-{seq}"

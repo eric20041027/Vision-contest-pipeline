@@ -58,9 +58,9 @@ def test_attempt_is_the_exported_one_or_else_the_records(roots, monkeypatch):
     monkeypatch.setenv("VCP_RUN_ID", "other")  # ... for the run it was exported for only
     assert s.attempt == 2
     monkeypatch.setenv("VCP_RUN_ID", "r1")
-    for junk in ("", "0", "two", "-1"):
+    for junk in ("", "0", "two", "-1", " 3", chr(0x663)):  # the last is an Arabic-Indic 3
         monkeypatch.setenv("VCP_ATTEMPT", junk)
-        assert s.attempt == 2
+        assert s.attempt == 2, junk
     with pytest.raises(AttributeError):
         s.attempt = 5
 

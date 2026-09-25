@@ -184,3 +184,25 @@ def test_superseded_names_a_path_once_however_many_times_it_was_replaced(roots):
     save_record(roots.data, rec)
     st = status(roots.data, "r1")
     assert st.superseded == ["work/weights/best.pt"] and st.unbacked == ["work/weights/best.pt"]
+
+
+def test_five_folds_named_model_pt_all_upload_and_leave_nothing_unbacked(roots, tmp_path):
+    """VCP-039 acceptance: five fold-k/model.pt checkpoints upload under distinct names and are
+    all verified, so a multi-fold run is no longer stuck at unbacked=5."""
+    rec, w = _seeded(roots)
+    folds = []
+    for k in range(5):
+        fold = roots.data / "work" / f"fold-{k}" / "model.pt"
+        fold.parent.mkdir(parents=True)
+        fold.write_bytes(f"fold {k}".encode())
+        folds.append(fold)
+    rec, _ = register(rec, folds, data_root=roots.data, attempt=1)
+    save_record(roots.data, rec)
+
+    _, out = upload_run(roots.data, "r1", str(tmp_path / "vault"))
+
+    assert sorted(r.name for r in out.records if r.name.endswith("model.pt")) == [
+        f"fold-{k}__model.pt" for k in range(5)
+    ]
+    assert all(r.verified for r in out.records)
+    assert status(roots.data, "r1").unbacked == []

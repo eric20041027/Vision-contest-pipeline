@@ -3,7 +3,6 @@ Uploads the ledger never saw become ``foreign`` rows -- they spent quota too."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -15,6 +14,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.matching import mentions
 from vcp.submit.platforms import PlatformSubmission, Runner, get_platform
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
@@ -42,11 +42,6 @@ class SyncResult:
     refreshed: int = 0  # already-known foreign refs whose status or score changed (new snapshot)
 
 
-def _mentions(description: str, submission_id: str) -> bool:
-    pattern = rf"(?<![A-Za-z0-9._-]){re.escape(submission_id)}(?![A-Za-z0-9._-])"
-    return re.search(pattern, description) is not None
-
-
 def match_submission(
     p: PlatformSubmission,
     ledger: SubmissionLedger,
@@ -60,7 +55,7 @@ def match_submission(
         if r.platform_ref and r.platform_ref == p.platform_ref:
             return r.submission_id
     for sid in sorted(ledger.ids(), key=len, reverse=True):
-        if _mentions(p.description, sid):
+        if mentions(p.description, sid):
             return sid
     at = parse_stamp(p.at)
     for sid in ledger.ids():

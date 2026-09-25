@@ -125,7 +125,7 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
+| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=`。子程序的環境多了 `VCP_RUN_ID`、`VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`、`VCP_ATTEMPT`（第幾個 attempt）與有 `--seed` 時的 `VCP_SEED` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
 | `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等；遠端是 `<dest>/<run>/<名稱>`，run 內同名不同路徑的 checkpoint（多折的 `fold-k/model.pt`）取能分開它們的最少上層資料夾（`fold-0__model.pt`），只有資料夾也分不開才 FAIL `name_collision` | `--run`、`--dest`、`--only final` |
 | `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令）；`backed=` / `unbacked=`（目前的 bytes 沒副本，會 WARN）/ `superseded=`（同路徑已被後來的登記取代、又從沒上傳過的舊 bytes，只報不 WARN——它們的副本再也不會出現） | `--run`、`--verify`（重算 sha） |
 
@@ -171,6 +171,7 @@ with MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="tra
     s = Session.current()  # 在 vcp train run 底下才有
     s.register_checkpoint("ckpt/best.pt", final=True)
     s.note("val_auc", 0.91)
+    per_attempt = f"evidence.a{s.attempt}.json"  # --resume 後遞增，與收據 id 的 -a<n>- 相同
 ```
 
 ## 提交治理命令 `vcp submit`
@@ -179,7 +180,7 @@ with MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="tra
 |---|---|---|
 | `vcp submit init` | 寫 `configs/datasets/<test>/submit.yaml`（平台、配額與時區、截止、決選指標、輸出格式），並替 test dataset 建單子集 plan `all-v1` | `--dataset`（test dataset）、`--eval-dataset`、`--plan`、`--sealed`、`--platform manual\|kaggle`、`--competition`、`--kind file\|kernel`、`--board-rule last\|best`、`--quota N --day-tz TZ`、`--display-tz`、`--deadline`、`--metric`、`--writer`、`--writer-opt k=v`、`--kaggle-command` |
 | `vcp submit stage` | 四道門（封槍 / 截止、eval-test 配對核對、準入判決、產檔）全過才寫 `submit/<test>/<id>/` 與台帳 `staged` 列；`Staged.provenance` 記候選等級，低於 `require_provenance` → `provenance_required:`；kernel 提交的 `--weights` 只能是 eval run 或它的融合成員（遞迴），否則 `weights_not_in_candidate:`，candidate 的每個權重 run 也要過 sealed 與 provenance 檢查，probe 不擋但在 `pairing.checks` 記 `weights:<run>=<發現>`，`provenance` 取所有相關 run 最低的等級 | `--id`、`--eval-run`、`--test-run`、`--kind candidate\|baseline\|probe`、`--reason`、kernel 類 `--kernel --version --weights RUN[:sha]`、`--writer-opt`、`--plugin` |
-| `vcp submit upload` | Kaggle：再驗 sha → 配額 → `kaggle competitions submit` → `uploaded` 列 | `--id`、`--message` |
+| `vcp submit upload` | Kaggle：再驗 sha → 配額 → `kaggle competitions submit` → `uploaded` 列。CLI 回 0 卻說 `Could not submit to competition` 是 FAIL `upload_failed:`、不寫列；印了 `Submission ref:` 或成功字樣即確認；都沒有（kernel 提交在 CLI 2.2.4 就是這樣）就回讀 submissions 列表：description 以這個 id 開頭、平台時間落在這次上傳前後 2 分鐘內的恰好一筆 → 確認並記下它的 `platform_ref`（那一筆若台帳上已有——同 id 的上一發——就不算，`known_ref`）。VERDICT 帶 `confirmed=`、`platform_ref=`（有才帶）、`readback=matched\|not_listed\|ambiguous\|known_ref\|failed\|interrupted`（有回讀才帶）、`detail=`（平台回覆，redact 後截 160 字，也進 `logs/`）。`confirmed=false` 是 WARN：重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（它的 `unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上） | `--id`、`--message` |
 | `vcp submit record` | 手動平台：你在網頁上傳後回填，平台顯示時間換成 UTC | `--id`、`--at "YYYY-MM-DD HH:MM"`、`--tz platform\|utc`、`--platform-ref` |
 | `vcp submit score` / `sync` | 回填 public / private；Kaggle 以 `competitions submissions` 回讀、配對、把別人的發記成 `foreign`（照數配額）。同一個 foreign ref 的狀態或分數變了（PENDING → COMPLETE 等）就多記一筆快照，VERDICT `refreshed=`；配額與到達仍每個 ref 算一次，其實是自己上傳的 foreign ref（`uploaded` 帶著它，或 `scored` 把它綁到某個 id、且與那個 id 的一發上傳相差不到 10 分鐘）不另計；配到的一發若這個 id 還沒有帶它 ref 的 `scored` 列，分數沒變也寫一列（同檔重傳才綁得上） | `--public`、`--private` |
 | `vcp submit final` | 已準入且已上傳的候選依 sealed 讀數（同分看 public、再看 staged 時間）選出 `final_slots` 個，寫決選表並封槍 | `--slots`、`--dry-run` |

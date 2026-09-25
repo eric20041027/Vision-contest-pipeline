@@ -3,7 +3,7 @@ command that performs -- or attests to -- the action."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -86,6 +86,15 @@ class UploadOutcome:
     quota: QuotaState | None
 
 
+def _unclaimed(result: UploadResult, ledger: SubmissionLedger) -> UploadResult:
+    """A ref the ledger already holds is an earlier submission's, not this upload's (VCP-037):
+    a read-back can meet the last upload of the same id while this one is not listed yet."""
+    known = {r.platform_ref for r in ledger.rows if r.platform_ref}
+    if result.platform_ref is None or result.platform_ref not in known:
+        return result
+    return replace(result, confirmed=False, platform_ref=None, readback="known_ref")
+
+
 def upload(
     dataset: str,
     submission_id: str,
@@ -100,6 +109,7 @@ def upload(
     assert_quota(quota_state(p.ledger, p.profile, now))
     msg = f"{submission_id} {message}".strip() if message else submission_id
     result = get_platform(p.profile.platform).upload(p.staged, p.artifact, msg, p.profile, runner)
+    result = _unclaimed(result, p.ledger)
     row = LedgerRow(
         event="uploaded",
         ts=stamp(),

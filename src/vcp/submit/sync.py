@@ -137,7 +137,11 @@ def sync(
         if p.public is None and p.private is None:
             continue
         latest = ledger.latest_score(sid)
-        if latest is None or latest.public != p.public or latest.private != p.private:
+        # VCP-038: a ref this id has no scored row for gets one even when the score did not
+        # change -- a re-upload of the same file scores the same -- because that row is what
+        # ties the ref to the id (``arrivals`` then counts a foreign row for it only once).
+        new_ref = p.platform_ref not in {r.platform_ref for r in ledger.of("scored", sid)}
+        if latest is None or new_ref or latest.public != p.public or latest.private != p.private:
             ledger.append(
                 _row(
                     event="scored",

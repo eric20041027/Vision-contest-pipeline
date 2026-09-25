@@ -132,7 +132,7 @@ def status(
     return StatusView(
         staged=len(ledger.ids()),
         uploaded=len(ledger.of("uploaded")),
-        foreign=len(ledger.foreign_refs()),
+        foreign=sum(1 for r in arrivals if r.event == "foreign"),  # VCP-038: not our own
         quota=quota_state(ledger, profile, now),
         deadline_in_hours=deadline_in,
         locked=ledger.lock_state(),

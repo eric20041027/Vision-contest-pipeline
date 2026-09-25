@@ -271,3 +271,30 @@ def test_final_drops_a_candidate_whose_receipt_read_the_sealed_subset(uploaded):
     table = {e.submission_id: e for e in res.row.table}
     assert table["S1"].why == "observed_sealed" and not table["S1"].eligible
     assert table["S2"].eligible
+
+
+def test_final_reads_a_kernel_submission_the_way_stage_recorded_it(pair):
+    """VCP-036: `final` re-reads provenance over the eval run and every weights run of a
+    kernel submission, so its table and stage.json agree on the grade."""
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(_profile(submission_kind="kernel", writer=None), **_kw(pair))
+    stage(
+        StageSpec(
+            dataset=TEST,
+            submission_id="K1",
+            eval_run="good",
+            kernel="u/nb",
+            version=3,
+            weights=["good"],
+            **_kw(pair),
+        )
+    )
+    record(TEST, "K1", utc_now().strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    _measure_holdout(pair, "good")
+
+    res = final(TEST, dry_run=True, **_kw(pair))
+    entry = {e.submission_id: e for e in res.row.table}["K1"]
+
+    assert entry.eligible
+    assert entry.provenance == load_staged(pair.test_paths, "K1").provenance == "declared"

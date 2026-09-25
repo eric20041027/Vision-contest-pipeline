@@ -137,11 +137,11 @@ def _run_card(local: Path, paths: DatasetPaths, add: Adder) -> None:
 
 def _train_record(local: Path, paths: DatasetPaths, add: Adder) -> None:
     rec = load_yaml_model(local, TrainRecord)
-    newest = {Path(c.path).name: c for c in rec.checkpoints}  # a --resume that changed bytes wins
-    for name, c in newest.items():
+    newest = {c.path: c for c in rec.checkpoints}  # per path: a --resume that changed bytes wins
+    for path, c in newest.items():
         p = resolve_stored_path(c.path, paths.data_root)
         if p.is_file():
-            add(f"{rec.run_id}/train.yaml:checkpoints.{name}", c.sha256, sha256_file(p))
+            add(f"{rec.run_id}/train.yaml:checkpoints.{path}", c.sha256, sha256_file(p))
 
 
 def _fuse_record(local: Path, paths: DatasetPaths, add: Adder) -> None:

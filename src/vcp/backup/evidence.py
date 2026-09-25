@@ -39,6 +39,7 @@ from vcp.submit.stage import load_staged, stage_json
 from vcp.train.records import events_path, has_record, train_dir, train_yaml
 from vcp.train.records import load_record as load_train_record
 from vcp.train.schema import CheckpointRecord, TrainRecord
+from vcp.train.upload import remote_names
 
 CONCLUSIONS = ("submission", "judgement", "run", "all")
 HISTORY = "history.jsonl"
@@ -206,16 +207,25 @@ class Collector:
         self.measure_ledgers(dpaths, conclusion)
 
     def _checkpoints(self, record: TrainRecord, conclusion: str) -> None:
-        """The newest record per checkpoint file name (a --resume that changed the bytes is
-        history); a copy `train upload` verified becomes a remote_copy instead of a file."""
+        """The newest record of every checkpoint path: a --resume that changed a path's bytes is
+        history, but five folds that each write ``model.pt`` are five checkpoints (VCP-035). A
+        copy `train upload` verified with the same bytes becomes a remote_copy instead of a file
+        -- but only under a name that is this path's own: the name the upload gives it now, or
+        the plain file name every upload used before 0.10.0. Matching bytes alone would hand a
+        fold the copy of an identical sibling."""
         newest: dict[str, CheckpointRecord] = {}
         for c in record.checkpoints:
-            newest[Path(c.path).name] = c
-        for name, c in newest.items():
+            newest[c.path] = c
+        try:
+            upload_names = remote_names(newest)
+        except ValidationFailed:  # paths no folder tells apart: only plain names can match
+            upload_names = {}
+        for path, c in newest.items():
+            own = {upload_names.get(path), Path(path).name}
             remote = None
             for u in reversed(record.uploads):
-                if u.name == name and u.sha256 == c.sha256 and u.verified:
-                    remote = RemoteCopy(dest=u.dest, run=record.run_id, name=name)
+                if u.verified and u.sha256 == c.sha256 and u.name in own:
+                    remote = RemoteCopy(dest=u.dest, run=record.run_id, name=u.name)
                     break
             self.add(
                 resolve_stored_path(c.path, self.data_root),

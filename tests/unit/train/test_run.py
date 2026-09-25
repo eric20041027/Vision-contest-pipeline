@@ -620,13 +620,20 @@ def test_the_child_knows_its_attempt_and_its_receipts_agree(roots, work):
     _seed(roots)
     (work / "attempt_train.py").write_text(ATTEMPT_FAKE, encoding="utf-8")
     command = [sys.executable, "attempt_train.py"]
-    for n, resume in ((1, False), (2, True)):
-        res = train_run(_spec(roots, work, command=command, resume=resume))
+    for n in (1, 2, 3):
+        if n == 3:  # vcp itself died during attempt 2: the resume closes it, then runs attempt 3
+            rec = load_record(roots.data, "r1")
+            crashed = rec.attempts[-1].model_copy(update={"status": "running", "exit_code": None})
+            save_record(
+                roots.data, rec.model_copy(update={"attempts": [*rec.attempts[:-1], crashed]})
+            )
+        res = train_run(_spec(roots, work, command=command, resume=n > 1))
         console = run_dir(roots.data, "r1") / "train" / f"console.{n}.log"
         text = console.read_text(encoding="utf-8")
-        assert res.attempt.status == "finished", text
+        assert res.attempt.n == n and res.attempt.status == "finished", text
         assert f"VCP_ATTEMPT {n} SESSION {n}" in text
-    assert [r.artifact_id for r in load_run(roots.data, "r1").access] == ["r1-a1-1", "r1-a2-1"]
+    ids = [r.artifact_id for r in load_run(roots.data, "r1").access]
+    assert ids == ["r1-a1-1", "r1-a2-1", "r1-a3-1"]
 
 
 def test_train_run_without_receipts_grades_export_or_declared(roots, work, tmp_path):

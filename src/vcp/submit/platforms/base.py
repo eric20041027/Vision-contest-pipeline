@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from vcp.core.errors import RegistryError
 from vcp.core.proc import Runner, default_runner, redact
@@ -15,6 +15,7 @@ __all__ = [
     "PLATFORMS",
     "Platform",
     "PlatformSubmission",
+    "Readback",
     "Runner",
     "UploadResult",
     "default_runner",
@@ -24,14 +25,17 @@ __all__ = [
 ]
 
 
+# How reading an upload back from the platform's list went, when the CLI's own answer confirmed
+# nothing (Kaggle, VCP-037). ``known_ref``: what the list showed was an earlier upload's ref.
+Readback = Literal["matched", "not_listed", "ambiguous", "known_ref", "failed", "interrupted"]
+
+
 @dataclass(frozen=True)
 class UploadResult:
     confirmed: bool
     platform_ref: str | None
     detail: str
-    # How reading the submission back from the platform's list went, when the CLI's own answer
-    # confirmed nothing (Kaggle, VCP-037); None when no read-back happened.
-    readback: str | None = None
+    readback: Readback | None = None  # None: no read-back happened
 
 
 @dataclass(frozen=True)

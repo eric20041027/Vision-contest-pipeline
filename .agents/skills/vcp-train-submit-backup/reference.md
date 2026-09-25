@@ -15,7 +15,7 @@
 | `submit init` | `--dataset`（test）`--eval-dataset --plan --sealed --platform manual|kaggle --metric` | `--competition`、`--kind file|kernel`、`--board-rule last|best`、`--slots`、`--quota`、`--day-tz`、`--day-start`、`--display-tz`、`--deadline <UTC>`、`--params`、`--writer`、`--writer-opt`、`--kaggle-command`、`--test-plan`（`all-v1`）、`--test-subset`（`test`） |
 | `submit stage` | `--dataset --id`（< 32 字）`--eval-run` | `--test-run`（file）、`--kind candidate|baseline|probe`、`--reason`、`--kernel --version --output --weights RUN[:sha]`（kernel）、`--writer-opt`、`--plugin` |
 | `submit verify` | `--dataset --id` | |
-| `submit upload` | `--dataset --id` | `--message` |
+| `submit upload` | `--dataset --id` | `--message`；VERDICT `confirmed=` `platform_ref=` `detail=`（CLI 沒確認就回讀列表：描述以 id 開頭 + 上傳前後 2 分鐘；`readback=` 記結果） |
 | `submit record` | `--dataset --id --at "YYYY-MM-DD HH:MM"` | `--tz platform|utc`、`--platform-ref` |
 | `submit score` / `sync` | `--dataset` (+ `--id --public/--private`) | sync 把別人的發記成 `foreign`，照數配額 |
 | `submit final` | `--dataset` | `--slots`、`--dry-run` |

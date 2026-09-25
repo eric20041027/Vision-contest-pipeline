@@ -1,3 +1,4 @@
+import json
 import subprocess
 from datetime import timedelta
 
@@ -9,11 +10,18 @@ from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.actions import record, score, upload
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.platforms import kaggle
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage
 
 SECRET = "fakesecretfakesecretfakesecret1234"
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    """Kaggle's read-back looks at once instead of waiting between looks."""
+    monkeypatch.setattr(kaggle, "READBACK_DELAYS", tuple(0.0 for _ in kaggle.READBACK_DELAYS))
 
 
 def _profile(**over) -> PlatformProfile:
@@ -136,17 +144,45 @@ def test_upload_kaggle_with_quota(pair):
     assert SECRET not in text and text.count("uploaded") == 1
 
 
-def test_upload_failures_write_no_row(pair):
+def test_upload_failures_write_no_row(pair, no_wait):
     _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
     runner = FakeRunner([(1, "", f"denied key={SECRET}")])
     with pytest.raises(Exception, match="exit 1") as ei:
         upload(TEST, "S1", runner=runner, **_kw(pair))
     assert SECRET not in str(ei.value)
-    runner = FakeRunner([(0, "queued", "")])
+    runner = FakeRunner([(0, "Could not submit to competition", "")])  # 2.2.4 exits 0 on this
+    with pytest.raises(Exception, match="upload_failed"):
+        upload(TEST, "S1", runner=runner, **_kw(pair))
+    empty = (0, "No submissions found", "")  # CLI 2.2.4's empty list
+    runner = FakeRunner([(0, "queued", ""), *[empty] * len(kaggle.READBACK_DELAYS)])
     out = upload(TEST, "S1", runner=runner, **_kw(pair))
-    assert not out.row.confirmed
+    assert not out.row.confirmed and out.row.platform_ref is None
+    assert out.result.readback == "not_listed"
     led = SubmissionLedger(pair.test_paths.submissions_log)
     assert [r.event for r in led.rows] == ["staged", "staged", "uploaded"]
+
+
+def test_a_read_back_ref_is_written_into_the_uploaded_row(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    listed = {"ref": 777, "fileName": "submission.csv", "date": stamp(), "description": "S1 x"}
+    runner = FakeRunner([(0, "queued", ""), (0, json.dumps([listed]), "")])
+    out = upload(TEST, "S1", message="x", runner=runner, **_kw(pair))
+    assert out.row.confirmed and out.row.platform_ref == "777"
+    row = SubmissionLedger(pair.test_paths.submissions_log).of("uploaded")[0]
+    assert row.confirmed and row.platform_ref == "777"  # sync's first rule matches it by ref
+
+
+def test_a_read_back_that_meets_a_ref_the_ledger_holds_confirms_nothing(pair, no_wait):
+    quota = Quota(per_day=5, day_tz="UTC")
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best", quota=quota))
+    listed = {"ref": 777, "fileName": "submission.csv", "date": stamp(), "description": "S1"}
+    answers = [(0, "queued", ""), (0, json.dumps([listed]), "")]
+    first = upload(TEST, "S1", runner=FakeRunner(answers), **_kw(pair))
+    assert first.row.platform_ref == "777"
+    # S1 once more, while the list still shows only the first one: 777 is not this upload
+    again = upload(TEST, "S1", runner=FakeRunner(answers), **_kw(pair))
+    assert (again.row.confirmed, again.row.platform_ref) == (False, None)
+    assert again.result.readback == "known_ref"
 
 
 def test_upload_on_manual_platform_is_refused(pair):

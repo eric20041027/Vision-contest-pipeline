@@ -43,7 +43,7 @@
 | 台帳位置 | `submissions.jsonl` 與 `submit.yaml` 進 git（configs）；輸出檔與 `stage.json` 進 data root | 跟預登記一樣是決策紀錄：團隊看得見、diff 得到；大檔不進 git |
 | 準入 | candidate 須 PASS 判決（融合 run 每個直接成員各一份）；baseline / probe 須 `--reason`；無 override | 準入統一且機械（報告 §8 缺陷 2） |
 | 配額 | 視窗 = `[day_start @ day_tz, +24h)`；`uploaded` + `foreign` 計數；`tzdata` 進依賴 | Windows 沒系統 tz 資料庫；報告 §6 #1 |
-| 上傳原子性 | CLI 回 0 即寫 `uploaded`；回應解析不了只降 WARN `confirmed=false` | 動作已發生，台帳必須記 |
+| 上傳原子性 | CLI 回 0 即寫 `uploaded`；回應確認不了（回讀也沒配到）只降 WARN `confirmed=false` | 動作已發生，台帳必須記 |
 | 憑證 | 零接觸；CLI 原文全部 redact 後才可落地 | 使用者要求 |
 
 ## 4. 資料模型（`src/vcp/submit/schema.py`，pydantic，`extra="forbid"`）
@@ -134,7 +134,7 @@ kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "k
 |---|---|---|
 | `init --dataset T --eval-dataset D --plan P --sealed S --platform manual\|kaggle [--competition C] [--kind file\|kernel] [--board-rule last\|best] [--quota N --day-tz TZ --day-start HH:MM] [--display-tz TZ] [--deadline UTC] [--metric M --params k=v] [--writer W --writer-opt k=v] [--kaggle-command "uv tool run kaggle"]` | 寫 `submit.yaml`（`--kaggle-command` 以空白切成清單）；test dataset 沒有 `all-v1` 就直接組 `SplitPlan` 寫檔（全體樣本 → `test`，role `eval`，`params.eval_gold_only=false`，不經產生器） | 設定檔已存在 → FAIL `reason=exists`；eval 側 plan 沒有 role=sealed 的 `--sealed` → FAIL；時區名未知 → FAIL |
 | `stage --dataset T --id S --eval-run E [--test-run R] [--kind candidate\|baseline\|probe] [--reason …] [--kernel user/nb --version N --output submission.csv] [--weights RUN[:sha]]… [--writer-opt k=v]…` | §6.1 的順序：檢查全做完才產檔、才寫 `staged` | 任一門不過 → FAIL 零副作用；id 已存在（目錄或台帳）→ FAIL；`kind` 非 candidate 而無 `--reason` → FAIL `reason=reason_required`。stage 不吃配額 |
-| `upload --dataset T --id S [--message TEXT]` | Kaggle：再驗 sha → 封槍 / 截止 / 配額 → 平台適配器上傳 → `uploaded` 列 `source=vcp` | `platform=manual` → FAIL `reason=manual_platform`；sha 不符 → `IntegrityError`；配額用盡 → FAIL；CLI 非 0 → FAIL 不寫列；CLI 回 0 但無法確認 → WARN `confirmed=false` 仍寫列 |
+| `upload --dataset T --id S [--message TEXT]` | Kaggle：再驗 sha → 封槍 / 截止 / 配額 → 平台適配器上傳 → `uploaded` 列 `source=vcp` | `platform=manual` → FAIL `reason=manual_platform`；sha 不符 → `IntegrityError`；配額用盡 → FAIL；CLI 非 0 → FAIL 不寫列；CLI 回 0 但無法確認（§10.2 的回讀也沒配到）→ WARN `confirmed=false` 仍寫列 |
 | `record --dataset T --id S --at "2026-08-31 21:28" [--tz platform\|utc] [--platform-ref ID] [--message TEXT]` | 手動平台（或 Kaggle 在網頁上傳的發）：再驗 sha → 封槍 / 截止 → `--at` 換 UTC → `uploaded` 列 `source=manual` | `--at` 在未來或早於 `staged_at` → FAIL；該視窗已滿 → WARN `quota_overflow=`（動作已發生，照記）；sha 不符 → `IntegrityError` |
 | `score --dataset T --id S [--public X] [--private Y]` | `scored` 列 `source=manual` | 沒有 `uploaded` 列 → FAIL；兩個都沒給 → FAIL；非有限 → FAIL |
 | `sync --dataset T` | Kaggle：讀全部平台 submissions（翻頁到底）→ §6.3 配對 → 補 `scored`（`source=platform`）、不認得的發寫 `foreign`（去重） | `platform=manual` → FAIL；新 `foreign` > 0 → WARN `foreign=`；台帳有 `uploaded` 但平台查無 → WARN `unconfirmed=`；平台回應缺必要鍵 → FAIL `reason=platform_response key=` |
@@ -269,6 +269,7 @@ class UploadResult:
     confirmed: bool
     platform_ref: str | None
     detail: str  # 已 redact 的一行摘要
+    readback: str | None = None  # CLI 的回覆確認不了時，回讀平台列表的結果（§17 第 28 條）
 
 
 @dataclass(frozen=True)
@@ -299,8 +300,8 @@ class Platform(Protocol):
 ### 10.2 `kaggle`
 
 - 執行檔：`profile.kaggle_command` 的第一個元素經 `shutil.which` 找不到 → `VcpError` ABORT `reason=kaggle_not_found`。
-- `upload`：file 類 `… competitions submit -f <輸出檔絕對路徑> -m "<message>" -q <competition>`；kernel 類 `… competitions submit -k <kernel> -v <version> -f <output> -m "<message>" -q <competition>`。stdout 含 `Successfully submitted` → `confirmed=True`。
-- `list_submissions`：`… competitions submissions --format json --page-size 200 <competition>`，回應含下一頁 token 就帶 `--page-token` 續讀到底。讀 `fileName`、`date`、`description`、`status`、`publicScore`、`privateScore`，`ref` 有就用、沒有以 `sha256_text(fileName|date)` 當 `platform_ref`；缺必要鍵 → FAIL `reason=platform_response key=`；`date` 依 ISO 8601 解析，無時區即視為 UTC；分數字串空白或 `null` → `None`。
+- `upload`：file 類 `… competitions submit -f <輸出檔絕對路徑> -m "<message>" -q <competition>`；kernel 類 `… competitions submit -k <kernel> -v <version> -f <output> -m "<message>" -q <competition>`。stdout 含 `Could not submit to competition`（2.2.4 的檔案上傳沒送出時仍回 0）→ `PlatformError` FAIL `upload_failed:`、不寫列；有 `Submission ref: <n>` 行（2.2.4 之後的 CLI）→ `confirmed=True`、`platform_ref=<n>`；否則含 `Successfully submitted` → `confirmed=True`；都沒有 → 回讀列表（§17 第 28 條），結果記在 `readback`。
+- `list_submissions`：`… competitions submissions --format json --page-size 200 <competition>`，回應含下一頁 token 就帶 `--page-token` 續讀到底；2.2.4 對沒有任何 submission 的比賽不管 `--format` 都印純文字 `No submissions found`，視為空列表。讀 `fileName`、`date`、`description`、`status`、`publicScore`、`privateScore`，`ref` 有就用、沒有以 `sha256_text(fileName|date)` 當 `platform_ref`；缺必要鍵 → FAIL `reason=platform_response key=`；`date` 依 ISO 8601 解析，無時區即視為 UTC；分數字串空白或 `null` → `None`。
 - 平台回應的原文只在記憶體裡解析；任何要進 VERDICT、`logs/`、`--json`、台帳的字串都先過 §11 的 redact。
 
 ## 11. API 隱私硬規則
@@ -324,11 +325,12 @@ class Platform(Protocol):
 | 輸出檔 sha 不符（upload / record / verify）；融合 output sha 不符 | `IntegrityError` | FAIL |
 | kaggle 找不到 | `VcpError` `kaggle_not_found` | ABORT |
 | kaggle CLI 非 0 | `VcpError`（redact 後的最後一行） | FAIL |
+| kaggle CLI 回 0 但說 `Could not submit to competition` | `PlatformError` `upload_failed:`（不寫列） | FAIL |
 | 平台回應缺鍵 | `ValidationFailed` `platform_response key=` | FAIL |
 | 台帳列壞 | `ValidationFailed` 帶 `file:line` | FAIL |
 | 未知 writer / platform | `RegistryError` | ABORT |
 
-共用欄位：`dataset=` `id=` `sha256=<前 12>` `quota=used/per_day` `resets_at=` `local=` `locked=` `deadline_in=` `foreign=` `unconfirmed=` `unranked=` `final=` `confirmed=` `missing=`。
+共用欄位：`dataset=` `id=` `sha256=<前 12>` `quota=used/per_day` `resets_at=` `local=` `locked=` `deadline_in=` `foreign=` `unconfirmed=` `unranked=` `final=` `confirmed=` `platform_ref=` `readback=` `detail=` `missing=`。
 
 ## 13. 與其他子專案的介面
 
@@ -393,3 +395,4 @@ class Platform(Protocol):
 
 25. **CLI 失敗身分**（2026-09-07）：十二個命令皆传 dataset context；有 --id 者傳 id，init 另傳 eval_dataset / plan，stage 另傳 eval_run 與有提供的 test_run。可選值省略，不把 None 傳入 FieldValue；深層錯誤身分優先，仍能識別融合配對的葉節點。
 26. **foreign 列是狀態快照（稽核 Wave 0，VCP-009，2026-09-11）**：同一個 `platform_ref` 可以有多筆 `foreign` 列——`sync` 在該 ref 的狀態或分數與最新快照不同時才 append（PENDING → COMPLETE、PENDING → ERROR、COMPLETE 的分數修正各一筆；同一頁重複列出同一 ref 只留一筆；同頁重跑零新列）。`arrivals()` 對每個 ref 只取最新快照，所以 quota、`status` 的 `foreign=`（改為 ref 數）、榜面現任與 `report` 都看最新狀態、但每個 ref 只算一次到達。`SyncResult.refreshed` 與 VERDICT `refreshed=` 計「已知 ref 的新快照數」，否則 PENDING → COMPLETE 的刷新在 VERDICT 上看不出來；刷新不觸發 WARN（WARN 仍只因新 foreign 或 unconfirmed）。平台沒給 `ref` 的列，其 `platform_ref` 由檔名 + 時間導出，跨次 sync 穩定，快照照樣接得上。原始問題：第一次 sync 在 PENDING 時記下 ref，之後同 ref 的 COMPLETE/分數因「ref 已知」被跳過，台帳永遠沒有分數（RSNA 第一次真實 submission）。
+28. **上傳的回讀確認（VCP-037，2026-09-25）**：Kaggle CLI 2.2.4 對 kernel 提交只印伺服器的 message（`competition_submit_code`，`-q` 把其餘都關掉），沒有成功字樣也沒有 ref，所以 kernel 上傳以前永遠 WARN `confirmed=false`；平台其實當下就列得出來（比賽實例：平台時間只比本地 `at` 早 2–4 秒）。現在依序：(1) stdout 含 `Could not submit to competition`——2.2.4 的檔案上傳在送出前失敗時說這句、卻回 0——是 `PlatformError` FAIL `upload_failed:`，什麼都沒送出，所以不寫列；(2) 有 `Submission ref: <n>` 行（2.2.4 之後的 CLI 會印）就確認並記 ref；(3) 有成功字樣就確認；(4) 都沒有才回讀 `list_submissions`（與 `sync` 同一個讀法），等待 0、2、5、10 秒各看一次：description **以這個 id 開頭**（`vcp.submit.matching.leads`；vcp 寫的描述一律是 `<id> <message>`，比 sync 規則 1 的「提到」嚴，`S2 same as S1` 不算 S1 的）、且平台時間落在「CLI 開始前 2 分鐘到回來後 2 分鐘」（`READBACK_SKEW`，比 sync 的 10 分鐘窄）的恰好一筆 → `confirmed=True` 並把它的 `platform_ref` 寫進 `uploaded` 列（`sync` 規則 0 從此靠 ref 配對）。同一個 ref 列兩次仍算一筆；兩筆不同的 ref → `ambiguous`、不確認；配到的 ref 已經在台帳上（同一個 id 的上一發，這一發還沒列出）→ `known_ref`、不確認；2.2.4 的空列表是純文字 `No submissions found`，當空頁照樣往下看（`sync` 以前在沒有任何 submission 時也因此 FAIL，一併修正）。回讀本身**永不讓上傳失敗**：CLI 已經收下這一發，列一定要寫——任何例外只結束等待（`failed`，原因 redact 後進 `logs/`），Ctrl+C 也一樣（`interrupted`）。VERDICT 另帶 `platform_ref=`、`readback=matched|not_listed|ambiguous|known_ref|failed|interrupted`（有回讀才帶）與 `detail=`（平台回覆，§11 redact 後截 160 字；主控台照舊印完整一行）；VERDICT 會進 `logs/`，平台實際說了什麼從此查得到。`confirmed=false` 的人讀訊息：先跑 `submit sync`——配到就是上了，再傳會多吃一發配額；仍是 `unconfirmed` 就是沒上。同一 id 重傳需要 `--force` 的護欄（呼應 VCP-014）仍待辦。

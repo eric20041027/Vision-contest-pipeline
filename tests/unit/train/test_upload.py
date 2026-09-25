@@ -286,3 +286,9 @@ def test_paths_no_folder_can_tell_apart_are_a_name_collision():
     with pytest.raises(ValidationFailed, match=NAME_COLLISION) as ei:
         remote_names(["w/a.pt", f"w{backslash}a.pt"])
     assert ei.value.fields == {"checkpoint": "w__a.pt"}
+
+
+@pytest.mark.parametrize("bad", ["", ".", "//"])
+def test_a_path_without_a_file_name_is_refused_cleanly(bad):
+    with pytest.raises(ValidationFailed, match="no file name"):
+        remote_names(["w/model.pt", bad])

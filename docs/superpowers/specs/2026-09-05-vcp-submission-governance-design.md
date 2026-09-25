@@ -167,7 +167,7 @@ kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "k
 2. 否則 `file_name` = 該候選的輸出檔名，且台帳有該候選的 `uploaded` 列，`|P.at − at| ≤ 10 分鐘` → 配給它。
 3. 否則 → `foreign`（以 `platform_ref` 去重，重跑 sync 不重複寫）。
 
-配到的：P 有分數而台帳最新 `scored` 不同（或沒有）→ append `scored`（`source=platform`）。台帳有 `uploaded` 但沒有任何 P 配到它 → `unconfirmed`。平台時間一律由適配器轉成 UTC stamp 後再進 vcp。
+配到的：P 有分數，而台帳最新 `scored` 不同（或沒有）、或這個 id 還沒有帶 P 的 ref 的 `scored` 列 → append `scored`（`source=platform`）——同一個檔重傳分數相同，也要有自己的一列，它把 ref 綁到 id（§17 第 29 條）。台帳有 `uploaded` 但沒有任何 P 配到它 → `unconfirmed`。平台時間一律由適配器轉成 UTC stamp 後再進 vcp。
 
 ### 6.4 final 的演算法
 
@@ -182,7 +182,7 @@ kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "k
 ### 6.5 時間與配額的計算
 
 - 視窗：把時間點換到 `day_tz` 的牆鐘時間，取當天 `day_start` 為起點（牆鐘時間早於 `day_start` 則取前一天），終點 = 起點加一天（牆鐘加法，DST 交界由 `zoneinfo` 處理），兩端再換回 UTC。
-- 已用 = 視窗內 `uploaded`（以 `at`）與 `foreign`（以 `at`）的列數；`remaining = per_day − used`。
+- 已用 = 視窗內的到達數：`uploaded` 列（以 `at`）加上 `foreign` ref（以 `at`，每個 ref 一次）；其實是自己上傳的 foreign ref 不另計（§17 第 29 條）；`remaining = per_day − used`。
 - `resets_at` = 視窗終點的 UTC stamp；VERDICT 另給 `local=<終點在 day_tz 的牆鐘>`。
 - `record --at` 的字串格式 `YYYY-MM-DD HH:MM[:SS]`，`--tz platform`（預設，`display_tz`）或 `--tz utc`；列上同時記 `at`（換算後 UTC）與 `ts`（寫入時刻）。
 - 存取時鐘只經 `vcp.core.time`；測試以 monkeypatch `utc_now` 固定時間。
@@ -399,3 +399,5 @@ class Platform(Protocol):
 27. **kernel 的權重必須是被判決的那組**（2026-09-25，VCP-036；修訂 §4.2 kernel 候選與 §7.5 第 4、5 點）：原本 `trained_on_sealed`、`observed_sealed`、`provenance_required` 與準入只看 `--eval-run`，`verify_weights` 只比對各權重 run 自己的 `weights_hash`，所以 candidate 可以帶著在 sealed 上訓練過或讀過 sealed 的權重通過準入，而 `final` 用來排名的 sealed 讀數也不代表實際提交的 notebook。現在：`kind=candidate` / `baseline` 的每個 `--weights` run 必須是 eval run 或它遞迴展開的融合成員，否則 FAIL `weights_not_in_candidate`（`run=`）；candidate 的每個權重 run 也要過 `trained_on_sealed`、`observed_sealed`、`provenance_required`（與 eval run 同一套，`run=` 指那個權重 run）；baseline 只受成員資格約束，其餘發現記進 `pairing.checks`；probe 全部豁免，但每項發現都記成 `weights:<run>=<not_in_candidate|trained_on_sealed|observed_sealed|provenance_<grade>>`。`Staged.provenance` 對 kernel 提交取 eval run 與所有權重 run 中最低的等級；`submit final` 重新讀 provenance 時同樣併入權重 run（等級取最低、讀過的子集取聯集），所以 final 表與 `stage.json` 一致。判斷寫在 `vcp.submit.kernel`。
 
 28. **上傳的回讀確認（VCP-037，2026-09-25）**：Kaggle CLI 2.2.4 對 kernel 提交只印伺服器的 message（`competition_submit_code`，`-q` 把其餘都關掉），沒有成功字樣也沒有 ref，所以 kernel 上傳以前永遠 WARN `confirmed=false`；平台其實當下就列得出來（比賽實例：平台時間只比本地 `at` 早 2–4 秒）。現在依序：(1) stdout 含 `Could not submit to competition`——2.2.4 的檔案上傳在送出前失敗時說這句、卻回 0——是 `PlatformError` FAIL `upload_failed:`，什麼都沒送出，所以不寫列；(2) 有 `Submission ref: <n>` 行（2.2.4 之後的 CLI 會印）就確認並記 ref；(3) 有成功字樣就確認；(4) 都沒有才回讀 `list_submissions`（與 `sync` 同一個讀法），等待 0、2、5、10 秒各看一次：description **以這個 id 開頭**（`vcp.submit.matching.leads`；vcp 寫的描述一律是 `<id> <message>`，比 sync 規則 1 的「提到」嚴，`S2 same as S1` 不算 S1 的）、且平台時間落在「CLI 開始前 2 分鐘到回來後 2 分鐘」（`READBACK_SKEW`，比 sync 的 10 分鐘窄）的恰好一筆 → `confirmed=True` 並把它的 `platform_ref` 寫進 `uploaded` 列（`sync` 規則 0 從此靠 ref 配對）。同一個 ref 列兩次仍算一筆；兩筆不同的 ref → `ambiguous`、不確認；配到的 ref 已經在台帳上（同一個 id 的上一發，這一發還沒列出）→ `known_ref`、不確認；2.2.4 的空列表是純文字 `No submissions found`，當空頁照樣往下看（`sync` 以前在沒有任何 submission 時也因此 FAIL，一併修正）。回讀本身**永不讓上傳失敗**：CLI 已經收下這一發，列一定要寫——任何例外只結束等待（`failed`，原因 redact 後進 `logs/`），Ctrl+C 也一樣（`interrupted`）。VERDICT 另帶 `platform_ref=`、`readback=matched|not_listed|ambiguous|known_ref|failed|interrupted`（有回讀才帶）與 `detail=`（平台回覆，§11 redact 後截 160 字；主控台照舊印完整一行）；VERDICT 會進 `logs/`，平台實際說了什麼從此查得到。`confirmed=false` 的人讀訊息：重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，再傳會多吃一發配額；`submit sync` 之後會配對。sync 的 `unconfirmed=` 以 id 為單位：這個 id 以前沒傳過時，sync 仍列它才代表這一發沒上；傳過的 id 會被舊的那一發配到，分不出這一發。同一 id 重傳需要 `--force` 的護欄（呼應 VCP-014）仍待辦。
+
+29. **自己的上傳不再被當成 foreign 多算一次（VCP-038 第 1 段，2026-09-25）**：台帳還不認得某一發時（另一個 worktree 的台帳、事後才 `record` 的上傳），`sync` 會把平台上的那一發記成 `foreign`；之後 id 認領了同一個 ref，`arrivals()` 以前仍把 `uploaded` 與那筆 `foreign` 各算一次，配額 used 多一（比賽以真實列重現：used=2/3）。現在 `arrivals()` 把「其實是自己上傳的」foreign ref 排除：`uploaded` 列自己帶著這個 ref（`record --platform-ref`、§17 第 28 條的回讀）就是那一發；否則 `scored` 列把 ref 綁到某個 id 時，由該 id 沒帶 ref 的上傳吸收——全部 (上傳, ref) 配對依時間差由小到大先配、一發上傳只吸收一個 ref、時間差（`uploaded` 的 `at` 是 vcp 記的時刻，`foreign` 的是平台時間）超過 `TWIN_WINDOW`（10 分，與 sync 的 `MATCH_WINDOW` 相同，測試釘住兩者相等）就不吸收；一個 ref 被幾個 id 的 `scored` 列綁住時，每個 id 的上傳都可以是它的另一半。剩下的 ref 是這個 id 在平台上的另一發（例如網頁上傳沒 `record`），照樣算到達：寧可多算、不漏算。配額、`status` 的 `foreign=`（改成數到達裡的 foreign）、榜面現任與 `last_uploaded`（`final` 的 `needs_reupload`）與 `report` 都讀 `arrivals()`，一起修正；`sync` 自己的 `foreign=` / `refreshed=` 計數不變。`sync` 另補一條：配到的平台發若這個 id 還沒有帶它 ref 的 `scored` 列，即使分數沒變也寫一列（§6.3）——`board_rule=last` 要求重傳同一個檔時分數必然相同，以前那一發的 ref 永遠綁不上。仍有的限制：平台還在 PENDING（沒有分數）的一發寫不出 `scored` 列，綁上之前照樣多算一次。第 2–4 段（上傳前先讀平台、台帳位置可設定、多寫入者拓樸與 `merge=union`）待另寫 spec。

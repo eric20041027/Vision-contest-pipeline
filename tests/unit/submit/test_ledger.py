@@ -1,7 +1,7 @@
 import pytest
 
 from vcp.core.errors import ValidationFailed
-from vcp.submit.ledger import SubmissionLedger, append_ledger_row
+from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger, append_ledger_row
 from vcp.submit.schema import Gate, LedgerRow
 
 T0 = "2026-09-05T00:00:00.000Z"
@@ -92,6 +92,114 @@ def test_arrivals_use_the_latest_snapshot_of_a_foreign_ref(tmp_path):
     assert len(arrivals) == 1
     assert arrivals[0].public == 0.935 and arrivals[0].platform_status == "complete"
     assert led.latest_foreign("f1") is arrivals[0]
+
+
+def _foreign(ref, at):
+    return LedgerRow(event="foreign", ts=T2, platform_ref=ref, file_name="submission.csv", at=at)
+
+
+def _scored(sid, ref, at):
+    return LedgerRow(
+        event="scored",
+        ts=T2,
+        submission_id=sid,
+        source="platform",
+        public=0.5,
+        at=at,
+        platform_ref=ref,
+    )
+
+
+def _arrivals(path, rows):
+    led = SubmissionLedger(path)
+    for row in rows:
+        led.append(row)
+    return [(r.event, r.submission_id or r.platform_ref) for r in led.arrivals()]
+
+
+def test_a_foreign_row_for_our_own_upload_is_one_arrival(tmp_path):
+    """VCP-038: a ledger that did not know S1 yet (another worktree, an upload recorded later)
+    wrote the platform's S1 as foreign. Once a ref ties that row to S1 -- a sync ``scored`` row
+    or the upload's own ref -- the upload and the foreign row are one arrival, not two."""
+    by_score = [_staged("S1"), _uploaded("S1", T1), _foreign("k7", T1), _scored("S1", "k7", T1)]
+    assert _arrivals(tmp_path / "a.jsonl", by_score) == [("uploaded", "S1")]
+    by_ref = [_staged("S1"), _foreign("k7", T1), _uploaded("S1", T1, ref="k7")]
+    assert _arrivals(tmp_path / "b.jsonl", by_ref) == [("uploaded", "S1")]
+
+
+def test_a_claimed_ref_with_no_upload_row_to_absorb_it_still_counts(tmp_path):
+    # S1 went up by hand on the web and was never recorded: the foreign row is its only arrival
+    rows = [_staged("S1"), _foreign("k7", T1), _scored("S1", "k7", T1)]
+    assert _arrivals(tmp_path / "s.jsonl", rows) == [("foreign", "k7")]
+
+
+def _at(hour, minute=0, day=5):
+    return f"2026-09-{day:02d}T{hour:02d}:{minute:02d}:00.000Z"
+
+
+def test_an_upload_absorbs_its_own_twin_before_a_nearby_web_upload(tmp_path):
+    """Closest pairs first: S1 went up through vcp at 10:00 (another ledger wrote its platform
+    copy kV as foreign) and by hand at 09:55 (kW, never recorded). Taking refs in time order
+    would hand the upload to kW and leave its own twin counted."""
+    path = tmp_path / "s.jsonl"
+    rows = [
+        _staged("S1"),
+        _uploaded("S1", _at(10)),
+        _foreign("kW", _at(9, 55)),
+        _foreign("kV", _at(10)),
+        _scored("S1", "kW", _at(9, 55)),
+        _scored("S1", "kV", _at(10)),
+    ]
+    assert _arrivals(path, rows) == [("foreign", "kW"), ("uploaded", "S1")]
+    assert SubmissionLedger(path).last_uploaded().event == "uploaded"  # final's needs_reupload
+
+
+def test_a_tied_ref_far_from_every_upload_still_counts(tmp_path):
+    """Only within TWIN_WINDOW: S1's upload on the 5th cannot be the S1 sent by hand on the
+    6th, whatever ties that ref to S1 -- absorbing it would free a slot on the 6th."""
+    rows = [
+        _staged("S1"),
+        _uploaded("S1", _at(10, day=5)),
+        _foreign("kV", _at(10, day=5)),  # its twin, not tied (no scored row yet)
+        _foreign("kW", _at(10, day=6)),
+        _scored("S1", "kW", _at(10, day=6)),
+    ]
+    assert _arrivals(tmp_path / "s.jsonl", rows) == [
+        ("uploaded", "S1"),
+        ("foreign", "kV"),
+        ("foreign", "kW"),
+    ]
+
+
+def test_each_upload_absorbs_the_twin_closest_to_it(tmp_path):
+    rows = [
+        _staged("S1"),
+        _uploaded("S1", _at(12)),  # recorded first, happened last
+        _uploaded("S1", _at(10)),
+        _foreign("k10", _at(10, 1)),
+        _foreign("k12", _at(12, 1)),
+        _scored("S1", "k12", _at(12, 1)),
+        _scored("S1", "k10", _at(10, 1)),
+    ]
+    assert _arrivals(tmp_path / "s.jsonl", rows) == [("uploaded", "S1"), ("uploaded", "S1")]
+
+
+def test_a_ref_tied_to_two_ids_goes_to_the_one_with_an_upload_to_absorb_it(tmp_path):
+    rows = [
+        _staged("S1"),
+        _staged("S2"),
+        _uploaded("S2", _at(10)),
+        _foreign("k", _at(10, 1)),
+        _scored("S2", "k", _at(10, 1)),
+        _scored("S1", "k", _at(10, 1)),  # the later tie names an id with no upload
+    ]
+    assert _arrivals(tmp_path / "s.jsonl", rows) == [("uploaded", "S2")]
+
+
+def test_the_twin_window_is_syncs_match_window():
+    from vcp.submit.sync import MATCH_WINDOW
+
+    assert TWIN_WINDOW == MATCH_WINDOW
 
 
 def test_lock_state_and_latest_final(tmp_path):

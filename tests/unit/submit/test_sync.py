@@ -11,7 +11,7 @@ from vcp.submit.actions import record
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile
 from vcp.submit.report import report, status
-from vcp.submit.schema import PlatformProfile
+from vcp.submit.schema import PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage
 from vcp.submit.sync import sync
 
@@ -306,6 +306,48 @@ def test_sync_processes_platform_rows_in_time_order(staged):
     led = SubmissionLedger(staged.test_paths.submissions_log)
     assert [r.public for r in led.of("scored", "S1")] == [0.9, 0.7]
     assert led.latest_score("S1").public == 0.7
+
+
+def test_a_re_upload_that_scores_the_same_still_gets_its_own_scored_row(staged):
+    """VCP-038: re-sending the same file (board_rule=last's needs_reupload) scores the same; its
+    ref still needs a scored row, the row that ties it to the id."""
+    now = utc_now()
+    first = {"ref": 1, "fileName": "x.csv", "description": "S1 first", "publicScore": "0.9"}
+    rows = [
+        {**first, "date": stamp(now - timedelta(hours=2))},
+        {**first, "ref": 2, "date": stamp(now), "description": "S1 again"},
+    ]
+    assert sync(TEST, runner=FakeRunner(rows), **_kw(staged)).scored == 2
+    led = SubmissionLedger(staged.test_paths.submissions_log)
+    assert [r.platform_ref for r in led.of("scored", "S1")] == ["1", "2"]
+    assert sync(TEST, runner=FakeRunner(rows), **_kw(staged)).scored == 0  # still idempotent
+
+
+def test_a_foreign_row_the_ledger_later_learns_is_ours_stops_counting(pair):
+    """VCP-038 end to end: sync meets an upload the ledger does not know yet and writes it as
+    foreign; the upload is recorded afterwards; the next sync ties the ref to S1 with a scored
+    row, and from then on the submission is one arrival."""
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(_profile(quota=Quota(per_day=5, day_tz="UTC")), **_kw(pair))
+    seed_test_runs(pair)
+    stage(
+        StageSpec(
+            dataset=TEST, submission_id="S1", eval_run="good", test_run="good.test", **_kw(pair)
+        )
+    )
+    now = utc_now()
+    web = {"ref": 9, "fileName": "submission.csv", "date": stamp(now), "publicScore": "0.8"}
+    rows = [{**web, "description": "sent from the browser"}]
+    assert sync(TEST, runner=FakeRunner(rows), **_kw(pair)).foreign == 1
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    assert len(SubmissionLedger(pair.test_paths.submissions_log).arrivals()) == 2  # not tied yet
+    res = sync(TEST, runner=FakeRunner(rows), **_kw(pair))
+    assert res.matched == {"9": "S1"} and res.scored == 1
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    assert [r.event for r in led.arrivals()] == ["uploaded"]
+    st = status(TEST, **_kw(pair))
+    assert st.foreign == 0 and st.quota.used == 1
 
 
 def test_sync_survives_a_missing_stage_json(staged):

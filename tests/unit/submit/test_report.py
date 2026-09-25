@@ -220,6 +220,27 @@ def test_report_when_a_foreign_upload_comes_first(pair):
     assert rows[1].submission_id == "S1" and rows[1].delta == pytest.approx(0.8 - 0.5)
 
 
+def test_status_and_report_do_not_count_our_own_upload_as_foreign(pair):
+    _seed(pair, _profile())
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    s1 = led.uploads("S1")[0]
+    led.append(LedgerRow(event="foreign", ts=s1.ts, platform_ref="k7", file_name="x.csv", at=s1.at))
+    led.append(
+        LedgerRow(
+            event="scored",
+            ts=s1.ts,
+            submission_id="S1",
+            source="platform",
+            public=0.8,
+            at=s1.at,
+            platform_ref="k7",
+        )
+    )
+    st = status(TEST, **_kw(pair))
+    assert st.foreign == 0 and st.uploaded == 2 and st.quota.used == 2
+    assert [r.submission_id for r in report(TEST, **_kw(pair))] == ["S1", "S2"]
+
+
 def test_status_lists_each_staged_provenance(pair):
     _seed(pair, _profile())
     st = status(TEST, **_kw(pair))

@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from vcp.core.time import parse_stamp
 from vcp.measure.ledger import read_rows
 from vcp.submit.schema import LedgerRow
+
+# How far vcp's stamp of one of its uploads and the platform's may sit apart -- the tolerance of
+# sync's file-and-time rule (``sync.MATCH_WINDOW``, which cannot be imported here: sync imports
+# this module; a test keeps the two equal).
+TWIN_WINDOW = timedelta(minutes=10)
 
 
 def append_ledger_row(path: Path, row: LedgerRow) -> None:
@@ -14,6 +21,41 @@ def append_ledger_row(path: Path, row: LedgerRow) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(row.model_dump_json(exclude_none=True) + "\n")
+
+
+def _ours(
+    uploads: list[LedgerRow], foreign: dict[str, LedgerRow], scored: list[LedgerRow]
+) -> set[str]:
+    """Foreign refs that are one of our own uploads, written by a ledger that did not know it
+    yet -- another worktree's, or one where the upload was recorded later (VCP-038). An upload
+    carrying the ref is that submission. Otherwise a ``scored`` row that ties the ref to an id
+    lets a ref-less upload of that id absorb it: closest pairs first, one ref per upload, and
+    only within ``TWIN_WINDOW``. A ref left over (say, a web upload never recorded) stays an
+    arrival -- the count errs toward too many, never too few."""
+    ours = {u.platform_ref for u in uploads if u.platform_ref} & foreign.keys()
+    ties: dict[str, set[str]] = {}
+    for s in scored:
+        if s.platform_ref and s.submission_id:
+            ties.setdefault(s.platform_ref, set()).add(s.submission_id)
+    free: dict[str, list[tuple[datetime, int]]] = {}
+    for i, u in enumerate(uploads):
+        if u.submission_id and not u.platform_ref:
+            free.setdefault(u.submission_id, []).append((parse_stamp(str(u.at)), i))
+    pairs = sorted(
+        (abs(upload_at - parse_stamp(str(row.at))), i, ref)
+        for ref, row in foreign.items()
+        if ref not in ours
+        for sid in ties.get(ref, ())
+        for upload_at, i in free.get(sid, ())
+    )
+    absorbed: set[int] = set()
+    for gap, i, ref in pairs:
+        if gap > TWIN_WINDOW:
+            break
+        if i not in absorbed and ref not in ours:
+            absorbed.add(i)
+            ours.add(ref)
+    return ours
 
 
 class SubmissionLedger:
@@ -50,8 +92,10 @@ class SubmissionLedger:
     def arrivals(self) -> list[LedgerRow]:
         """Every upload the platform saw -- ours (``uploaded``) and others' (``foreign``) -- in
         platform-time order. A foreign upload may have multiple append-only snapshots while its
-        platform status changes; only its newest snapshot is an arrival. Stamps share one format,
-        so string order is time order; ties keep ledger order."""
+        platform status changes; only its newest snapshot is an arrival, and a foreign ref that
+        is one of our own uploads is none (``_ours``). Stamps share one format, so string order
+        is time order; at the same stamp our uploads come before others', each in ledger
+        order."""
         latest_foreign: dict[str, LedgerRow] = {}
         uploads: list[LedgerRow] = []
         for row in self.rows:
@@ -59,8 +103,9 @@ class SubmissionLedger:
                 uploads.append(row)
             elif row.event == "foreign" and row.platform_ref:
                 latest_foreign[row.platform_ref] = row
-        rows = [*uploads, *latest_foreign.values()]
-        return sorted(rows, key=lambda r: r.at or "")
+        ours = _ours(uploads, latest_foreign, self.of("scored"))
+        others = [row for ref, row in latest_foreign.items() if ref not in ours]
+        return sorted([*uploads, *others], key=lambda r: r.at or "")
 
     def last_uploaded(self) -> LedgerRow | None:
         arrivals = self.arrivals()

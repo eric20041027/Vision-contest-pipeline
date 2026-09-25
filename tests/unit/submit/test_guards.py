@@ -76,6 +76,26 @@ def test_deadline():
     assert_before_deadline(_profile(), parse_stamp("2999-01-01T00:00:00Z"))
 
 
+def test_quota_counts_an_upload_the_platform_also_listed_as_foreign_once(tmp_path):
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    now = utc_now()
+    at = stamp(now)
+    led.append(_uploaded("S1", at))
+    led.append(LedgerRow(event="foreign", ts=at, platform_ref="k7", file_name="x", at=at))
+    led.append(
+        LedgerRow(
+            event="scored",
+            ts=at,
+            submission_id="S1",
+            source="platform",
+            public=0.5,
+            at=at,
+            platform_ref="k7",
+        )
+    )
+    assert quota_state(led, _profile(), now).used == 1  # VCP-038: it was 2
+
+
 def test_quota_counts_uploaded_and_foreign(tmp_path):
     led = SubmissionLedger(tmp_path / "s.jsonl")
     now = utc_now()

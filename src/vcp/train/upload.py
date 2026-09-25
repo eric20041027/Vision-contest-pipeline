@@ -43,7 +43,12 @@ class UploadOutcome:
 def _parts(path: str) -> list[str]:
     """Folder names and file name of a stored path, without a root or a drive colon."""
     parts = PurePosixPath(path.replace("\\", "/")).parts
-    return [part.rstrip(":") for part in parts if part.strip("/")]
+    kept = [part.rstrip(":") for part in parts if part.strip("/")]
+    if not kept:
+        raise ValidationFailed(
+            f"checkpoint path {path!r} has no file name", fields={"checkpoint": path}
+        )
+    return kept
 
 
 def remote_names(paths: Iterable[str]) -> dict[str, str]:

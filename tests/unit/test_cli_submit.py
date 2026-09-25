@@ -186,6 +186,50 @@ def test_record_score_cli(pair):
     assert r.exit_code == 1 and "manual_platform" in _verdict(r.output)
 
 
+def test_upload_verdict_carries_the_platform_ref_and_detail_into_the_log(roots, monkeypatch):
+    """VCP-037: the platform's reply was printed to the console only; it now rides the VERDICT
+    (which the log keeps), clipped, next to the ref the read-back found."""
+    from vcp import cli_submit
+    from vcp.submit.actions import UploadOutcome
+    from vcp.submit.platforms import UploadResult
+    from vcp.submit.schema import LedgerRow
+
+    reply = "Your submission was queued. " + "It is scored when the notebook finishes. " * 5
+
+    def fake_upload(dataset, submission_id, **_):
+        ref = "51234" if submission_id == "S1" else None
+        row = LedgerRow(
+            event="uploaded",
+            ts="2026-09-25T08:00:00.000Z",
+            submission_id=submission_id,
+            at="2026-09-25T08:00:00.000Z",
+            source="vcp",
+            platform_ref=ref,
+            message=submission_id,
+            confirmed=ref is not None,
+            profile_sha256="p" * 64,
+        )
+        readback = "matched" if ref else "not_listed"
+        return UploadOutcome(row, UploadResult(ref is not None, ref, reply, readback), None)
+
+    monkeypatch.setattr(cli_submit, "upload", fake_upload)
+    r = runner.invoke(app, ["submit", "upload", "--dataset", "beach-test", "--id", "S1"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "confirmed=true" in v
+    assert "platform_ref=51234" in v and "readback=matched" in v
+    detail = json.loads(v.split("detail=", 1)[1])  # a quoted VERDICT value is a JSON string
+    assert len(detail) == 160 and detail.endswith("...") and reply.startswith(detail[:-3])
+    assert reply in r.output and "vcp submit sync" not in r.output  # the console keeps it all
+    logged = "".join(p.read_text(encoding="utf-8") for p in (roots.data / "logs").iterdir())
+    assert "Your submission was queued" in logged
+    r = runner.invoke(app, ["submit", "upload", "--dataset", "beach-test", "--id", "S2"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "confirmed=false" in v
+    assert "platform_ref" not in v and "readback=not_listed" in v and "detail=" in v
+    assert "look there for a S2 entry near 2026-09-25T08:00:00.000Z" in r.output
+    assert "`vcp submit sync --dataset beach-test` matches it later" in r.output
+
+
 def test_final_status_report_cli(pair):
     from vcp.core.time import utc_now
 

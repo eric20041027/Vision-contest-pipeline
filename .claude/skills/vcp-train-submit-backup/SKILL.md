@@ -18,7 +18,7 @@ uv run vcp train run --run R --dataset D --plan fixed-v1 --export <export dir> -
   --framework "…" --cwd projects/<c> --checkpoints "work/R/*.pt" --final "work/R/best.pt" [--upload DEST] -- <訓練命令>
 uv run vcp train status --run R --verify
 ```
-- 訓練迴圈用 `MaterializedReader(...)` 或 `Session.current().access(subsets={"train"})` 讀資料才有 access receipt；`Session.current().register_checkpoint(path, final=True)`、`s.note(k, v)` 在 `train run` 底下才可用。
+- 訓練迴圈用 `MaterializedReader(...)` 或 `Session.current().access(subsets={"train"})` 讀資料才有 access receipt；`Session.current().register_checkpoint(path, final=True)`、`s.note(k, v)`、`s.attempt`（第幾個 attempt，`--resume` 後遞增；別呼叫私有的 `_attempt()`）在 `train run` 底下才可用。
 - `train status`：`backed=0` 才是有副本；`unbacked=` 是目前 bytes 沒副本（WARN，不是壞）；`superseded=` 同路徑被後來的登記取代且從沒上傳；`drift=` 檔案與登記 sha 不符（壞）。`attempts[-1]` 是最新一次執行。
 - `--resume` 加 attempt；`train upload --run R --dest …` 冪等，`--only final` 只傳最終權重。
 - 開訓前先 commit 專案程式：`train/env.N.json` 記 `git.commit` 與 `dirty`，髒樹會如實寫 `dirty: true`。
@@ -51,5 +51,6 @@ uv run vcp backup status --dataset D-test
 
 ## 常見錯誤
 - 把 RUNBOOK 的命令當已完成；staged ≠ uploaded；local `remote_copy` ≠ 異機備份；`rclone_conf=unknown` ≠ absent。
+- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（`unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上）。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。
 - 直接上傳既有 CSV 再補紀錄：先釐清來源，無法證明身分的檔只能如實標示。
 - 在 main checkout 的 venv 啟動訓練：用比賽釘版 worktree 的 `vcp.exe`（見 `vcp-release-and-environments`）。

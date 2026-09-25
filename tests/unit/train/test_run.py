@@ -105,6 +105,21 @@ with Session.current().access(subsets={"valA"}) as peek:
 )
 
 
+# VCP-043: the child learns its attempt number, and it agrees with the receipt ids it leaves.
+ATTEMPT_FAKE = """
+import os
+from pathlib import Path
+from vcp.train import Session
+
+s = Session.current()
+print("VCP_ATTEMPT", os.environ.get("VCP_ATTEMPT"), "SESSION", s.attempt)
+with s.access(subsets={"train"}) as access:
+    list(access.iter("train"))
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best")
+"""
+
+
 def _seed(roots, name="tiny", n=40):
     paths = DatasetPaths.resolve(name, data_root=roots.data, configs_root=roots.configs)
     samples = det_samples(n, seed=0)
@@ -599,6 +614,26 @@ def test_train_run_binds_the_childs_receipts_and_warns_on_observed_beyond(roots,
     )
     ids = [r.artifact_id for r in load_run(roots.data, "r2").access]
     assert ids == ["r2-a1-1", "r2-a1-2", "r2-a2-1", "r2-a2-2"] and res.receipts == 4
+
+
+def test_the_child_knows_its_attempt_and_its_receipts_agree(roots, work):
+    _seed(roots)
+    (work / "attempt_train.py").write_text(ATTEMPT_FAKE, encoding="utf-8")
+    command = [sys.executable, "attempt_train.py"]
+    for n in (1, 2, 3):
+        if n == 3:  # vcp itself died during attempt 2: the resume closes it, then runs attempt 3
+            rec = load_record(roots.data, "r1")
+            crashed = rec.attempts[-1].model_copy(update={"status": "running", "exit_code": None})
+            save_record(
+                roots.data, rec.model_copy(update={"attempts": [*rec.attempts[:-1], crashed]})
+            )
+        res = train_run(_spec(roots, work, command=command, resume=n > 1))
+        console = run_dir(roots.data, "r1") / "train" / f"console.{n}.log"
+        text = console.read_text(encoding="utf-8")
+        assert res.attempt.n == n and res.attempt.status == "finished", text
+        assert f"VCP_ATTEMPT {n} SESSION {n}" in text
+    ids = [r.artifact_id for r in load_run(roots.data, "r1").access]
+    assert ids == ["r1-a1-1", "r1-a2-1", "r1-a3-1"]
 
 
 def test_train_run_without_receipts_grades_export_or_declared(roots, work, tmp_path):

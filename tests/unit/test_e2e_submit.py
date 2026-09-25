@@ -13,6 +13,7 @@ from submit_fixtures import make_pair, seed_eval_runs, seed_judgements, seed_tes
 from vcp.cli import app
 from vcp.core.time import utc_now
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.platforms import kaggle
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import PlatformProfile, Quota
 
@@ -35,7 +36,7 @@ if args[:2] == ["competitions", "submit"]:
     n = len(state["submissions"]) + 1
     state["submissions"].insert(0, {"ref": n, "fileName": os.path.basename(f), "date": os.environ["FAKE_KAGGLE_NOW"], "description": m, "status": "complete", "publicScore": str(round(0.5 + 0.1 * n, 3))})
     json.dump(state, open(state_path, "w", encoding="utf-8"))
-    print("Successfully submitted to c1")
+    print(os.environ.get("FAKE_KAGGLE_REPLY", "Successfully submitted to c1"))
 elif args[:2] == ["competitions", "submissions"]:
     print(json.dumps(state["submissions"]))
 else:
@@ -202,6 +203,7 @@ def _scan(pair, outputs: list[str]) -> None:
 
 def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
     _ready(pair)
+    monkeypatch.setattr(kaggle, "READBACK_DELAYS", tuple(0.0 for _ in kaggle.READBACK_DELAYS))
     script = tmp_path / "fake_kaggle.py"
     script.write_text(FAKE_KAGGLE, encoding="utf-8")
     state = tmp_path / "state.json"
@@ -249,6 +251,11 @@ def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
         outputs.append(r.output)
         assert r.exit_code == 0, r.output
         assert "confirmed=true" in _verdict(r.output)
+        # S2 answers the way a code submission does (VCP-037): no success phrase, no ref
+        monkeypatch.setenv("FAKE_KAGGLE_REPLY", "Your submission was queued")
+    v = _verdict(r.output)
+    assert "status=OK" in v and "platform_ref=2" in v and "readback=matched" in v
+    assert 'detail="Your submission was queued"' in v
     r = _run("upload", "--dataset", "beach-test", "--id", "S3")
     outputs.append(r.output)
     assert r.exit_code == 1 and "quota_exhausted" in _verdict(r.output)

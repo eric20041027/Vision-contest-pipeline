@@ -96,7 +96,7 @@ created_at: <UTC stamp>
 }
 ```
 
-kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "kernel": "user/notebook", "version": 7, "output": "submission.csv", "weights": [{"run": "yolo11m-s0", "sha256": "…"}]}`；`pairing.mode = "kernel"`。vcp 只核對它知道的東西（宣告的權重 sha 對得上 `run.yaml.weights_hash`），notebook 內容不驗，`checks` 明寫 `notebook=declared`。
+kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "kernel": "user/notebook", "version": 7, "output": "submission.csv", "weights": [{"run": "yolo11m-s0", "sha256": "…"}]}`；`pairing.mode = "kernel"`。vcp 只核對它知道的東西（宣告的權重 sha 對得上 `run.yaml.weights_hash`），notebook 內容不驗，`checks` 明寫 `notebook=declared`。2026-09-25 起（VCP-036，見 §17 第 27 條）宣告的權重還必須是被判決的那組：eval run 本身或它遞迴展開的融合成員。
 
 ### 4.3 台帳（`configs/datasets/<test>/submissions.jsonl`，只 append）
 
@@ -194,8 +194,8 @@ kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "k
 1. **模式**：兩側都有 `fuse.json` → `fusion`；都沒有 → `single`；只有一側有 → FAIL `reason=identity field=fuse.json`。
 2. **single**：`source.weights_hash` 兩側非空且相等，否則 FAIL `reason=identity field=weights_hash side=<缺的那側|both>`；`source.config_hash` 兩側都非空時必須相等（不等 → FAIL `field=config_hash`），一側空 → WARN `config_hash=unchecked`。
 3. **fusion**：`method`、`method_version`、`params` 相等；成員數相等；依位置逐對：`weight` 相等、對每對 (eval 成員, test 成員) 載入兩張 run 卡並遞迴套本節（成員本身是融合 run 就再進 `fusion`）；不等 → FAIL `reason=identity field=<method|params|members|weight> index=<i>`。test 側再驗 `fuse.json.subsets[test_subset].output_sha256` = `test_run.predictions[test_subset].sha256`，否則 `IntegrityError`。
-4. **kernel**：`--weights RUN[:sha]`（可重複，預設 `[eval_run]`）：每個 RUN 是 eval 側 run，`source.weights_hash` 必須非空（否則 FAIL `field=weights_hash run=`）；給了 `:sha` 必須相等。記成 `artifact.weights`。
-5. **不得訓練在 holdout 上**：`kind=candidate` 且 `sealed_subset ∈ eval_run.trained_on` → FAIL `reason=trained_on_sealed`（永遠拿不到乾淨 sealed 讀數，不可能成為最終）。融合 run 的 `trained_on` 已是聯集。
+4. **kernel**：`--weights RUN[:sha]`（可重複，預設 `[eval_run]`）：每個 RUN 是 eval 側 run，`source.weights_hash` 必須非空（否則 FAIL `field=weights_hash run=`）；給了 `:sha` 必須相等。記成 `artifact.weights`。`kind=candidate` / `baseline` 時每個 RUN 必須是 eval run 或它遞迴展開的融合成員，否則 FAIL `reason=weights_not_in_candidate run=`；`kind=probe` 不擋，改在 `checks` 記 `weights:<run>=not_in_candidate`（2026-09-25，VCP-036）。
+5. **不得訓練在 holdout 上**：`kind=candidate` 且 `sealed_subset ∈ eval_run.trained_on` → FAIL `reason=trained_on_sealed`（永遠拿不到乾淨 sealed 讀數，不可能成為最終）。融合 run 的 `trained_on` 已是聯集。kernel 的每個 `--weights` run 同樣套用（`trained_on_sealed` / `observed_sealed` / `provenance_required`，`run=` 是那個權重 run；probe 只記 `weights:<run>=<finding>`）。
 6. `pairing.checks` 記每條通過的檢查（人可讀），`pairing.members` 記配對表。
 
 ## 8. 準入門
@@ -318,7 +318,7 @@ class Platform(Protocol):
 | 設定檔缺、壞、含未知鍵；時區名未知；`--at` 格式錯 | `ValidationFailed` | FAIL |
 | 配對核對不過 | `ValidationFailed` `identity` + `field=` `side=` / `index=` | FAIL |
 | run 的 dataset / plan 與設定不符 | `PlanMismatchError` + `side=` | ABORT |
-| 準入門 | `not_admitted` / `member_not_admitted member=` / `stale_judgement prereg=` / `trained_on_sealed` / `reason_required` | FAIL |
+| 準入門 | `not_admitted` / `member_not_admitted member=` / `stale_judgement prereg=` / `trained_on_sealed` / `reason_required` / `weights_not_in_candidate run=` | FAIL |
 | 配額 / 封槍 / 截止 / 平台 | `quota_exhausted resets_at= local=` / `locked since= why=` / `past_deadline` / `manual_platform` | FAIL |
 | id 已存在；writer 選項未知；對映 id 重複；缺樣本 | `exists` / `option=` / `duplicate_id` / `missing=` | FAIL |
 | 輸出檔 sha 不符（upload / record / verify）；融合 output sha 不符 | `IntegrityError` | FAIL |
@@ -393,4 +393,7 @@ class Platform(Protocol):
 
 25. **CLI 失敗身分**（2026-09-07）：十二個命令皆传 dataset context；有 --id 者傳 id，init 另傳 eval_dataset / plan，stage 另傳 eval_run 與有提供的 test_run。可選值省略，不把 None 傳入 FieldValue；深層錯誤身分優先，仍能識別融合配對的葉節點。
 26. **foreign 列是狀態快照（稽核 Wave 0，VCP-009，2026-09-11）**：同一個 `platform_ref` 可以有多筆 `foreign` 列——`sync` 在該 ref 的狀態或分數與最新快照不同時才 append（PENDING → COMPLETE、PENDING → ERROR、COMPLETE 的分數修正各一筆；同一頁重複列出同一 ref 只留一筆；同頁重跑零新列）。`arrivals()` 對每個 ref 只取最新快照，所以 quota、`status` 的 `foreign=`（改為 ref 數）、榜面現任與 `report` 都看最新狀態、但每個 ref 只算一次到達。`SyncResult.refreshed` 與 VERDICT `refreshed=` 計「已知 ref 的新快照數」，否則 PENDING → COMPLETE 的刷新在 VERDICT 上看不出來；刷新不觸發 WARN（WARN 仍只因新 foreign 或 unconfirmed）。平台沒給 `ref` 的列，其 `platform_ref` 由檔名 + 時間導出，跨次 sync 穩定，快照照樣接得上。原始問題：第一次 sync 在 PENDING 時記下 ref，之後同 ref 的 COMPLETE/分數因「ref 已知」被跳過，台帳永遠沒有分數（RSNA 第一次真實 submission）。
+
+27. **kernel 的權重必須是被判決的那組**（2026-09-25，VCP-036；修訂 §4.2 kernel 候選與 §7.5 第 4、5 點）：原本 `trained_on_sealed`、`observed_sealed`、`provenance_required` 與準入只看 `--eval-run`，`verify_weights` 只比對各權重 run 自己的 `weights_hash`，所以 candidate 可以帶著在 sealed 上訓練過或讀過 sealed 的權重通過準入，而 `final` 用來排名的 sealed 讀數也不代表實際提交的 notebook。現在：`kind=candidate` / `baseline` 的每個 `--weights` run 必須是 eval run 或它遞迴展開的融合成員，否則 FAIL `weights_not_in_candidate`（`run=`）；candidate 的每個權重 run 也要過 `trained_on_sealed`、`observed_sealed`、`provenance_required`（與 eval run 同一套，`run=` 指那個權重 run）；baseline 只受成員資格約束，其餘發現記進 `pairing.checks`；probe 全部豁免，但每項發現都記成 `weights:<run>=<not_in_candidate|trained_on_sealed|observed_sealed|provenance_<grade>>`。`Staged.provenance` 對 kernel 提交取 eval run 與所有權重 run 中最低的等級；`submit final` 重新讀 provenance 時同樣併入權重 run（等級取最低、讀過的子集取聯集），所以 final 表與 `stage.json` 一致。判斷寫在 `vcp.submit.kernel`。
+
 29. **自己的上傳不再被當成 foreign 多算一次（VCP-038 第 1 段，2026-09-25）**：台帳還不認得某一發時（另一個 worktree 的台帳、事後才 `record` 的上傳），`sync` 會把平台上的那一發記成 `foreign`；之後 id 認領了同一個 ref，`arrivals()` 以前仍把 `uploaded` 與那筆 `foreign` 各算一次，配額 used 多一（比賽以真實列重現：used=2/3）。現在 `arrivals()` 把「其實是自己上傳的」foreign ref 排除：`uploaded` 列自己帶著這個 ref（`record --platform-ref`、§17 第 28 條的回讀）就是那一發；否則 `scored` 列把 ref 綁到某個 id 時，由該 id 沒帶 ref 的上傳吸收——全部 (上傳, ref) 配對依時間差由小到大先配、一發上傳只吸收一個 ref、時間差（`uploaded` 的 `at` 是 vcp 記的時刻，`foreign` 的是平台時間）超過 `TWIN_WINDOW`（10 分，與 sync 的 `MATCH_WINDOW` 相同，測試釘住兩者相等）就不吸收；一個 ref 被幾個 id 的 `scored` 列綁住時，每個 id 的上傳都可以是它的另一半。剩下的 ref 是這個 id 在平台上的另一發（例如網頁上傳沒 `record`），照樣算到達：寧可多算、不漏算。配額、`status` 的 `foreign=`（改成數到達裡的 foreign）、榜面現任與 `last_uploaded`（`final` 的 `needs_reupload`）與 `report` 都讀 `arrivals()`，一起修正；`sync` 自己的 `foreign=` / `refreshed=` 計數不變。`sync` 另補一條：配到的平台發若這個 id 還沒有帶它 ref 的 `scored` 列，即使分數沒變也寫一列（§6.3）——`board_rule=last` 要求重傳同一個檔時分數必然相同，以前那一發的 ref 永遠綁不上。仍有的限制：平台還在 PENDING（沒有分數）的一發寫不出 `scored` 列，綁上之前照樣多算一次。第 2–4 段（上傳前先讀平台、台帳位置可設定、多寫入者拓樸與 `merge=union`）待另寫 spec。

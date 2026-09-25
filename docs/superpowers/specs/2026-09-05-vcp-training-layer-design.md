@@ -151,7 +151,7 @@ vcp 自己在第 5 步之後崩潰會留下 `status: running` 的 attempt——`
 ### 6.3 上傳與驗證
 
 - 目的地形狀：`remote:path`（第一個 `:` 前只有 `[A-Za-z0-9_-]`，且不是 Windows 磁碟機 `X:\` / `X:/`）→ `rclone`；其餘 → 本機 / 掛載目錄。
-- 目標路徑 `<dest>/<run_id>/<name>`，`name` = checkpoint 檔名；兩個 checkpoint 檔名相同 → FAIL `reason=name_collision`。
+- 目標路徑 `<dest>/<run_id>/<name>`，`name` = checkpoint 檔名；兩個 checkpoint 檔名相同 → FAIL `reason=name_collision`。（2026-09-25 修訂：同名不同路徑改取可區分的最短上層資料夾，見第 16 條。）
 - rclone：逐檔 `rclone copyto <src> <dest>/<run_id>/<name> --checksum`，之後 `rclone hashsum sha256 <dest>/<run_id>` 解析結果逐檔比對登記的 sha；rclone 不在 PATH → `VcpError`（ABORT）。呼叫經可注入的 runner（測試用假 runner）。
 - 本機：`shutil.copy2` 到目標，讀回算 sha256 比對。
 - 每檔一筆 `uploads[]`（`verified` 為比對結果）與 `uploaded` 事件；任一檔 `verified=false` → 命令 FAIL `verified<uploaded`。
@@ -254,3 +254,5 @@ s.note("val_auc", 0.912)                            # note 事件
 14. **CLI 失敗身分**（2026-09-07）：run / upload / status 的 context 均帶 run，run 另帶 dataset / plan；早期驗證失敗也輸出這些欄位，錯誤 fields 優先，JSON 與 VERDICT 一致。
 
 15. **Windows 使用命令的絕對 interpreter**（2026-09-07，RSNA 現場驗證）：`--venv` 的探針 / 環境設定不代表 Windows `Popen` 會依子程序 PATH 選到裸 `python`；已觀測實際訓練落到基底 Python 而失敗。現行可行契約是呼叫者明寫 `<venv>/Scripts/python.exe` 的絕對路徑，失敗 attempt 用相同 config 的 `--resume` 留痕接續。這是現行限制與使用裁決，並非本輪改過核心命令解析；通用修復待 Plan 5 後記 §10。
+
+16. **checkpoint 以路徑為身分，同名的遠端名稱帶上層資料夾**（2026-09-25，VCP-035 / VCP-039，修訂第 4 條與 §上傳的目標路徑）：一個 run 登記多個不同路徑、同檔名的 checkpoint（例如 `fold-0/model.pt` … `fold-4/model.pt`）是多個 checkpoint，不是撞名。上傳、備份清單與 `backup verify` 的一致性層一律以**路徑**取最新一筆（同一路徑重新登記才是歷史）。遠端名稱：run 內沒人重複的檔名照舊；重複的檔名取「能分開它們的最少上層資料夾」以 `__` 串接（`fold-0__model.pt`），名稱以 run 的全部路徑計算，所以 `--only final` 與全部上傳用同一個名字；連資料夾都分不開的路徑（例如只差分隔符）才 FAIL `name_collision`。備份清單的 `remote_copy` 改以 sha256 對上已驗證的上傳紀錄、取那筆紀錄的遠端名稱；一致性層的標籤改為 `<run>/train.yaml:checkpoints.<路徑>`。

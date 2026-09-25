@@ -119,7 +119,7 @@
 ### 6.2 verify 的三層
 
 1. **副本**：給了 `--dest` 才做。清單每個 `kind=file` 條目：目的地 sha（rclone 每 root 一次 `hashsum`；本機讀回）等於清單 sha → `ok`，不在 → `missing`，不同 → `mismatch`。`remote_copy` 條目：`rclone hashsum sha256 <其 dest>/<run_id>` 找 `name`。
-2. **一致性**（只對 `present=true` 且本機存在的檔）：`run.yaml` 的 `predictions[*].sha256` ↔ 預測檔；`train.yaml` 的 checkpoint sha ↔ 檔（每個檔名最新一筆，同 `train status`）；`fuse.json` 的 `output_sha256` ↔ 預測檔、`member_sha256` ↔ 成員預測檔；`stage.json` 的 `artifact.sha256` ↔ 候選檔；`dataset.yaml` 的 `samples_hash` ↔ `samples.jsonl`；`submissions.jsonl` 的 `staged.sha256` ↔ `stage.json`；清單 sha ↔ 現在的檔（清單之後被改）。每個不符計一個 `drift`，`--json` 列出 `(what, expected, actual)`。
+2. **一致性**（只對 `present=true` 且本機存在的檔）：`run.yaml` 的 `predictions[*].sha256` ↔ 預測檔；`train.yaml` 的 checkpoint sha ↔ 檔（每個路徑最新一筆，同 `train status`；2026-09-25 前為每個檔名，見 §14）；`fuse.json` 的 `output_sha256` ↔ 預測檔、`member_sha256` ↔ 成員預測檔；`stage.json` 的 `artifact.sha256` ↔ 候選檔；`dataset.yaml` 的 `samples_hash` ↔ `samples.jsonl`；`submissions.jsonl` 的 `staged.sha256` ↔ `stage.json`；清單 sha ↔ 現在的檔（清單之後被改）。每個不符計一個 `drift`，`--json` 列出 `(what, expected, actual)`。
 3. **時戳**：清單裡每個 role 為台帳的 jsonl（`submissions_log`、`readings`、`judgements`、`sigma`、`anchors_log`、`prereg_log`、`train_log`、`history`、`unseal_log`、`backup_log`、`logs`）逐列 `ts` 經 `parse_stamp`，且與前一列相比不減；每張卡（`dataset.yaml`、`run.yaml`、`train.yaml`、`stage.json`、`fuse.json`、預登記、配方、plan）的 `created_at` / `*_at` / `ts` 欄位可解析。壞的計 `bad_stamps`，第一個位置記 `first_bad`。
 
 寫 `verify` 列（三層結果）。三層任一有問題 → FAIL；`--dest` 缺席時 `copies` 記 null。
@@ -144,7 +144,7 @@
 | 2 | `samples` / `raw_manifest` | `datasets/<dataset>/samples.jsonl`、`raw_manifest.txt` |
 | 2 | `train_dir` | `runs/<id>/train/*`（console、env、config 副本） |
 | 2 | `logs` | `logs/vcp-*.jsonl`（全部；小） |
-| 3 | `checkpoint` | `train.yaml` 登記的每個 checkpoint（每個檔名最新一筆；`final` 排最前） |
+| 3 | `checkpoint` | `train.yaml` 登記的每個 checkpoint（每個路徑最新一筆；`final` 排最前；2026-09-25 前為每個檔名，見 §14） |
 
 `cache/`、`raw/`、`inputs/`（ingest `--keep-input`）不在任何清單裡。
 
@@ -157,7 +157,7 @@
 - **`submission:<id>`**（`--dataset` 是 test dataset）：`submit_profile`、`submissions_log`、`stage`、`artifact`（file 類）；`run:<eval_run>`；`run:<test_run>`（file 類）或 `artifact.weights[*].run` 的 `run:`（kernel 類）；`stage.json` `gate.judgements` 每份 `judgement:`；test dataset 的 `dataset_card` 與 `plan`（`test_plan`）。
 - **`all`**：`runs/*/run.yaml` 中 `dataset` 等於本 dataset 的每個 run 的 `run:`；每份預登記的 `judgement:`；有 `submit.yaml` 時每個 staged id 的 `submission:`；`samples`、`raw_manifest`、`logs`。
 
-`checkpoint` 條目：`train.yaml.uploads` 裡有 `(name, sha256)` 相符且 `verified=true` 的紀錄 → `kind=remote_copy`、`remote={dest, name}`（多筆取最新）；否則 `kind=file`。checkpoint 路徑經 `resolve_stored_path`，在 data root 外 → `root=external`。
+`checkpoint` 條目：`train.yaml.uploads` 裡有 `sha256` 相符且 `verified=true` 的紀錄 → `kind=remote_copy`、`remote={dest, name}`，`name` 取那筆上傳紀錄的遠端名稱（多筆取最新；2026-09-25 前還要求 `name` 等於檔名）；否則 `kind=file`。checkpoint 路徑經 `resolve_stored_path`，在 data root 外 → `root=external`。
 
 ## 8. 錯誤處理與 VERDICT 字彙
 
@@ -223,5 +223,6 @@
 - **pull**：目的地 sha 先比對（不符 → `mismatch`、不拉）；拉回不符就刪；本機已有且相同（台帳角色：長大也算）→ `skipped`；不同 → `conflict`，`--overwrite` 才蓋且舊檔留 `.bak-<UTC 時戳含微秒>`，新檔驗不過就把 `.bak` 還原；只寫到 data / configs 根內（`unsafe_path:`）；external 只還原到既有目錄，否則 `external_skipped=`（WARN）；先記列再拋錯，優先序 `mismatch` > `missing` > `conflict`。
 - **status**：`verified` = 某個 verify 列有 `--dest`、tier 3、副本層與本機兩層皆無問題；另報 `local_ok`（一致性與時戳過）；「已推 tier」= `failed` 空的 push 的最大 `--tier` 以下全部；rclone 不在 → `rclone_conf=unknown`。
 - **本機副本的語意**（2026-09-07 實跑澄清，未改程式）：`remote_copy` 可來自 `train upload` 驗過的本機路徑，verify 成功只證明那些 bytes 在所記位置可讀，不證明異機容災。換遠端前先將權重 upload 到新目的地，再產新清單；project notebook bundle / Git source bundle 不自動納入證據圖，須另保存與驗 SHA。真實例見 Plan 7 後記 §9。
+- **checkpoint 以路徑為身分**（2026-09-25，VCP-035）：清單與一致性層原本以檔名取最新一筆，一個 run 登記多個同名不同路徑的 checkpoint（多折訓練的 `fold-k/model.pt`）時只留最後一個、其餘靜默消失且 VERDICT 仍 OK。改為以路徑取最新（同一路徑重新登記才是歷史）；`remote_copy` 以 sha256 對上已驗證的上傳紀錄並沿用它的遠端名稱（訓練層同日改為同名不同路徑帶上層資料夾，見訓練層 spec 第 16 條）；一致性層的標籤改為 `<run>/train.yaml:checkpoints.<路徑>`。
 - **目的地**：rclone 命令前綴是 `vcp.backup.dest.RCLONE`（端到端測試指到假 rclone 腳本）；`hashsum` exit 3 / 4 才是空目錄，其餘非 0 是 `PlatformError`（redact 後的最後一行）；雜湊列不是 64 hex（後端不支援 sha256）也是 `PlatformError`；`hashsum` 解析 `<sha>  <相對路徑>` 沿用訓練層。
 - **Plan 7c（後記待辦處置，同日）**：`dest_kind` 搬到 `backup/dest.py`（訓練層只是再匯出），Windows 上單字母加冒號（`C:backup`）視為磁碟、即本機——rclone 自己在 Windows 也這樣讀；訓練層 `train upload` 的 rclone 路徑改走 `RcloneDest`：rclone 失敗是 `PlatformError`（FAIL），rclone 不在是 `rclone_not_found`（ABORT），`hashsum` exit 3 / 4 才是空；pull 本機複製的 `OSError` 也還原 `.bak`、寫列、拋 `copy_failed:`（ABORT）；時戳的 `first_bad` 標籤用 `root/path`；失敗的 VERDICT 保留 `dataset=` / `manifest=` / `dest=`（`run_command` 的 `context`，其他層可比照採用）。

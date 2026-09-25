@@ -9,7 +9,7 @@ from vcp.core.errors import PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.schema import TrainRecord
-from vcp.train.upload import NAME_COLLISION, dest_kind, merge_uploads, upload
+from vcp.train.upload import NAME_COLLISION, dest_kind, merge_uploads, remote_names, upload
 
 
 def _record() -> TrainRecord:
@@ -86,15 +86,67 @@ def test_local_upload_refuses_changed_or_missing_source(roots, tmp_path):
     assert not (tmp_path / "vault" / "r1" / "last.pt").exists()  # nothing copied before the check
 
 
-def test_name_collision(roots, tmp_path):
+def test_same_named_checkpoints_upload_under_folder_qualified_names(roots, tmp_path):
+    """VCP-039: two checkpoints named best.pt in different folders no longer stop the upload;
+    each goes up under the shortest folder-qualified name that tells them apart, and a name
+    that is unique in the run (last.pt) stays as it is."""
     rec, w = _registered(roots)
     other = roots.data / "work" / "run2" / "best.pt"
     other.parent.mkdir(parents=True)
     other.write_bytes(b"different best")
     rec, _ = register(rec, [other], data_root=roots.data, attempt=1)
-    with pytest.raises(ValidationFailed, match=NAME_COLLISION) as ei:
-        upload(rec, str(tmp_path / "vault"), data_root=roots.data)
-    assert ei.value.fields == {"checkpoint": "best.pt"}
+
+    out = upload(rec, str(tmp_path / "vault"), data_root=roots.data)
+
+    assert sorted(r.name for r in out.records) == ["last.pt", "run2__best.pt", "weights__best.pt"]
+    assert all(r.verified for r in out.records) and out.uploaded == 3
+    vault = tmp_path / "vault" / "r1"
+    assert (vault / "weights__best.pt").read_bytes() == b"best"
+    assert (vault / "run2__best.pt").read_bytes() == b"different best"
+
+
+def test_final_only_upload_uses_the_same_names_as_a_full_upload(roots, tmp_path):
+    """Names are worked out over every checkpoint of the run, so --final does not upload the
+    final best.pt under a different name than a full upload would."""
+    rec, w = _registered(roots)
+    other = roots.data / "work" / "run2" / "best.pt"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"different best")
+    rec, _ = register(rec, [other], data_root=roots.data, attempt=1)
+
+    out = upload(rec, str(tmp_path / "vault"), data_root=roots.data, only_final=True)
+
+    assert [r.name for r in out.records] == ["weights__best.pt"]
+
+
+def test_remote_names_use_the_shortest_distinguishing_folders():
+    paths = [
+        "ckpt/fold-0/best/model.pt",
+        "ckpt/fold-1/best/model.pt",
+        "ckpt/last.pt",
+        "a/x/model2.pt",
+        "b/a/x/model2.pt",
+        "C:/w/solo.pt",
+    ]
+
+    assert remote_names(paths) == {
+        "ckpt/fold-0/best/model.pt": "fold-0__best__model.pt",
+        "ckpt/fold-1/best/model.pt": "fold-1__best__model.pt",
+        "ckpt/last.pt": "last.pt",
+        "a/x/model2.pt": "a__x__model2.pt",
+        "b/a/x/model2.pt": "b__a__x__model2.pt",
+        "C:/w/solo.pt": "solo.pt",
+    }
+
+
+def test_remote_names_never_carry_a_drive_or_a_root():
+    names = remote_names(["C:/w/model.pt", "D:/w/model.pt", "/mnt/w/model.pt"])
+
+    assert names == {
+        "C:/w/model.pt": "C__w__model.pt",
+        "D:/w/model.pt": "D__w__model.pt",
+        "/mnt/w/model.pt": "mnt__w__model.pt",
+    }
 
 
 def test_resume_same_path_different_sha_uploads_newest_not_a_collision(roots, tmp_path):
@@ -227,3 +279,10 @@ def test_rclone_upload_hashsum_failure_is_a_platform_error(roots):
     with pytest.raises(PlatformError, match="hashsum failed") as ei:
         upload(rec, "gdrive:w", data_root=roots.data, runner=runner)
     assert secret not in str(ei.value) and "<redacted>" in str(ei.value)
+
+
+def test_paths_no_folder_can_tell_apart_are_a_name_collision():
+    backslash = chr(92)
+    with pytest.raises(ValidationFailed, match=NAME_COLLISION) as ei:
+        remote_names(["w/a.pt", f"w{backslash}a.pt"])
+    assert ei.value.fields == {"checkpoint": "w__a.pt"}

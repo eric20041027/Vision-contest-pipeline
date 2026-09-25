@@ -202,6 +202,97 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             "tests/unit/test_e2e_source_audit.py": ["test_source_audit_flow"],
         },
     ),
+    (
+        "VCP-035/039 (#24)",
+        "backup / train: a checkpoint is its path -- same-named checkpoints in different folders "
+        "all reach the manifest and verify, and upload under folder-qualified remote names",
+        {
+            "tests/unit/backup/test_evidence_run.py": [
+                "test_same_named_checkpoints_in_different_folders_are_all_collected",
+                "test_identical_folds_keep_their_own_remote_copy",
+            ],
+            "tests/unit/backup/test_verify.py": ["test_verify_checks_every_same_named_checkpoint"],
+            "tests/unit/train/test_upload.py": [
+                "test_same_named_checkpoints_upload_under_folder_qualified_names",
+                "test_remote_names_use_the_shortest_distinguishing_folders",
+            ],
+            "tests/unit/train/test_status.py": [
+                "test_five_folds_named_model_pt_all_upload_and_leave_nothing_unbacked",
+            ],
+        },
+    ),
+    (
+        "VCP-036 (#25)",
+        "submit: a kernel candidate may load only the judged weights, and every weights run "
+        "passes the sealed and provenance checks; final reads a kernel submission the same way",
+        {
+            "tests/unit/submit/test_kernel.py": [
+                "test_a_candidate_may_load_only_the_judged_weights",
+                "test_every_candidate_weights_run_passes_the_sealed_checks",
+                "test_a_probe_is_exempt_but_every_finding_is_written_down",
+                "test_kernel_provenance_folds_every_weights_run_in",
+            ],
+            "tests/unit/submit/test_stage.py": [
+                "test_kernel_candidate_cannot_carry_weights_that_were_not_judged",
+            ],
+            "tests/unit/submit/test_final.py": [
+                "test_final_reads_a_kernel_submission_the_way_stage_recorded_it",
+            ],
+        },
+    ),
+    (
+        "VCP-037 (#27)",
+        "submit: a Kaggle upload the CLI does not confirm is read back (description opens with "
+        "the id, inside the CLI's run give or take two minutes); nothing in the read-back fails "
+        "the upload; 'Could not submit' at exit 0 writes no row; the VERDICT carries the reply",
+        {
+            "tests/unit/submit/test_platforms.py": [
+                "test_kaggle_kernel_upload_confirms_by_reading_the_submission_back",
+                "test_the_window_opens_before_the_cli_started_and_closes_after_it_returned",
+                "test_a_read_back_cut_short_still_returns_the_upload",
+                "test_a_file_the_cli_could_not_submit_fails_although_the_cli_exited_0",
+            ],
+            "tests/unit/submit/test_actions.py": [
+                "test_a_read_back_that_meets_a_ref_the_ledger_holds_confirms_nothing",
+            ],
+            "tests/unit/test_cli_submit.py": [
+                "test_upload_verdict_carries_the_platform_ref_and_detail_into_the_log",
+            ],
+        },
+    ),
+    (
+        "VCP-038 (#28)",
+        "submit: an upload another ledger wrote as foreign is one arrival once a ref ties it to "
+        "the id (closest first, within ten minutes); a same-score re-upload gets its own scored "
+        "row, so its ref ties",
+        {
+            "tests/unit/submit/test_ledger.py": [
+                "test_a_foreign_row_for_our_own_upload_is_one_arrival",
+                "test_an_upload_absorbs_its_own_twin_before_a_nearby_web_upload",
+                "test_a_tied_ref_far_from_every_upload_still_counts",
+            ],
+            "tests/unit/submit/test_sync.py": [
+                "test_a_re_upload_that_scores_the_same_still_gets_its_own_scored_row",
+                "test_a_foreign_row_the_ledger_later_learns_is_ours_stops_counting",
+            ],
+            "tests/unit/submit/test_guards.py": [
+                "test_quota_counts_an_upload_the_platform_also_listed_as_foreign_once",
+            ],
+        },
+    ),
+    (
+        "VCP-043 (#26)",
+        "train: the child learns its attempt number (VCP_ATTEMPT, Session.attempt) and it agrees "
+        "with its receipt ids, after --resume and after a crash too",
+        {
+            "tests/unit/train/test_run.py": [
+                "test_the_child_knows_its_attempt_and_its_receipts_agree",
+            ],
+            "tests/unit/train/test_session.py": [
+                "test_attempt_is_the_exported_one_or_else_the_records",
+            ],
+        },
+    ),
 ]
 
 

@@ -1,9 +1,10 @@
 """``Session``: the one thing a hand-written training loop needs from vcp (spec 8.2).
 
-``vcp train run`` exports ``VCP_RUN_ID`` / ``VCP_DATA_ROOT`` to the command it wraps; a loop
-running under it can register checkpoints as they are written and leave notes in the event
-log. Only the session writes ``train.yaml`` while the command runs -- the wrapper writes it
-before and after -- so there is no concurrent writer.
+``vcp train run`` exports ``VCP_RUN_ID`` / ``VCP_DATA_ROOT`` / ``VCP_ATTEMPT`` to the command it
+wraps; a loop running under it can register checkpoints as they are written, leave notes in the
+event log, and read ``Session.attempt`` to keep per-attempt files apart after ``--resume``.
+Only the session writes ``train.yaml`` while the command runs -- the wrapper writes it before
+and after -- so there is no concurrent writer.
 """
 
 from __future__ import annotations
@@ -37,15 +38,27 @@ class Session:
             raise ValidationFailed(f"no training record for run {run_id!r} under {root}")
         return cls(run_id, root)
 
-    def _attempt(self) -> int:
+    @property
+    def attempt(self) -> int:
+        """The attempt this process runs in: ``VCP_ATTEMPT`` when ``vcp train run`` exported it
+        for this run, else the record's running attempt. Receipt ids (``<run>-a<n>-<seq>``) and
+        events use the same number."""
+        exported = os.environ.get("VCP_ATTEMPT", "")
+        ours = os.environ.get("VCP_RUN_ID") == self.run_id
+        if ours and exported.isascii() and exported.isdigit() and int(exported) > 0:
+            return int(exported)
         return current_attempt(load_record(self.data_root, self.run_id))
+
+    def _attempt(self) -> int:
+        """Kept for loops written before ``attempt`` was public (VCP-043)."""
+        return self.attempt
 
     def register_checkpoint(self, path: str | Path, *, final: bool = False) -> CheckpointRecord:
         file = Path(path).resolve()
         if not file.is_file():
             raise ValidationFailed(f"checkpoint is not a file: {file}")
         record = load_record(self.data_root, self.run_id)
-        n = current_attempt(record)
+        n = self.attempt  # one answer everywhere: events, checkpoints and receipts
         # 5-5: one read of what may be a multi-GB file; `register` takes the sha rather than
         # hashing the same bytes again.
         stored, digest = store_path(file, self.data_root), sha256_file(file)
@@ -75,7 +88,7 @@ class Session:
         return entry
 
     def note(self, key: str, value: str | int | float | bool) -> None:
-        append_event(self.data_root, self.run_id, "note", self._attempt(), key=key, value=value)
+        append_event(self.data_root, self.run_id, "note", self.attempt, key=key, value=value)
 
     def access(
         self,
@@ -111,7 +124,7 @@ class SessionBinding:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.run_id = session.run_id
-        self.attempt = current_attempt(load_record(session.data_root, session.run_id))
+        self.attempt = session.attempt
 
     def receipt_id(self, seq: int) -> str:
         return f"{self.run_id}-a{self.attempt}-{seq}"

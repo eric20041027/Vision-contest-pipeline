@@ -18,7 +18,7 @@ uv run vcp train run --run R --dataset D --plan fixed-v1 --export <export dir> -
   --framework "…" --cwd projects/<c> --checkpoints "work/R/*.pt" --final "work/R/best.pt" [--upload DEST] -- <訓練命令>
 uv run vcp train status --run R --verify
 ```
-- 訓練迴圈用 `MaterializedReader(...)` 或 `Session.current().access(subsets={"train"})` 讀資料才有 access receipt；`Session.current().register_checkpoint(path, final=True)`、`s.note(k, v)` 在 `train run` 底下才可用。
+- 訓練迴圈用 `MaterializedReader(...)` 或 `Session.current().access(subsets={"train"})` 讀資料才有 access receipt；`Session.current().register_checkpoint(path, final=True)`、`s.note(k, v)`、`s.attempt`（第幾個 attempt，`--resume` 後遞增；別呼叫私有的 `_attempt()`）在 `train run` 底下才可用。
 - `train status`：`backed=0` 才是有副本；`unbacked=` 是目前 bytes 沒副本（WARN，不是壞）；`superseded=` 同路徑被後來的登記取代且從沒上傳；`drift=` 檔案與登記 sha 不符（壞）。`attempts[-1]` 是最新一次執行。
 - `--resume` 加 attempt；`train upload --run R --dest …` 冪等，`--only final` 只傳最終權重。
 - 開訓前先 commit 專案程式：`train/env.N.json` 記 `git.commit` 與 `dirty`，髒樹會如實寫 `dirty: true`。

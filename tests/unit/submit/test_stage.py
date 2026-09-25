@@ -286,3 +286,62 @@ def test_stage_reads_the_test_subset_through_a_receipt(ready):
     assert receipt.run_id == "good" and set(receipt.accessed) == {"test"}
     assert res.staged.artifact.rows == receipt.accessed["test"].ids_count
     assert res.identity == "source_audit" and receipt.identity == "source_audit"
+
+
+def _kernel_ready(pair):
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(
+        _profile(platform="kaggle", competition="c1", submission_kind="kernel", writer=None),
+        data_root=pair.roots.data,
+        configs_root=pair.roots.configs,
+    )
+    bad = load_run(pair.roots.data, "bad")
+    save_run(
+        pair.roots.data,
+        bad.model_copy(update={"trained_on": ["holdout", "train", "valA", "valB"]}),
+    )
+    return pair
+
+
+def test_kernel_candidate_cannot_carry_weights_that_were_not_judged(pair):
+    """VCP-036 reproduction: ``good`` is admitted and ``bad`` trained on the sealed subset.
+    Declaring bad's weights next to good's used to stage with admission=PASS."""
+    _kernel_ready(pair)
+
+    with pytest.raises(ValidationFailed, match="^weights_not_in_candidate: run 'bad'"):
+        stage(_spec(pair, "K1", "good", None, kernel="u/nb", version=3, weights=["good", "bad"]))
+
+    assert SubmissionLedger(pair.test_paths.submissions_log).of("staged", "K1") == []
+    assert not pair.test_paths.submission_dir("K1").exists()
+
+
+def test_kernel_candidate_with_only_the_judged_weights_still_stages(pair):
+    _kernel_ready(pair)
+
+    res = stage(_spec(pair, "K1", "good", None, kernel="u/nb", version=3, weights=["good"]))
+
+    assert res.staged.gate.admission == "PASS"
+    assert [w.run for w in res.staged.artifact.weights] == ["good"]
+
+
+def test_kernel_probe_stages_and_writes_down_what_its_weights_are(pair):
+    _kernel_ready(pair)
+
+    res = stage(
+        _spec(
+            pair,
+            "K2",
+            "good",
+            None,
+            kind="probe",
+            reason="check the notebook runs",
+            kernel="u/nb",
+            version=3,
+            weights=["good", "bad"],
+        )
+    )
+
+    checks = res.staged.pairing.checks
+    assert "weights:bad=not_in_candidate" in checks
+    assert "weights:bad=trained_on_sealed" in checks

@@ -197,3 +197,99 @@ def test_walk_run_collects_the_source_audit_behind_a_receipt(world):
     entry = by_key[f"data/artifacts/source_audit/{aid}/index.jsonl"]
     assert entry.tier == 2 and entry.present and entry.for_ == ["run:good"]
     assert col.missing == [] and col.unlisted == []
+
+
+def _register_folds(world, count: int, *, attempt: int = 2) -> list[Path]:
+    """Folds that each write best.pt -- the same name as the run's own final checkpoint."""
+    from vcp.train.checkpoints import register
+    from vcp.train.records import load_record, save_record
+
+    folds = []
+    for k in range(count):
+        fold = world.roots.data / "work" / "good" / f"fold-{k}" / "best.pt"
+        fold.parent.mkdir(parents=True, exist_ok=True)
+        fold.write_bytes(f"fold {k} weights".encode())
+        folds.append(fold)
+    record = load_record(world.roots.data, "good")
+    record, _ = register(record, folds, data_root=world.roots.data, attempt=attempt)
+    save_record(world.roots.data, record)
+    return folds
+
+
+def test_same_named_checkpoints_in_different_folders_are_all_collected(world):
+    """VCP-035: checkpoints are keyed by path, not file name -- every fold's best.pt belongs in
+    the manifest, next to the run's own best.pt, and none is dropped without a word."""
+    _register_folds(world, 3)
+
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    roles = _roles(col)
+
+    assert sorted(roles["checkpoint"]) == [
+        "work/good/fold-0/best.pt",
+        "work/good/fold-1/best.pt",
+        "work/good/fold-2/best.pt",
+        "work/good/weights/last.pt",
+    ]
+    assert roles["checkpoint_final"] == ["work/good/weights/best.pt"]
+    by_key = {e.key: e for e in col.files_of()}
+    assert by_key["data/work/good/weights/best.pt"].kind == "remote_copy"  # its upload still counts
+    assert by_key["data/work/good/fold-0/best.pt"].kind == "file"
+
+
+def test_a_re_registered_path_is_collected_once_with_its_newest_bytes(world):
+    """A --resume that rewrites the same path is history, not a second checkpoint."""
+    from vcp.train.checkpoints import register
+    from vcp.train.records import load_record, save_record
+
+    folds = _register_folds(world, 1)
+    folds[0].write_bytes(b"fold 0 weights, resumed")
+    record = load_record(world.roots.data, "good")
+    record, _ = register(record, folds, data_root=world.roots.data, attempt=3)
+    save_record(world.roots.data, record)
+
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    fold_entries = [e for e in col.files_of() if e.path == "work/good/fold-0/best.pt"]
+
+    assert len(fold_entries) == 1
+    assert fold_entries[0].sha256 == sha256_file(folds[0])
+
+
+def test_identical_folds_keep_their_own_remote_copy(world):
+    """Review of VCP-035: two folds with byte-identical weights are uploaded under their own
+    names; a manifest must not hand fold 0 the copy uploaded under fold 1's name (a later
+    --resume of fold 1 would then make fold 0 look mismatched)."""
+    from vcp.train.records import load_record, save_record
+    from vcp.train.schema import UploadRecord
+
+    folds = _register_folds(world, 2)
+    same = b"identical weights"
+    for fold in folds:
+        fold.write_bytes(same)
+    from vcp.train.checkpoints import register
+
+    record = load_record(world.roots.data, "good")
+    record, _ = register(record, folds, data_root=world.roots.data, attempt=3)
+    sha = sha256_file(folds[0])
+    uploads = [
+        UploadRecord(
+            dest=str(world.vault),
+            kind="local",
+            name=name,
+            sha256=sha,
+            verified=True,
+            uploaded_at="2026-09-25T00:00:00.000Z",
+        )
+        for name in ("fold-0__best.pt", "fold-1__best.pt")  # fold 1's copy is the newest
+    ]
+    save_record(
+        world.roots.data, record.model_copy(update={"uploads": [*record.uploads, *uploads]})
+    )
+
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    by_path = {e.path: e for e in col.files_of()}
+
+    assert by_path["work/good/fold-0/best.pt"].remote.name == "fold-0__best.pt"
+    assert by_path["work/good/fold-1/best.pt"].remote.name == "fold-1__best.pt"

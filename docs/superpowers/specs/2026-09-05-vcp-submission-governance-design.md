@@ -96,7 +96,7 @@ created_at: <UTC stamp>
 }
 ```
 
-kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "kernel": "user/notebook", "version": 7, "output": "submission.csv", "weights": [{"run": "yolo11m-s0", "sha256": "…"}]}`；`pairing.mode = "kernel"`。vcp 只核對它知道的東西（宣告的權重 sha 對得上 `run.yaml.weights_hash`），notebook 內容不驗，`checks` 明寫 `notebook=declared`。
+kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "kernel": "user/notebook", "version": 7, "output": "submission.csv", "weights": [{"run": "yolo11m-s0", "sha256": "…"}]}`；`pairing.mode = "kernel"`。vcp 只核對它知道的東西（宣告的權重 sha 對得上 `run.yaml.weights_hash`），notebook 內容不驗，`checks` 明寫 `notebook=declared`。2026-09-25 起（VCP-036，見 §17 第 27 條）宣告的權重還必須是被判決的那組：eval run 本身或它遞迴展開的融合成員。
 
 ### 4.3 台帳（`configs/datasets/<test>/submissions.jsonl`，只 append）
 
@@ -194,8 +194,8 @@ kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "k
 1. **模式**：兩側都有 `fuse.json` → `fusion`；都沒有 → `single`；只有一側有 → FAIL `reason=identity field=fuse.json`。
 2. **single**：`source.weights_hash` 兩側非空且相等，否則 FAIL `reason=identity field=weights_hash side=<缺的那側|both>`；`source.config_hash` 兩側都非空時必須相等（不等 → FAIL `field=config_hash`），一側空 → WARN `config_hash=unchecked`。
 3. **fusion**：`method`、`method_version`、`params` 相等；成員數相等；依位置逐對：`weight` 相等、對每對 (eval 成員, test 成員) 載入兩張 run 卡並遞迴套本節（成員本身是融合 run 就再進 `fusion`）；不等 → FAIL `reason=identity field=<method|params|members|weight> index=<i>`。test 側再驗 `fuse.json.subsets[test_subset].output_sha256` = `test_run.predictions[test_subset].sha256`，否則 `IntegrityError`。
-4. **kernel**：`--weights RUN[:sha]`（可重複，預設 `[eval_run]`）：每個 RUN 是 eval 側 run，`source.weights_hash` 必須非空（否則 FAIL `field=weights_hash run=`）；給了 `:sha` 必須相等。記成 `artifact.weights`。
-5. **不得訓練在 holdout 上**：`kind=candidate` 且 `sealed_subset ∈ eval_run.trained_on` → FAIL `reason=trained_on_sealed`（永遠拿不到乾淨 sealed 讀數，不可能成為最終）。融合 run 的 `trained_on` 已是聯集。
+4. **kernel**：`--weights RUN[:sha]`（可重複，預設 `[eval_run]`）：每個 RUN 是 eval 側 run，`source.weights_hash` 必須非空（否則 FAIL `field=weights_hash run=`）；給了 `:sha` 必須相等。記成 `artifact.weights`。`kind=candidate` / `baseline` 時每個 RUN 必須是 eval run 或它遞迴展開的融合成員，否則 FAIL `reason=weights_not_in_candidate run=`；`kind=probe` 不擋，改在 `checks` 記 `weights:<run>=not_in_candidate`（2026-09-25，VCP-036）。
+5. **不得訓練在 holdout 上**：`kind=candidate` 且 `sealed_subset ∈ eval_run.trained_on` → FAIL `reason=trained_on_sealed`（永遠拿不到乾淨 sealed 讀數，不可能成為最終）。融合 run 的 `trained_on` 已是聯集。kernel 的每個 `--weights` run 同樣套用（`trained_on_sealed` / `observed_sealed` / `provenance_required`，`run=` 是那個權重 run；probe 只記 `weights:<run>=<finding>`）。
 6. `pairing.checks` 記每條通過的檢查（人可讀），`pairing.members` 記配對表。
 
 ## 8. 準入門
@@ -319,7 +319,7 @@ class Platform(Protocol):
 | 設定檔缺、壞、含未知鍵；時區名未知；`--at` 格式錯 | `ValidationFailed` | FAIL |
 | 配對核對不過 | `ValidationFailed` `identity` + `field=` `side=` / `index=` | FAIL |
 | run 的 dataset / plan 與設定不符 | `PlanMismatchError` + `side=` | ABORT |
-| 準入門 | `not_admitted` / `member_not_admitted member=` / `stale_judgement prereg=` / `trained_on_sealed` / `reason_required` | FAIL |
+| 準入門 | `not_admitted` / `member_not_admitted member=` / `stale_judgement prereg=` / `trained_on_sealed` / `reason_required` / `weights_not_in_candidate run=` | FAIL |
 | 配額 / 封槍 / 截止 / 平台 | `quota_exhausted resets_at= local=` / `locked since= why=` / `past_deadline` / `manual_platform` | FAIL |
 | id 已存在；writer 選項未知；對映 id 重複；缺樣本 | `exists` / `option=` / `duplicate_id` / `missing=` | FAIL |
 | 輸出檔 sha 不符（upload / record / verify）；融合 output sha 不符 | `IntegrityError` | FAIL |
@@ -395,4 +395,7 @@ class Platform(Protocol):
 
 25. **CLI 失敗身分**（2026-09-07）：十二個命令皆传 dataset context；有 --id 者傳 id，init 另傳 eval_dataset / plan，stage 另傳 eval_run 與有提供的 test_run。可選值省略，不把 None 傳入 FieldValue；深層錯誤身分優先，仍能識別融合配對的葉節點。
 26. **foreign 列是狀態快照（稽核 Wave 0，VCP-009，2026-09-11）**：同一個 `platform_ref` 可以有多筆 `foreign` 列——`sync` 在該 ref 的狀態或分數與最新快照不同時才 append（PENDING → COMPLETE、PENDING → ERROR、COMPLETE 的分數修正各一筆；同一頁重複列出同一 ref 只留一筆；同頁重跑零新列）。`arrivals()` 對每個 ref 只取最新快照，所以 quota、`status` 的 `foreign=`（改為 ref 數）、榜面現任與 `report` 都看最新狀態、但每個 ref 只算一次到達。`SyncResult.refreshed` 與 VERDICT `refreshed=` 計「已知 ref 的新快照數」，否則 PENDING → COMPLETE 的刷新在 VERDICT 上看不出來；刷新不觸發 WARN（WARN 仍只因新 foreign 或 unconfirmed）。平台沒給 `ref` 的列，其 `platform_ref` 由檔名 + 時間導出，跨次 sync 穩定，快照照樣接得上。原始問題：第一次 sync 在 PENDING 時記下 ref，之後同 ref 的 COMPLETE/分數因「ref 已知」被跳過，台帳永遠沒有分數（RSNA 第一次真實 submission）。
+
+27. **kernel 的權重必須是被判決的那組**（2026-09-25，VCP-036；修訂 §4.2 kernel 候選與 §7.5 第 4、5 點）：原本 `trained_on_sealed`、`observed_sealed`、`provenance_required` 與準入只看 `--eval-run`，`verify_weights` 只比對各權重 run 自己的 `weights_hash`，所以 candidate 可以帶著在 sealed 上訓練過或讀過 sealed 的權重通過準入，而 `final` 用來排名的 sealed 讀數也不代表實際提交的 notebook。現在：`kind=candidate` / `baseline` 的每個 `--weights` run 必須是 eval run 或它遞迴展開的融合成員，否則 FAIL `weights_not_in_candidate`（`run=`）；candidate 的每個權重 run 也要過 `trained_on_sealed`、`observed_sealed`、`provenance_required`（與 eval run 同一套，`run=` 指那個權重 run）；baseline 只受成員資格約束，其餘發現記進 `pairing.checks`；probe 全部豁免，但每項發現都記成 `weights:<run>=<not_in_candidate|trained_on_sealed|observed_sealed|provenance_<grade>>`。`Staged.provenance` 對 kernel 提交取 eval run 與所有權重 run 中最低的等級；`submit final` 重新讀 provenance 時同樣併入權重 run（等級取最低、讀過的子集取聯集），所以 final 表與 `stage.json` 一致。判斷寫在 `vcp.submit.kernel`。
+
 28. **上傳的回讀確認（VCP-037，2026-09-25）**：Kaggle CLI 2.2.4 對 kernel 提交只印伺服器的 message（`competition_submit_code`，`-q` 把其餘都關掉），沒有成功字樣也沒有 ref，所以 kernel 上傳以前永遠 WARN `confirmed=false`；平台其實當下就列得出來（比賽實例：平台時間只比本地 `at` 早 2–4 秒）。現在依序：(1) stdout 含 `Could not submit to competition`——2.2.4 的檔案上傳在送出前失敗時說這句、卻回 0——是 `PlatformError` FAIL `upload_failed:`，什麼都沒送出，所以不寫列；(2) 有 `Submission ref: <n>` 行（2.2.4 之後的 CLI 會印）就確認並記 ref；(3) 有成功字樣就確認；(4) 都沒有才回讀 `list_submissions`（與 `sync` 同一個讀法），等待 0、2、5、10 秒各看一次：description **以這個 id 開頭**（`vcp.submit.matching.leads`；vcp 寫的描述一律是 `<id> <message>`，比 sync 規則 1 的「提到」嚴，`S2 same as S1` 不算 S1 的）、且平台時間落在「CLI 開始前 2 分鐘到回來後 2 分鐘」（`READBACK_SKEW`，比 sync 的 10 分鐘窄）的恰好一筆 → `confirmed=True` 並把它的 `platform_ref` 寫進 `uploaded` 列（`sync` 規則 0 從此靠 ref 配對）。同一個 ref 列兩次仍算一筆；兩筆不同的 ref → `ambiguous`、不確認；配到的 ref 已經在台帳上（同一個 id 的上一發，這一發還沒列出）→ `known_ref`、不確認；2.2.4 的空列表是純文字 `No submissions found`，當空頁照樣往下看（`sync` 以前在沒有任何 submission 時也因此 FAIL，一併修正）。回讀本身**永不讓上傳失敗**：CLI 已經收下這一發，列一定要寫——任何例外只結束等待（`failed`，原因 redact 後進 `logs/`），Ctrl+C 也一樣（`interrupted`）。VERDICT 另帶 `platform_ref=`、`readback=matched|not_listed|ambiguous|known_ref|failed|interrupted`（有回讀才帶）與 `detail=`（平台回覆，§11 redact 後截 160 字；主控台照舊印完整一行）；VERDICT 會進 `logs/`，平台實際說了什麼從此查得到。`confirmed=false` 的人讀訊息：重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，再傳會多吃一發配額；`submit sync` 之後會配對。sync 的 `unconfirmed=` 以 id 為單位：這個 id 以前沒傳過時，sync 仍列它才代表這一發沒上；傳過的 id 會被舊的那一發配到，分不出這一發。同一 id 重傳需要 `--force` 的護欄（呼應 VCP-014）仍待辦。

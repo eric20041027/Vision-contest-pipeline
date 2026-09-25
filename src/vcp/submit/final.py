@@ -20,6 +20,7 @@ from vcp.measure.provenance import provenance
 from vcp.measure.runs import load_run
 from vcp.measure.schema import Reading, RunCard
 from vcp.submit.guards import assert_unlocked
+from vcp.submit.kernel import kernel_provenance
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
@@ -150,12 +151,21 @@ def final(
         else:
             card = load_run(paths.data_root, str(st.eval_run))
             info = provenance(card, data_root=paths.data_root, configs_root=configs_root)
-            grade = info.grade
+            grade, observed = info.grade, set(info.observed)
+            artifact = load_staged(paths, sid).artifact
+            if artifact.kind == "kernel":  # VCP-036: the weights the notebook loads count too
+                grade, observed = kernel_provenance(
+                    data_root=paths.data_root,
+                    configs_root=configs_root,
+                    grade=grade,
+                    observed=observed,
+                    weights=artifact.weights,
+                )
             reading, why = sealed_reading(readings, card, profile, params_hash, sealed_size)
             if why == "" and st.kind == "candidate":
-                if profile.sealed_subset in info.observed:
+                if profile.sealed_subset in observed:
                     why = "observed_sealed"
-                elif GRADE_RANK[info.grade] < GRADE_RANK[profile.require_provenance]:
+                elif GRADE_RANK[grade] < GRADE_RANK[profile.require_provenance]:
                     why = "provenance_required"
         entries.append(
             FinalEntry(

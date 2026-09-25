@@ -15,6 +15,65 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.10.0] - 2026-09-25
+
+RSNA Knee 第二輪回報（VCP-035 … VCP-043）裡可以先修的五件，各一個 PR（#24–#28）；tag `v0.10.0`
+打在發版 PR 的合併 commit 上。MINOR 的理由：`submit upload` 的 VERDICT 多了 `platform_ref=` /
+`readback=` / `detail=`；`reason=` 字彙多了 `weights_not_in_candidate:`、`upload_failed:`；
+`uploaded` 列可以帶 `platform_ref`，`sync` 對新的 (id, ref) 即使分數沒變也寫 `scored` 列；backup
+manifest 對多折 run 多出條目；`train upload` 的遠端名稱對同名 checkpoint 帶上層資料夾；訓練子程序
+多了環境變數 `VCP_ATTEMPT`。
+
+### Added
+- `Session.attempt`（公開唯讀）與子程序環境變數 `VCP_ATTEMPT`：`--resume` 後每個 attempt 可以各寫
+  自己的證據檔，不必呼叫私有的 `_attempt()`（保留為別名）；`note`、`register_checkpoint` 與收據 id
+  `<run>-a<n>-<seq>` 都讀同一個數字（VCP-043，#26）。
+- `vcp submit upload` 的 VERDICT：`platform_ref=`（有才帶）、`readback=matched|not_listed|ambiguous|
+  known_ref|failed|interrupted`（有回讀才帶）、`detail=`（平台回覆，redact 後截 160 字）；VERDICT
+  進 `logs/`，平台說了什麼從此查得到（VCP-037，#27）。
+- `vcp.submit.kernel`（kernel 提交可以載入哪些權重）與 `vcp.submit.matching`（`mentions` / `leads`：
+  vcp 怎麼從平台列表認出自己的上傳）。
+
+### Changed
+- **kernel candidate 的 `--weights` 必須是被判決的那組**（VCP-036，#25，使用者選的嚴格規則）：每個
+  權重 run 必須是 eval run 或它遞迴展開的融合成員，否則 FAIL `weights_not_in_candidate`；candidate 的
+  每個權重 run 也過 `trained_on_sealed` / `observed_sealed` / `provenance_required`；baseline 只受成員
+  資格約束；probe 豁免但每項發現記進 `pairing.checks`（`weights:<run>=<finding>`）。
+  `Staged.provenance` 與 `submit final` 對 kernel 提交取所有相關 run 最低的等級。
+- `train upload`：run 內同名、不同路徑的 checkpoint（多折的 `fold-k/model.pt`）不再 FAIL
+  `name_collision`，遠端名稱取能分開它們的最少上層資料夾以 `__` 串接（`fold-0__model.pt`）；檔名不
+  重複的 run 名稱不變，舊的純檔名副本照舊算數（VCP-039，#24）。
+- `sync`：配到的平台發若這個 id 還沒有帶它 ref 的 `scored` 列，分數沒變也寫一列——同檔重傳分數必然
+  相同，以前那一發永遠沒有自己的分數、ref 也綁不上 id（VCP-038，#28）。
+- `submit status` 的 `foreign=` 改成數到達裡的 foreign（不含其實是自己上傳的那些）。
+
+### Fixed
+- backup manifest 與 `backup verify` 的一致性層以檔名去重：一個 run 登記 `fold-0/model.pt` …
+  `fold-4/model.pt` 時只留最後一個，其餘靜默消失、VERDICT 仍 OK。現在以路徑為身分（VCP-035，#24）。
+- Kaggle kernel 上傳永遠 `WARN confirmed=false`：CLI 2.2.4 對 code submission 只印伺服器的 message，
+  沒有成功字樣也不印 ref。現在 CLI 印了 `Submission ref:` 就採用，否則回讀提交列表：description 以
+  這個 id 開頭、平台時間落在「CLI 開始前 2 分鐘到回來後 2 分鐘」的恰好一筆 → 確認並記 ref；回讀永不讓
+  上傳失敗（VCP-037，#27）。
+- Kaggle CLI 2.2.4 在檔案上傳送出前失敗時仍回 0、只說 `Could not submit to competition`：以前寫下一筆
+  `uploaded` 列（WARN），現在是 FAIL `upload_failed:`、不寫列（#27）。
+- Kaggle CLI 2.2.4 對還沒有任何 submission 的比賽印純文字 `No submissions found`：`sync` 以前 FAIL
+  `platform_response: not JSON`，現在當空列表（#27）。
+- 同一發被 `uploaded` 與 `foreign` 各算一次配額：台帳還不認得某一發時 `sync` 會記成 foreign，之後
+  id 認領同一個 ref 也不會抵銷。`arrivals()` 現在排除其實是自己上傳的 foreign ref——`uploaded` 自帶
+  那個 ref，或 `scored` 把它綁到某個 id、且與那個 id 的一發上傳相差不到 10 分鐘（最近的先配、一發只
+  吸收一個）。配額、榜面現任、`final` 的 `needs_reupload` 與 `report` 一起修正（VCP-038 第 1 段，#28）。
+
+### Upgrade notes
+- 既有台帳升級後第一次 `sync`，會替過去「同分重傳」的每一發補一列 `scored`，`scored=` 一次性變大；
+  之後照常冪等。
+- 多折 run 之後的 `train upload` 會用新名稱上傳其餘幾折；已在遠端的純檔名副本留在原處、照舊算數。
+
+### Not in this release
+- VCP-038 第 2–4 段（上傳前先讀平台、台帳位置可設定、多寫入者拓樸與 `merge=union`）、VCP-040 + 042、
+  VCP-041（稽核 Wave 1c）：先寫 spec。
+- 已知的既有問題：同一個 id 的幾發分數不同時，`sync` 每次都會重寫一輪 `scored` 列（與 id 最新一列
+  比較）；修它要一併重想 `latest_score` 的語意。同 id 重傳要 `--force` 的護欄（呼應 VCP-014）仍待辦。
+
 ## [0.9.1] - 2026-09-24
 
 vcp 的 skill 變成可在任何專案使用的 Claude Code plugin，並帶上 0.9.0 之後合併的 SQLite gaps 修正（PR #21）；

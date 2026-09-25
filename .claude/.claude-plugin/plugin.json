@@ -1,6 +1,6 @@
 {
   "name": "vcp",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Skills that teach an agent to run a vision contest with vcp: orientation, the contest lifecycle, data, measurement and fusion admission, training / submission / backup, provenance and its graph, releases and environments, registry extensions.",
   "author": {
     "name": "eric20041027",

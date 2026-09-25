@@ -1,4 +1,4 @@
-<!-- 副本：來源是比賽工作區 RSNA_Knee_Abnormality_Detection/projects/rsna-knee/VCP_IMPROVEMENT_AUDIT_20260911.md（2026-09-11，由 Codex 在跑完 RSNA Knee 後寫成）。第 15 節的相對連結指向該工作區，不在本 repo。本 repo 的 Wave 0 已於 v0.3.0 完成（見 CHANGELOG）；Wave 1 拆成 1a 不可變產物（spec：docs/superpowers/specs/2026-09-11-vcp-immutable-artifacts-design.md）、1b 角色範圍存取與收據、1c 程式碼快照與授權。 -->
+<!-- 副本：來源是比賽工作區 RSNA_Knee_Abnormality_Detection/projects/rsna-knee/VCP_IMPROVEMENT_AUDIT_20260911.md（2026-09-11，由 Codex 在跑完 RSNA Knee 後寫成）。第 15 節的相對連結指向該工作區，不在本 repo。本 repo 的 Wave 0 已於 v0.3.0 完成（見 CHANGELOG）；Wave 1 拆成 1a 不可變產物（spec：docs/superpowers/specs/2026-09-11-vcp-immutable-artifacts-design.md）、1b 角色範圍存取與收據、1c 程式碼快照與授權。第 16 節是 2026-09-25 第二輪回報（VCP-035 – 043）的補遺，只收通用的缺陷與處置。 -->
 
 # VCP 使用後改進稽核
 
@@ -862,3 +862,51 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 - [FOURTH_CANDIDATE_SELECTION_20260909.md](FOURTH_CANDIDATE_SELECTION_20260909.md)：train-only 選型與 provenance review。
 
 這份稽核的首要判斷是：VCP 下一階段最有價值的工作，是讓「沒有讀到 eval/sealed data」成為可由框架獨立驗證的事實，並讓每一個正式產物的來源、程式、環境、授權與 supersession 都能被機器沿 lineage 重建。完成這層之後，submission 監控、備份狀態與開發體驗改善才會建立在可信的證據鏈上。
+
+## 16. 補遺：第二輪回報（VCP-035 – VCP-043，2026-09-25）
+
+來源：比賽工作區交給 VCP 的第二輪回報（2026-09-25，不在本 repo）。以下只留通用的缺陷與修法，比賽的資料、路徑與 id 都不收。處置由使用者裁決：可以直接修的五件隨 v0.10.0 發出（每件一個 PR），其餘先寫 spec。
+
+| ID | 類型 | 嚴重度 | 問題 | 處置 |
+|---|---|---|---|---|
+| VCP-035 | DEFECT | 中高 | backup manifest 與 verify 以檔名去重，多折 run 的 checkpoint 被靜默丟棄 | v0.10.0（#24） |
+| VCP-036 | DEFECT | 中 | kernel 提交的 `--weights` run 不受 sealed／provenance／準入檢查 | v0.10.0（#25） |
+| VCP-037 | DEFECT | 低 | Kaggle kernel 上傳永遠 `WARN confirmed=false` | v0.10.0（#27） |
+| VCP-038 | FEATURE_GAP（含可拆出的 DEFECT） | 低中 | 同一發被 uploaded 與 foreign 各算一次配額；沒有多寫入者模型 | 第 1 段 v0.10.0（#28）；第 2–4 段待 spec |
+| VCP-039 | FEATURE_GAP | 低中 | `train upload` 對多折同名 checkpoint 沒有可區分的遠端名稱 | v0.10.0（#24） |
+| VCP-040 | FEATURE_GAP | 低中 | 沒有把證據檔以 SHA256＋角色綁進 run 紀錄的正式 API | 待 spec（與 VCP-042 合併） |
+| VCP-041 | FEATURE_GAP | 低 | `train run` 對 dirty git 不 WARN、沒有 `--require-clean`、不記 dirty 路徑 | 待 spec（Wave 1c，VCP-004 的一片） |
+| VCP-042 | FEATURE_GAP | 低 | run card 無法宣告實際使用的標籤集 | 待 spec（與 VCP-040 合併） |
+| VCP-043 | FEATURE_GAP | 低 | 訓練子程序拿不到 attempt 編號 | v0.10.0（#26） |
+
+### VCP-035：多折 checkpoint 在備份清單裡只剩一個
+
+**狀態：v0.10.0 已修（#24）。** 清單與一致性驗證以檔名當 key，`fold-0/model.pt` … `fold-4/model.pt` 只留最後一個，VERDICT 仍 OK。改為以路徑為身分（同一路徑重新登記才是 `--resume` 的歷史）；`remote_copy` 還要求上傳紀錄的名稱是這個路徑自己的，內容剛好相同的另一折不會被誤配。
+
+### VCP-036：kernel 提交帶的權重沒被檢查
+
+**狀態：v0.10.0 已修（#25），採嚴格規則。** 準入與 sealed 檢查只看 `--eval-run`，notebook 實際載入的 `--weights` 只比 `weights_hash`。現在 candidate / baseline 的權重 run 必須是 eval run 或它的融合成員（`weights_not_in_candidate`），candidate 的每個權重 run 也過 sealed 與 provenance；probe 豁免但留紀錄；`final` 以同一套規則重讀。
+
+### VCP-037：Kaggle kernel 上傳無法確認
+
+**狀態：v0.10.0 已修（#27）。** CLI 2.2.4 對 code submission 只印伺服器 message（沒有成功字樣、不印 ref）。現在 CLI 印了 ref 就採用，否則有上限地回讀提交列表（描述以 id 開頭、時間落在這次上傳前後），`readback=` 記結果、`detail=` 讓平台回覆進 log；CLI 回 0 卻沒送出的檔案上傳改為 FAIL 不寫列。同 id 重傳的 `--force` 護欄（VCP-014）仍待辦。
+
+### VCP-038：配額重複計入與多寫入者
+
+**狀態：第 1 段 v0.10.0 已修（#28）；第 2–4 段待 spec。** 台帳還不認得某一發時 `sync` 會記成 foreign，之後 id 認領同一個 ref 也不會抵銷，配額多算一發。`arrivals()` 現在排除其實是自己上傳的 foreign ref（`uploaded` 自帶 ref，或 `scored` 綁到 id 且與該 id 的一發上傳相差不到 10 分鐘，最近的先配）；`sync` 對新 ref 分數沒變也寫 `scored` 列，同檔重傳才綁得上。仍開放：上傳前先讀平台、台帳位置可設定（多個 worktree 共用一份正本）、支援的多寫入者拓樸與 `merge=union`；PENDING 的一發在有分數之前綁不上。
+
+### VCP-039：多折同名 checkpoint 無法上傳
+
+**狀態：v0.10.0 已修（#24）。** 同名不同路徑一律 `name_collision`，多折 run 永遠 `unbacked`。遠端名稱改為取能分開它們的最少上層資料夾（`fold-0__model.pt`）；檔名不重複的 run 名稱不變。
+
+### VCP-040 + VCP-042：run 實際讀的輸入沒有正式紀錄
+
+**狀態：待 spec。** Session 只能登記 checkpoint、純量 note 與存取收據；衍生標籤、外部語料收據、teacher 預測沒有「路徑＋SHA＋角色」的位置，拿 `register_checkpoint` 代用會汙染 `weights_hash` 與備份計數。run card 也無法宣告實際用的標籤集（偽標籤、soft label）。方向：`TrainRecord.evidence[]` / `inputs[]`、`Session.attach_evidence`、`train run --evidence` / `--input`，舊卡相容。
+
+### VCP-041：dirty 工作樹沒有警告也沒有細節
+
+**狀態：待 spec（Wave 1c）。** `train run` 只記 `dirty: true`，不 WARN、沒有 `--require-clean`、不記哪些路徑，事後無法證明只是無關的未追蹤檔。方向：dirty 時 WARN 並把 commit / dirty 放進 VERDICT、`--require-clean` 在第一次寫入前 FAIL、選擇性記 porcelain 雜湊與截斷的路徑清單。
+
+### VCP-043：子程序拿不到 attempt 編號
+
+**狀態：v0.10.0 已修（#26）。** 子程序環境多了 `VCP_ATTEMPT`，`Session.attempt` 公開唯讀；checkpoint、note 與收據 id 讀同一個數字。

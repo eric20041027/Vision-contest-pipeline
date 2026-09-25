@@ -29,6 +29,9 @@ class UploadResult:
     confirmed: bool
     platform_ref: str | None
     detail: str
+    # How reading the submission back from the platform's list went, when the CLI's own answer
+    # confirmed nothing (Kaggle, VCP-037); None when no read-back happened.
+    readback: str | None = None
 
 
 @dataclass(frozen=True)

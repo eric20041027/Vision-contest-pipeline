@@ -36,6 +36,11 @@ IdOpt = Annotated[str, typer.Option("--id", help="submission id (path-safe, unde
 PluginOpt = Annotated[
     list[str] | None, typer.Option("--plugin", help="python module to import (registers writers)")
 ]
+DETAIL_MAX = 160  # characters of the platform's reply a VERDICT carries
+
+
+def _clip(text: str, limit: int = DETAIL_MAX) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 @submit_app.command("init")
@@ -276,9 +281,22 @@ def upload_cmd(
             "at": str(out.row.at),
             "confirmed": bool(out.row.confirmed),
         }
+        if out.row.platform_ref:
+            fields["platform_ref"] = out.row.platform_ref
+        if out.result.readback:
+            fields["readback"] = out.result.readback
         if out.quota is not None:
             fields.update(out.quota.fields())
+        if out.result.detail:  # the platform's redacted reply; the VERDICT is what the log keeps
+            fields["detail"] = _clip(out.result.detail)
         human = [out.result.detail] if out.result.detail else []
+        if not out.row.confirmed:
+            human.append(
+                f"unconfirmed: the platform does not list {submission_id} yet. Before uploading "
+                f"it again, run `vcp submit sync --dataset {dataset}`: if sync matches it, it "
+                "landed and another upload spends a submission; if it stays unconfirmed there, "
+                "it did not land"
+            )
         status: Status = "OK" if out.row.confirmed else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 

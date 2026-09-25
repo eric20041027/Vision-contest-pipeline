@@ -224,3 +224,27 @@ def test_verify_remote_copy_on_rclone(world):
     assert ["rclone", "hashsum", "sha256", "fake:w/good"] in remote.calls
     assert res.reason == "missing"
     assert SECRET not in json.dumps(res.copy_problems)
+
+
+def test_verify_checks_every_same_named_checkpoint(world):
+    """VCP-035: the consistency layer keys checkpoints by path as well -- a change to fold 0's
+    bytes is drift even though fold 1, registered later, has the same file name."""
+    from vcp.train.checkpoints import register
+
+    folds = []
+    for k in range(2):
+        fold = world.roots.data / "work" / "good" / f"fold-{k}" / "best.pt"
+        fold.parent.mkdir(parents=True, exist_ok=True)
+        fold.write_bytes(f"fold {k} weights".encode())
+        folds.append(fold)
+    record = load_record(world.roots.data, "good")
+    record, _ = register(record, folds, data_root=world.roots.data, attempt=2)
+    save_record(world.roots.data, record)
+    build_manifest(EVAL, "run:good", manifest_id="folds", **_kw(world))
+
+    folds[0].write_bytes(b"fold 0 weights, overwritten")
+    res = verify(EVAL, "folds", **_kw(world))
+
+    whats = {d.what for d in res.drift}
+    assert "good/train.yaml:checkpoints.work/good/fold-0/best.pt" in whats
+    assert "good/train.yaml:checkpoints.work/good/fold-1/best.pt" not in whats

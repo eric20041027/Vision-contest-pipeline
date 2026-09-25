@@ -32,6 +32,7 @@ from vcp.measure.runs import assert_run_matches, load_run, verify_prediction
 from vcp.measure.schema import RunCard
 from vcp.submit.gate import admit
 from vcp.submit.guards import assert_before_deadline, assert_unlocked
+from vcp.submit.kernel import check_weights
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.pairing import UNCHECKED, is_fusion, verify_pairing, verify_weights
 from vcp.submit.profile import load_profile
@@ -235,6 +236,7 @@ def stage(spec: StageSpec) -> StageResult:
                 f"{profile.require_provenance}",
                 fields={"run": spec.eval_run, "provenance": info.grade},
             )
+    grade = info.grade  # a kernel submission also counts the runs whose weights it loads
     warnings: list[str] = []
     test_dataset_card = Dataset.load_card(
         profile.dataset, data_root=spec.data_root, configs_root=spec.configs_root
@@ -255,6 +257,17 @@ def stage(spec: StageSpec) -> StageResult:
         if spec.kernel is None or spec.version is None:
             raise ValidationFailed("kernel submissions need --kernel and --version")
         pairing, weights = verify_weights(paths.data_root, spec.eval_run, spec.weights)
+        checked = check_weights(
+            data_root=paths.data_root,
+            configs_root=paths.configs_root,
+            eval_run=spec.eval_run,
+            weights=weights,
+            kind=spec.kind,
+            sealed_subset=profile.sealed_subset,
+            require_provenance=profile.require_provenance,
+        )
+        pairing = pairing.model_copy(update={"checks": [*pairing.checks, *checked.notes]})
+        grade = min(grade, checked.grade, key=lambda g: GRADE_RANK[g])
     if UNCHECKED in pairing.checks:
         warnings.append("config_hash unchecked (missing on one side)")
     fuse = (
@@ -291,7 +304,7 @@ def stage(spec: StageSpec) -> StageResult:
             profile_sha256=profile_sha,
             staged_at=stamp(),
             vcp_version=build_string(),
-            provenance=info.grade,
+            provenance=grade,
         )
         text = json.dumps(staged.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
         (final_dir / STAGE_FILE).write_text(text, encoding="utf-8", newline="\n")

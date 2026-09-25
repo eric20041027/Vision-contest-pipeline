@@ -125,7 +125,7 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
+| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=`。子程序的環境多了 `VCP_RUN_ID`、`VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`、`VCP_ATTEMPT`（第幾個 attempt）與有 `--seed` 時的 `VCP_SEED` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
 | `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等 | `--run`、`--dest`、`--only final` |
 | `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令）；`backed=` / `unbacked=`（目前的 bytes 沒副本，會 WARN）/ `superseded=`（同路徑已被後來的登記取代、又從沒上傳過的舊 bytes，只報不 WARN——它們的副本再也不會出現） | `--run`、`--verify`（重算 sha） |
 
@@ -171,6 +171,7 @@ with MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="tra
     s = Session.current()  # 在 vcp train run 底下才有
     s.register_checkpoint("ckpt/best.pt", final=True)
     s.note("val_auc", 0.91)
+    per_attempt = f"evidence.a{s.attempt}.json"  # --resume 後遞增，與收據 id 的 -a<n>- 相同
 ```
 
 ## 提交治理命令 `vcp submit`

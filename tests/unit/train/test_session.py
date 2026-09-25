@@ -46,6 +46,25 @@ def test_current_requires_the_wrapper_env(roots, monkeypatch):
         Session.current(roots.data)
 
 
+def test_attempt_is_the_exported_one_or_else_the_records(roots, monkeypatch):
+    """VCP-043: a public, read-only attempt number (the contest had to call ``_attempt()``)."""
+    _running(roots)  # the record's current attempt is 2
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.delenv("VCP_ATTEMPT", raising=False)
+    s = Session("r1", roots.data)
+    assert s.attempt == 2
+    monkeypatch.setenv("VCP_ATTEMPT", "3")  # what `vcp train run` exported wins ...
+    assert s.attempt == 3
+    monkeypatch.setenv("VCP_RUN_ID", "other")  # ... for the run it was exported for only
+    assert s.attempt == 2
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    for junk in ("", "0", "two", "-1"):
+        monkeypatch.setenv("VCP_ATTEMPT", junk)
+        assert s.attempt == 2
+    with pytest.raises(AttributeError):
+        s.attempt = 5
+
+
 def test_register_and_note_in_process(roots, monkeypatch, tmp_path):
     _running(roots)
     monkeypatch.setenv("VCP_RUN_ID", "r1")

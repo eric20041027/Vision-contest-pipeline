@@ -135,7 +135,7 @@ VERDICT 欄位：
 4. run 目錄：`train.yaml` 已存在且無 `--resume` → FAIL `reason=run_exists`；`--resume` 時紀錄的 `config_hash` 須相同（不同 = 新 run，FAIL）且 `run.yaml` 的 dataset / plan / `trained_on` 須相同，attempt 編號 +1；`run.yaml` 存在但沒有 `train.yaml`（ingest 或 fuse 產的 run）→ FAIL `reason=run_bound_elsewhere`。
 5. 寫入：新 run 寫 `run.yaml`；寫 `train.yaml`（attempt `running`）；複製 config 到 `train/config.<n>.<ext>`；`started` 事件。
 6. 環境快照 → `train/env.<n>.json`；`env` 事件。
-7. 執行命令：`cwd` = `--cwd`（預設當前目錄）；環境變數 = 當前環境 + `VCP_RUN_ID` / `VCP_DATA_ROOT` / `VCP_CONFIGS_ROOT` +（有 seed 時）`VCP_SEED` / `PYTHONHASHSEED` +（有 venv 時）`VIRTUAL_ENV` 與 PATH 前置；stdout+stderr 合流，逐行寫 `train/console.<n>.log`（utf-8，`errors="replace"`）並回顯；結束記 `exit_code`、`finished_at`、`duration_s`、`status`（0 → `finished`，其餘 → `failed`）；`finished` 事件。Ctrl+C：終止子程序、等待、`status=interrupted`。
+7. 執行命令：`cwd` = `--cwd`（預設當前目錄）；環境變數 = 當前環境 + `VCP_RUN_ID` / `VCP_DATA_ROOT` / `VCP_CONFIGS_ROOT` / `VCP_ATTEMPT`（這一輪的 attempt 編號 n）+（有 seed 時）`VCP_SEED` / `PYTHONHASHSEED` +（有 venv 時）`VIRTUAL_ENV` 與 PATH 前置；stdout+stderr 合流，逐行寫 `train/console.<n>.log`（utf-8，`errors="replace"`）並回顯；結束記 `exit_code`、`finished_at`、`duration_s`、`status`（0 → `finished`，其餘 → `failed`）；`finished` 事件。Ctrl+C：終止子程序、等待、`status=interrupted`。
 8. 登記 checkpoint（不論成敗）：每個 glob 相對 `--cwd` 展開，只取檔案，算 sha256 與 bytes，寫 `checkpoints[]`（`source: glob`）與 `checkpoint` 事件。`--final`：命令成功時須恰好命中一個檔（0 或 >1 → FAIL `reason=final_ambiguous`，`fields={"checkpoint": glob}`），其 sha 寫進 `run.yaml` 的 `weights_hash`；命令失敗時略過並 WARN；沒給 `--final` 但 `Session` 登記過 `final=true` 的 checkpoint，取那一個；都沒有 → WARN `final=none`。
 9. 上傳（§6.3）：只在命令成功時做；每個 `--upload DEST` 一輪。
 10. VERDICT。
@@ -188,6 +188,7 @@ s = Session.current()                   # 讀 VCP_RUN_ID / VCP_DATA_ROOT；不�
 s.register_checkpoint("ckpt/epoch12.pt")            # sha256 + 事件 + 重寫 train.yaml
 s.register_checkpoint("ckpt/best.pt", final=True)   # 沒給 --final 時作為 weights_hash 的來源
 s.note("val_auc", 0.912)                            # note 事件
+s.attempt                                          # 這個程序是第幾個 attempt（VCP_ATTEMPT；與收據 id 的 -a<n>- 相同）
 ```
 
 `train.yaml` 在命令執行期間只有 Session 會寫（包裝器在開始前與結束後才寫），所以沒有並行寫入。
@@ -254,3 +255,5 @@ s.note("val_auc", 0.912)                            # note 事件
 14. **CLI 失敗身分**（2026-09-07）：run / upload / status 的 context 均帶 run，run 另帶 dataset / plan；早期驗證失敗也輸出這些欄位，錯誤 fields 優先，JSON 與 VERDICT 一致。
 
 15. **Windows 使用命令的絕對 interpreter**（2026-09-07，RSNA 現場驗證）：`--venv` 的探針 / 環境設定不代表 Windows `Popen` 會依子程序 PATH 選到裸 `python`；已觀測實際訓練落到基底 Python 而失敗。現行可行契約是呼叫者明寫 `<venv>/Scripts/python.exe` 的絕對路徑，失敗 attempt 用相同 config 的 `--resume` 留痕接續。這是現行限制與使用裁決，並非本輪改過核心命令解析；通用修復待 Plan 5 後記 §10。
+
+17. **子程序拿得到 attempt 編號（VCP-043，2026-09-25）**：`child_env` 在 attempt 編號算出來之前就建好，子程序只拿到 `VCP_RUN_ID` / `VCP_DATA_ROOT` / `VCP_CONFIGS_ROOT` / `VCP_SEED`，`--resume` 後想讓每個 attempt 各寫自己證據檔的迴圈只能呼叫私有的 `Session._attempt()`。現在 `train run` 在算出 n 之後把 `VCP_ATTEMPT=n` 放進子程序環境；`Session.attempt` 是公開唯讀屬性：`VCP_RUN_ID` 就是這個 session 的 run、且 `VCP_ATTEMPT` 是正整數時用它，否則讀 `train.yaml` 的 running attempt（`current_attempt`）。它與收據 id 的 `<run>-a<n>-<seq>`、`note` 事件的 attempt 同一個數字；`_attempt()` 保留為別名。

@@ -226,8 +226,8 @@ def test_upload_verdict_carries_the_platform_ref_and_detail_into_the_log(roots, 
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v and "confirmed=false" in v
     assert "platform_ref" not in v and "readback=not_listed" in v and "detail=" in v
-    assert "run `vcp submit sync --dataset beach-test`" in r.output
-    assert "if it stays unconfirmed there, it did not land" in r.output
+    assert "look there for a S2 entry near 2026-09-25T08:00:00.000Z" in r.output
+    assert "`vcp submit sync --dataset beach-test` matches it later" in r.output
 
 
 def test_final_status_report_cli(pair):

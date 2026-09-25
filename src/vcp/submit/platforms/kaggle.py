@@ -31,6 +31,7 @@ from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.matching import leads
 from vcp.submit.platforms.base import (
     PlatformSubmission,
+    Readback,
     Runner,
     UploadResult,
     default_runner,
@@ -196,7 +197,7 @@ class KagglePlatform:
         started: datetime,
         profile: PlatformProfile,
         runner: Runner | None,
-    ) -> tuple[str | None, str]:
+    ) -> tuple[str | None, Readback]:
         """The ref of the submission this upload just made, and how the looks went:
         ``matched`` (one listed entry opens with the id and is stamped between the moment the
         CLI started and the moment it returned, give or take ``READBACK_SKEW``), ``ambiguous``

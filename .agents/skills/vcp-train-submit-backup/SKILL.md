@@ -51,6 +51,6 @@ uv run vcp backup status --dataset D-test
 
 ## 常見錯誤
 - 把 RUNBOOK 的命令當已完成；staged ≠ uploaded；local `remote_copy` ≠ 異機備份；`rclone_conf=unknown` ≠ absent。
-- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。先跑 `submit sync`——配到就是上了，重傳會再吃一發配額；仍列在 `unconfirmed=` 才是沒上。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。
+- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（`unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上）。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。
 - 直接上傳既有 CSV 再補紀錄：先釐清來源，無法證明身分的檔只能如實標示。
 - 在 main checkout 的 venv 啟動訓練：用比賽釘版 worktree 的 `vcp.exe`（見 `vcp-release-and-environments`）。

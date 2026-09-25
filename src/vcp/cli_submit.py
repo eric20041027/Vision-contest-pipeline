@@ -292,10 +292,10 @@ def upload_cmd(
         human = [out.result.detail] if out.result.detail else []
         if not out.row.confirmed:
             human.append(
-                f"unconfirmed: the platform does not list {submission_id} yet. Before uploading "
-                f"it again, run `vcp submit sync --dataset {dataset}`: if sync matches it, it "
-                "landed and another upload spends a submission; if it stays unconfirmed there, "
-                "it did not land"
+                f"unconfirmed: vcp could not tie this upload of {submission_id} to an entry on "
+                f"the platform. Before uploading it again, look there for a {submission_id} "
+                f"entry near {out.row.at}: if there is one, another upload spends a submission. "
+                f"`vcp submit sync --dataset {dataset}` matches it later"
             )
         status: Status = "OK" if out.row.confirmed else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human

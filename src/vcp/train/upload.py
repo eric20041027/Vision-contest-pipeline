@@ -14,8 +14,10 @@ it used to be silently treated as an empty listing.
 from __future__ import annotations
 
 import shutil
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # `dest_kind` moved to `backup/dest.py` (spec 14); re-exported so `vcp.train.upload.dest_kind`
 # keeps working for anything that still imports it from here.
@@ -38,26 +40,59 @@ class UploadOutcome:
     skipped: int
 
 
-def _targets(checkpoints: list[CheckpointRecord]) -> dict[str, CheckpointRecord]:
-    """Checkpoints by destination file name: the newest record of a path wins.
+def _parts(path: str) -> list[str]:
+    """Folder names and file name of a stored path, without a root or a drive colon."""
+    parts = PurePosixPath(path.replace("\\", "/")).parts
+    return [part.rstrip(":") for part in parts if part.strip("/")]
 
-    ``checkpoints`` is chronological (registration appends), so a later record of the SAME path
-    with different bytes is a ``--resume`` that changed the weights -- history, not a collision --
-    and simply replaces the earlier entry. Two DIFFERENT paths sharing a name with different
-    bytes is a genuine collision.
+
+def remote_names(paths: Iterable[str]) -> dict[str, str]:
+    """The name each checkpoint path is uploaded under, inside ``<dest>/<run_id>/``.
+
+    A file name nobody else in the run uses stays as it is. Checkpoints that share a file name
+    (five folds that each write ``model.pt``) take the fewest trailing folders that tell them
+    apart, joined with ``__``: ``fold-0__model.pt``. Paths no folder can tell apart are a
+    ``name_collision``.
     """
-    by_name: dict[str, CheckpointRecord] = {}
-    for c in checkpoints:
-        name = Path(c.path).name
-        existing = by_name.get(name)
-        if existing is not None and existing.path != c.path and existing.sha256 != c.sha256:
-            raise ValidationFailed(
-                f"{NAME_COLLISION}: two checkpoints named {name!r} "
-                f"({existing.path} and {c.path}); rename one before uploading",
-                fields={"checkpoint": name},
-            )
-        by_name[name] = c
-    return by_name
+    groups: dict[str, list[str]] = {}
+    for path in paths:
+        groups.setdefault(_parts(path)[-1], []).append(path)
+    names: dict[str, str] = {}
+    for base, group in groups.items():
+        if len(group) == 1:
+            names[group[0]] = base
+            continue
+        split = {path: _parts(path) for path in group}
+        chosen = {path: "__".join(parts) for path, parts in split.items()}  # every folder
+        for depth in range(2, max(len(parts) for parts in split.values())):
+            candidate = {path: "__".join(parts[-depth:]) for path, parts in split.items()}
+            if len(set(candidate.values())) == len(group):
+                chosen = candidate
+                break
+        names.update(chosen)
+    clashes = sorted(name for name, count in Counter(names.values()).items() if count > 1)
+    if clashes:
+        raise ValidationFailed(
+            f"{NAME_COLLISION}: checkpoints {sorted(p for p, n in names.items() if n in clashes)} "
+            "cannot be told apart by their folders; rename one before uploading",
+            fields={"checkpoint": clashes[0]},
+        )
+    return names
+
+
+def _targets(record: TrainRecord, only_final: bool) -> dict[str, CheckpointRecord]:
+    """Checkpoints by remote name: the newest record of every path.
+
+    ``record.checkpoints`` is chronological (registration appends), so a later record of the SAME
+    path is a ``--resume`` that changed the weights -- history, not a second checkpoint. Names
+    are worked out over every path of the run, so ``--final`` uploads under the same name a full
+    upload would.
+    """
+    current: dict[str, CheckpointRecord] = {}
+    for c in record.checkpoints:
+        current[c.path] = c
+    names = remote_names(current)
+    return {names[path]: c for path, c in current.items() if c.final or not only_final}
 
 
 def _source(c: CheckpointRecord, data_root: Path) -> Path:
@@ -133,8 +168,7 @@ def upload(
     runner: Runner | None = None,
 ) -> UploadOutcome:
     """Copy the run's registered checkpoints to ``dest/<run_id>/`` and verify every one."""
-    chosen = [c for c in record.checkpoints if c.final] if only_final else list(record.checkpoints)
-    targets = _targets(chosen)
+    targets = _targets(record, only_final)
     target = open_dest(dest, runner)
     if isinstance(target, LocalDest):
         return _upload_local(record, dest, targets, data_root)

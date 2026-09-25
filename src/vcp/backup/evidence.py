@@ -206,16 +206,18 @@ class Collector:
         self.measure_ledgers(dpaths, conclusion)
 
     def _checkpoints(self, record: TrainRecord, conclusion: str) -> None:
-        """The newest record per checkpoint file name (a --resume that changed the bytes is
-        history); a copy `train upload` verified becomes a remote_copy instead of a file."""
+        """The newest record of every checkpoint path: a --resume that changed a path's bytes is
+        history, but five folds that each write ``model.pt`` are five checkpoints (VCP-035). A
+        copy `train upload` verified with the same bytes becomes a remote_copy instead of a file,
+        under whatever name the upload gave it."""
         newest: dict[str, CheckpointRecord] = {}
         for c in record.checkpoints:
-            newest[Path(c.path).name] = c
-        for name, c in newest.items():
+            newest[c.path] = c
+        for c in newest.values():
             remote = None
             for u in reversed(record.uploads):
-                if u.name == name and u.sha256 == c.sha256 and u.verified:
-                    remote = RemoteCopy(dest=u.dest, run=record.run_id, name=name)
+                if u.sha256 == c.sha256 and u.verified:
+                    remote = RemoteCopy(dest=u.dest, run=record.run_id, name=u.name)
                     break
             self.add(
                 resolve_stored_path(c.path, self.data_root),

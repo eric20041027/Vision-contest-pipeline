@@ -492,6 +492,7 @@ def train_run(spec: RunSpec) -> RunResult:
         )
     record = _close_running(record, data_root=data_root, run_id=spec.run_id)  # no-op for a new run
     n = len(record.attempts) + 1
+    env = {**env, "VCP_ATTEMPT": str(n)}  # VCP-043: the child's own attempt number
     # spec 6.1 step 5: the first writes.
     run_root = run_dir(data_root, spec.run_id)
     train_dir(data_root, spec.run_id).mkdir(parents=True, exist_ok=True)

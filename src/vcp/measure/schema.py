@@ -5,10 +5,19 @@ from __future__ import annotations
 import math
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from vcp.core.errors import RegistryError, ValidationFailed
 from vcp.data.access.schema import AccessRef, Grade
+from vcp.data.evidence_ref import EvidenceRef
 from vcp.data.tasks import get_task
 
 PAYLOAD_FIELDS = ("boxes", "masks", "scores", "targets")
@@ -149,6 +158,16 @@ class RunCard(_Strict):
     created_at: str
     predictions: dict[str, PredictionFile] = Field(default_factory=dict)
     access: list[AccessRef] = Field(default_factory=list)
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_evidence(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A card that attached nothing is written exactly as before 0.11.0, so an older vcp
+        still reads it (spec 2026-09-26 §3.3)."""
+        data: dict[str, Any] = handler(self)
+        if not self.evidence:
+            data.pop("evidence", None)
+        return data
 
 
 class MetricResult(_Strict):

@@ -723,16 +723,47 @@ Path("weights/best.pt").write_bytes(b"best")
 def test_evidence_and_labels_are_checked_before_the_first_write(roots, work, tmp_path):
     _, plan, _ = _seed(roots)
     make_label_set(roots, tmp_path, plan, subsets=("train", "valA"), label_set_id="wide")
+    make_label_set(roots, tmp_path, plan)  # "pseudo-v1" over "train": fits trained_on=["train"]
+    evidence_file = tmp_path / "some_evidence.txt"
+    evidence_file.write_text("x", encoding="utf-8")
     for kw, reason in (
         ({"evidence": [f"teacher={tmp_path / 'gone.jsonl'}"]}, "not_found"),
         ({"evidence": [f"teacher={tmp_path}"]}, "not_a_file"),
         ({"evidence": ["teacher"]}, "NAME=PATH"),
         ({"labels": ["nope"]}, "not_found"),
         ({"labels": ["wide"]}, "labels_mismatch"),  # valA is not in trained_on
+        ({"evidence": [f"labels={evidence_file}"]}, "role_reserved"),
+        (
+            {"evidence": [f"pseudo-v1={evidence_file}"], "labels": ["pseudo-v1"]},
+            "evidence_conflict",
+        ),
     ):
         with pytest.raises(ValidationFailed, match=reason):
             train_run(_spec(roots, work, **kw))
         assert not (run_dir(roots.data, "r1") / "run.yaml").exists()
+
+
+def test_evidence_conflict_on_resume_leaves_no_trace_of_the_second_attempt(roots, work, tmp_path):
+    """The `evidence_conflict:` check must run before ANY write of the new attempt: a --resume
+    that trips it (the name is already bound under another role/kind from attempt 1) must not
+    leave a `started` attempt, a console/env file, or a single changed byte of train.yaml /
+    train.log.jsonl."""
+    _, plan, _ = _seed(roots)
+    make_label_set(roots, tmp_path, plan)  # "pseudo-v1" over "train"
+    evidence_file = tmp_path / "corpus.txt"
+    evidence_file.write_text("x", encoding="utf-8")
+    first = train_run(_spec(roots, work, evidence=[f"pseudo-v1={evidence_file}"]))
+    assert first.attempt.status == "finished", first.record
+    run = run_dir(roots.data, "r1")
+    before_yaml = (run / "train.yaml").read_bytes()
+    before_log = (run / "train.log.jsonl").read_bytes()
+    with pytest.raises(ValidationFailed, match="evidence_conflict"):
+        train_run(_spec(roots, work, resume=True, labels=["pseudo-v1"]))
+    assert (run / "train.yaml").read_bytes() == before_yaml
+    assert (run / "train.log.jsonl").read_bytes() == before_log
+    assert len(load_record(roots.data, "r1").attempts) == 1
+    assert not (run / "train" / "console.2.log").exists()
+    assert not (run / "train" / "env.2.json").exists()
 
 
 def test_train_run_binds_evidence_and_labels_to_the_run(roots, work, tmp_path):

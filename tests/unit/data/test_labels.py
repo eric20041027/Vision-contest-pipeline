@@ -1,8 +1,10 @@
 import json
 
 import pytest
+from typer.testing import CliRunner
 
 from helpers import det_samples, seed_tiny
+from vcp.cli import app
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.paths import artifact_dir
 from vcp.data.labels import LabelSetSpec, create_label_set, load_label_set, sample_ids_by_key
@@ -171,3 +173,33 @@ def test_a_tampered_or_absent_label_set_does_not_load(roots, tmp_path):
         load_label_set(roots.data, "pseudo-v1")
     with pytest.raises(ValidationFailed, match="not_found"):
         load_label_set(roots.data, "nope")
+
+
+runner = CliRunner()
+
+
+def _verdict(output: str) -> str:
+    lines = [line for line in output.splitlines() if line.startswith("VERDICT ")]
+    assert lines, output
+    return lines[-1]
+
+
+def test_cli_labels(roots, tmp_path):
+    _, plan = seed_tiny(roots)
+    train = sorted(plan.ids_in("train"))
+    f = _csv(tmp_path / "a.csv", [*train, "ext"])
+    base = ["data", "labels", "--name", "tiny", "--plan", "fixed-v1", "--subset", "train"]
+    base += ["--id-field", "sample_id"]
+    ok = runner.invoke(app, [*base, "--file", str(f), "--id", "pseudo-v1"])
+    assert ok.exit_code == 0, ok.output
+    v = _verdict(ok.output)
+    assert v.startswith("VERDICT cmd=labels status=OK")
+    for part in (f"rows={len(train) + 1}", f"matched={len(train)}", "external=1"):
+        assert part in v
+    assert "reused=false" in v and "subsets=train" in v and "id=pseudo-v1" in v
+    leak = _csv(tmp_path / "b.csv", sorted(plan.ids_in("valA")))
+    bad = runner.invoke(app, [*base, "--file", str(leak), "--id", "leak-v1"])
+    assert bad.exit_code == 1 and "status=FAIL" in _verdict(bad.output)
+    assert "labels_outside_subsets" in _verdict(bad.output) and "id=leak-v1" in _verdict(bad.output)
+    again = runner.invoke(app, [*base, "--file", str(f), "--id", "pseudo-v1", "--json"])
+    assert again.exit_code == 0 and json.loads(again.stdout)["fields"]["reused"] is True

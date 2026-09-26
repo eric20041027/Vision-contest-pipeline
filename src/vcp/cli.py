@@ -34,6 +34,7 @@ from vcp.data.audit import AUDITS, AuditContext, AuditOptions, run_audit
 from vcp.data.dataset import Dataset
 from vcp.data.exporters import ExportSpec, export_subset
 from vcp.data.importers import ImportSpec, get_importer
+from vcp.data.labels import LabelSetSpec, create_label_set
 from vcp.data.lineage import clean_eval_subsets
 from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.source_audit import write_source_audit
@@ -445,6 +446,68 @@ def export_cmd(
         return status, fields, payload, human
 
     run_command("export", json_mode, data_root, fn)
+
+
+@data_app.command("labels")
+def labels_cmd(
+    name: NameOpt,
+    plan: Annotated[str, typer.Option("--plan", help="plan id")],
+    subset: Annotated[
+        list[str], typer.Option("--subset", help="subset these labels are for (repeatable)")
+    ],
+    file: Annotated[Path, typer.Option("--file", help="label file: .csv or .jsonl")],
+    id_field: Annotated[
+        str, typer.Option("--id-field", help="sample_id | view_path | view_stem | meta.<key>")
+    ],
+    label_set_id: Annotated[str, typer.Option("--id", help="label_set artifact id")],
+    id_col: Annotated[
+        str, typer.Option("--id-col", help="csv column / jsonl key holding the id")
+    ] = "id",
+    notes: Annotated[str, typer.Option("--notes")] = "",
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Check a training label file against the split plan and keep it as a label_set."""
+
+    def fn() -> CmdResult:
+        res = create_label_set(
+            LabelSetSpec(
+                name=name,
+                plan_id=plan,
+                subsets=list(subset),
+                file=file,
+                id_field=id_field,
+                label_set_id=label_set_id,
+                id_col=id_col,
+                notes=notes,
+                data_root=data_root,
+                configs_root=configs_root,
+            )
+        )
+        s = res.summary
+        fields: dict[str, FieldValue] = {
+            "id": label_set_id,
+            "dataset": name,
+            "plan": plan,
+            "subsets": ",".join(s.subsets),
+            "rows": s.rows,
+            "matched": sum(s.matched.values()),
+            "external": s.external,
+            "reused": res.reused,
+        }
+        human = [f"{k}: {v} rows" for k, v in s.matched.items()]
+        if s.external:
+            human.append(f"not in {name} (external): {s.external} rows")
+        return "OK", fields, s.model_dump(mode="json"), human
+
+    run_command(
+        "labels",
+        json_mode,
+        data_root,
+        fn,
+        context={"id": label_set_id, "dataset": name, "plan": plan},
+    )
 
 
 @data_app.command("audit")

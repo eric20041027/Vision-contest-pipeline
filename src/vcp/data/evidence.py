@@ -15,7 +15,14 @@ from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import validate_name
 from vcp.core.time import stamp
-from vcp.data.evidence_ref import LABELS_ROLE, Binding, EvidenceKind, EvidenceRef, current
+from vcp.data.evidence_ref import (
+    LABELS_ROLE,
+    Binding,
+    EvidenceKind,
+    EvidenceRef,
+    check_name,
+    current,
+)
 from vcp.data.labels import LABEL_SET_KIND, load_label_set
 
 EVIDENCE_KIND = "evidence"
@@ -66,6 +73,25 @@ def check_evidence_file(name: str, path: Path, role: str) -> None:
         raise ValidationFailed(
             f"not_a_file: evidence {name!r} ({path}) is not a file", fields={"evidence": name}
         )
+
+
+def check_names(
+    existing: list[EvidenceRef], evidence: list[tuple[str, Path]], labels: list[str]
+) -> None:
+    """spec 2026-09-26 §5.2 / §5.4 "names do not conflict", before anything is written: no
+    ``--evidence`` name is also a ``--labels`` id, and no name is already bound to the run under
+    another role or kind. Shared by ``train run`` (§5.2) and ``eval ingest`` (§5.4)."""
+    names = {name for name, _ in evidence}
+    for label_set_id in labels:
+        if label_set_id in names:
+            raise ValidationFailed(
+                f"evidence_conflict: {label_set_id!r} is both an --evidence name and a --labels id",
+                fields={"evidence": label_set_id},
+            )
+    for name, _ in evidence:
+        check_name(existing, name, name, "evidence")
+    for label_set_id in labels:
+        check_name(existing, label_set_id, LABELS_ROLE, "label_set")
 
 
 def _ref(

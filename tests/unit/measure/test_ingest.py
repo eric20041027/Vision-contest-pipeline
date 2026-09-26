@@ -7,6 +7,7 @@ from helpers import (
     det_samples,
     det_with_runs,
     make_card,
+    make_label_set,
     perfect_predictions,
     write_images,
 )
@@ -262,3 +263,55 @@ def test_ingest_refuses_a_run_built_by_vcp_fuse(roots, tmp_path):
     # an ordinary run still takes the same subset
     res = ingest(_spec(roots, run_id="noisy", subset="holdout", src=src))
     assert res.subset == "holdout" and not res.created_run
+
+
+def test_ingest_binds_evidence_and_labels(roots, tmp_path):
+    ds, plan, _ = det_with_runs(roots, tmp_path, n=20)
+    make_label_set(roots, tmp_path, plan)
+    teacher = tmp_path / "teacher.jsonl"
+    teacher.write_text("t", encoding="utf-8")
+    src = tmp_path / "labelled-valA.jsonl"
+    write_predictions(src, perfect_predictions(ds.subset("valA", plan), ds.card))
+
+    def spec(run_id, trained_on, **over):
+        base = dict(
+            run_id=run_id,
+            dataset="tiny",
+            plan_id="fixed-v1",
+            subset="valA",
+            format="jsonl",
+            src=src,
+            trained_on=trained_on,
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+        return IngestSpec(**{**base, **over})
+
+    res = ingest(spec("labelled", ["train"], evidence=[f"teacher={teacher}"], labels=["pseudo-v1"]))
+    assert [(r.name, r.binding, r.attempt) for r in res.run.evidence] == [
+        ("teacher", "manual", None),
+        ("pseudo-v1", "manual", None),
+    ]
+    assert load_run(roots.data, "labelled").evidence == res.run.evidence
+    with pytest.raises(ValidationFailed, match="labels_mismatch"):
+        ingest(spec("other", ["valB"], labels=["pseudo-v1"]))
+    assert not (run_dir(roots.data, "other") / "run.yaml").exists()
+
+    # Ruling: a name doing double duty in the SAME invocation (an --evidence name that is also a
+    # --labels id) is evidence_conflict, caught before anything is written -- no run.yaml for the
+    # new run, and no orphan evidence artifact copied for it.
+    evidence_dir = roots.data / "artifacts" / "evidence"
+    with pytest.raises(ValidationFailed, match="evidence_conflict"):
+        ingest(spec("fresh", ["train"], evidence=[f"pseudo-v1={teacher}"], labels=["pseudo-v1"]))
+    assert not (run_dir(roots.data, "fresh") / "run.yaml").exists()
+    assert not any(p.name.startswith("fresh-") for p in evidence_dir.iterdir())
+
+    # Ruling: the same check against the RUN's existing list -- "pseudo-v1" is already attached
+    # to "labelled" as a label set, so attaching it again as an --evidence name is the same
+    # evidence_conflict, and run.yaml must come out byte-identical.
+    run_yaml = run_dir(roots.data, "labelled") / "run.yaml"
+    before_bytes = run_yaml.read_bytes()
+    with pytest.raises(ValidationFailed, match="evidence_conflict"):
+        ingest(spec("labelled", ["train"], evidence=[f"pseudo-v1={teacher}"], replace=True))
+    assert run_yaml.read_bytes() == before_bytes
+    assert not any(p.name.startswith("labelled-pseudo-v1-") for p in evidence_dir.iterdir())

@@ -32,7 +32,7 @@ from vcp.measure.provenance import provenance
 from vcp.measure.runs import append_history, assert_run_matches, load_run, run_dir, save_run
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train.attach import attach as attach_cli_evidence
-from vcp.train.attach import moved, preflight
+from vcp.train.attach import check_names, moved, preflight
 from vcp.train.checkpoints import expand, register, resolve_final
 from vcp.train.env import snapshot, venv_python
 from vcp.train.records import (
@@ -507,6 +507,8 @@ def train_run(spec: RunSpec) -> RunResult:
             chash=chash,
             cwd=cwd,
         )
+    # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
+    check_names([*record.evidence, *card.evidence], evidence, spec.labels)
     record = _close_running(record, data_root=data_root, run_id=spec.run_id)  # no-op for a new run
     n = len(record.attempts) + 1
     env = {**env, "VCP_ATTEMPT": str(n)}  # VCP-043: the child's own attempt number

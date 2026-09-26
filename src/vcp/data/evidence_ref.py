@@ -38,17 +38,23 @@ class EvidenceRef(BaseModel):
         return v
 
 
+def check_name(refs: list[EvidenceRef], name: str, role: str, kind: str) -> None:
+    """The list rule that can fail (spec §3.3): a name keeps its role and kind."""
+    same = [r for r in refs if r.name == name]
+    if any(r.role != role or r.kind != kind for r in same):
+        raise ValidationFailed(
+            f"evidence_conflict: {name!r} is attached as {same[-1].kind}/{same[-1].role}, "
+            f"not {kind}/{role}",
+            fields={"evidence": name},
+        )
+
+
 def add_ref(refs: list[EvidenceRef], ref: EvidenceRef) -> list[EvidenceRef]:
     """The list only grows (spec §3.3): the same name and manifest again is no new row, the same
     name with another manifest is a new row that becomes current, and the same name under
     another role or kind is ``evidence_conflict:``."""
+    check_name(refs, ref.name, ref.role, ref.kind)
     same = [r for r in refs if r.name == ref.name]
-    if any(r.role != ref.role or r.kind != ref.kind for r in same):
-        raise ValidationFailed(
-            f"evidence_conflict: {ref.name!r} is attached as {same[-1].kind}/{same[-1].role}, "
-            f"not {ref.kind}/{ref.role}",
-            fields={"evidence": ref.name},
-        )
     if same and same[-1].manifest_sha256 == ref.manifest_sha256:
         return list(refs)
     return [*refs, ref]

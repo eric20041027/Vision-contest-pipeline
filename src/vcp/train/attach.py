@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.data.evidence import (
     RunScope,
@@ -15,6 +16,7 @@ from vcp.data.evidence import (
     parse_evidence_args,
     source_sha,
 )
+from vcp.data.evidence_ref import LABELS_ROLE, EvidenceRef, check_name
 from vcp.train.records import bind_ref
 from vcp.train.schema import TrainRecord
 
@@ -32,6 +34,25 @@ def preflight(
     return parsed
 
 
+def check_names(
+    existing: list[EvidenceRef], evidence: list[tuple[str, Path]], labels: list[str]
+) -> None:
+    """spec 2026-09-26 §5.2 "names do not conflict", before the first write: no ``--evidence``
+    name is also a ``--labels`` id, and no name is already bound to the run under another role
+    or kind."""
+    names = {name for name, _ in evidence}
+    for label_set_id in labels:
+        if label_set_id in names:
+            raise ValidationFailed(
+                f"evidence_conflict: {label_set_id!r} is both an --evidence name and a --labels id",
+                fields={"evidence": label_set_id},
+            )
+    for name, _ in evidence:
+        check_name(existing, name, name, "evidence")
+    for label_set_id in labels:
+        check_name(existing, label_set_id, LABELS_ROLE, "label_set")
+
+
 def attach(
     data_root: Path,
     scope: RunScope,
@@ -42,7 +63,8 @@ def attach(
     attempt: int,
 ) -> tuple[TrainRecord, dict[str, str]]:
     """Copy every ``--evidence`` file and bind it, then every ``--labels`` set, to ``attempt``.
-    Returns the saved record and each evidence file's sha as attached."""
+    Returns the record (saved whenever a reference was new) and each evidence file's sha as
+    attached."""
     digests: dict[str, str] = {}
     for name, path in evidence:
         ref = attach_evidence(

@@ -624,7 +624,8 @@ def status_cmd(
             for run, msg in st.provenance_failed.items()
         ]
         human += [
-            f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'}"
+            f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'} "
+            f"labels={st.labels.get(run, 'dataset')}"
             for run, g in st.provenance.items()
         ]
         # An abandoned claim is the one thing here that wants attention; everything else is a

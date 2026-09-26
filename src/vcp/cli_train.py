@@ -19,6 +19,7 @@ from vcp.cli_common import (
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import resolve_data_root
+from vcp.data.evidence_ref import current, labels_field
 from vcp.train.run import RunSpec, train_run
 from vcp.train.status import status as status_view
 from vcp.train.status import upload_run
@@ -214,6 +215,8 @@ def status_cmd(
             # up. Reported, never WARNed: no copy of them can appear any more.
             "superseded": len(st.superseded),
             "running": st.running,
+            "evidence": len(current(st.record.evidence)),
+            "labels": labels_field(st.record.evidence),
         }
         if verify:
             fields["drift"] = len(st.drift)

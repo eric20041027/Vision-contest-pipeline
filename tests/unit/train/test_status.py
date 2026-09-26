@@ -1,9 +1,12 @@
 import pytest
 
+from helpers import seed_tiny
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
+from vcp.core.paths import artifact_dir
+from vcp.data.evidence import RunScope, attach_evidence
 from vcp.train.checkpoints import mark_final, register
-from vcp.train.records import read_events, save_record
+from vcp.train.records import bind_ref, load_record, read_events, save_record
 from vcp.train.schema import Attempt, TrainRecord, UploadRecord
 from vcp.train.status import status, upload_run
 
@@ -206,3 +209,27 @@ def test_five_folds_named_model_pt_all_upload_and_leave_nothing_unbacked(roots, 
     ]
     assert all(r.verified for r in out.records)
     assert status(roots.data, "r1").unbacked == []
+
+
+def test_status_verify_reports_a_broken_evidence_artifact(roots, tmp_path):
+    ds, _ = seed_tiny(roots)
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd="w",
+        command=["python"],
+    )
+    save_record(roots.data, rec)
+    f = tmp_path / "teacher.jsonl"
+    f.write_text("t", encoding="utf-8")
+    scope = RunScope("r1", "tiny", ds.card.samples_hash, "fixed-v1", ("train",))
+    ref = attach_evidence(roots.data, scope, "teacher", f, role="teacher", attempt=1, binding="cli")
+    bind_ref(roots.data, load_record(roots.data, "r1"), ref, 1)
+    assert status(roots.data, "r1", verify=True).drift == []
+    (artifact_dir(roots.data, "evidence", ref.artifact_id) / "teacher.jsonl").write_text(
+        "x", encoding="utf-8"
+    )
+    assert status(roots.data, "r1", verify=True).drift == ["evidence:teacher"]

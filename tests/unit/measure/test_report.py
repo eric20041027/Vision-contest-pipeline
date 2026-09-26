@@ -5,17 +5,19 @@ from datetime import timedelta
 
 import pytest
 
-from helpers import det_with_runs
+from helpers import det_with_runs, make_label_set, perfect_predictions
 from vcp.core.errors import VcpError
 from vcp.core.time import parse_stamp, stamp
 from vcp.data.access.access import DatasetAccess
 from vcp.fuse.build import write_record
 from vcp.fuse.schema import FuseRecord, MemberRecord
+from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
 from vcp.measure.ledger import ReadingsLedger
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.metrics import METRICS, applicable_metrics
 from vcp.measure.plugins import load_plugins
+from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg, prereg_time
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.report import last_vs_last, report_rows, status
@@ -325,3 +327,26 @@ def test_status_survives_a_fused_run_whose_member_cannot_be_read(roots, tmp_path
     assert st.provenance_failed.keys() == {"fused"}
     assert st.provenance_failed["fused"].startswith("ValidationFailed")
     assert "noisy" in st.provenance and "perfect" in st.provenance
+
+
+def test_eval_status_names_each_runs_labels(roots, tmp_path):
+    ds, plan, paths = det_with_runs(roots, tmp_path, n=20)
+    make_label_set(roots, tmp_path, plan)
+    src = tmp_path / "labelled.jsonl"
+    write_predictions(src, perfect_predictions(ds.subset("valA", plan), ds.card))
+    ingest(
+        IngestSpec(
+            run_id="labelled",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            subset="valA",
+            format="jsonl",
+            src=src,
+            trained_on=["train"],
+            labels=["pseudo-v1"],
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    st = status(paths)
+    assert st.labels == {"labelled": "pseudo-v1", "noisy": "dataset", "perfect": "dataset"}

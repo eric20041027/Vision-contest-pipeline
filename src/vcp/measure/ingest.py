@@ -13,6 +13,15 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
+from vcp.data.evidence import (
+    RunScope,
+    attach_evidence,
+    check_evidence_file,
+    check_names,
+    label_ref,
+    parse_evidence_args,
+)
+from vcp.data.evidence_ref import add_refs
 from vcp.data.split import assert_plan_matches, load_plan
 from vcp.measure.converters import ConvertContext, get_converter
 from vcp.measure.predictions import check_predictions, write_predictions
@@ -53,6 +62,9 @@ class IngestSpec(BaseModel):
     # repeatable). Attached before anything else is written, so a receipt naming another run,
     # dataset or plan fails before a single byte of predictions is touched.
     receipts: list[str] = Field(default_factory=list)
+    # spec 2026-09-26 §5.4: evidence files (NAME=PATH) and label_set ids to bind to the run.
+    evidence: list[str] = Field(default_factory=list)
+    labels: list[str] = Field(default_factory=list)
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -187,6 +199,34 @@ def _run_card(
     return card, True
 
 
+def _attach(data_root: Path, card: RunCard, evidence: list[str], labels: list[str]) -> RunCard:
+    """``ingest --evidence / --labels``: bound by hand, no attempt. Every check runs before any
+    evidence is copied."""
+    scope = RunScope(
+        run_id=card.run_id,
+        dataset=card.dataset,
+        samples_hash=card.samples_hash,
+        plan_id=card.plan_id,
+        trained_on=tuple(card.trained_on),
+    )
+    parsed = parse_evidence_args(evidence)
+    for name, path in parsed:
+        check_evidence_file(name, path, name)
+    # Ruling 2026-09-26 (Task 7): names must not conflict before a single byte is copied, exactly
+    # as `train run` already enforces (spec §5.2 / §5.4) -- checked against the run's own current
+    # list before either a --labels lookup or a --evidence copy happens below.
+    check_names(card.evidence, parsed, labels)
+    label_refs = [
+        label_ref(data_root, scope, lid, attempt=None, binding="manual") for lid in labels
+    ]
+    evidence_refs = [
+        attach_evidence(data_root, scope, name, path, role=name, attempt=None, binding="manual")
+        for name, path in parsed
+    ]
+    new_refs = add_refs(card.evidence, [*evidence_refs, *label_refs])
+    return card.model_copy(update={"evidence": new_refs})
+
+
 def ingest(spec: IngestSpec) -> IngestResult:
     paths = DatasetPaths.resolve(
         spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
@@ -204,6 +244,8 @@ def ingest(spec: IngestSpec) -> IngestResult:
     )
     if spec.receipts:
         card = attach_receipts(card, spec.receipts, data_root=paths.data_root)
+    if spec.evidence or spec.labels:
+        card = _attach(paths.data_root, card, spec.evidence, spec.labels)
     converter = get_converter(spec.format)
     ctx = ConvertContext(dataset, ids, spec.export_dir, dict(spec.options))
     preds = converter.convert(spec.src, ctx)

@@ -18,9 +18,19 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_data_root, store_path
 from vcp.data.access.access import DatasetAccess
 from vcp.data.access.schema import AccessRef, Purpose
+from vcp.data.evidence import RunScope, attach_evidence, label_ref
+from vcp.data.evidence_ref import EvidenceRef
+from vcp.measure.runs import load_run
 from vcp.train.checkpoints import mark_final, register
-from vcp.train.records import append_event, current_attempt, has_record, load_record, save_record
-from vcp.train.schema import CheckpointRecord
+from vcp.train.records import (
+    append_event,
+    bind_ref,
+    current_attempt,
+    has_record,
+    load_record,
+    save_record,
+)
+from vcp.train.schema import CheckpointRecord, TrainRecord
 
 
 class Session:
@@ -54,6 +64,8 @@ class Session:
         return self.attempt
 
     def register_checkpoint(self, path: str | Path, *, final: bool = False) -> CheckpointRecord:
+        """Register a WEIGHTS file (spec 6.2); anything else the loop read is evidence
+        (``attach_evidence``) or a label set (``attach_labels``)."""
         file = Path(path).resolve()
         if not file.is_file():
             raise ValidationFailed(f"checkpoint is not a file: {file}")
@@ -89,6 +101,45 @@ class Session:
 
     def note(self, key: str, value: str | int | float | bool) -> None:
         append_event(self.data_root, self.run_id, "note", self.attempt, key=key, value=value)
+
+    def attach_evidence(
+        self, name: str, path: str | Path, *, role: str | None = None
+    ) -> EvidenceRef:
+        """Copy a file this loop read into an immutable ``evidence`` artifact and bind it to the
+        running attempt (spec 2026-09-26 §5.3). Weights are checkpoints, not evidence."""
+        record = load_record(self.data_root, self.run_id)
+        ref = attach_evidence(
+            self.data_root,
+            self._scope(record),
+            name,
+            Path(path).resolve(),
+            role=role or name,
+            attempt=self.attempt,
+            binding="session",
+        )
+        return bind_ref(self.data_root, record, ref, self.attempt)[1]
+
+    def attach_labels(self, label_set_id: str) -> EvidenceRef:
+        """Bind a ``vcp data labels`` label set this loop trains with (spec §5.3, §4.2)."""
+        record = load_record(self.data_root, self.run_id)
+        ref = label_ref(
+            self.data_root,
+            self._scope(record),
+            label_set_id,
+            attempt=self.attempt,
+            binding="session",
+        )
+        return bind_ref(self.data_root, record, ref, self.attempt)[1]
+
+    def _scope(self, record: TrainRecord) -> RunScope:
+        card = load_run(self.data_root, self.run_id)
+        return RunScope(
+            run_id=self.run_id,
+            dataset=record.dataset,
+            samples_hash=card.samples_hash,
+            plan_id=record.plan_id,
+            trained_on=tuple(record.trained_on),
+        )
 
     def access(
         self,

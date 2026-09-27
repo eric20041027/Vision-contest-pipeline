@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
 from vcp.data.access.schema import AccessRef
+from vcp.data.evidence_ref import EvidenceRef
 
 AttemptStatus = Literal["running", "finished", "failed", "interrupted"]
 CheckpointSource = Literal["glob", "session"]
 UploadKind = Literal["rclone", "local"]
-EVENTS = ("started", "env", "checkpoint", "uploaded", "finished", "note", "access")
+EVENTS = ("started", "env", "checkpoint", "uploaded", "finished", "note", "access", "evidence")
 
 
 class _Strict(BaseModel):
@@ -96,7 +97,17 @@ class TrainRecord(_Strict):
     checkpoints: list[CheckpointRecord] = Field(default_factory=list)
     uploads: list[UploadRecord] = Field(default_factory=list)
     access: list[AccessRef] = Field(default_factory=list)
+    evidence: list[EvidenceRef] = Field(default_factory=list)
     notes: str = ""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_evidence(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A record that attached nothing is written exactly as before 0.11.0, so an older vcp
+        still reads it (spec 2026-09-26 §3.3)."""
+        data: dict[str, Any] = handler(self)
+        if not self.evidence:
+            data.pop("evidence", None)
+        return data
 
 
 class GitInfo(_Strict):

@@ -23,6 +23,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
+from vcp.data.evidence_ref import current, labels_field
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
@@ -123,6 +124,14 @@ def ingest_cmd(
             "--receipt", help="access receipt artifact id to bind to the run (repeatable)"
         ),
     ] = None,
+    evidence: Annotated[
+        list[str] | None,
+        typer.Option("--evidence", help="NAME=PATH of a file the run read (repeatable)"),
+    ] = None,
+    labels: Annotated[
+        list[str] | None,
+        typer.Option("--labels", help="label_set id the run trained with (repeatable)"),
+    ] = None,
     plugin: PluginOpt = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
@@ -149,6 +158,8 @@ def ingest_cmd(
             replace=replace,
             options=parse_opts(opt),
             receipts=list(receipt or []),
+            evidence=list(evidence or []),
+            labels=list(labels or []),
             data_root=data_root,
             configs_root=configs_root,
         )
@@ -170,6 +181,8 @@ def ingest_cmd(
             "replaced": res.replaced,
             "receipts": len(res.run.access),
             "provenance": res.provenance,
+            "evidence": len(current(res.run.evidence)),
+            "labels": labels_field(res.run.evidence),
         }
         if res.unknown:
             fields["unknown"] = len(res.unknown)
@@ -611,7 +624,8 @@ def status_cmd(
             for run, msg in st.provenance_failed.items()
         ]
         human += [
-            f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'}"
+            f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'} "
+            f"labels={st.labels.get(run, 'dataset')}"
             for run, g in st.provenance.items()
         ]
         # An abandoned claim is the one thing here that wants attention; everything else is a

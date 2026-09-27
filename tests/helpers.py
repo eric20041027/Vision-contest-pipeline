@@ -13,6 +13,7 @@ from PIL import Image
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
+from vcp.data.labels import LabelSetSpec, LabelSetSummary, create_label_set
 from vcp.data.schema import Box, Category, DatasetCard, Labels, Mask, Sample, SourceInfo, View
 from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, SplitPlan, build_plan, parse_subsets, save_plan
@@ -511,3 +512,41 @@ def write_yolo_txt(
         (labels_dir / f"{stem}.txt").write_text(
             "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
         )
+
+
+def seed_tiny(roots: Any, samples: list[Sample] | None = None) -> tuple[Dataset, SplitPlan]:
+    """det dataset ``tiny`` + plan ``fixed-v1`` (train / valA / valB / holdout), no runs."""
+    paths = DatasetPaths.resolve("tiny", data_root=roots.data, configs_root=roots.configs)
+    ds = Dataset.from_parts(
+        make_card("det", image_root="raw/tiny"), samples or det_samples(40, seed=0)
+    )
+    ds.save(paths)
+    plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
+    save_plan(plan, paths)
+    return ds, plan
+
+
+def make_label_set(
+    roots: Any,
+    tmp_path: Path,
+    plan: SplitPlan,
+    *,
+    label_set_id: str = "pseudo-v1",
+    dataset: str = "tiny",
+    subsets: tuple[str, ...] = ("train",),
+) -> LabelSetSummary:
+    """A label set over every sample of ``subsets`` (keyed by sample id) plus one external row."""
+    ids = sorted(sid for s in subsets for sid in plan.ids_in(s))
+    f = tmp_path / f"{label_set_id}.csv"
+    f.write_text("id,y\n" + "".join(f"{i},1\n" for i in [*ids, "ext-1"]), encoding="utf-8")
+    spec = LabelSetSpec(
+        name=dataset,
+        plan_id=plan.plan_id,
+        subsets=list(subsets),
+        file=f,
+        id_field="sample_id",
+        label_set_id=label_set_id,
+        data_root=roots.data,
+        configs_root=roots.configs,
+    )
+    return create_label_set(spec).summary

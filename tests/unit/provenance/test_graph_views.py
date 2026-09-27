@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from helpers import det_with_runs, make_card
+from helpers import det_with_runs, make_card, make_label_set
 from vcp.artifact.schema import ArtifactSpec
 from vcp.artifact.writer import ArtifactWriter
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.access.schema import AccessRef
 from vcp.data.dataset import Dataset
+from vcp.data.evidence import RunScope, attach_evidence, label_ref
 from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.source_audit import write_source_audit
 from vcp.fuse.build import write_record
@@ -531,3 +532,58 @@ def test_sample_impact_excludes_run_on_disjoint_subset():
     assert entity_id("reading", "a") in result.entity_ids
     assert entity_id("run", "b") not in result.entity_ids
     assert entity_id("reading", "b") not in result.entity_ids
+
+
+def _labelled_perfect(roots, tmp_path):
+    ds, plan, _ = det_with_runs(roots, tmp_path, n=20)
+    make_label_set(roots, tmp_path, plan)
+    card = load_run(roots.data, "perfect")
+    scope = RunScope("perfect", "tiny", card.samples_hash, "fixed-v1", tuple(card.trained_on))
+    ref = label_ref(roots.data, scope, "pseudo-v1", attempt=None, binding="manual")
+    return ds, card, ref
+
+
+def test_a_label_set_is_consumed_by_the_run_and_produced_by_the_dataset(roots, tmp_path):
+    ds, card, ref = _labelled_perfect(roots, tmp_path)
+    save_run(roots.data, card.model_copy(update={"evidence": [ref]}))
+    graph = build_graph(roots.data, roots.configs)
+    run = entity_id("run", "perfect")
+    label_set = entity_id("artifact", "label_set/pseudo-v1")
+    edges = {(e.source_id, e.target_id, e.edge_type) for e in graph.edges.values()}
+    assert (label_set, run, "CONSUMED_BY") in edges
+    assert (dataset_version_id("tiny", ds.card.samples_hash), label_set, "PRODUCED_BY") in edges
+    assert graph.entities[run].broken_reason is None
+
+
+def test_an_evidence_copy_is_consumed_only_when_the_run_lists_it(roots, tmp_path):
+    """spec §6.2: like a receipt, an evidence copy reaches a run only through the run's own
+    list; ``params.run`` just names the run that made the copy (a failed ingest leaves one)."""
+    det_with_runs(roots, tmp_path, n=20)
+    card = load_run(roots.data, "perfect")
+    scope = RunScope("perfect", "tiny", card.samples_hash, "fixed-v1", tuple(card.trained_on))
+    teacher = tmp_path / "teacher.jsonl"
+    teacher.write_text("t", encoding="utf-8")
+    ref = attach_evidence(
+        roots.data, scope, "teacher", teacher, role="teacher", attempt=None, binding="manual"
+    )
+    run = entity_id("run", "perfect")
+    copy = entity_id("artifact", f"evidence/{ref.artifact_id}")
+    for listed in (False, True):
+        if listed:
+            save_run(roots.data, card.model_copy(update={"evidence": [ref]}))
+        graph = build_graph(roots.data, roots.configs)
+        edges = {(e.source_id, e.target_id, e.edge_type) for e in graph.edges.values()}
+        assert copy in graph.entities
+        assert ((copy, run, "CONSUMED_BY") in edges) is listed
+        assert graph.entities[run].broken_reason is None
+
+
+def test_a_missing_or_repinned_evidence_reference_marks_the_run_broken(roots, tmp_path):
+    _, card, ref = _labelled_perfect(roots, tmp_path)
+    gone = ref.model_copy(update={"name": "gone", "artifact_id": "gone"})
+    stale = ref.model_copy(update={"manifest_sha256": "0" * 64})
+    for bad, what in ((gone, "label_set/gone"), (stale, "label_set/pseudo-v1")):
+        save_run(roots.data, card.model_copy(update={"evidence": [bad]}))
+        graph = build_graph(roots.data, roots.configs)
+        reason = graph.entities[entity_id("run", "perfect")].broken_reason
+        assert reason is not None and f"invalid evidence/{what}" in reason

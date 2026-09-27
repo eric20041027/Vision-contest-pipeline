@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from vcp.data.evidence import broken_refs
 from vcp.train.checkpoints import drift as _drift
 from vcp.train.checkpoints import missing as _missing
 from vcp.train.records import append_event, load_record, save_record
@@ -43,7 +44,12 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
         # superseded checkpoint, not several.
         superseded=list(dict.fromkeys(c.path for c in stale if newest[c.path] != c.sha256)),
         missing=_missing(record, data_root),
-        drift=_drift(record, data_root) if verify else [],
+        drift=(
+            _drift(record, data_root)
+            + [f"evidence:{n}" for n in broken_refs(data_root, record.evidence)]
+            if verify
+            else []
+        ),
         running=sum(1 for a in record.attempts if a.status == "running"),
     )
 

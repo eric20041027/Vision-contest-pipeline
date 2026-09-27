@@ -24,11 +24,15 @@ from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp, utc_now
 from vcp.data.dataset import Dataset
+from vcp.data.evidence import RunScope, check_names
+from vcp.data.evidence_ref import current, labels_field, merge_refs
 from vcp.data.schema import DatasetCard
 from vcp.data.split import SplitPlan, assert_plan_matches, load_plan
 from vcp.measure.provenance import provenance
 from vcp.measure.runs import append_history, assert_run_matches, load_run, run_dir, save_run
 from vcp.measure.schema import RunCard, RunSource
+from vcp.train.attach import attach as attach_cli_evidence
+from vcp.train.attach import moved, preflight
 from vcp.train.checkpoints import expand, register, resolve_final
 from vcp.train.env import snapshot, venv_python
 from vcp.train.records import (
@@ -76,6 +80,8 @@ class RunSpec(BaseModel):
     uploads: list[str] = Field(default_factory=list)
     resume: bool = False
     notes: str = ""
+    evidence: list[str] = Field(default_factory=list)  # NAME=PATH (spec 2026-09-26 §5.2)
+    labels: list[str] = Field(default_factory=list)  # label_set ids
     command: list[str]
     on_line: Callable[[str], None] | None = None
     rclone_runner: Runner | None = None
@@ -101,6 +107,9 @@ class RunResult(BaseModel):
     observed_beyond: list[str] = Field(default_factory=list)
     receipt_invalid: int = 0
     source_audit_missing: int = 0
+    evidence: int = 0
+    labels: str = "dataset"
+    evidence_changed: list[str] = Field(default_factory=list)
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -478,6 +487,14 @@ def train_run(spec: RunSpec) -> RunResult:
     env = child_env(spec, data_root=data_root, configs_root=configs_root, python=python)
     if not command_found(spec.command[0], cwd, env.get("PATH")):
         raise ValidationFailed(f"command not found: {spec.command[0]!r}")
+    scope = RunScope(
+        run_id=spec.run_id,
+        dataset=dataset_card.name,
+        samples_hash=dataset_card.samples_hash,
+        plan_id=spec.plan_id,
+        trained_on=tuple(trained_on),
+    )
+    evidence = preflight(data_root, scope, spec.evidence, spec.labels)
     card, record = _existing(spec, data_root, dataset_card, trained_on, chash)
     created = card is None
     if card is None or record is None:
@@ -490,6 +507,8 @@ def train_run(spec: RunSpec) -> RunResult:
             chash=chash,
             cwd=cwd,
         )
+    # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
+    check_names([*record.evidence, *card.evidence], evidence, spec.labels)
     record = _close_running(record, data_root=data_root, run_id=spec.run_id)  # no-op for a new run
     n = len(record.attempts) + 1
     env = {**env, "VCP_ATTEMPT": str(n)}  # VCP-043: the child's own attempt number
@@ -532,6 +551,10 @@ def train_run(spec: RunSpec) -> RunResult:
     append_event(
         data_root, spec.run_id, "env", n, python=snap.python, gpus=snap.gpus, torch=snap.torch
     )
+    # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything.
+    record, digests = attach_cli_evidence(
+        data_root, scope, record, evidence, spec.labels, attempt=n
+    )
     # step 7: the command
     started = utc_now()
     code, status = execute(
@@ -559,6 +582,11 @@ def train_run(spec: RunSpec) -> RunResult:
         status=status,
         duration_s=attempt.duration_s,
     )
+    changed = moved(evidence, digests)
+    if changed:
+        append_event(
+            data_root, spec.run_id, "note", n, key="evidence_changed", value=",".join(changed)
+        )
     # spec 7.1: the receipts the child bound to this attempt become the run's access record.
     # F5: merged by artifact_id rather than replaced outright -- train.yaml's refs first (in
     # their own order), then any ref already on the card (e.g. a manual `ingest --receipt`
@@ -569,7 +597,9 @@ def train_run(spec: RunSpec) -> RunResult:
         *record.access,
         *(r for r in card.access if r.artifact_id not in train_ids),
     ]
-    card = card.model_copy(update={"access": merged_access})
+    card = card.model_copy(
+        update={"access": merged_access, "evidence": merge_refs(record.evidence, card.evidence)}
+    )
     save_run(data_root, card)
     # steps 8-9
     record, card, final, registered, warnings = _finish_checkpoints(
@@ -582,6 +612,8 @@ def train_run(spec: RunSpec) -> RunResult:
         warnings.append("seed=none")
     if spec.venv is None:
         warnings.append("venv=inherited")
+    if changed:
+        warnings.append(f"evidence_changed={','.join(changed)}")
     info = provenance(card, data_root=data_root, configs_root=configs_root)
     observed_beyond = sorted(set(info.observed) - set(trained_on))
     if observed_beyond:
@@ -607,4 +639,7 @@ def train_run(spec: RunSpec) -> RunResult:
         observed_beyond=observed_beyond,
         receipt_invalid=len(info.invalid),
         source_audit_missing=source_audit_missing,
+        evidence=len(current(card.evidence)),
+        labels=labels_field(card.evidence),
+        evidence_changed=changed,
     )

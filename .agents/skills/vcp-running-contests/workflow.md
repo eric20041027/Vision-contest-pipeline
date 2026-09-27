@@ -64,7 +64,7 @@
 | `$VCP_DATA_ROOT/runs/<run>/` | run card、預測、train/fuse 證據 | 指定 replace/resume 才換寫，必須留 history/log |
 | `$VCP_DATA_ROOT/measure/<name>/` | readings、judgements、sigma、anchors | 台帳只增；anchor 換寫前先留 log |
 | `$VCP_DATA_ROOT/submit/<test>/<id>/` | submission、stage card | 寫一次不改 |
-| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、provenance_policy、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
+| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、label_set、evidence、provenance_policy、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
 | `$VCP_DATA_ROOT/indexes/` | provenance 的 SQLite 索引 | 衍生品，可刪可 rebuild，不進 git |
 | `configs/datasets/<name>/` | dataset card、splits、prereg、fuse、submit、backup | 進 git；不可變物換 id |
 | `projects/<contest>/` | 模型、轉換器、metric、writer、notebook、RUNBOOK | 比賽專屬且可重跑 |

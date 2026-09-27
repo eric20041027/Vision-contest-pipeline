@@ -874,9 +874,9 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 | VCP-037 | DEFECT | 低 | Kaggle kernel 上傳永遠 `WARN confirmed=false` | v0.10.0（#27） |
 | VCP-038 | FEATURE_GAP（含可拆出的 DEFECT） | 低中 | 同一發被 uploaded 與 foreign 各算一次配額；沒有多寫入者模型 | 第 1 段 v0.10.0（#28）；第 2–4 段待 spec |
 | VCP-039 | FEATURE_GAP | 低中 | `train upload` 對多折同名 checkpoint 沒有可區分的遠端名稱 | v0.10.0（#24） |
-| VCP-040 | FEATURE_GAP | 低中 | 沒有把證據檔以 SHA256＋角色綁進 run 紀錄的正式 API | 待 spec（與 VCP-042 合併） |
+| VCP-040 | FEATURE_GAP | 低中 | 沒有把證據檔以 SHA256＋角色綁進 run 紀錄的正式 API | 已實作（隨 0.11.0） |
 | VCP-041 | FEATURE_GAP | 低 | `train run` 對 dirty git 不 WARN、沒有 `--require-clean`、不記 dirty 路徑 | 待 spec（Wave 1c，VCP-004 的一片） |
-| VCP-042 | FEATURE_GAP | 低 | run card 無法宣告實際使用的標籤集 | 待 spec（與 VCP-040 合併） |
+| VCP-042 | FEATURE_GAP | 低 | run card 無法宣告實際使用的標籤集 | 已實作（隨 0.11.0，與 VCP-040 同一件） |
 | VCP-043 | FEATURE_GAP | 低 | 訓練子程序拿不到 attempt 編號 | v0.10.0（#26） |
 
 ### VCP-035：多折 checkpoint 在備份清單裡只剩一個
@@ -901,7 +901,7 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 
 ### VCP-040 + VCP-042：run 實際讀的輸入沒有正式紀錄
 
-**狀態：待 spec。** Session 只能登記 checkpoint、純量 note 與存取收據；衍生標籤、外部語料收據、teacher 預測沒有「路徑＋SHA＋角色」的位置，拿 `register_checkpoint` 代用會汙染 `weights_hash` 與備份計數。run card 也無法宣告實際用的標籤集（偽標籤、soft label）。方向：`TrainRecord.evidence[]` / `inputs[]`、`Session.attach_evidence`、`train run --evidence` / `--input`，舊卡相容。
+**狀態：已實作，隨 0.11.0 發出（spec `2026-09-26-vcp-run-evidence-design.md`）。** Session 原本只能登記 checkpoint、純量 note 與存取收據；衍生標籤、外部語料收據、teacher 預測沒有「路徑＋SHA＋角色」的位置，拿 `register_checkpoint` 代用會汙染 `weights_hash` 與備份計數，run card 也說不出實際用的標籤集。現在 `vcp data labels` 把標籤檔對切分 plan 驗過後存成不可變的 `label_set`（落在允許子集以外的 dataset 樣本 → `labels_outside_subsets:`，sealed 子集不能標）；run 讀的其他檔複製成 `evidence` 產物。兩者都掛在 `run.yaml` / `train.yaml` 的 `evidence` 清單（`train run --evidence NAME=PATH --labels ID`、`Session.attach_evidence / attach_labels`、`eval ingest --evidence / --labels`），備份、`backup verify` 與 provenance 圖都認得；清單空的時候不寫出，沒掛證據的紀錄舊版 vcp 照讀。
 
 ### VCP-041：dirty 工作樹沒有警告也沒有細節
 

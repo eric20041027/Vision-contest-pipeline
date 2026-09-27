@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from helpers import seed_tiny
 from vcp.cli import app
+from vcp.measure.runs import load_run
 from vcp.provenance.graph import build_graph, entity_id
 
 runner = CliRunner()
@@ -104,6 +105,10 @@ def test_run_evidence_story(roots, tmp_path):
         if e.target_id == run_id and e.edge_type == "CONSUMED_BY"
     }
     assert entity_id("artifact", "label_set/pseudo-v1") in consumed
+    refs = {r.name: r for r in load_run(roots.data, "r1").evidence}
+    for name in ("corpus", "teacher"):  # one from the command line, one from the loop
+        assert refs[name].kind == "evidence"
+        assert entity_id("artifact", f"evidence/{refs[name].artifact_id}") in consumed
     assert graph.entities[run_id].broken_reason is None
     logs = "".join(p.read_text(encoding="utf-8") for p in (roots.data / "logs").iterdir())
     assert "zz-label-content" not in logs

@@ -112,9 +112,9 @@ class EvidenceRef(_Strict):
 
 - label_set 的 `dataset`、`samples_hash`、`plan_id` 都要等於 run card 的。
 - 它的 `subsets` 要 ⊆ run 的 `trained_on`。
-- 產物必須存在、已 commit、`store.verify` 通過。
+- 產物本身用產物層自己的字：找不到 → FAIL `not_found:`；有目錄、沒有 `manifest.json`（沒 commit）→ FAIL `partial:`；`store.verify` 不過 → FAIL `mismatch:`。
 
-任何一項不合 → FAIL `labels_mismatch:`，訊息指出是哪一項。`evidence` 產物掛上時只檢查存在與 verify。
+`labels_mismatch:` 只給「產物好好的、但不合這個 run」的 label_set：`dataset`、`samples_hash` 或 `plan_id` 不同，或 `subsets` ⊄ `trained_on`；訊息指出是哪一項。`evidence` 產物掛上時只檢查存在與 verify。
 
 ### 4.3 證據原檔在訓練期間變動
 
@@ -189,7 +189,7 @@ s.attach_labels("pseudo-v3")                                          # -> Evide
 
 ### 6.2 provenance 圖
 
-- `_scan_runs` 對 run card 上每筆參照，連一條「產物 → run」的 `CONSUMED_BY` 邊，不帶屬性。`evidence` 產物因為 `params.run` 已經有同一條邊，`add_edge` 對相同的邊是冪等的，不會重複。
+- `_scan_runs` 對 run card 上每筆參照，連一條「產物 → run」的 `CONSUMED_BY` 邊，不帶屬性。`evidence` 產物跟存取收據一樣，只經由 run 的清單連到 run：`params.run` 只說是哪個 run 做了這份副本，不算消費的證明。所以沒被引用的副本（例如 ingest 失敗時留下的）不會畫成被 run 消費。
 - label_set 可跨 run 共用，靠的就是這條邊；它的 spec 帶 `dataset`、`params` 帶 `samples_hash`，`_artifact_dataset_sources` 據此自動連出「dataset → label_set」。所以 dataset 改版時，`impact` / `stale` 會經過它走到用它訓練的 run。
 - 參照指到的產物不見了、驗不過或 `manifest_sha256` 不符 → 這個 run 的 `broken_reason` 加上 `missing or invalid evidence/<kind>/<id>`，跟收據壞掉的處理相同。
 - 不改索引 schema：實體與邊的種類都是既有的。
@@ -200,8 +200,10 @@ s.attach_labels("pseudo-v3")                                          # -> Evide
 |---|---|---|
 | 標籤列落在允許子集以外的 dataset 樣本 | `ValidationFailed` `labels_outside_subsets:` | FAIL |
 | 對應或標籤檔有重複 id | `ValidationFailed` `duplicate_id:` | FAIL |
+| `--id-field` 不是 `sample_id` / `view_path` / `view_stem` / `meta.<key>` | `ValidationFailed` `id_field:` | FAIL |
 | `--subset` 是 sealed 角色 | `ValidationFailed` `labels_on_sealed:` | FAIL |
 | 副檔名不是 `.csv` / `.jsonl` | `ValidationFailed` `unsupported_format:` | FAIL |
+| 標籤列格式不對（壞 JSON 列、空 id）或 `--evidence` 不是 `NAME=PATH` | `ValidationFailed` `invalid:` | FAIL |
 | 標籤檔、欄位、證據檔或 label_set 找不到 | `ValidationFailed` `not_found:` | FAIL |
 | 證據路徑不是檔案 | `ValidationFailed` `not_a_file:` | FAIL |
 | label_set 與 run 不相容 | `ValidationFailed` `labels_mismatch:` | FAIL |

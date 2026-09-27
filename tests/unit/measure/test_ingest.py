@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from typer.testing import CliRunner
 
 from helpers import (
     cls_samples,
@@ -11,6 +12,7 @@ from helpers import (
     perfect_predictions,
     write_images,
 )
+from vcp.cli import app
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
@@ -315,3 +317,19 @@ def test_ingest_binds_evidence_and_labels(roots, tmp_path):
         ingest(spec("labelled", ["train"], evidence=[f"pseudo-v1={teacher}"], replace=True))
     assert run_yaml.read_bytes() == before_bytes
     assert not any(p.name.startswith("labelled-pseudo-v1-") for p in evidence_dir.iterdir())
+
+
+def test_cli_ingest_reports_the_evidence_and_labels_it_bound(roots, tmp_path):
+    ds, plan, _ = det_with_runs(roots, tmp_path, n=20)
+    make_label_set(roots, tmp_path, plan)
+    teacher = tmp_path / "teacher.jsonl"
+    teacher.write_text("t", encoding="utf-8")
+    src = tmp_path / "labelled-valA.jsonl"
+    write_predictions(src, perfect_predictions(ds.subset("valA", plan), ds.card))
+    args = ["eval", "ingest", "--run", "labelled", "--dataset", "tiny", "--plan", "fixed-v1"]
+    args += ["--subset", "valA", "--format", "jsonl", "--src", str(src), "--trained-on", "train"]
+    args += ["--evidence", f"teacher={teacher}", "--labels", "pseudo-v1"]
+    r = CliRunner().invoke(app, args)
+    assert r.exit_code == 0, r.output
+    verdict = [line for line in r.output.splitlines() if line.startswith("VERDICT ")][-1]
+    assert "evidence=2" in verdict and "labels=pseudo-v1" in verdict

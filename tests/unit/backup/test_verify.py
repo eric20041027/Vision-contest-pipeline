@@ -3,6 +3,7 @@ import json
 import pytest
 
 from backup_fixtures import SECRET, FakeRemote
+from helpers import make_label_set
 from submit_fixtures import EVAL, STAMP, TEST
 from vcp.backup.evidence import build_manifest
 from vcp.backup.ledger import BackupLedger
@@ -12,8 +13,10 @@ from vcp.backup.verify import Drift, sha256_prefix, verify
 from vcp.core.errors import PlatformError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
+from vcp.data.evidence import RunScope, label_ref
+from vcp.data.split import load_plan
 from vcp.measure.ledger import READINGS_LEDGER
-from vcp.measure.runs import load_run, run_dir
+from vcp.measure.runs import load_run, run_dir, save_run
 from vcp.train.records import load_record, save_record
 from vcp.train.schema import UploadRecord
 from vcp.train.upload import merge_uploads
@@ -248,3 +251,18 @@ def test_verify_checks_every_same_named_checkpoint(world):
     whats = {d.what for d in res.drift}
     assert "good/train.yaml:checkpoints.work/good/fold-0/best.pt" in whats
     assert "good/train.yaml:checkpoints.work/good/fold-1/best.pt" not in whats
+
+
+def test_verify_checks_the_manifest_each_evidence_reference_pinned(world, tmp_path):
+    paths = DatasetPaths.resolve(EVAL, data_root=world.roots.data, configs_root=world.roots.configs)
+    make_label_set(world.roots, tmp_path, load_plan(paths, "fixed-v1"), dataset=EVAL)
+    card = load_run(world.roots.data, "good")
+    scope = RunScope("good", EVAL, card.samples_hash, "fixed-v1", tuple(card.trained_on))
+    lab = label_ref(world.roots.data, scope, "pseudo-v1", attempt=None, binding="manual")
+    save_run(world.roots.data, card.model_copy(update={"evidence": [lab]}))
+    build_manifest(EVAL, "run:good", manifest_id="ev", **_kw(world))
+    assert not any("evidence" in d.what for d in verify(EVAL, "ev", **_kw(world)).drift)
+    stale = lab.model_copy(update={"manifest_sha256": "0" * 64})
+    save_run(world.roots.data, card.model_copy(update={"evidence": [stale]}))
+    whats = {d.what for d in verify(EVAL, "ev", **_kw(world)).drift}
+    assert "good/run.yaml:evidence.label_set/pseudo-v1" in whats

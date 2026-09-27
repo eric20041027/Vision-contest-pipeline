@@ -12,12 +12,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vcp.artifact import store
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import default_manifest_id, write_manifest
 from vcp.backup.schema import ROLES, TIER_OF, BackupRow, FileEntry, Manifest, RemoteCopy
 from vcp.core.build import build_string
 from vcp.core.config import load_yaml_model
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import (
     DatasetPaths,
@@ -27,6 +28,7 @@ from vcp.core.paths import (
     validate_name,
 )
 from vcp.core.time import stamp
+from vcp.data.evidence_ref import EvidenceRef, merge_refs
 from vcp.fuse.build import load_record, record_path
 from vcp.fuse.recipes import recipe_path
 from vcp.measure.ledger import JUDGEMENTS_LEDGER, READINGS_LEDGER, SIGMA_LEDGER
@@ -180,6 +182,8 @@ class Collector:
                 sdir = artifact_dir(self.data_root, "source_audit", ref.source_audit)
                 for name in ("manifest.json", "audit.json", "index.jsonl"):
                     self.add(sdir / name, "source_audit", conclusion)
+        for ref in self._evidence_of(run_id, card.evidence):  # spec 2026-09-26 §6.1
+            self._artifact(ref, conclusion)
         if (rdir / HISTORY).is_file():
             self.add(rdir / HISTORY, "history", conclusion)
         for entry in card.predictions.values():
@@ -205,6 +209,22 @@ class Collector:
         dpaths = self._dataset_paths(card.dataset)
         self.dataset_basics(dpaths, card.plan_id, conclusion)
         self.measure_ledgers(dpaths, conclusion)
+
+    def _evidence_of(self, run_id: str, card_refs: list[EvidenceRef]) -> list[EvidenceRef]:
+        """Every reference, history included: run.yaml's, then train.yaml's it lacks."""
+        if not has_record(self.data_root, run_id):
+            return list(card_refs)
+        return merge_refs(card_refs, load_train_record(self.data_root, run_id).evidence)
+
+    def _artifact(self, ref: EvidenceRef, conclusion: str) -> None:
+        adir = artifact_dir(self.data_root, ref.kind, ref.artifact_id)
+        self.add(adir / "manifest.json", ref.kind, conclusion, sha256=ref.manifest_sha256)
+        try:
+            manifest = store.load_manifest(self.data_root, ref.kind, ref.artifact_id)
+        except (ValidationFailed, IntegrityError):
+            return  # listed above as missing, with the sha the run pinned
+        for f in manifest.files:
+            self.add(adir / f.name, ref.kind, conclusion, sha256=f.sha256, size=f.bytes)
 
     def _checkpoints(self, record: TrainRecord, conclusion: str) -> None:
         """The newest record of every checkpoint path: a --resume that changed a path's bytes is

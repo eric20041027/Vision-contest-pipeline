@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from backup_fixtures import make_fusion
+from helpers import make_label_set
 from submit_fixtures import EVAL
 from vcp.backup.evidence import CONCLUSIONS, Collector, external_path, parse_conclusion
 from vcp.backup.schema import CARD_ROLES, ROLES, TIER_OF
@@ -10,6 +11,8 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.access.access import DatasetAccess
+from vcp.data.evidence import RunScope, attach_evidence, label_ref
+from vcp.data.split import load_plan
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, run_dir, save_run
 
@@ -293,3 +296,36 @@ def test_identical_folds_keep_their_own_remote_copy(world):
 
     assert by_path["work/good/fold-0/best.pt"].remote.name == "fold-0__best.pt"
     assert by_path["work/good/fold-1/best.pt"].remote.name == "fold-1__best.pt"
+
+
+def _with_evidence(world, tmp_path):
+    paths = DatasetPaths.resolve(EVAL, data_root=world.roots.data, configs_root=world.roots.configs)
+    make_label_set(world.roots, tmp_path, load_plan(paths, "fixed-v1"), dataset=EVAL)
+    card = load_run(world.roots.data, "good")
+    scope = RunScope("good", EVAL, card.samples_hash, "fixed-v1", tuple(card.trained_on))
+    f = tmp_path / "teacher.jsonl"
+    f.write_text("t", encoding="utf-8")
+    ev = attach_evidence(
+        world.roots.data, scope, "teacher", f, role="teacher", attempt=None, binding="manual"
+    )
+    lab = label_ref(world.roots.data, scope, "pseudo-v1", attempt=None, binding="manual")
+    save_run(world.roots.data, card.model_copy(update={"evidence": [ev, lab]}))
+    return ev, lab
+
+
+def test_walk_run_collects_evidence_and_label_sets(world, tmp_path):
+    assert TIER_OF["label_set"] == 1 and TIER_OF["evidence"] == 2
+    ev, _ = _with_evidence(world, tmp_path)
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    roles = _roles(col)
+    assert roles["label_set"] == [
+        "artifacts/label_set/pseudo-v1/label_set.json",
+        "artifacts/label_set/pseudo-v1/labels.csv",
+        "artifacts/label_set/pseudo-v1/manifest.json",
+    ]
+    assert roles["evidence"] == [
+        f"artifacts/evidence/{ev.artifact_id}/manifest.json",
+        f"artifacts/evidence/{ev.artifact_id}/teacher.jsonl",
+    ]
+    assert col.missing == [] and col.unlisted == []

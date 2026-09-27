@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from vcp.artifact import store
 from vcp.backup.dest import Destination, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
@@ -26,6 +27,7 @@ from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import DatasetPaths, resolve_stored_path
 from vcp.core.proc import Runner
 from vcp.core.time import parse_stamp, stamp
+from vcp.data.evidence_ref import EvidenceRef
 from vcp.data.schema import DatasetCard
 from vcp.fuse.build import load_record as load_fuse_record
 from vcp.measure.runs import prediction_path
@@ -127,12 +129,24 @@ def _check_copies(
 # --- layer 2: local consistency --------------------------------------------------------------
 
 
+def _evidence(owner: str, refs: list[EvidenceRef], paths: DatasetPaths, add: Adder) -> None:
+    for ref in refs:
+        p = store.manifest_path(paths.data_root, ref.kind, ref.artifact_id)
+        if p.is_file():
+            add(
+                f"{owner}:evidence.{ref.kind}/{ref.artifact_id}",
+                ref.manifest_sha256,
+                sha256_file(p),
+            )
+
+
 def _run_card(local: Path, paths: DatasetPaths, add: Adder) -> None:
     card = load_yaml_model(local, RunCard)
     for subset, entry in card.predictions.items():
         p = local.parent / entry.path
         if p.is_file():
             add(f"{card.run_id}/run.yaml:predictions.{subset}", entry.sha256, sha256_file(p))
+    _evidence(f"{card.run_id}/run.yaml", card.evidence, paths, add)
 
 
 def _train_record(local: Path, paths: DatasetPaths, add: Adder) -> None:
@@ -142,6 +156,7 @@ def _train_record(local: Path, paths: DatasetPaths, add: Adder) -> None:
         p = resolve_stored_path(c.path, paths.data_root)
         if p.is_file():
             add(f"{rec.run_id}/train.yaml:checkpoints.{path}", c.sha256, sha256_file(p))
+    _evidence(f"{rec.run_id}/train.yaml", rec.evidence, paths, add)
 
 
 def _fuse_record(local: Path, paths: DatasetPaths, add: Adder) -> None:

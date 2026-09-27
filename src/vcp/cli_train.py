@@ -19,6 +19,7 @@ from vcp.cli_common import (
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import resolve_data_root
+from vcp.data.evidence_ref import current, labels_field
 from vcp.train.run import RunSpec, train_run
 from vcp.train.status import status as status_view
 from vcp.train.status import upload_run
@@ -69,6 +70,14 @@ def run_cmd(
         bool, typer.Option("--resume", help="add an attempt to an existing training run")
     ] = False,
     notes: Annotated[str, typer.Option("--notes")] = "",
+    evidence: Annotated[
+        list[str] | None,
+        typer.Option("--evidence", help="NAME=PATH of a file the run reads (repeatable)"),
+    ] = None,
+    labels: Annotated[
+        list[str] | None,
+        typer.Option("--labels", help="label_set id the run trains with (repeatable)"),
+    ] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -93,6 +102,8 @@ def run_cmd(
                 uploads=list(upload or []),
                 resume=resume,
                 notes=notes,
+                evidence=list(evidence or []),
+                labels=list(labels or []),
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -115,6 +126,8 @@ def run_cmd(
             "receipts": res.receipts,
             "denied": res.denied,
             "provenance": res.provenance,
+            "evidence": res.evidence,
+            "labels": res.labels,
         }
         if res.skipped:
             fields["skipped"] = res.skipped
@@ -124,6 +137,8 @@ def run_cmd(
             fields["receipt_invalid"] = res.receipt_invalid
         if res.source_audit_missing:
             fields["source_audit"] = "missing"
+        if res.evidence_changed:
+            fields["evidence_changed"] = ",".join(res.evidence_changed)
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":
@@ -200,6 +215,8 @@ def status_cmd(
             # up. Reported, never WARNed: no copy of them can appear any more.
             "superseded": len(st.superseded),
             "running": st.running,
+            "evidence": len(current(st.record.evidence)),
+            "labels": labels_field(st.record.evidence),
         }
         if verify:
             fields["drift"] = len(st.drift)

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from helpers import det_samples, det_with_runs, make_card, write_images
+from helpers import det_samples, det_with_runs, make_card, make_label_set, write_images
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
@@ -698,3 +698,127 @@ def test_train_run_warns_when_the_dataset_has_no_source_audit(roots, work):
     assert res.source_audit_missing == 0 and "source_audit=missing" not in res.warnings
     ref = load_run(roots.data, "r2").access[0]
     assert ref.identity == "source_audit" and ref.source_audit is not None
+
+
+# VCP-040: a loop that attaches what it read, beside what `train run --evidence` attached.
+EVIDENCE_FAKE = """
+from pathlib import Path
+from vcp.train import Session
+
+Path("teacher.jsonl").write_text("t")
+Session.current().attach_evidence("teacher", "teacher.jsonl")
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best")
+"""
+
+# ... and one that rewrites the file `--evidence corpus=` attached before it started.
+CHANGE_FAKE = """
+from pathlib import Path
+Path("corpus.json").write_text("changed")
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best")
+"""
+
+
+def test_evidence_and_labels_are_checked_before_the_first_write(roots, work, tmp_path):
+    _, plan, _ = _seed(roots)
+    make_label_set(roots, tmp_path, plan, subsets=("train", "valA"), label_set_id="wide")
+    make_label_set(roots, tmp_path, plan)  # "pseudo-v1" over "train": fits trained_on=["train"]
+    evidence_file = tmp_path / "some_evidence.txt"
+    evidence_file.write_text("x", encoding="utf-8")
+    # A file named like one the artifact layer writes itself, in any case (NTFS folds it): each
+    # in its own directory, since the two names are one file on a case-insensitive disk.
+    reserved = []
+    for folder, file_name in (("lower", "manifest.json"), ("upper", "MANIFEST.JSON")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / file_name).write_text('{"derived": true}', encoding="utf-8")
+        reserved.append(tmp_path / folder / file_name)
+    evidence_dir = roots.data / "artifacts" / "evidence"
+    for kw, reason in (
+        ({"evidence": [f"teacher={tmp_path / 'gone.jsonl'}"]}, "not_found"),
+        ({"evidence": [f"teacher={tmp_path}"]}, "not_a_file"),
+        ({"evidence": ["teacher"]}, "NAME=PATH"),
+        ({"labels": ["nope"]}, "not_found"),
+        ({"labels": ["wide"]}, "labels_mismatch"),  # valA is not in trained_on
+        ({"evidence": [f"labels={evidence_file}"]}, "role_reserved"),
+        (
+            {"evidence": [f"pseudo-v1={evidence_file}"], "labels": ["pseudo-v1"]},
+            "evidence_conflict",
+        ),
+        ({"evidence": [f"derived={reserved[0]}"]}, "reserved_name"),
+        ({"evidence": [f"derived={reserved[1]}"]}, "reserved_name"),
+    ):
+        with pytest.raises(ValidationFailed, match=reason):
+            train_run(_spec(roots, work, **kw))
+        assert not (run_dir(roots.data, "r1") / "run.yaml").exists()
+        assert not evidence_dir.exists() or not any(evidence_dir.iterdir())
+
+
+def test_evidence_conflict_on_resume_leaves_no_trace_of_the_second_attempt(roots, work, tmp_path):
+    """The `evidence_conflict:` check must run before ANY write of the new attempt: a --resume
+    that trips it (the name is already bound under another role/kind from attempt 1) must not
+    leave a `started` attempt, a console/env file, or a single changed byte of train.yaml /
+    train.log.jsonl."""
+    _, plan, _ = _seed(roots)
+    make_label_set(roots, tmp_path, plan)  # "pseudo-v1" over "train"
+    evidence_file = tmp_path / "corpus.txt"
+    evidence_file.write_text("x", encoding="utf-8")
+    first = train_run(_spec(roots, work, evidence=[f"pseudo-v1={evidence_file}"]))
+    assert first.attempt.status == "finished", first.record
+    run = run_dir(roots.data, "r1")
+    before_yaml = (run / "train.yaml").read_bytes()
+    before_log = (run / "train.log.jsonl").read_bytes()
+    with pytest.raises(ValidationFailed, match="evidence_conflict"):
+        train_run(_spec(roots, work, resume=True, labels=["pseudo-v1"]))
+    assert (run / "train.yaml").read_bytes() == before_yaml
+    assert (run / "train.log.jsonl").read_bytes() == before_log
+    assert len(load_record(roots.data, "r1").attempts) == 1
+    assert not (run / "train" / "console.2.log").exists()
+    assert not (run / "train" / "env.2.json").exists()
+
+
+def test_train_run_binds_evidence_and_labels_to_the_run(roots, work, tmp_path):
+    _, plan, _ = _seed(roots)
+    make_label_set(roots, tmp_path, plan)
+    corpus = tmp_path / "corpus-receipt.json"
+    corpus.write_text('{"source": "external"}', encoding="utf-8")
+    (work / "evidence_train.py").write_text(EVIDENCE_FAKE, encoding="utf-8")
+    kw = dict(
+        command=[sys.executable, "evidence_train.py"],
+        evidence=[f"corpus={corpus}"],
+        labels=["pseudo-v1"],
+    )
+    res = train_run(_spec(roots, work, **kw))
+    assert res.attempt.status == "finished", res.record
+    assert (res.evidence, res.labels, res.evidence_changed) == (3, "pseudo-v1", [])
+    card = load_run(roots.data, "r1")
+    assert [(r.name, r.kind, r.binding) for r in card.evidence] == [
+        ("corpus", "evidence", "cli"),
+        ("pseudo-v1", "label_set", "cli"),
+        ("teacher", "evidence", "session"),
+    ]
+    assert card.evidence == load_record(roots.data, "r1").evidence
+    again = train_run(_spec(roots, work, resume=True, **kw))  # same bytes: same artifacts
+    assert again.evidence == 3 and len(load_run(roots.data, "r1").evidence) == 3
+    assert len(list((roots.data / "artifacts" / "evidence").iterdir())) == 2
+
+
+def test_an_evidence_file_that_changes_during_the_run_is_a_warning(roots, work):
+    _seed(roots)
+    corpus = work / "corpus.json"
+    corpus.write_text("original", encoding="utf-8")
+    (work / "change_train.py").write_text(CHANGE_FAKE, encoding="utf-8")
+    res = train_run(
+        _spec(
+            roots,
+            work,
+            command=[sys.executable, "change_train.py"],
+            evidence=[f"corpus={corpus}"],
+        )
+    )
+    assert res.evidence_changed == ["corpus"] and "evidence_changed=corpus" in res.warnings
+    art = load_run(roots.data, "r1").evidence[0].artifact_id
+    kept = roots.data / "artifacts" / "evidence" / art / "corpus.json"
+    assert kept.read_text(encoding="utf-8") == "original"  # the attached copy never moves
+    notes = [e for e in read_events(roots.data, "r1") if e["event"] == "note"]
+    assert any(e.get("key") == "evidence_changed" and e["value"] == "corpus" for e in notes)

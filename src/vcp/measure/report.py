@@ -17,6 +17,7 @@ from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
+from vcp.data.evidence_ref import labels_field
 from vcp.measure.anchors import load_anchors
 from vcp.measure.ledger import (
     JUDGEMENTS_LEDGER,
@@ -51,6 +52,7 @@ class StatusResult:
     provenance: dict[str, str] = field(default_factory=dict)
     observed: dict[str, list[str]] = field(default_factory=dict)
     provenance_failed: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)  # run id -> label sets or "dataset"
 
 
 def _runs_for(paths: DatasetPaths) -> tuple[list[RunCard], list[str]]:
@@ -103,9 +105,11 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
             orphans.append(pid)
     cards, unreadable = _runs_for(paths)
     grades: dict[str, str] = {}
+    labels: dict[str, str] = {}
     observed: dict[str, list[str]] = {}
     provenance_failed: dict[str, str] = {}
     for card in sorted(cards, key=lambda c: c.run_id):
+        labels[card.run_id] = labels_field(card.evidence)
         try:
             info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
         except (VcpError, OSError, UnicodeDecodeError) as e:
@@ -136,6 +140,7 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
         provenance=grades,
         observed=observed,
         provenance_failed=provenance_failed,
+        labels=labels,
     )
 
 

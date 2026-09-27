@@ -14,7 +14,7 @@
 `readings.jsonl`、`judgements.jsonl`、`sigma.jsonl`（只增）；`anchors.json`（整份換寫，先寫 `anchors.log.jsonl`）。
 
 ## artifacts 的 kind
-`access_receipt`（存取器收據）、`source_audit`（逐列 sha 索引）、`dataset_diff`（版本差異，`changes.jsonl` + `summary.json`）、`provenance_policy`（adaptive policy）、比賽自訂 kind。目錄有 `spec.json` 沒 `manifest.json` = 半途；`failure.json` = 例外離開；`supersession.jsonl` 只增。
+`access_receipt`（存取器收據）、`source_audit`（逐列 sha 索引）、`dataset_diff`（版本差異，`changes.jsonl` + `summary.json`）、`label_set`（`vcp data labels` 驗過的訓練標籤集）、`evidence`（run 讀過的證據檔副本，`<run>-<name>-<sha12>`）、`provenance_policy`（adaptive policy）、比賽自訂 kind。目錄有 `spec.json` 沒 `manifest.json` = 半途；`failure.json` = 例外離開；`supersession.jsonl` 只增。
 
 ## 十二個登記表（加一種形態 = 加一個登記項）
 任務 `register_task`、匯入器 `register_importer`、匯出器 `register_exporter`、解碼器 `register_decoder`、切分策略（函式）、稽核 `register_check`、轉換器 `register_converter`、指標 `register_metric`、σ_p 方法 `register_sigma_method`、融合器 `register_fuser`、輸出格式 `register_writer`、平台 `register_platform`；另有 provenance 的 `register_impact_policy`。比賽專屬的以 `--plugin projects.<contest>.<module>` 匯入登記。

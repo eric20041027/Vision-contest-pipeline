@@ -11,7 +11,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 ## 八層與它們留下的證據
 | 層 | 命令群 | 留下什麼 |
 |---|---|---|
-| 資料 | `vcp data import/validate/audit/split/lineage/export/materialize/diff` | card + `samples.jsonl`、不可變 plan、export manifest、`source_audit`、`dataset_diff` |
+| 資料 | `vcp data import/validate/audit/split/lineage/export/materialize/diff/labels` | card + `samples.jsonl`、不可變 plan、export manifest、`source_audit`、`dataset_diff`、`label_set` |
 | 量測 | `vcp eval ingest/measure/anchor/sigma/preregister/judge/status/report` | run 預測檔、`readings.jsonl`、預登記（git）、`judgements.jsonl` |
 | 融合 | `vcp fuse recipe/build/ablate` | 配方（git）、`runs/fuse-<id>/fuse.json` |
 | 訓練 | `vcp train run/upload/status` | `run.yaml`、`train.yaml`、checkpoint sha、access receipt |

@@ -41,6 +41,7 @@ uv run vcp data lineage --name <ds> --plan fixed-v1 --trained-on train,valA
 ## 收據與改版
 - 每次 `export` 留一份 `access_receipt`（manifest 的 `receipt`）；訓練迴圈用 `vcp.train.MaterializedReader(name, mode, plan_id=, subset=)` 讀 materialize 快取，只有授權子集的列會被解析，關閉時寫收據——這是 run 拿到 `receipt` 等級 provenance 的唯一方法（詳見 vcp-eval-and-fuse / vcp-train-submit-backup）。
 - 資料集改版不覆寫：新版另取名匯入 + `validate`，`vcp data diff --from A --to B` 發布 `dataset_diff` artifact，之後交給 vcp-provenance。
+- 偽標籤、soft label、蒸餾標籤先 `uv run vcp data labels --name <ds> --plan fixed-v1 --subset train --file <labels.csv> --id-field sample_id --id <id>`（`--id-field` 說那一欄的值是樣本的哪種身分：`sample_id`、`view_path`、`view_stem` 或 `meta.<key>`；欄名另用 `--id-col`，預設 `id`）：一個 id 一列；一張圖多列的標籤（偵測框）先依 id 併成一列（JSONL 放一個 list）。落在驗證或 sealed 樣本的列會 FAIL（`labels_outside_subsets:`），不在 dataset 裡的列只記數；訓練時用 `--labels <id>` 掛上，`run.yaml` 才說得出實際用的是哪份標籤。
 
 ## 無標註資料（test 集）
 沒有匯入器直接吃「純影像資料夾、無標籤」。正確做法是 jsonl 直通、`label_source: none`（食譜在 reference.md），不要用空 CSV 走 csv_boxes（那會變成 gold 的負樣本）。

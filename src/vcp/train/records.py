@@ -14,6 +14,7 @@ from typing import Any
 from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.time import stamp
+from vcp.data.evidence_ref import EvidenceRef, add_ref, current
 from vcp.measure.runs import run_dir
 from vcp.train.schema import EVENTS, TrainRecord
 
@@ -94,3 +95,31 @@ def read_events(data_root: Path, run_id: str) -> list[dict[str, Any]]:
         return []
     with path.open("r", encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def append_evidence_event(data_root: Path, run_id: str, ref: EvidenceRef, attempt: int) -> None:
+    append_event(
+        data_root,
+        run_id,
+        "evidence",
+        attempt,
+        name=ref.name,
+        role=ref.role,
+        kind=ref.kind,
+        artifact_id=ref.artifact_id,
+        manifest_sha256=ref.manifest_sha256,
+        binding=ref.binding,
+    )
+
+
+def bind_ref(
+    data_root: Path, record: TrainRecord, ref: EvidenceRef, attempt: int
+) -> tuple[TrainRecord, EvidenceRef]:
+    """Add ``ref`` to ``train.yaml`` (saved) and the event log unless it is already there (spec
+    2026-09-26 §3.3); returns the record and the reference now current under that name."""
+    refs = add_ref(record.evidence, ref)
+    if len(refs) > len(record.evidence):
+        record = record.model_copy(update={"evidence": refs})
+        save_record(data_root, record)
+        append_evidence_event(data_root, record.run_id, ref, attempt)
+    return record, next(r for r in current(refs) if r.name == ref.name)

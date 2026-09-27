@@ -486,20 +486,27 @@ def labels_cmd(
             )
         )
         s = res.summary
+        matched = sum(s.matched.values())
         fields: dict[str, FieldValue] = {
             "id": label_set_id,
             "dataset": name,
             "plan": plan,
             "subsets": ",".join(s.subsets),
             "rows": s.rows,
-            "matched": sum(s.matched.values()),
+            "matched": matched,
             "external": s.external,
             "reused": res.reused,
         }
         human = [f"{k}: {v} rows" for k, v in s.matched.items()]
         if s.external:
             human.append(f"not in {name} (external): {s.external} rows")
-        return "OK", fields, s.model_dump(mode="json"), human
+        # Every row external is most likely a wrong --id-field / --id-col, and then the leak
+        # check saw nothing: kept, but never a quiet OK (a reuse says so again).
+        status: Status = "OK"
+        if s.rows > 0 and matched == 0:
+            status = "WARN"
+            human.append("no row matched a dataset sample; check --id-field / --id-col")
+        return status, fields, s.model_dump(mode="json"), human
 
     run_command(
         "labels",

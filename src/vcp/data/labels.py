@@ -77,7 +77,7 @@ def _keys(sample: Sample, id_field: str) -> list[str]:
         return [Path(v.path).stem for v in sample.views]
     key = id_field.removeprefix("meta.")
     raw = sample.meta.get(key)
-    return [] if raw is None else [str(raw)]
+    return [] if raw is None else [str(raw).strip()]  # stripped like the file's ids
 
 
 def _check_id_field(id_field: str) -> None:
@@ -100,21 +100,34 @@ def sample_ids_by_key(samples: list[Sample], id_field: str) -> dict[str, str]:
             if other is not None and other != s.sample_id:
                 raise ValidationFailed(
                     f"duplicate_id: {id_field} {key!r} names samples {other!r} and {s.sample_id!r}",
-                    fields={"id": key},
+                    fields={"duplicate": key},
                 )
             out[key] = s.sample_id
     return out
 
 
+def _row_id(raw: object, path: Path, lineno: int) -> str:
+    """A row's id as it is classified: a stripped string. A blank or absent one is a malformed
+    row, not an external one."""
+    value = "" if raw is None else str(raw).strip()
+    if not value:
+        raise ValidationFailed(f"invalid: blank id at {path.name}:{lineno}")
+    return value
+
+
 def _csv_ids(path: Path, id_col: str) -> list[str]:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames is None or id_col not in reader.fieldnames:
+        header = reader.fieldnames or []
+        if id_col not in header:
+            # A count only: with no header row the first data row stands in for one, and its
+            # cells must reach neither the VERDICT nor the log.
             raise ValidationFailed(
-                f"not_found: column {id_col!r} in {path.name} (has {reader.fieldnames or []})",
+                f"not_found: column {id_col!r} not in the header of {path.name} "
+                f"({len(header)} columns; is the header row missing?)",
                 fields={"column": id_col},
             )
-        return [str(row[id_col]).strip() for row in reader]
+        return [_row_id(row[id_col], path, reader.line_num) for row in reader]
 
 
 def _jsonl_ids(path: Path, id_col: str) -> list[str]:
@@ -127,19 +140,19 @@ def _jsonl_ids(path: Path, id_col: str) -> list[str]:
                 row = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValidationFailed(
-                    f"bad label row: {e}", location=f"{path.name}:{lineno}"
+                    f"invalid: label row is not JSON: {e}", location=f"{path.name}:{lineno}"
                 ) from e
             if not isinstance(row, dict) or id_col not in row:
                 raise ValidationFailed(
                     f"not_found: column {id_col!r} in {path.name}:{lineno}",
                     fields={"column": id_col},
                 )
-            out.append(str(row[id_col]).strip())
+            out.append(_row_id(row[id_col], path, lineno))
     return out
 
 
-def read_ids(path: Path, id_col: str) -> tuple[str, list[str]]:
-    """``(format, ids)`` of a label file, ids as stripped strings in file order."""
+def _label_format(path: Path) -> str:
+    """``csv`` / ``jsonl``: ``not_found:`` / ``unsupported_format:`` before a byte is read."""
     if not path.is_file():
         raise ValidationFailed(f"not_found: {path}", fields={"file": str(path)})
     fmt = FORMATS.get(path.suffix.lower())
@@ -148,6 +161,12 @@ def read_ids(path: Path, id_col: str) -> tuple[str, list[str]]:
             f"unsupported_format: {path.name} (want one of {sorted(FORMATS)})",
             fields={"file": str(path)},
         )
+    return fmt
+
+
+def read_ids(path: Path, id_col: str) -> tuple[str, list[str]]:
+    """``(format, ids)`` of a label file, ids as stripped strings in file order."""
+    fmt = _label_format(path)
     return fmt, (_csv_ids(path, id_col) if fmt == "csv" else _jsonl_ids(path, id_col))
 
 
@@ -160,7 +179,7 @@ def _classify(
     if twice:
         raise ValidationFailed(
             f"duplicate_id: {len(twice)} ids appear more than once, e.g. {twice[:SHOWN_IDS]}",
-            fields={"id": twice[0]},
+            fields={"duplicate": twice[0]},
         )
     matched = {s: 0 for s in subsets}
     outside: dict[str, list[str]] = {}
@@ -183,7 +202,7 @@ def _classify(
         shown = sorted(sid for v in outside.values() for sid in v)[:SHOWN_IDS]
         raise ValidationFailed(
             f"labels_outside_subsets: {', '.join(parts)}; e.g. {shown}",
-            fields={f"outside_{k}": len(v) for k, v in sorted(outside.items())},
+            fields={"outside": sum(len(v) for v in outside.values())},
         )
     return matched, external
 
@@ -211,6 +230,8 @@ def create_label_set(spec: LabelSetSpec) -> LabelSetResult:
     plan = load_plan(paths, spec.plan_id)
     assert_plan_matches(plan, dataset.card)
     subsets = _subsets(plan, spec.subsets)
+    _label_format(spec.file)  # not_found: / unsupported_format: before a byte is hashed
+    digest = sha256_file(spec.file)  # before the read: the bytes kept must be the bytes checked
     fmt, ids = read_ids(spec.file, spec.id_col)
     by_key = sample_ids_by_key(dataset.samples, spec.id_field)
     matched, external = _classify(ids, by_key, plan, subsets)
@@ -238,13 +259,18 @@ def create_label_set(spec: LabelSetSpec) -> LabelSetResult:
             "id_col": spec.id_col,
             "format": fmt,
         },
-        inputs=[InputRef(name="labels", sha256=sha256_file(spec.file))],
+        inputs=[InputRef(name="labels", sha256=digest)],
         notes=spec.notes,
     )
     if store.reuse(art, paths.data_root, check_files=True) is not None:
         return LabelSetResult(load_label_set(paths.data_root, spec.label_set_id), reused=True)
     with ArtifactWriter.create(art, data_root=paths.data_root) as writer:
-        writer.add_file(f"labels.{fmt}", spec.file)
+        entry = writer.add_file(f"labels.{fmt}", spec.file)
+        if entry.sha256 != digest:
+            raise IntegrityError(
+                f"drift: label file {spec.file.name} changed while it was being checked",
+                fields={"file": str(spec.file)},
+            )
         writer.write_json(SUMMARY, summary.model_dump(mode="json"))
         writer.commit()
     return LabelSetResult(summary, reused=False)

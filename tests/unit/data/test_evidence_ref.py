@@ -44,7 +44,7 @@ def test_a_name_cannot_change_its_role_or_kind():
     refs = add_ref([], _ref())
     with pytest.raises(ValidationFailed, match="evidence_conflict") as ei:
         add_ref(refs, _ref(role="corpus", sha="b"))
-    assert ei.value.fields == {"evidence": "teacher"}
+    assert ei.value.fields == {"evidence_name": "teacher"}
 
 
 def test_merge_keeps_the_first_list_then_what_it_lacks():

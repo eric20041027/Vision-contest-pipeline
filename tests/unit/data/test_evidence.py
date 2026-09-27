@@ -68,10 +68,24 @@ def test_evidence_files_are_checked_before_anything_is_copied(roots, tmp_path):
         check_evidence_file("bad name", f, "bad name")
 
 
+@pytest.mark.parametrize(
+    "file_name", ["manifest.json", "MANIFEST.JSON", "Spec.json", ".teacher.jsonl.0123abcd.tmp"]
+)
+def test_an_evidence_file_the_artifact_layer_would_refuse_is_refused_first(tmp_path, file_name):
+    """The copy keeps the source's file name, so a name the writer refuses -- its own files, in
+    any case, or a temp name `clean` may remove -- fails here, before a byte is written."""
+    f = tmp_path / file_name
+    f.write_text('{"derived": true}', encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="reserved_name") as ei:
+        check_evidence_file("derived", f, "derived")
+    assert ei.value.fields == {"evidence_name": "derived"}
+
+
 def test_parse_evidence_args():
     assert parse_evidence_args(["a=x.json", "b=y/z.csv"])[1][0] == "b"
-    with pytest.raises(ValidationFailed, match="NAME=PATH"):
+    with pytest.raises(ValidationFailed, match="^invalid: --evidence expects NAME=PATH") as ei:
         parse_evidence_args(["a"])
+    assert ei.value.fields == {"evidence_name": "a"}
     with pytest.raises(ValidationFailed, match="evidence_conflict"):
         parse_evidence_args(["a=x", "a=y"])
 

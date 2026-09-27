@@ -18,9 +18,10 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_data_root, store_path
 from vcp.data.access.access import DatasetAccess
 from vcp.data.access.schema import AccessRef, Purpose
-from vcp.data.evidence import RunScope, attach_evidence, label_ref
-from vcp.data.evidence_ref import EvidenceRef
+from vcp.data.evidence import RunScope, attach_evidence, check_evidence_file, label_ref
+from vcp.data.evidence_ref import LABELS_ROLE, EvidenceRef, check_name
 from vcp.measure.runs import load_run
+from vcp.measure.schema import RunCard
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.records import (
     append_event,
@@ -30,7 +31,7 @@ from vcp.train.records import (
     load_record,
     save_record,
 )
-from vcp.train.schema import CheckpointRecord, TrainRecord
+from vcp.train.schema import CheckpointRecord
 
 
 class Session:
@@ -106,39 +107,49 @@ class Session:
         self, name: str, path: str | Path, *, role: str | None = None
     ) -> EvidenceRef:
         """Copy a file this loop read into an immutable ``evidence`` artifact and bind it to the
-        running attempt (spec 2026-09-26 §5.3). Weights are checkpoints, not evidence."""
+        running attempt (spec 2026-09-26 §5.3). Weights are checkpoints, not evidence. The name
+        is checked against both ``train.yaml`` and ``run.yaml`` before anything is copied."""
         record = load_record(self.data_root, self.run_id)
+        card, scope = self._card_scope()
+        file, role_used = Path(path).resolve(), role or name
+        check_evidence_file(name, file, role_used)
+        check_name([*record.evidence, *card.evidence], name, role_used, "evidence")
         ref = attach_evidence(
             self.data_root,
-            self._scope(record),
+            scope,
             name,
-            Path(path).resolve(),
-            role=role or name,
+            file,
+            role=role_used,
             attempt=self.attempt,
             binding="session",
         )
         return bind_ref(self.data_root, record, ref, self.attempt)[1]
 
     def attach_labels(self, label_set_id: str) -> EvidenceRef:
-        """Bind a ``vcp data labels`` label set this loop trains with (spec §5.3, §4.2)."""
+        """Bind a ``vcp data labels`` label set this loop trains with (spec §5.3, §4.2); the
+        name is checked against both ``train.yaml`` and ``run.yaml`` first."""
         record = load_record(self.data_root, self.run_id)
+        card, scope = self._card_scope()
+        check_name([*record.evidence, *card.evidence], label_set_id, LABELS_ROLE, "label_set")
         ref = label_ref(
             self.data_root,
-            self._scope(record),
+            scope,
             label_set_id,
             attempt=self.attempt,
             binding="session",
         )
         return bind_ref(self.data_root, record, ref, self.attempt)[1]
 
-    def _scope(self, record: TrainRecord) -> RunScope:
+    def _card_scope(self) -> tuple[RunCard, RunScope]:
+        """The run card (loaded once per attach) and the scope an attachment must fit, all of
+        it read from the card."""
         card = load_run(self.data_root, self.run_id)
-        return RunScope(
+        return card, RunScope(
             run_id=self.run_id,
-            dataset=record.dataset,
+            dataset=card.dataset,
             samples_hash=card.samples_hash,
-            plan_id=record.plan_id,
-            trained_on=tuple(record.trained_on),
+            plan_id=card.plan_id,
+            trained_on=tuple(card.trained_on),
         )
 
     def access(

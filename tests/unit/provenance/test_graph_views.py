@@ -7,7 +7,7 @@ from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.access.schema import AccessRef
 from vcp.data.dataset import Dataset
-from vcp.data.evidence import RunScope, label_ref
+from vcp.data.evidence import RunScope, attach_evidence, label_ref
 from vcp.data.materialize import MaterializeSpec, materialize
 from vcp.data.source_audit import write_source_audit
 from vcp.fuse.build import write_record
@@ -553,6 +553,29 @@ def test_a_label_set_is_consumed_by_the_run_and_produced_by_the_dataset(roots, t
     assert (label_set, run, "CONSUMED_BY") in edges
     assert (dataset_version_id("tiny", ds.card.samples_hash), label_set, "PRODUCED_BY") in edges
     assert graph.entities[run].broken_reason is None
+
+
+def test_an_evidence_copy_is_consumed_only_when_the_run_lists_it(roots, tmp_path):
+    """spec §6.2: like a receipt, an evidence copy reaches a run only through the run's own
+    list; ``params.run`` just names the run that made the copy (a failed ingest leaves one)."""
+    det_with_runs(roots, tmp_path, n=20)
+    card = load_run(roots.data, "perfect")
+    scope = RunScope("perfect", "tiny", card.samples_hash, "fixed-v1", tuple(card.trained_on))
+    teacher = tmp_path / "teacher.jsonl"
+    teacher.write_text("t", encoding="utf-8")
+    ref = attach_evidence(
+        roots.data, scope, "teacher", teacher, role="teacher", attempt=None, binding="manual"
+    )
+    run = entity_id("run", "perfect")
+    copy = entity_id("artifact", f"evidence/{ref.artifact_id}")
+    for listed in (False, True):
+        if listed:
+            save_run(roots.data, card.model_copy(update={"evidence": [ref]}))
+        graph = build_graph(roots.data, roots.configs)
+        edges = {(e.source_id, e.target_id, e.edge_type) for e in graph.edges.values()}
+        assert copy in graph.entities
+        assert ((copy, run, "CONSUMED_BY") in edges) is listed
+        assert graph.entities[run].broken_reason is None
 
 
 def test_a_missing_or_repinned_evidence_reference_marks_the_run_broken(roots, tmp_path):

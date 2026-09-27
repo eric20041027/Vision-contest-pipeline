@@ -16,6 +16,7 @@ from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import DatasetPaths, artifacts_root, check_relative_path, runs_root
 from vcp.data.dataset import Dataset
+from vcp.data.evidence_ref import EvidenceRef
 from vcp.data.materialize.manifest import ManifestRow
 from vcp.data.source_audit import load_source_audit
 from vcp.data.split import SplitPlan
@@ -313,6 +314,16 @@ def _run_entity(
     )
 
 
+def _evidence_intact(graph: ProvenanceGraph, data_root: Path, ref: EvidenceRef) -> bool:
+    """The artifact a run references was scanned, verified, and still has the manifest the run
+    pinned (spec 2026-09-26 §6.2)."""
+    entity = graph.entities.get(entity_id("artifact", f"{ref.kind}/{ref.artifact_id}"))
+    if entity is None or entity.broken_reason is not None:
+        return False
+    manifest = store.manifest_path(data_root, ref.kind, ref.artifact_id)
+    return manifest.is_file() and sha256_file(manifest) == ref.manifest_sha256
+
+
 def _scan_runs(graph: ProvenanceGraph, data_root: Path, configs_root: Path) -> None:
     root = runs_root(data_root)
     if not root.is_dir():
@@ -338,6 +349,12 @@ def _scan_runs(graph: ProvenanceGraph, data_root: Path, configs_root: Path) -> N
         info = run_provenance(card, data_root=data_root, configs_root=configs_root)
         if info.invalid:
             missing.extend(f"invalid access_receipt/{value}" for value in info.invalid)
+        consumed: list[str] = []
+        for ref in card.evidence:
+            if _evidence_intact(graph, data_root, ref):
+                consumed.append(entity_id("artifact", f"{ref.kind}/{ref.artifact_id}"))
+            else:
+                missing.append(f"invalid evidence/{ref.kind}/{ref.artifact_id}")
         ident = entity_id("run", card.run_id)
         graph.add_entity(
             _run_entity(
@@ -380,6 +397,8 @@ def _scan_runs(graph: ProvenanceGraph, data_root: Path, configs_root: Path) -> N
             receipt = entity_id("artifact", f"access_receipt/{receipt_ref.artifact_id}")
             if receipt in graph.entities:
                 graph.add_edge(receipt, ident, "CONSUMED_BY")
+        for artifact in consumed:
+            graph.add_edge(artifact, ident, "CONSUMED_BY")
 
 
 def _scan_measurements(graph: ProvenanceGraph, data_root: Path) -> None:

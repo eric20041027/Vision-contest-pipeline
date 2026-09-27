@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vcp.artifact import store
-from vcp.artifact.schema import ArtifactSpec, InputRef
+from vcp.artifact.schema import RESERVED_NAMES, ArtifactSpec, InputRef, check_file_name
 from vcp.artifact.writer import ArtifactWriter
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
@@ -47,31 +47,49 @@ def parse_evidence_args(items: list[str]) -> list[tuple[str, Path]]:
         name, sep, path = item.partition("=")
         if not sep or not name or not path:
             raise ValidationFailed(
-                f"--evidence expects NAME=PATH, got {item!r}", fields={"evidence": item}
+                f"invalid: --evidence expects NAME=PATH, got {item!r}",
+                fields={"evidence_name": item},
             )
         if any(n == name for n, _ in out):
             raise ValidationFailed(
-                f"evidence_conflict: --evidence {name!r} is given twice", fields={"evidence": name}
+                f"evidence_conflict: --evidence {name!r} is given twice",
+                fields={"evidence_name": name},
             )
         out.append((name, Path(path)))
     return out
 
 
 def check_evidence_file(name: str, path: Path, role: str) -> None:
-    """Everything an evidence attachment needs before a byte is copied."""
+    """Everything an evidence attachment needs before a byte is copied. The copy keeps the
+    source's file name, so a name the artifact writer would refuse is refused here -- one of
+    its own files in any case (a case-insensitive disk folds ``MANIFEST.JSON`` onto
+    ``manifest.json``), or a temp name ``clean`` may remove."""
     validate_name(name)
     validate_name(role)
     if role == LABELS_ROLE:
         raise ValidationFailed(
             f"role_reserved: role {LABELS_ROLE!r} is for label sets; attach them with --labels "
             "or Session.attach_labels",
-            fields={"evidence": name},
+            fields={"evidence_name": name},
         )
     if not path.exists():
-        raise ValidationFailed(f"not_found: evidence {name!r} ({path})", fields={"evidence": name})
+        raise ValidationFailed(
+            f"not_found: evidence {name!r} ({path})", fields={"evidence_name": name}
+        )
     if not path.is_file():
         raise ValidationFailed(
-            f"not_a_file: evidence {name!r} ({path}) is not a file", fields={"evidence": name}
+            f"not_a_file: evidence {name!r} ({path}) is not a file",
+            fields={"evidence_name": name},
+        )
+    try:
+        check_file_name(path.name)  # `unsafe_path:` / `reserved_name:`
+    except ValueError as e:
+        raise ValidationFailed(str(e), fields={"evidence_name": name}) from e
+    if path.name.lower() in RESERVED_NAMES:
+        raise ValidationFailed(
+            f"reserved_name: evidence {name!r} file {path.name!r} is, ignoring case, a file the "
+            "artifact layer writes itself; rename the file",
+            fields={"evidence_name": name},
         )
 
 
@@ -86,7 +104,7 @@ def check_names(
         if label_set_id in names:
             raise ValidationFailed(
                 f"evidence_conflict: {label_set_id!r} is both an --evidence name and a --labels id",
-                fields={"evidence": label_set_id},
+                fields={"evidence_name": label_set_id},
             )
     for name, _ in evidence:
         check_name(existing, name, name, "evidence")
@@ -145,7 +163,7 @@ def attach_evidence(
             if entry.sha256 != digest:
                 raise IntegrityError(
                     f"drift: evidence {name!r} changed while it was being copied",
-                    fields={"evidence": name},
+                    fields={"evidence_name": name},
                 )
             writer.commit()
     return _ref(

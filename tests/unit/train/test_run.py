@@ -726,6 +726,14 @@ def test_evidence_and_labels_are_checked_before_the_first_write(roots, work, tmp
     make_label_set(roots, tmp_path, plan)  # "pseudo-v1" over "train": fits trained_on=["train"]
     evidence_file = tmp_path / "some_evidence.txt"
     evidence_file.write_text("x", encoding="utf-8")
+    # A file named like one the artifact layer writes itself, in any case (NTFS folds it): each
+    # in its own directory, since the two names are one file on a case-insensitive disk.
+    reserved = []
+    for folder, file_name in (("lower", "manifest.json"), ("upper", "MANIFEST.JSON")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / file_name).write_text('{"derived": true}', encoding="utf-8")
+        reserved.append(tmp_path / folder / file_name)
+    evidence_dir = roots.data / "artifacts" / "evidence"
     for kw, reason in (
         ({"evidence": [f"teacher={tmp_path / 'gone.jsonl'}"]}, "not_found"),
         ({"evidence": [f"teacher={tmp_path}"]}, "not_a_file"),
@@ -737,10 +745,13 @@ def test_evidence_and_labels_are_checked_before_the_first_write(roots, work, tmp
             {"evidence": [f"pseudo-v1={evidence_file}"], "labels": ["pseudo-v1"]},
             "evidence_conflict",
         ),
+        ({"evidence": [f"derived={reserved[0]}"]}, "reserved_name"),
+        ({"evidence": [f"derived={reserved[1]}"]}, "reserved_name"),
     ):
         with pytest.raises(ValidationFailed, match=reason):
             train_run(_spec(roots, work, **kw))
         assert not (run_dir(roots.data, "r1") / "run.yaml").exists()
+        assert not evidence_dir.exists() or not any(evidence_dir.iterdir())
 
 
 def test_evidence_conflict_on_resume_leaves_no_trace_of_the_second_attempt(roots, work, tmp_path):

@@ -45,7 +45,7 @@ def check_name(refs: list[EvidenceRef], name: str, role: str, kind: str) -> None
         raise ValidationFailed(
             f"evidence_conflict: {name!r} is attached as {same[-1].kind}/{same[-1].role}, "
             f"not {kind}/{role}",
-            fields={"evidence": name},
+            fields={"evidence_name": name},
         )
 
 

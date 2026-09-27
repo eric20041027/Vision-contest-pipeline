@@ -710,7 +710,9 @@ def _link_artifact_runs(graph: ProvenanceGraph, data_root: Path) -> None:
     for artifact_entity in sorted(graph.entities.values(), key=lambda item: item.entity_id):
         if artifact_entity.entity_type != "artifact":
             continue
-        if artifact_entity.attributes.get("kind") == "access_receipt":
+        # Receipts and evidence copies reach a run only through the run's own list (_scan_runs):
+        # an evidence copy's params.run names the run that made it, not one that consumed it.
+        if artifact_entity.attributes.get("kind") in ("access_receipt", "evidence"):
             continue
         params = artifact_entity.attributes.get("params", {})
         run_name = params.get("run") if isinstance(params, dict) else None

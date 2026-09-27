@@ -11,8 +11,9 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.access.receipt import read_receipt
 from vcp.data.dataset import Dataset
+from vcp.data.evidence import RunScope, attach_evidence
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
-from vcp.measure.runs import save_run
+from vcp.measure.runs import run_dir, save_run
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train import Session
 from vcp.train import checkpoints as ckptmod
@@ -225,3 +226,61 @@ def test_attach_evidence_and_labels_in_process(roots, monkeypatch, tmp_path):
     assert [(e["name"], e["attempt"]) for e in events] == [("teacher", 2), ("pseudo-v1", 2)]
     with pytest.raises(ValidationFailed, match="role_reserved"):
         s.attach_evidence("x", teacher, role="labels")
+
+
+def _card(ds, evidence=()):
+    return RunCard(
+        run_id="r1",
+        dataset="tiny",
+        samples_hash=ds.card.samples_hash,
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        source=RunSource(),
+        created_at=STAMP,
+        evidence=list(evidence),
+    )
+
+
+def test_attach_labels_checks_the_name_against_run_yaml_too(roots, monkeypatch, tmp_path):
+    """A name `eval ingest --evidence` bound on run.yaml cannot come back from the loop as a
+    label set: run.yaml would carry one name under two kinds."""
+    ds, plan = seed_tiny(roots)
+    make_label_set(roots, tmp_path, plan)  # "pseudo-v1" fits the run
+    _running(roots)
+    raw = tmp_path / "raw-pseudo.csv"
+    raw.write_text("id,y\n", encoding="utf-8")
+    scope = RunScope("r1", "tiny", ds.card.samples_hash, "fixed-v1", ("train",))
+    ingested = attach_evidence(
+        roots.data, scope, "pseudo-v1", raw, role="pseudo-v1", attempt=None, binding="manual"
+    )
+    save_run(roots.data, _card(ds, [ingested]))
+    train_yaml = run_dir(roots.data, "r1") / "train.yaml"
+    before = train_yaml.read_bytes()
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    with pytest.raises(ValidationFailed, match="evidence_conflict") as ei:
+        Session("r1", roots.data).attach_labels("pseudo-v1")
+    assert ei.value.fields == {"evidence_name": "pseudo-v1"}
+    assert train_yaml.read_bytes() == before
+
+
+def test_a_conflicting_attach_evidence_copies_nothing(roots, monkeypatch, tmp_path):
+    """The name is checked before the copy: no orphan artifact, and the same bytes under
+    another role are `evidence_conflict:` rather than the store's `spec_mismatch:`."""
+    ds, _ = seed_tiny(roots)
+    _running(roots)
+    save_run(roots.data, _card(ds))
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.delenv("VCP_ATTEMPT", raising=False)
+    s = Session("r1", roots.data)
+    first = tmp_path / "teacher.jsonl"
+    first.write_text("v1", encoding="utf-8")
+    s.attach_evidence("teacher", first)  # role "teacher"
+    evidence_dir = roots.data / "artifacts" / "evidence"
+    before = sorted(p.name for p in evidence_dir.iterdir())
+    other = tmp_path / "teacher2.jsonl"
+    other.write_text("v2", encoding="utf-8")
+    for f in (other, first):  # other bytes, then the very same bytes
+        with pytest.raises(ValidationFailed, match="evidence_conflict"):
+            s.attach_evidence("teacher", f, role="soft")
+        assert sorted(p.name for p in evidence_dir.iterdir()) == before
+    assert [r.role for r in load_record(roots.data, "r1").evidence] == ["teacher"]

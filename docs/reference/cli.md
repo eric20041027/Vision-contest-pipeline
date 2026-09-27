@@ -16,6 +16,7 @@
 | `vcp data split` | 固定多子集 plan（進 git、不可改） | `--plan-id`、`--subsets`、`--stratify-key`、`--group-key`、`--group-from-audit`、`--strategy` |
 | `vcp data lineage` | 某訓練用了哪些子集 → 哪些驗證集還乾淨 | `--plan`、`--trained-on` |
 | `vcp data export` | 子集 → COCO / YOLO 目錄 + manifest | `--plan`、`--subset`、`--format`、`--out`、`--opt view=`、`--opt copy=true`、`--unseal --reason`；每次匯出留一份 `access_receipt`（manifest 的 `receipt`、VERDICT `receipt=`）；VERDICT `identity=source_audit\|full_hash` |
+| `vcp data labels` | 訓練標籤檔（`.csv` / `.jsonl`）對切分 plan 驗證後存成不可變的 `label_set/<id>`：每列的 id 依 `--id-field` 對到樣本；落在 `--subset` 以外的 dataset 樣本（驗證、sealed、未分配）→ FAIL `labels_outside_subsets:`（只報計數與前幾個 sample id）；不在 dataset 裡的列允許、記 `external=`；sealed 子集不能當 `--subset`（`labels_on_sealed:`）。同 id 同內容重跑 `reused=true`。VERDICT `rows=` `matched=` `external=` `subsets=` | `--name`、`--plan`、`--subset`（可重複）、`--file`、`--id-field sample_id\|view_path\|view_stem\|meta.<key>`、`--id-col`（預設 `id`）、`--id`、`--notes` |
 | `vcp data materialize` | 每個 view 解碼一次成 npy / png 快取 + manifest | `--mode`、`--resize`、`--stack-seq`、`--window`、`--workers`、`--force`、`--decoder` |
 
 每個命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；`--json` 時結果到 stdout、VERDICT 到 stderr。終端機的 code page 編不出的字元改印成 ASCII 跳脫（`--json` 則是 ASCII 跳脫的同一份 JSON），VERDICT 一定印得出來。eval / fuse / train / submit / backup 失敗時仍帶命令已知的 dataset / run / recipe / id 等識別欄位；深層錯誤可提供更精確的身分。
@@ -55,13 +56,13 @@ calibration 與 held-out 結果仍待外部 runtime，不得把 offline tests �
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true`、`--receipt ID`（可重複；把 `vcp train run` 之外產生的收據掛上 run） |
+| `vcp eval ingest` | 框架輸出 → run 的標準預測檔（記 sha、建或更新 `run.yaml`） | `--run`、`--dataset`、`--plan`、`--subset`、`--format jsonl\|coco_results\|yolo_txt\|scores_csv`、`--src`、`--export-manifest`、`--trained-on`、`--framework`、`--notes`、`--weights PATH`、`--config PATH`、`--keep-input`、`--replace`、`--opt allow_unknown=true`、`--receipt ID`（可重複；把 `vcp train run` 之外產生的收據掛上 run）、`--evidence NAME=PATH`、`--labels ID`（皆可重複；參照記進 `run.yaml` 的 `evidence`，VERDICT `evidence=` `labels=`） |
 | `vcp eval measure` | 護欄 → 每個乾淨 eval 子集 × 適用指標一列讀數；乾淨 = `trained_on ∪` 收據觀測到的子集都不含；`--subsets` 點到被讀過的子集 → `contaminated:` | `--run`、`--metrics`、`--subsets`、`--params k=v`、`--unseal --reason` |
 | `vcp eval anchor` | 把既有讀數設成該 plan/子集/指標的護欄 | `--run`、`--subset`、`--metric`、`--params`、`--tolerance`（須有限且 ≥ 0）、`--replace` |
 | `vcp eval sigma` | 估 σ_p 並 append | `--dataset`、`--plan`、`--metric`、`--method`（已登記的 σ_p 估法；內建 `splithalf` / `bootstrap` / `prior`，其餘以 `--plugin` 登記）、`--params`、`--subsets`、`--run`（bootstrap 預設取該 cell 的錨點 run）、`--prior --note`、`--resamples`、`--seed` |
 | `vcp eval preregister` | 量候選之前先把主張寫死（進 git） | `--dataset`、`--id`、`--claim`、`--component`、`--class model\|tuning`、`--baseline-run`、`--candidate-run`、`--metric`、`--params`、`--subsets`、`--t-min`、`--min-bases`、`--sigma-method`、`--sigma-ratio` |
 | `vcp eval judge` | 配對 bootstrap → Δ、se、t、基底數、σ_p 條件 → 判決；候選或基準讀過主張的子集 → `INVALID contaminated:<run>/<subset>`；判決記候選的 provenance | `--dataset`、`--prereg`、`--resamples`、`--seed`、`--strict`、`--unseal --reason` |
-| `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p | `--dataset`、`--max-age-hours` |
+| `vcp eval status` | 孤兒預登記、run / 預登記 / 判決 / 錨點數、最新 σ_p；每個 run 另列 `labels=`（`dataset` 或 label_set id） | `--dataset`、`--max-age-hours` |
 | `vcp eval report` | 全部 run × subset 讀數（全精度）+ 每個判決的 last-vs-last | `--dataset`、`--metric`、`--plan` |
 
 共用選項：`--json`、`--data-root`、`--configs-root`；前六個命令另有 `--plugin <module>`（可重複，import 該模組讓它登記指標、轉換器或 σ_p 估法），`status` / `report` 不碰登記表所以沒有。狀態與 exit code：未知 sample_id、缺讀數、選項不合法 → FAIL(1)；沒有錨點、σ_p 為 0、有孤兒預登記 → WARN(0)；護欄對不上 → ABORT(2) 且一列讀數都不寫，VERDICT 帶 `guardrail=FAIL anchor=<reading_id> got=<值>`。判決本身不是工具錯誤：`status=OK verdict=PASS|FAIL|INVALID`，要讓 FAIL 擋 CI 就加 `--strict`。
@@ -125,9 +126,9 @@ uv run vcp eval judge --dataset D --prereg r1-admit-a    # PASS = a 證明了自
 
 | 命令 | 作用 | 主要選項 |
 |---|---|---|
-| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=`。子程序的環境多了 `VCP_RUN_ID`、`VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`、`VCP_ATTEMPT`（第幾個 attempt）與有 `--seed` 時的 `VCP_SEED` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`；`--` 之後是訓練命令 |
+| `vcp train run` | 包在任何訓練命令外面：開始就寫 `run.yaml`（`trained_on` 由 export manifest 推導）、複製 config、環境快照、console 落檔、結束後登記 checkpoint 的 sha、上傳並驗證；子程序用 `MaterializedReader` / `Session.access` 留的收據結束時抄進 `run.yaml`（`receipts=` `denied=` `provenance=`），讀到 `trained_on` 以外的子集 → WARN `observed_beyond_trained_on=`。子程序的環境多了 `VCP_RUN_ID`、`VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`、`VCP_ATTEMPT`（第幾個 attempt）與有 `--seed` 時的 `VCP_SEED` | `--run`、`--dataset`、`--plan`、`--export DIR`（可重複）或 `--trained-on a,b`、`--venv DIR`、`--config`、`--seed`、`--framework`、`--cwd`、`--checkpoints GLOB`（可重複）、`--final GLOB`、`--upload DEST`（可重複）、`--resume`、`--notes`、`--evidence NAME=PATH`（可重複：子程序啟動前複製成 `evidence` 產物；結束時原檔變了 → WARN `evidence_changed=`）、`--labels ID`（可重複：`vcp data labels` 的標籤集，須與 run 的 dataset 版本、plan、`trained_on` 相容，否則 `labels_mismatch:`；同一名稱不能換角色或種類，第一次寫入前就 `evidence_conflict:`）；VERDICT `evidence=` `labels=`；`--` 之後是訓練命令 |
 | `vcp train upload` | 事後或換目的地上傳已登記的 checkpoint，冪等；遠端是 `<dest>/<run>/<名稱>`，run 內同名不同路徑的 checkpoint（多折的 `fold-k/model.pt`）取能分開它們的最少上層資料夾（`fold-0__model.pt`），只有資料夾也分不開才 FAIL `name_collision` | `--run`、`--dest`、`--only final` |
-| `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令）；`backed=` / `unbacked=`（目前的 bytes 沒副本，會 WARN）/ `superseded=`（同路徑已被後來的登記取代、又從沒上傳過的舊 bytes，只報不 WARN——它們的副本再也不會出現） | `--run`、`--verify`（重算 sha） |
+| `vcp train status` | attempts / checkpoints / 副本（唯讀；人類行印最後一個 attempt 的命令）；`backed=` / `unbacked=`（目前的 bytes 沒副本，會 WARN）/ `superseded=`（同路徑已被後來的登記取代、又從沒上傳過的舊 bytes，只報不 WARN——它們的副本再也不會出現）；VERDICT `evidence=` `labels=`，`--verify` 另驗證據產物（壞了列成 `drift` 的 `evidence:<名稱>`） | `--run`、`--verify`（重算 sha） |
 
 共用選項：`--json`、`--data-root`；`--configs-root` 只有 `vcp train run` 有（另外兩個命令只讀資料根目錄下的 run）。`--upload` 的目的地：`remote:path` 走 rclone，經 `vcp.backup.dest.RcloneDest`（`copyto --checksum` + `hashsum sha256` 逐檔比對，指令前綴 `vcp.backup.dest.RCLONE`；rclone 不在 PATH 又沒注入 runner 是 `VcpError("rclone_not_found: ...")` ABORT，指令有跑但失敗是 `PlatformError`〔FAIL，最後一行已去敏〕；`hashsum` exit 3/4 才算「還沒東西」，其餘非 0 或雜湊欄不是 sha256 都是錯誤），其餘是本機 / 掛載目錄（複製後讀回驗 sha）。訓練命令 exit ≠ 0 → `status=FAIL exit_code=N`，checkpoint 仍登記但不上傳；沒給 `--seed`、`--venv`、`--final` 各 WARN 一項。`run.yaml` 就是量測層的 run：之後 `vcp eval ingest --run R ...` 直接接上，不必再給 `--trained-on` / `--framework`。`--resume` 每次都新增一個 attempt，各記自己的 `command` / `seed` / `venv`；`train.yaml` 頂層那三欄刻意留著**第一個** attempt 的值（它描述 run 是怎麼開始的），要看最新的看 `attempts[-1]`。上一輪若還停在 `running`（vcp 自己崩過），`--resume` 會把它標成 `interrupted` 並在 `train.log.jsonl` 記一列 `note`。
 
@@ -172,6 +173,8 @@ with MaterializedReader("rsna-knee", "png-r256", plan_id="fixed-v1", subset="tra
     s.register_checkpoint("ckpt/best.pt", final=True)
     s.note("val_auc", 0.91)
     per_attempt = f"evidence.a{s.attempt}.json"  # --resume 後遞增，與收據 id 的 -a<n>- 相同
+    s.attach_evidence("teacher", "preds/teacher.jsonl")  # 讀過的檔：複製成 evidence 產物
+    s.attach_labels("pseudo-v3")  # `vcp data labels` 驗過的標籤集
 ```
 
 ## 提交治理命令 `vcp submit`

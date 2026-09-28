@@ -15,6 +15,76 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.11.0] - 2026-09-28
+
+RSNA Knee 第二輪回報的 VCP-040 + 042（#30）與 VCP-041（#31）；tag `v0.11.0` 打在發版 PR 的合併
+commit 上。MINOR 的理由：
+- 新命令 `vcp data labels`。
+- 新選項：`train run --evidence / --labels / --require-clean`、`eval ingest --evidence / --labels`。
+- VERDICT 新欄位：`evidence=`、`labels=`、`evidence_changed=`、`commit=`、`modified=`、`untracked=`、
+  `git_changed=`。
+- `reason=` 新字：`labels_outside_subsets:`、`labels_on_sealed:`、`labels_mismatch:`、
+  `evidence_conflict:`、`role_reserved:`、`dirty_tree:`。既有的 `invalid:` 也用在標籤列格式與
+  `--evidence` 參數上。
+- 新產物種類：`label_set`、`evidence`。
+- 寫入內容的改變：
+  - `run.yaml` / `train.yaml` 的 `evidence` 清單；
+  - `train.log.jsonl` 的 `evidence` 事件，以及 `note` 的 `evidence_changed` / `git_changed`；
+  - `env.<n>.json` 的 `git` 新欄位與 `train/git.<n>.patch`；
+  - 備份新角色 `label_set` / `evidence`。
+
+### Added
+- `vcp data labels`（VCP-042，#30）：訓練標籤檔（`.csv` / `.jsonl`，一個 id 一列）對切分 plan 驗過後，
+  存成不可變的 `label_set/<id>`。
+  - 落在允許子集以外的 dataset 樣本 → FAIL `labels_outside_subsets:`。只報計數與前 5 個 sample id，
+    不報標籤內容。
+  - sealed 子集不能標（`labels_on_sealed:`）。
+  - 不在 dataset 裡的列記 `external=`。
+  - 一列都沒對到 → WARN。
+- run 讀的證據檔（VCP-040，#30）：
+  - 證據檔複製成不可變的 `evidence/<run>-<name>-<sha12>`。
+  - `run.yaml` / `train.yaml` 多一張 `evidence` 參照清單，空的時候不寫出。
+  - 附上的入口有三個：
+    - `train run --evidence NAME=PATH --labels ID`：預檢（含名稱衝突與保留檔名）都在第一次寫入前；
+      結束時原檔變了 → WARN `evidence_changed=`。
+    - `Session.attach_evidence / attach_labels`。
+    - `eval ingest --evidence / --labels`。
+- 下游跟著認得證據與標籤集：
+  - `train status`：`evidence=` / `labels=`，`--verify` 多出 `evidence:<名稱>` drift。
+  - `eval status`：每個 run 的 `labels`。
+  - 備份：新角色 `label_set`（tier 1）與 `evidence`（tier 2，含歷史列）。`backup verify` 比對 run
+    釘住的 `manifest_sha256`。
+  - provenance 圖：「產物 → run」的 `CONSUMED_BY` 邊；參照壞掉時 run 就是 broken。
+- `train run --require-clean`（VCP-041，#31）：
+  - `--cwd` 所在 repo 的追蹤檔有改動時，在第一次寫入前 FAIL `dirty_tree:`，帶 `modified=` 與 `commit=`。
+  - 不在 repo 裡或 git 不能用 → `not_found:`，附 git 的原因。
+- `vcp.train.gitstate`：vcp 對訓練 repo 的 git 呼叫都在這裡。
+  - 固定前綴、`core.quotepath`、submodule 格式與結尾的 `--`。
+  - 不繼承 `GIT_DIR` 等決定 repo 的環境變數；環境變數給的設定照樣有效。
+  - 設 `GIT_OPTIONAL_LOCKS=0`。
+
+### Changed
+- `train run` 的工作樹紀錄（VCP-041，#31）：
+  - 追蹤檔有未提交改動 → WARN（`modified=`），diff 存成 `train/git.<n>.patch`（10 MiB 以內），在該
+    commit 上 `git apply` 就能還原。
+  - `env.<n>.json` 的 `git` 多記改動與未追蹤的數量和路徑，以及 status 與 diff 的 sha256。
+  - 結束時 HEAD 或追蹤檔的 diff 變了 → `note` 事件 `git_changed`，並 WARN。
+  - 未追蹤檔（含 submodule 裡的）不算改動。
+  - VERDICT 多 `commit=` / `modified=` / `untracked=`。
+- `register_checkpoint` 只給權重；run 讀的其他檔改用 `attach_evidence`（VCP-040）。
+- provenance 圖：`evidence` 產物只經由 run 自己的清單連到 run。沒被參照的副本（例如 ingest 失敗留下的）
+  不再畫成 consumed。
+
+### 相容性
+- 新 vcp 照讀舊紀錄。
+- 舊 vcp 讀不了這兩種新東西：
+  - 帶 `evidence` 的 `run.yaml` / `train.yaml`，會 FAIL `extra_forbidden`；
+  - 帶新角色的備份清單。
+- 訓練 venv 要跟著升級。若它裝的是舊版、非 editable 的 vcp，wrapper 附上 `--evidence` / `--labels` 後，
+  `Session.register_checkpoint` 就會失敗。比賽工作區的兩個 venv 應以 editable 指向新 tag 的 worktree。
+- `GitInfo.dirty` 的意思不變，只有 submodule 裡的未追蹤檔不再算。
+- `env.<n>.json` 的新欄位都有預設值，而且 vcp 本身不讀回它。
+
 ## [0.10.0] - 2026-09-25
 
 RSNA Knee 第二輪回報（VCP-035 … VCP-043）裡可以先修的五件，各一個 PR（#24–#28）；tag `v0.10.0`

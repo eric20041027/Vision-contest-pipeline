@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -16,6 +16,12 @@ from vcp.submit.schema import LedgerRow
 # sync's file-and-time rule (``sync.MATCH_WINDOW``, which cannot be imported here: sync imports
 # this module; a test keeps the two equal).
 TWIN_WINDOW = timedelta(minutes=10)
+
+_BEFORE_ANY = datetime.min.replace(tzinfo=UTC)  # where a score without a platform time sorts
+
+
+def _when(row: LedgerRow) -> datetime:
+    return parse_stamp(row.at) if row.at else _BEFORE_ANY
 
 
 def append_ledger_row(path: Path, row: LedgerRow) -> None:
@@ -121,7 +127,18 @@ class SubmissionLedger:
         return self.of("uploaded", submission_id)
 
     def latest_score(self, submission_id: str) -> LedgerRow | None:
+        """The newest score by platform time (spec 2026-09-28 §4.6), not by file order: a later
+        sync may append an older upload's score. A row without ``at`` (``vcp submit score``)
+        counts as older than every platform-timed row; ledger order breaks ties, so a
+        corrected score of the same moment wins."""
         rows = self.of("scored", submission_id)
+        if not rows:
+            return None
+        return rows[max(range(len(rows)), key=lambda i: (_when(rows[i]), i))]
+
+    def score_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
+        """The newest ``scored`` row of one platform entry of this id, in ledger order."""
+        rows = [r for r in self.of("scored", submission_id) if r.platform_ref == platform_ref]
         return rows[-1] if rows else None
 
     def arrivals(self) -> list[LedgerRow]:

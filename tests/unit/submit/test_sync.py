@@ -9,7 +9,8 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.time import stamp, utc_now
 from vcp.submit.actions import record
 from vcp.submit.ledger import SubmissionLedger
-from vcp.submit.profile import init_profile
+from vcp.submit.location import shared_ledger
+from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import report, status
 from vcp.submit.schema import PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage
@@ -377,3 +378,165 @@ def test_sync_refuses_a_non_finite_score(staged):
     ]
     with pytest.raises(ValidationFailed, match="platform_response"):
         sync(TEST, runner=FakeRunner(rows), **_kw(staged))
+
+
+def _only_s1(pair, **over):
+    """S1 staged on a Kaggle profile with room for five uploads a day; nothing uploaded."""
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(_profile(quota=Quota(per_day=5, day_tz="UTC"), **over), **_kw(pair))
+    seed_test_runs(pair)
+    stage(
+        StageSpec(
+            dataset=TEST, submission_id="S1", eval_run="good", test_run="good.test", **_kw(pair)
+        )
+    )
+
+
+def test_a_pending_upload_the_ledger_never_recorded_is_bound_to_its_id(pair):
+    """spec 2026-09-28 §4.4: S1 went up by hand and was never recorded. The entry names S1 and
+    has no score yet; it becomes S1's upload anyway (source=platform), counts once against the
+    quota, and the next sync binds nothing more -- it only adds the score."""
+    _only_s1(pair)
+    now = stamp(utc_now())
+    web = {
+        "ref": 21,
+        "fileName": "submission.csv",
+        "date": now,
+        "description": "S1 by hand",
+        "status": "pending",
+    }
+    first = sync(TEST, runner=FakeRunner([web]), **_kw(pair))
+    assert (first.bound, first.scored, first.foreign) == (1, 0, 0)
+    assert first.matched == {"21": "S1"} and first.unconfirmed == []
+    [row] = SubmissionLedger(pair.test_paths.submissions_log).of("uploaded")
+    assert (row.submission_id, row.source, row.platform_ref, row.at, row.confirmed) == (
+        "S1",
+        "platform",
+        "21",
+        now,
+        True,
+    )
+    assert row.profile_sha256 == load_profile(pair.test_paths)[1]
+    assert status(TEST, **_kw(pair)).quota.used == 1
+    scored = {**web, "status": "complete", "publicScore": "0.8"}
+    second = sync(TEST, runner=FakeRunner([scored]), **_kw(pair))
+    assert (second.bound, second.scored) == (0, 1)
+    assert status(TEST, **_kw(pair)).quota.used == 1
+
+
+def test_an_upload_recorded_within_ten_minutes_is_that_entry_and_nothing_is_bound(pair):
+    _only_s1(pair)
+    now = utc_now()
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    near = {
+        "ref": 22,
+        "fileName": "submission.csv",
+        "date": stamp(now + timedelta(minutes=3)),
+        "description": "S1",
+    }
+    res = sync(TEST, runner=FakeRunner([near]), **_kw(pair))
+    assert res.bound == 0 and res.matched == {"22": "S1"}
+    assert len(SubmissionLedger(pair.test_paths.submissions_log).of("uploaded")) == 1
+    assert status(TEST, **_kw(pair)).quota.used == 1
+
+
+def test_a_ref_written_as_foreign_before_its_id_was_staged_is_one_arrival_once_bound(pair):
+    """The entry was listed before S1 was in the ledger, so sync wrote it as foreign. Once S1 is
+    staged and the entry names it, the binding and the foreign row are one arrival."""
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(_profile(quota=Quota(per_day=5, day_tz="UTC")), **_kw(pair))
+    seed_test_runs(pair)
+    early = {
+        "ref": 23,
+        "fileName": "submission.csv",
+        "date": stamp(utc_now()),
+        "description": "S1 early",
+    }
+    assert sync(TEST, runner=FakeRunner([early]), **_kw(pair)).foreign == 1
+    stage(
+        StageSpec(
+            dataset=TEST, submission_id="S1", eval_run="good", test_run="good.test", **_kw(pair)
+        )
+    )
+    res = sync(TEST, runner=FakeRunner([early]), **_kw(pair))
+    assert res.bound == 1 and res.matched == {"23": "S1"}
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    assert [r.event for r in led.arrivals()] == ["uploaded"]
+    assert status(TEST, **_kw(pair)).quota.used == 1
+
+
+def test_a_bound_entry_does_not_pull_a_same_named_neighbour_into_its_id(pair):
+    """The file-and-time rule looks only at uploads vcp or a person attested. A binding is the
+    platform's own entry; were it to count, the teammate's upload of the same file name two
+    minutes earlier would be bound to S1 on the next sync and S1 would read as uploaded twice."""
+    _only_s1(pair)
+    now = utc_now()
+    mine = {"ref": 31, "fileName": "submission.csv", "date": stamp(now), "description": "S1 web"}
+    theirs = {
+        "ref": 32,
+        "fileName": "submission.csv",
+        "date": stamp(now - timedelta(minutes=2)),
+        "description": "teammate",
+    }
+    first = sync(TEST, runner=FakeRunner([mine, theirs]), **_kw(pair))
+    assert (first.bound, first.foreign) == (1, 1)
+    second = sync(TEST, runner=FakeRunner([mine, theirs]), **_kw(pair))
+    assert (second.bound, second.foreign, second.refreshed) == (0, 0, 0)
+    assert second.matched == {"31": "S1"}
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    assert [r.platform_ref for r in led.of("uploaded")] == ["31"]
+
+
+def test_two_scores_of_one_id_are_written_once_and_the_latest_is_by_platform_time(staged):
+    """spec 2026-09-28 §4.6: S1 went up twice and scored 0.9, then 0.7. The later upload is
+    listed first, so its row lands first. A sync that lists both writes only the other, the
+    next writes nothing, and the latest score is the later upload's whatever the file order."""
+    now = utc_now()
+    later = {
+        "ref": 42,
+        "fileName": "x.csv",
+        "date": stamp(now),
+        "description": "S1 again",
+        "publicScore": "0.7",
+    }
+    earlier = {
+        "ref": 41,
+        "fileName": "x.csv",
+        "date": stamp(now - timedelta(hours=1)),
+        "description": "S1 first",
+        "publicScore": "0.9",
+    }
+    assert sync(TEST, runner=FakeRunner([later]), **_kw(staged)).scored == 1
+    assert sync(TEST, runner=FakeRunner([later, earlier]), **_kw(staged)).scored == 1
+    led = SubmissionLedger(staged.test_paths.submissions_log)
+    assert [r.public for r in led.of("scored", "S1")] == [0.7, 0.9]
+    assert led.latest_score("S1").public == 0.7
+    before = len(led.rows)
+    assert sync(TEST, runner=FakeRunner([later, earlier]), **_kw(staged)).scored == 0
+    assert len(SubmissionLedger(staged.test_paths.submissions_log).rows) == before
+
+
+def test_a_status_change_of_a_scored_entry_is_a_new_scored_row(staged):
+    entry = {
+        "ref": 51,
+        "fileName": "x.csv",
+        "date": stamp(utc_now()),
+        "description": "S1",
+        "publicScore": "0.7",
+        "status": "pending",
+    }
+    assert sync(TEST, runner=FakeRunner([entry]), **_kw(staged)).scored == 1
+    done = {**entry, "status": "complete"}
+    assert sync(TEST, runner=FakeRunner([done]), **_kw(staged)).scored == 1
+    assert sync(TEST, runner=FakeRunner([done]), **_kw(staged)).scored == 0
+
+
+def test_sync_writes_the_shared_ledger_when_submit_yaml_says_so(pair):
+    _only_s1(pair, ledger="shared")
+    web = {"ref": 24, "fileName": "submission.csv", "date": stamp(utc_now()), "description": "S1"}
+    assert sync(TEST, runner=FakeRunner([web]), **_kw(pair)).bound == 1
+    events = [r.event for r in SubmissionLedger(shared_ledger(pair.test_paths)).rows]
+    assert events == ["staged", "uploaded"]
+    assert not pair.test_paths.submissions_log.exists()

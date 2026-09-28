@@ -3,7 +3,7 @@ import sys
 
 from typer.testing import CliRunner
 
-from helpers import det_samples, make_card, write_images
+from helpers import det_samples, git_repo, make_card, write_images
 from vcp.cli import app
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
@@ -240,3 +240,24 @@ def test_upload_only_accepts_final(roots, tmp_path):
     assert r.exit_code == 1, r.output
     v = _verdict(r.output)
     assert "status=FAIL" in v and "'final'" in v and "garbage" in v
+
+
+def test_train_run_cli_git_fields(roots, tmp_path):
+    seed_det(roots)
+    repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
+    r = _run(repo, "--seed", "3", "--framework", "fake")
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "commit=" in v and "commit=none" not in v
+    assert "modified=0" in v and "untracked=0" in v
+    (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# tweak\n")
+    r = _run(repo, "--seed", "3", "--framework", "fake", "--require-clean", run="r2")
+    assert r.exit_code == 1, r.output
+    v = _verdict(r.output)
+    assert "status=FAIL" in v and "dirty_tree" in v and "modified=1" in v and "run=r2" in v
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_bytes(FAKE.encode())
+    r = _run(work, "--seed", "3", "--framework", "fake", run="r3")
+    v = _verdict(r.output)
+    assert "commit=none" in v and "modified=" not in v

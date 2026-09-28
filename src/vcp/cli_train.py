@@ -78,6 +78,12 @@ def run_cmd(
         list[str] | None,
         typer.Option("--labels", help="label_set id the run trains with (repeatable)"),
     ] = None,
+    require_clean: Annotated[
+        bool,
+        typer.Option(
+            "--require-clean", help="FAIL before any write when tracked files have changes"
+        ),
+    ] = False,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -104,6 +110,7 @@ def run_cmd(
                 notes=notes,
                 evidence=list(evidence or []),
                 labels=list(labels or []),
+                require_clean=require_clean,
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -128,6 +135,7 @@ def run_cmd(
             "provenance": res.provenance,
             "evidence": res.evidence,
             "labels": res.labels,
+            "commit": res.git.commit[:12] if res.git is not None else "none",
         }
         if res.skipped:
             fields["skipped"] = res.skipped
@@ -139,6 +147,11 @@ def run_cmd(
             fields["source_audit"] = "missing"
         if res.evidence_changed:
             fields["evidence_changed"] = ",".join(res.evidence_changed)
+        if res.git is not None:
+            fields["modified"] = res.git.modified
+            fields["untracked"] = res.git.untracked
+        if res.git_changed:
+            fields["git_changed"] = ",".join(res.git_changed)
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":

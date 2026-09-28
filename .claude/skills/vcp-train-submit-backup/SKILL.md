@@ -22,7 +22,7 @@ uv run vcp train status --run R --verify
 - `train status`：`backed=0` 才是有副本；`unbacked=` 是目前 bytes 沒副本（WARN，不是壞）；`superseded=` 同路徑被後來的登記取代且從沒上傳；`drift=` 檔案與登記 sha 不符（壞）。`attempts[-1]` 是最新一次執行。
 - `--resume` 加 attempt；`train upload --run R --dest …` 冪等，`--only final` 只傳最終權重。
 - `--cwd` 所在 repo 的追蹤檔有未提交改動時 `train run` WARN（`modified=`），diff 存成 `train/git.<n>.patch`；比賽要求只用 commit 過的程式就加 `--require-clean`（第一次寫入前 FAIL `dirty_tree:`）。未追蹤的輸出檔不算改動；訓練中途改了追蹤檔或 commit → WARN `git_changed=`。
-- 開訓前先 commit 專案程式：`train/env.N.json` 記 `git.commit` 與 `dirty`，髒樹會如實寫 `dirty: true`。
+- 開訓前先 commit 專案程式：乾淨的樹只要 VERDICT 的 `commit=` 就說得出跑的是哪一版；髒樹要靠 `train/git.N.patch` 在那個 commit 上 `git apply` 才還原得回來。
 
 ## 提交
 ```bash

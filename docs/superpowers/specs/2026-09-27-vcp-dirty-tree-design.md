@@ -45,7 +45,7 @@
 | 欄位 | 意思 |
 |---|---|
 | `commit` | HEAD 的 40 位 sha（不變）。 |
-| `dirty` | porcelain 有任何輸出，含未追蹤檔（意思不變，與舊檔可比）。 |
+| `dirty` | porcelain 有任何輸出，含未追蹤檔（與舊檔可比；唯一的差別是 submodule 裡的未追蹤檔不算，見 §3.2）。 |
 | `modified` | porcelain 裡 `??` 以外的列數：暫存、未暫存、刪除、改名、submodule 都算。 |
 | `untracked` | `??` 的列數。用 `--untracked-files=normal`，整個未追蹤的目錄只算一列。 |
 | `modified_paths` | 那些改動列的路徑（改名取新路徑），照 git 的順序，最多 50 筆。 |
@@ -72,9 +72,9 @@
 - `-z` 格式裡，改名與複製的列後面多一個原路徑欄位，解析時略過它。
 - 明寫 `--untracked-files=normal`，讓使用者的 `status.showUntrackedFiles` 設定不會把未追蹤檔藏起來。
 - 明寫 `a/` / `b/` 前綴：使用者設了 `diff.noprefix` 或 `diff.mnemonicPrefix` 時，patch 仍能直接 `git apply`。`core.quotepath=false` 讓非 ASCII 檔名在不同機器上得到同一個 `diff_sha256`。
-- `--ignore-submodules=untracked`：submodule 裡的未追蹤檔不算改動（決定 1）；submodule 的指標或它追蹤檔的改動仍算。
+- `--ignore-submodules=untracked`：submodule 裡的未追蹤檔不算改動（決定 1）；submodule 的指標或它追蹤檔的改動仍算。所以 submodule 裡只有未追蹤檔時 `dirty` 是 false，這些檔也不列進任何數量或路徑。
 - `--submodule=short` 與結尾的 `--`：使用者的 `diff.submodule` 不會讓 patch 變成無法套用的摘要，頂層有叫 `HEAD` 的檔也不會讓命令失敗。
-- vcp 的 git 子程序不繼承 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` 等本地變數，並設 `GIT_OPTIONAL_LOCKS=0`：只看 `--cwd` 所在的 repo，也不改寫它的 index。
+- vcp 的 git 子程序不繼承 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` 等決定 repo 的變數，並設 `GIT_OPTIONAL_LOCKS=0`：只看 `--cwd` 所在的 repo，`git status` 不改寫它的 index（`git diff` 仍可能更新 index 的 stat 快取）。用環境變數給的設定（`GIT_CONFIG_PARAMETERS`、`GIT_CONFIG_COUNT` 與它的 KEY/VALUE）照樣繼承，跟 git 自己切換到別的 repo 時一樣：容器或 CI 用它設的 `safe.directory` 仍然有效。
 
 ### 3.3 patch 檔
 
@@ -92,7 +92,7 @@
 
 只在給了 `--require-clean` 時做。和其他預檢一起，在第一次寫入之前：
 
-- 找不到 git、`--cwd` 不在 repo 裡、或 git 命令失敗 → FAIL `not_found: git repository for --cwd <path>`（括號裡附 git 的第一行錯誤）。
+- 找不到 git、`--cwd` 不在 repo 裡、或 git 命令失敗 → FAIL `not_found: git repository for --cwd <path>`（括號裡附 git 的第一行錯誤；找不到 git 或 git 啟動不了時，是 vcp 自己的說明）。
 - `modified > 0` → FAIL `dirty_tree: <n> tracked path(s) changed: <前 5 個路徑>`，帶欄位 `modified=<n>`。
 - 只有未追蹤檔 → 通過。
 
@@ -148,7 +148,7 @@
   - 新 `reason=` 字 `dirty_tree:`；
   - `env.<n>.json` 與 `train.log.jsonl` 的新內容；
   - 新檔 `git.<n>.patch`。
-- `GitInfo.dirty` 的意思不變，舊 `env.json` 照樣解析得動。
+- `GitInfo.dirty` 的意思不變（只有 submodule 裡的未追蹤檔不再算，§3.2），舊 `env.json` 照樣解析得動。
 - `train.yaml`、`run.yaml`、provenance 索引的 schema 都不變。
 
 ## 8. 測試

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -17,12 +18,13 @@ from vcp.cli_common import (
 )
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
+from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.measure.metrics import effective_params, get_metric
 from vcp.measure.plugins import load_plugins
 from vcp.submit.actions import record, score, upload
 from vcp.submit.final import final, lock, unlock
-from vcp.submit.profile import init_profile
+from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
@@ -41,6 +43,13 @@ DETAIL_MAX = 160  # characters of the platform's reply a VERDICT carries
 
 def _clip(text: str, limit: int = DETAIL_MAX) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def ledger_mode(dataset: str, *, data_root: Path | None, configs_root: Path | None) -> str:
+    """The ``ledger=`` VERDICT field (spec 2026-09-28 §5): where this dataset's submit.yaml puts
+    the ledger. Read after the command succeeded, so the profile is known to load."""
+    paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+    return load_profile(paths)[0].ledger
 
 
 @submit_app.command("init")
@@ -196,6 +205,7 @@ def stage_cmd(
             "eval_run": st.eval_run,
             "pairing": st.pairing.mode,
             "admission": st.gate.admission,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         if st.test_run:
             fields["test_run"] = st.test_run
@@ -436,6 +446,7 @@ def final_cmd(
             "unranked": len(res.unranked),
             "holdout_unseals": res.row.holdout_unseals or 0,
             "dry_run": dry_run,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         if res.needs_reupload:
             fields["needs_reupload"] = res.needs_reupload
@@ -464,12 +475,12 @@ def lock_cmd(
 
     def fn() -> CmdResult:
         row = lock(dataset, reason, data_root=data_root, configs_root=configs_root)
-        return (
-            "OK",
-            {"dataset": dataset, "locked": True},
-            row.model_dump(mode="json", exclude_none=True),
-            [],
-        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "locked": True,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
+        return "OK", fields, row.model_dump(mode="json", exclude_none=True), []
 
     run_command("submit.lock", json_mode, data_root, fn, context={"dataset": dataset})
 
@@ -486,12 +497,12 @@ def unlock_cmd(
 
     def fn() -> CmdResult:
         row = unlock(dataset, reason, data_root=data_root, configs_root=configs_root)
-        return (
-            "OK",
-            {"dataset": dataset, "locked": False},
-            row.model_dump(mode="json", exclude_none=True),
-            [],
-        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "locked": False,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
+        return "OK", fields, row.model_dump(mode="json", exclude_none=True), []
 
     run_command("submit.unlock", json_mode, data_root, fn, context={"dataset": dataset})
 
@@ -512,6 +523,7 @@ def status_cmd(
             "staged": st.staged,
             "uploaded": st.uploaded,
             "foreign": st.foreign,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         warn = False
         if st.quota is None:

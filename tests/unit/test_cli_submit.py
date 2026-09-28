@@ -145,6 +145,7 @@ def test_stage_and_verify_cli(pair):
     assert "status=WARN" in v and "admission=PASS" in v and "pairing=single" in v
     assert "rows=50" in v and "writer=scores_csv" in v
     assert "missing=0" in v and "config_hash=unchecked" in v
+    assert "ledger=configs" in v
     r = _stage("S2", "bad", "bad.test")
     assert r.exit_code == 1 and "not_admitted" in _verdict(r.output)
     r = _stage("S2", "bad", "bad.test", "--kind", "probe", "--reason", "look")
@@ -275,6 +276,7 @@ def test_final_status_report_cli(pair):
     assert r.exit_code == 0, r.output
     v = _verdict(r.output)
     assert "chosen=S1" in v and "needs_reupload=S1" in v and "dry_run=true" in v
+    assert "ledger=configs" in v
     r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--json"])
     assert r.exit_code == 0, r.output
     assert _json(r)["result"]["chosen"] == ["S1"]

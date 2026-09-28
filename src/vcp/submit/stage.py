@@ -34,6 +34,7 @@ from vcp.submit.gate import admit
 from vcp.submit.guards import assert_before_deadline, assert_unlocked
 from vcp.submit.kernel import check_weights
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.location import transaction
 from vcp.submit.pairing import UNCHECKED, is_fusion, verify_pairing, verify_weights
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import (
@@ -188,7 +189,19 @@ def stage(spec: StageSpec) -> StageResult:
             "test_run: kernel submissions are not rendered from a test run; drop --test-run",
             fields={"kind": "kernel"},
         )
-    ledger = SubmissionLedger(paths.submissions_log)
+    with transaction(paths, profile, command="submit.stage") as ledger:
+        return _stage_locked(spec, paths, profile, profile_sha, ledger)
+
+
+def _stage_locked(
+    spec: StageSpec,
+    paths: DatasetPaths,
+    profile: PlatformProfile,
+    profile_sha: str,
+    ledger: SubmissionLedger,
+) -> StageResult:
+    """The rest of ``stage``, inside the ledger's transaction (spec 2026-09-28 §4.2): the
+    ledger was read after its lock was taken, and the row lands before the lock is let go."""
     assert_unlocked(ledger)
     assert_before_deadline(profile, utc_now())
     validate_name(spec.submission_id)

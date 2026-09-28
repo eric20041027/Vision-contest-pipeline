@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from vcp.measure.schema import Reading, RunCard
 from vcp.submit.guards import assert_unlocked
 from vcp.submit.kernel import kernel_provenance
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.location import transaction
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
 from vcp.submit.stage import load_staged
@@ -88,12 +90,15 @@ class FinalResult:
     written: bool
 
 
+@contextmanager
 def _open(
-    dataset: str, data_root: Path | None, configs_root: Path | None
-) -> tuple[DatasetPaths, PlatformProfile, str, SubmissionLedger]:
+    dataset: str, data_root: Path | None, configs_root: Path | None, command: str
+) -> Iterator[tuple[DatasetPaths, PlatformProfile, str, SubmissionLedger]]:
+    """The profile, then the ledger read inside its transaction (spec 2026-09-28 §4.2)."""
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, sha = load_profile(paths)
-    return paths, profile, sha, SubmissionLedger(paths.submissions_log)
+    with transaction(paths, profile, command=command) as ledger:
+        yield paths, profile, sha, ledger
 
 
 def rank_key(sign: float) -> Callable[[FinalEntry], tuple[float, float, str]]:
@@ -118,7 +123,22 @@ def final(
     data_root: Path | None = None,
     configs_root: Path | None = None,
 ) -> FinalResult:
-    paths, profile, profile_sha, ledger = _open(dataset, data_root, configs_root)
+    with _open(dataset, data_root, configs_root, "submit.final") as (paths, profile, sha, ledger):
+        return _final_locked(paths, profile, sha, ledger, slots, dry_run, data_root, configs_root)
+
+
+def _final_locked(
+    paths: DatasetPaths,
+    profile: PlatformProfile,
+    profile_sha: str,
+    ledger: SubmissionLedger,
+    slots: int | None,
+    dry_run: bool,
+    data_root: Path | None,
+    configs_root: Path | None,
+) -> FinalResult:
+    """``final``'s body, inside the ledger's transaction (spec 2026-09-28 §4.2); ``--dry-run``
+    takes the lock too."""
     assert_unlocked(ledger)
     if slots is not None and slots < 1:
         raise ValidationFailed(f"slots: must be >= 1, got {slots}", fields={"slots": slots})
@@ -214,19 +234,19 @@ def final(
 def lock(
     dataset: str, reason: str, *, data_root: Path | None = None, configs_root: Path | None = None
 ) -> LedgerRow:
-    _, _, _, ledger = _open(dataset, data_root, configs_root)
-    assert_unlocked(ledger)
-    row = LedgerRow(event="lock", ts=stamp(), reason=reason)
-    ledger.append(row)
-    return row
+    with _open(dataset, data_root, configs_root, "submit.lock") as (_, _, _, ledger):
+        assert_unlocked(ledger)
+        row = LedgerRow(event="lock", ts=stamp(), reason=reason)
+        ledger.append(row)
+        return row
 
 
 def unlock(
     dataset: str, reason: str, *, data_root: Path | None = None, configs_root: Path | None = None
 ) -> LedgerRow:
-    _, _, _, ledger = _open(dataset, data_root, configs_root)
-    if ledger.lock_state() is None:
-        raise ValidationFailed("not_locked: nothing to unlock")
-    row = LedgerRow(event="unlock", ts=stamp(), reason=reason)
-    ledger.append(row)
-    return row
+    with _open(dataset, data_root, configs_root, "submit.unlock") as (_, _, _, ledger):
+        if ledger.lock_state() is None:
+            raise ValidationFailed("not_locked: nothing to unlock")
+        row = LedgerRow(event="unlock", ts=stamp(), reason=reason)
+        ledger.append(row)
+        return row

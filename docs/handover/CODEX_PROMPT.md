@@ -24,7 +24,7 @@
 
 ## 目前的開放待辦（依價值排序；每項都在對應後記有裁決脈絡）
 
-1. **稽核 Wave 1c：程式碼快照與授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 目前只記 `git.commit` / `dirty`，要把訓練程式的快照與授權邊界做成產物。這是 `1.0.0` 前最後一個 wave。
+1. **稽核 Wave 1c：程式碼快照與授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 從 0.11.0 起記下工作樹狀態與追蹤檔的 patch（VCP-041），但訓練程式的快照與授權邊界還沒有做成產物。這是 `1.0.0` 前最後一個 wave。
 2. **PostgreSQL adaptive policy v2**（Plan 12 後記 §3-6、§5、§7）：selector 的信心帶改為相對預估差距或分層 RMSE；需重跑 calibration → six-method → held-out → real；v1 的 policy 與五份證據不改。
 3. **full rebuild 後的 dead tuples**（§3-7）：是否在 rebuild 收尾 `VACUUM`，或只寫進操作指南。
 4. **EXPLAIN 覆蓋 `status` / `impact` 查詢計畫**（§3-4）；**Linux host 的 live integration record**（§3-3）；**1M 規模**要 ≥128 GB 的機器。
@@ -32,7 +32,7 @@
 
 ## 完成的定義
 
-- 全套測試綠、覆蓋率 ≥ 80%（現在 94.85%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
+- 全套測試綠、覆蓋率 ≥ 80%（現在 95.27%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
 - 每個 CLI 命令仍以 VERDICT 收尾、exit code 對、`--json` 可解析；沒有任何憑證進 repo / 台帳 / log。
 - 後記、spec 補充決定、`docs/reference/cli.md`、AGENTS.md / CLAUDE.md、對應 skill 已更新；PR 合併、需要時 tag 已 push。
 

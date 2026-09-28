@@ -409,6 +409,8 @@ def sync_cmd(
             "foreign": res.foreign,
             "refreshed": res.refreshed,
             "unconfirmed": len(res.unconfirmed),
+            "bound": res.bound,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
         status: Status = "WARN" if res.foreign or res.unconfirmed else "OK"
@@ -416,6 +418,7 @@ def sync_cmd(
             "matched": res.matched,
             "unconfirmed": res.unconfirmed,
             "refreshed": res.refreshed,
+            "bound": res.bound,
         }
         return status, fields, payload, human
 

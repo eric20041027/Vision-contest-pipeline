@@ -260,3 +260,32 @@ def test_a_bad_whole_row_still_fails_a_reader(tmp_path):
         f.write('{"event": "lock", "ts": "x"}\n')
     with pytest.raises(ValidationFailed, match="s.jsonl:2"):
         SubmissionLedger(path, complete_only=True)
+
+
+def test_latest_score_is_by_platform_time_and_a_manual_score_counts_as_oldest(tmp_path):
+    """spec 2026-09-28 §4.6: not file order -- a later sync may append an older upload's score."""
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(_staged("S1"))
+    led.append(_scored("S1", "k2", T2))
+    led.append(_scored("S1", "k1", T1))  # appended later, happened earlier
+    assert led.latest_score("S1").platform_ref == "k2"
+    manual = LedgerRow(event="scored", ts=T2, submission_id="S1", source="manual", public=0.1)
+    led.append(manual)
+    assert led.latest_score("S1").platform_ref == "k2"  # no at: older than any platform time
+    led.append(_scored("S1", "k2", T2).model_copy(update={"public": 0.6}))
+    assert led.latest_score("S1").public == 0.6  # the same moment, a later row: the correction
+    only_manual = SubmissionLedger(tmp_path / "m.jsonl")
+    for ts, public in ((T0, 0.1), (T1, 0.2)):
+        only_manual.append(
+            LedgerRow(event="scored", ts=ts, submission_id="S2", source="manual", public=public)
+        )
+    assert only_manual.latest_score("S2").public == 0.2
+
+
+def test_score_for_ref_is_the_newest_row_of_that_entry(tmp_path):
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(_scored("S1", "k1", T1))
+    led.append(_scored("S1", "k2", T2))
+    led.append(_scored("S1", "k1", T1).model_copy(update={"public": 0.6}))
+    assert led.score_for_ref("S1", "k1").public == 0.6
+    assert led.score_for_ref("S1", "k3") is None and led.score_for_ref("S2", "k1") is None

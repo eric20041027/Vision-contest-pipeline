@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from vcp.core.errors import ValidationFailed
@@ -550,3 +553,44 @@ def make_label_set(
         configs_root=roots.configs,
     )
     return create_label_set(spec).summary
+
+
+GIT_CONFIG = (
+    "-c",
+    "user.name=vcp-test",
+    "-c",
+    "user.email=vcp-test@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "init.defaultBranch=main",
+)
+
+
+def git(repo: Path, *args: str) -> str:
+    """git in ``repo`` with a throwaway identity and none of the machine's global surprises
+    (autocrlf, signing); commits pass ``--no-verify`` at the call site. Skips without git."""
+    exe = shutil.which("git")
+    if exe is None:
+        pytest.skip("git is not installed")
+    proc = subprocess.run(
+        [exe, *GIT_CONFIG, "-C", str(repo), *args], capture_output=True, check=True
+    )
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
+def git_repo(path: Path, files: dict[str, bytes] | None = None) -> Path:
+    """A repository at ``path`` whose one commit holds ``files`` (default: ``train.py``). Its own
+    config pins ``core.autocrlf=false``, so vcp's git calls see the bytes the test wrote."""
+    path.mkdir(parents=True, exist_ok=True)
+    git(path, "init", "-q")
+    git(path, "config", "core.autocrlf", "false")
+    for name, data in (files or {"train.py": b"print('v1')\n"}).items():
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "--no-verify", "-m", "init")
+    return path

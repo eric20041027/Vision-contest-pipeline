@@ -44,31 +44,49 @@ def _note(text):
     return LedgerRow(event="note", ts=STAMP, text=text)
 
 
+def _adopted_empty(paths):
+    """What ``vcp submit ledger adopt`` leaves when there was no history: an empty shared
+    ledger."""
+    shared_ledger(paths).parent.mkdir(parents=True, exist_ok=True)
+    shared_ledger(paths).write_bytes(b"")
+
+
 def test_configs_keeps_the_ledger_in_git_and_shared_puts_it_in_the_data_root(roots):
     paths = _paths(roots)
     assert locate(paths, _profile()) == roots.configs / "datasets" / "t" / "submissions.jsonl"
-    assert locate(paths, _profile("shared")) == roots.data / "submit" / "t" / "submissions.jsonl"
     assert shared_ledger(paths) == roots.data / "submit" / "t" / "submissions.jsonl"
     assert shared_ledgers(roots.data) == []
     other = _paths(roots, "u")
     SubmissionLedger(shared_ledger(paths)).append(_note("x"))
     SubmissionLedger(shared_ledger(other)).append(_note("y"))
+    assert locate(paths, _profile("shared")) == roots.data / "submit" / "t" / "submissions.jsonl"
     assert shared_ledgers(roots.data) == [shared_ledger(paths), shared_ledger(other)]
 
 
-def test_shared_before_adopt_is_refused_while_the_configs_ledger_has_rows(roots):
+@pytest.mark.parametrize("configs", ["missing", "blank", "rows"])
+def test_shared_before_adopt_is_refused_whatever_the_configs_ledger_holds(roots, configs):
+    """spec 2026-09-28 §4.1 (final-review amendment): only adopt creates the shared ledger. A
+    checkout cannot see its siblings' configs ledgers, so an empty one of its own is no licence
+    to start the shared ledger -- that would lock their history out of adopt for good."""
     paths = _paths(roots)
-    paths.submissions_log.parent.mkdir(parents=True)
-    paths.submissions_log.write_bytes(b"\n\n")  # blank lines are no rows: start fresh
-    assert locate(paths, _profile("shared")) == shared_ledger(paths)
-    SubmissionLedger(paths.submissions_log).append(_note("history"))
+    if configs != "missing":
+        paths.submissions_log.parent.mkdir(parents=True)
+        paths.submissions_log.write_bytes(b"\n\n")
+    if configs == "rows":
+        SubmissionLedger(paths.submissions_log).append(_note("history"))
+    shared_ledger(paths).mkdir(parents=True)  # a directory in its place is not a ledger either
     with pytest.raises(ValidationFailed, match="not_adopted: .*ledger adopt --dataset t") as ei:
         locate(paths, _profile("shared"))
-    assert ei.value.fields == {"ledger": "shared"}
+    assert "does not exist yet" in str(ei.value) and ei.value.fields == {"ledger": "shared"}
     with pytest.raises(ValidationFailed, match="not_adopted"):
         read_only(paths, _profile("shared"))
-    SubmissionLedger(shared_ledger(paths)).append(_note("adopted"))
+    shared_ledger(paths).rmdir()
+    with pytest.raises(ValidationFailed, match="not_adopted"):
+        locate(paths, _profile("shared"))
+    assert not shared_ledger(paths).exists()  # asking never creates it
+    _adopted_empty(paths)
     assert locate(paths, _profile("shared")) == shared_ledger(paths)
+    assert read_only(paths, _profile("shared")).rows == []
 
 
 def test_a_transaction_holds_the_ledgers_lock_and_reads_after_taking_it(roots, monkeypatch):
@@ -76,10 +94,12 @@ def test_a_transaction_holds_the_ledgers_lock_and_reads_after_taking_it(roots, m
     monkeypatch.setattr(lock, "RETRY_SECONDS", 0.05)
     paths = _paths(roots)
     profile = _profile("shared")
+    _adopted_empty(paths)
     with transaction(paths, profile, command="submit.lock") as ledger:
         assert ledger.path == shared_ledger(paths) and ledger.rows == []
         ledger.append(_note("mine"))
-        with pytest.raises(VcpError, match=r"locked: .*held by submit\.lock \(pid "):
+        # the lock is held for the whole body: this process asking again is refused at once
+        with pytest.raises(VcpError, match=r"locked: .* is already held by this process"):
             with transaction(paths, profile, command="submit.unlock"):
                 pass
     with transaction(paths, profile, command="submit.unlock") as ledger:

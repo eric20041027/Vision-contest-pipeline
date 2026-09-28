@@ -1,6 +1,6 @@
 """``vcp.core.lock`` (spec 2026-09-28 §3.3, §4.2): one exclusive lock per ledger, between
 processes. A waiter gives up after the wait and names the holder; the operating system drops a
-dead holder's lock."""
+dead holder's lock; a process that asks again for a lock it holds is refused at once."""
 
 import hashlib
 import os
@@ -25,6 +25,22 @@ with file_lock(Path(sys.argv[1]), command="test.holder", label=sys.argv[2]):
     sys.stdin.readline()
 """
 
+# Asks for the lock named by argv[1] with a wait of a fraction of a second, and prints the
+# status and the message of the refusal (or "got it").
+WAITER = """
+import sys
+from pathlib import Path
+from vcp.core import lock
+from vcp.core.errors import VcpError
+lock.WAIT_SECONDS, lock.RETRY_SECONDS = 0.3, 0.05
+try:
+    with lock.file_lock(Path(sys.argv[1]), command="submit.sync", label="the ledger"):
+        print("got it")
+except VcpError as e:
+    print(e.status)
+    print(e)
+"""
+
 
 @pytest.fixture
 def quick(monkeypatch):
@@ -45,6 +61,16 @@ def _hold(path):
     return proc, int(words[1])
 
 
+def _release(proc):
+    proc.stdin.write("\n")
+    proc.stdin.flush()
+    proc.wait(timeout=30)
+
+
+def _no_wait(seconds):
+    raise AssertionError(f"slept {seconds}s: a lock this process holds is refused at once")
+
+
 def test_the_lock_file_is_in_the_data_root_named_by_the_ledgers_path(tmp_path):
     data = tmp_path / "data"
     ledger = tmp_path / "configs" / "datasets" / "t" / "submissions.jsonl"
@@ -61,17 +87,19 @@ def test_the_lock_file_is_in_the_data_root_named_by_the_ledgers_path(tmp_path):
     assert not ledger.parent.exists()  # nothing beside the ledger: it may sit in a git tree
 
 
-def test_a_second_holder_waits_then_aborts_naming_the_first(tmp_path, quick):
+def test_a_second_holder_waits_then_aborts_naming_the_first(tmp_path):
+    """The second holder is another process: this one holds the lock, the child waits for it,
+    gives up and names who holds it."""
     path = tmp_path / "locks" / "x.lock"
     with file_lock(path, command="submit.upload", label="the ledger") as me:
         assert read_holder(path) == me and me.pid == os.getpid()
-        with pytest.raises(VcpError) as ei:
-            with file_lock(path, command="submit.sync", label="the ledger"):
-                pass
-    assert ei.value.status == "ABORT"
-    assert str(ei.value) == (
-        f"locked: the ledger held by submit.upload (pid {me.pid} on {me.host} since {me.since})"
-    )
+        out = subprocess.run(
+            [sys.executable, "-c", WAITER, str(path)], capture_output=True, text=True, timeout=60
+        )
+    assert out.stdout.splitlines() == [
+        "ABORT",
+        f"locked: the ledger held by submit.upload (pid {me.pid} on {me.host} since {me.since})",
+    ], out.stderr
     with file_lock(path, command="submit.sync", label="the ledger") as again:
         assert read_holder(path) == again
 
@@ -81,11 +109,39 @@ def test_the_wait_is_a_minute_in_half_second_steps(tmp_path, monkeypatch):
     slept: list[float] = []
     monkeypatch.setattr(lock.time, "sleep", slept.append)
     path = tmp_path / "x.lock"
-    with file_lock(path, command="a", label="l"):
-        with pytest.raises(VcpError, match="locked: l held by a "):
+    proc, pid = _hold(path)
+    try:
+        with pytest.raises(VcpError, match=rf"locked: l held by test\.holder \(pid {pid} on "):
             with file_lock(path, command="b", label="l"):
                 pass
+    finally:
+        _release(proc)
     assert slept == [0.5] * 120
+
+
+def test_a_lock_this_process_holds_is_refused_at_once(tmp_path, monkeypatch):
+    """Recommendation 1 of the final review: a second ``with`` on a lock this process already
+    holds can never succeed, so it is refused without the minute's wait -- however the path is
+    spelled -- and the lock is free again once the first ``with`` ends, even by an exception."""
+    monkeypatch.setattr(lock.time, "sleep", _no_wait)
+    path = tmp_path / "locks" / "x.lock"
+    spellings = [path, path.parent / ".." / "locks" / "x.lock"]
+    if sys.platform == "win32":
+        spellings.append(Path(str(path).upper()))
+    with file_lock(path, command="submit.upload", label="the ledger"):
+        for spelled in spellings:
+            with pytest.raises(VcpError) as ei:
+                with file_lock(spelled, command="submit.sync", label="the ledger"):
+                    pass
+            assert ei.value.status == "ABORT"
+            assert str(ei.value) == (
+                "locked: the ledger is already held by this process (submit.sync)"
+            )
+    with pytest.raises(RuntimeError, match="boom"):
+        with file_lock(path, command="submit.stage", label="the ledger"):
+            raise RuntimeError("boom")
+    with file_lock(path, command="submit.sync", label="the ledger") as again:
+        assert read_holder(path) == again
 
 
 def test_a_holder_in_another_process_blocks_until_it_is_killed(tmp_path, monkeypatch, quick):

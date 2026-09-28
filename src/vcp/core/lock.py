@@ -9,7 +9,10 @@ can). That line only feeds the ``locked:`` message: the byte-range lock is the l
 
 No clock is read to time the wait: it is ``WAIT_SECONDS / RETRY_SECONDS`` tries with a sleep
 between them, both read at call time so a test can shrink them. A lock file is never deleted:
-removing one while it is held would let a second process lock a new file of the same name."""
+removing one while it is held would let a second process lock a new file of the same name.
+
+The lock is not re-entrant. A process that asks again for a lock it already holds would only
+wait out the minute against itself, so it is refused at once (``_HELD``)."""
 
 from __future__ import annotations
 
@@ -32,6 +35,9 @@ from vcp.core.time import stamp
 WAIT_SECONDS = 60.0
 RETRY_SECONDS = 0.5
 LOCKS_DIR = "locks"
+
+# The lock files this process holds, resolved and case-folded the platform's way.
+_HELD: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -91,9 +97,13 @@ def _write_holder(fd: int, holder: Holder) -> None:
 def file_lock(path: Path, *, command: str, label: str) -> Iterator[Holder]:
     """Hold ``path`` exclusively for the ``with`` block. Waits up to ``WAIT_SECONDS``, trying
     every ``RETRY_SECONDS``; then ``VcpError`` (ABORT) ``locked: <label> held by <command> (pid
-    <n> on <host> since <stamp>)``."""
+    <n> on <host> since <stamp>)``. A lock this process already holds is ``locked: <label> is
+    already held by this process (<command>)`` at once, without the wait."""
     lock_file = Path(path)
     lock_file.parent.mkdir(parents=True, exist_ok=True)
+    key = os.path.normcase(str(lock_file.resolve()))
+    if key in _HELD:
+        raise VcpError(f"locked: {label} is already held by this process ({command})")
     fd = os.open(lock_file, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
     try:
         tries = max(1, math.ceil(WAIT_SECONDS / RETRY_SECONDS))
@@ -105,9 +115,11 @@ def file_lock(path: Path, *, command: str, label: str) -> Iterator[Holder]:
             time.sleep(RETRY_SECONDS)
         me = Holder(pid=os.getpid(), host=socket.gethostname(), command=command, since=stamp())
         try:
+            _HELD.add(key)
             _write_holder(fd, me)
             yield me
         finally:
+            _HELD.discard(key)
             _unlock(fd)
     finally:
         os.close(fd)

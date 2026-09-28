@@ -145,13 +145,20 @@ class SubmissionLedger:
         """Every upload the platform saw -- ours (``uploaded``) and others' (``foreign``) -- in
         platform-time order. A foreign upload may have multiple append-only snapshots while its
         platform status changes; only its newest snapshot is an arrival, and a foreign ref that
-        is one of our own uploads is none (``_ours``). Stamps share one format, so string order
-        is time order; at the same stamp our uploads come before others', each in ledger
-        order."""
+        is one of our own uploads is none (``_ours``). Two ``uploaded`` rows carrying one ref
+        are one platform entry (adopt can merge a ``record --platform-ref`` from one checkout
+        with another's sync binding): the first in ledger order is its arrival. Stamps share one
+        format, so string order is time order; at the same stamp our uploads come before
+        others', each in ledger order."""
         latest_foreign: dict[str, LedgerRow] = {}
         uploads: list[LedgerRow] = []
+        upload_refs: set[str] = set()
         for row in self.rows:
             if row.event == "uploaded":
+                if row.platform_ref:
+                    if row.platform_ref in upload_refs:
+                        continue
+                    upload_refs.add(row.platform_ref)
                 uploads.append(row)
             elif row.event == "foreign" and row.platform_ref:
                 latest_foreign[row.platform_ref] = row

@@ -34,7 +34,7 @@ from vcp.submit.gate import admit
 from vcp.submit.guards import assert_before_deadline, assert_unlocked
 from vcp.submit.kernel import check_weights
 from vcp.submit.ledger import SubmissionLedger
-from vcp.submit.location import transaction
+from vcp.submit.location import LEDGER_NAME, transaction
 from vcp.submit.pairing import UNCHECKED, is_fusion, verify_pairing, verify_weights
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import (
@@ -193,6 +193,24 @@ def stage(spec: StageSpec) -> StageResult:
         return _stage_locked(spec, paths, profile, profile_sha, ledger)
 
 
+def _check_id(submission_id: str) -> None:
+    """A submission id names a directory under ``submit/<test>/``: path-safe, short enough for
+    sync to match, and never the shared ledger's name, which lives in that directory too (spec
+    2026-09-28 §3.1) -- in any case, and with any suffix (backup keeps ``.bak-*`` copies)."""
+    validate_name(submission_id)
+    if len(submission_id) > MAX_ID_LENGTH:
+        raise ValidationFailed(
+            f"submission id {submission_id!r} is longer than {MAX_ID_LENGTH} characters "
+            "(sync matches ids inside platform descriptions, and redaction hides anything longer)"
+        )
+    folded = submission_id.casefold()
+    if folded == LEDGER_NAME or folded.startswith(f"{LEDGER_NAME}."):
+        raise ValidationFailed(
+            f"invalid: submission id {submission_id!r} is reserved: the shared ledger "
+            f"submit/<test>/{LEDGER_NAME} lives beside the submission directories"
+        )
+
+
 def _stage_locked(
     spec: StageSpec,
     paths: DatasetPaths,
@@ -204,12 +222,7 @@ def _stage_locked(
     ledger was read after its lock was taken, and the row lands before the lock is let go."""
     assert_unlocked(ledger)
     assert_before_deadline(profile, utc_now())
-    validate_name(spec.submission_id)
-    if len(spec.submission_id) > MAX_ID_LENGTH:
-        raise ValidationFailed(
-            f"submission id {spec.submission_id!r} is longer than {MAX_ID_LENGTH} characters "
-            "(sync matches ids inside platform descriptions, and redaction hides anything longer)"
-        )
+    _check_id(spec.submission_id)
     if paths.submission_dir(spec.submission_id).exists() or ledger.staged(spec.submission_id):
         raise ValidationFailed(
             f"exists: submission {spec.submission_id!r} is already staged",

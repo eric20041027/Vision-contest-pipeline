@@ -139,37 +139,55 @@ def upload(
 ) -> UploadOutcome:
     """One upload, one transaction (spec 2026-09-28 §4.2): every check that needs no platform,
     then the platform's list read into the ledger, the quota, the re-upload guard, the upload
-    and its row."""
+    and its row. The rows the pre-sync wrote stay even when a later step refuses, so that
+    refusal carries ``sync=`` and ``bound=`` like the upload's own VERDICT would."""
     reason = _force_reason(force)
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, profile_sha = load_profile(paths)
     with transaction(paths, profile, command="submit.upload") as ledger:
         p = _prepare(paths, profile, profile_sha, ledger, submission_id, uploading=True)
         synced = None if no_sync else _pre_sync(p, runner)
-        assert_quota(quota_state(ledger, profile, utc_now()))
-        if reason is None:
-            assert_not_uploaded(ledger, submission_id)
-        msg = f"{submission_id} {message}".strip() if message else submission_id
-        result = get_platform(profile.platform).upload(p.staged, p.artifact, msg, profile, runner)
-        result = _unclaimed(result, ledger)
-        row = LedgerRow(
-            event="uploaded",
-            ts=stamp(),
-            submission_id=submission_id,
-            at=stamp(utc_now()),
-            source="vcp",
-            platform_ref=result.platform_ref,
-            message=msg,
-            confirmed=result.confirmed,
-            sha256=p.staged.artifact.sha256,
-            profile_sha256=profile_sha,
-            reason=reason,
-        )
-        ledger.append(row)
-        quota = quota_state(ledger, profile, parse_stamp(str(row.at)))
-    if synced is None:
-        return UploadOutcome(row, result, quota, sync="skipped")
-    return UploadOutcome(row, result, quota, sync="ok", bound=synced.bound)
+        state: SyncState = "skipped" if synced is None else "ok"
+        bound = 0 if synced is None else synced.bound
+        try:
+            row, result, quota = _send(p, submission_id, message, reason, runner)
+        except VcpError as e:
+            e.fields.setdefault("sync", state)
+            e.fields.setdefault("bound", bound)
+            raise
+    return UploadOutcome(row, result, quota, sync=state, bound=bound)
+
+
+def _send(
+    p: Prepared,
+    submission_id: str,
+    message: str | None,
+    reason: str | None,
+    runner: Runner | None,
+) -> tuple[LedgerRow, UploadResult, QuotaState | None]:
+    """What follows the pre-sync, on the ledger it just wrote: the quota, the re-upload guard
+    (unless ``--force`` gave ``reason``), the upload and its row."""
+    assert_quota(quota_state(p.ledger, p.profile, utc_now()))
+    if reason is None:
+        assert_not_uploaded(p.ledger, submission_id)
+    msg = f"{submission_id} {message}".strip() if message else submission_id
+    result = get_platform(p.profile.platform).upload(p.staged, p.artifact, msg, p.profile, runner)
+    result = _unclaimed(result, p.ledger)
+    row = LedgerRow(
+        event="uploaded",
+        ts=stamp(),
+        submission_id=submission_id,
+        at=stamp(utc_now()),
+        source="vcp",
+        platform_ref=result.platform_ref,
+        message=msg,
+        confirmed=result.confirmed,
+        sha256=p.staged.artifact.sha256,
+        profile_sha256=p.profile_sha,
+        reason=reason,
+    )
+    p.ledger.append(row)
+    return row, result, quota_state(p.ledger, p.profile, parse_stamp(str(row.at)))
 
 
 @dataclass(frozen=True)
@@ -200,6 +218,19 @@ def record(
         return _record_locked(p, submission_id, at_text, tz, platform_ref, message)
 
 
+def _assert_new_ref(ledger: SubmissionLedger, platform_ref: str | None) -> None:
+    """A platform ref an ``uploaded`` row already carries -- any id, any source -- is that
+    upload, recorded already: a second row would count one platform entry twice (final review
+    M3). ``exists:``, and nothing is written."""
+    if not platform_ref:
+        return
+    for r in ledger.of("uploaded"):
+        if r.platform_ref == platform_ref:
+            raise ValidationFailed(
+                f"exists: platform ref {platform_ref} is already recorded for {r.submission_id}"
+            )
+
+
 def _record_locked(
     p: Prepared,
     submission_id: str,
@@ -222,6 +253,7 @@ def _record_locked(
         )
     assert_unlocked(p.ledger, submission_id=submission_id)
     assert_before_deadline(p.profile, at)
+    _assert_new_ref(p.ledger, platform_ref)
     warnings: list[str] = []
     state = quota_state(p.ledger, p.profile, at)
     if state is not None and state.used >= state.per_day:

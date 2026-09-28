@@ -1,10 +1,12 @@
 """``vcp submit ledger adopt`` (spec 2026-09-28 §4.1): the shared ledger's first content, merged
-once from checkouts' configs ledgers inside the shared ledger's lock. The sources are left as
-they are; vcp stops reading them once ``ledger: shared`` is set, and whether git keeps them is a
+once from checkouts' configs ledgers inside the shared ledger's lock -- and the only way the
+shared ledger comes to exist, empty when there is no history. The sources are left as they
+are; vcp stops reading them once ``ledger: shared`` is set, and whether git keeps them is a
 person's call."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,10 +30,11 @@ class AdoptResult:
 
 def merge_ledgers(sources: list[list[LedgerRow]]) -> tuple[list[LedgerRow], int]:
     """Every source's rows; a row identical in every field is kept once (checkouts share the
-    history git gave them). Rows are concatenated in ``--from`` order, then stably sorted by
-    ``ts``: two rows with equal ``ts`` therefore keep source order first, and the order within a
-    source second. Two different ``staged`` rows of one id are ``ledger_conflict:``. Returns
-    ``(rows, duplicates dropped)``."""
+    history git gave them). Rows are concatenated in source order -- this checkout's configs
+    ledger first, then ``--from`` order -- then stably sorted by ``ts``: two rows with equal
+    ``ts`` therefore keep source order first, and the order within a source second. Two
+    different ``staged`` rows of one id are ``ledger_conflict:``. Returns ``(rows, duplicates
+    dropped)``."""
     seen: set[str] = set()
     merged: list[LedgerRow] = []
     for rows in sources:
@@ -61,6 +64,32 @@ def _source(path: Path) -> list[LedgerRow]:
     return SubmissionLedger(path).rows
 
 
+def _file_key(path: Path) -> str:
+    """One key per file however its path is spelled -- the key its lock is named by."""
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def _source_paths(paths: DatasetPaths, froms: list[Path], target: Path) -> list[Path]:
+    """This checkout's configs ledger when it is a file, then each ``--from`` in the order given,
+    each file once. Always this checkout's own: leaving it out would lose its history for good,
+    and content dedup makes naming it again harmless. A source that is the shared ledger itself
+    is ``invalid:`` before any lock is taken -- adopt holds that lock, so asking for it again
+    could only fail."""
+    candidates = [paths.submissions_log] if paths.submissions_log.is_file() else []
+    candidates += [Path(p) for p in froms]
+    target_key = _file_key(target)
+    seen: set[str] = set()
+    out: list[Path] = []
+    for p in candidates:
+        key = _file_key(p)
+        if key == target_key:
+            raise ValidationFailed(f"invalid: --from {p} is the shared ledger itself")
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
 def adopt(
     dataset: str,
     *,
@@ -68,9 +97,11 @@ def adopt(
     data_root: Path | None = None,
     configs_root: Path | None = None,
 ) -> AdoptResult:
-    """Every check before the one write: ``not_shared:``, ``exists:``, sources that parse, no
-    ``ledger_conflict:``; then ``.tmp`` and one rename (``write_once_text``). The merged ``ts``
-    never runs backwards, so ``backup verify`` has nothing to say about it.
+    """Every check before the one write: ``not_shared:``, a source that is the target itself
+    (``invalid:``), ``exists:``, sources that parse, no ``ledger_conflict:``; then ``.tmp`` and
+    one rename (``write_once_text``) -- an empty file when no source has a row, or there is no
+    source at all. The merged ``ts`` never runs backwards, so ``backup verify`` has nothing to
+    say about it.
 
     Each source is read under its own lock too -- ``lock_path(data_root, "submissions", p)``,
     the very file a sibling checkout's own transaction on that source computes (the hash is of
@@ -89,7 +120,7 @@ def adopt(
             fields={"ledger": profile.ledger},
         )
     target = shared_ledger(paths)
-    froms = [Path(p) for p in sources] if sources else [paths.submissions_log]
+    froms = _source_paths(paths, list(sources or []), target)
     with ledger_lock(paths, target, command="submit.ledger.adopt"):
         if target.exists():
             raise ValidationFailed(

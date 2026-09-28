@@ -4,8 +4,10 @@ none of them builds the ledger's path itself.
 
 ``configs`` (the default) keeps ``configs/datasets/<test>/submissions.jsonl`` in git, one per
 checkout. ``shared`` keeps ``<data_root>/submit/<test>/submissions.jsonl`` beside the submission
-directories, one for every checkout that uses the data root. Either way a write command takes
-the ledger's lock and only then reads the ledger."""
+directories, one for every checkout that uses the data root. Only ``vcp submit ledger adopt``
+creates the shared ledger (§4.1): until it has run, every command that asks for it is
+``not_adopted:``. Either way a write command takes the ledger's lock and only then reads the
+ledger."""
 
 from __future__ import annotations
 
@@ -37,22 +39,21 @@ def shared_ledgers(data_root: Path) -> list[Path]:
     return sorted(p for p in root.glob(f"*/{LEDGER_NAME}") if p.is_file())
 
 
-def _has_rows(path: Path) -> bool:
-    return path.is_file() and any(line.strip() for line in path.read_bytes().split(b"\n"))
-
-
 def locate(paths: DatasetPaths, profile: PlatformProfile) -> Path:
-    """The ledger ``profile`` names. A ``shared`` ledger that does not exist yet while the
-    configs ledger still has rows is ``not_adopted:``: starting an empty one would hide that
-    history from the quota and the guards (spec §4.1). When neither has rows, start fresh."""
+    """The ledger ``profile`` names. A ``shared`` ledger that is not a file yet is
+    ``not_adopted:``, whatever this checkout's configs ledger holds (spec §4.1): a checkout
+    cannot see its siblings' configs ledgers, so starting the shared ledger here would hide
+    their history from the quota and the guards, and adopt -- one shot -- could never merge it
+    afterwards."""
     if profile.ledger == "configs":
         return paths.submissions_log
     shared = shared_ledger(paths)
-    if not shared.exists() and _has_rows(paths.submissions_log):
+    if not shared.is_file():
         raise ValidationFailed(
-            f"not_adopted: submit.yaml says ledger: shared, but {shared} does not exist while "
-            f"{paths.submissions_log} has rows; run `vcp submit ledger adopt --dataset "
-            f"{paths.name}` first",
+            f"not_adopted: submit.yaml says ledger: shared, but the shared ledger {shared} does "
+            f"not exist yet; run `vcp submit ledger adopt --dataset {paths.name}` once: it "
+            "merges this checkout's configs ledger and every --from ledger into it, or starts "
+            "an empty one",
             fields={"ledger": "shared"},
         )
     return shared

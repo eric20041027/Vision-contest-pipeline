@@ -62,8 +62,8 @@
 
 所有命令都在 `--cwd` 所在 repo 的最上層目錄執行，也就是 `git -C <cwd> rev-parse --show-toplevel` 的結果。這樣可以避開 `diff.relative` 設定和子目錄的相對路徑。
 
-- 狀態：`git status --porcelain=v1 -z --untracked-files=normal`
-- diff：`git -c core.quotepath=false diff HEAD --binary --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/`
+- 狀態：`git status --porcelain=v1 -z --untracked-files=normal --ignore-submodules=untracked`
+- diff：`git -c core.quotepath=false diff HEAD --binary --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --submodule=short --ignore-submodules=untracked --`
 
 解析規則：
 
@@ -72,6 +72,9 @@
 - `-z` 格式裡，改名與複製的列後面多一個原路徑欄位，解析時略過它。
 - 明寫 `--untracked-files=normal`，讓使用者的 `status.showUntrackedFiles` 設定不會把未追蹤檔藏起來。
 - 明寫 `a/` / `b/` 前綴：使用者設了 `diff.noprefix` 或 `diff.mnemonicPrefix` 時，patch 仍能直接 `git apply`。`core.quotepath=false` 讓非 ASCII 檔名在不同機器上得到同一個 `diff_sha256`。
+- `--ignore-submodules=untracked`：submodule 裡的未追蹤檔不算改動（決定 1）；submodule 的指標或它追蹤檔的改動仍算。
+- `--submodule=short` 與結尾的 `--`：使用者的 `diff.submodule` 不會讓 patch 變成無法套用的摘要，頂層有叫 `HEAD` 的檔也不會讓命令失敗。
+- vcp 的 git 子程序不繼承 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` 等本地變數，並設 `GIT_OPTIONAL_LOCKS=0`：只看 `--cwd` 所在的 repo，也不改寫它的 index。
 
 ### 3.3 patch 檔
 
@@ -89,7 +92,7 @@
 
 只在給了 `--require-clean` 時做。和其他預檢一起，在第一次寫入之前：
 
-- 找不到 git、`--cwd` 不在 repo 裡、或 git 命令失敗 → FAIL `not_found: git repository for --cwd <path>`。
+- 找不到 git、`--cwd` 不在 repo 裡、或 git 命令失敗 → FAIL `not_found: git repository for --cwd <path>`（括號裡附 git 的第一行錯誤）。
 - `modified > 0` → FAIL `dirty_tree: <n> tracked path(s) changed: <前 5 個路徑>`，帶欄位 `modified=<n>`。
 - 只有未追蹤檔 → 通過。
 
@@ -106,7 +109,7 @@
 
 位置在子程序結束、`finished` 事件之後，與 `evidence_changed` 同一處。
 
-1. 重算 `commit` 與 `diff_sha256`，規則同 §3.2，這次不寫 patch。
+1. 重算 `commit` 與 `diff_sha256`，規則同 §3.2，這次不寫 patch；diff 為空時當作沒有 diff。
 2. 只比追蹤檔這一側：未追蹤檔不比，因為訓練常把輸出寫進 repo 裡的新目錄，這和決定 1 一致。
 3. 任一項和開始時不同 → `train.log.jsonl` 寫一筆 `note` 事件，並 WARN `git_changed=`：
    - `key="git_changed"`；
@@ -126,6 +129,7 @@
 - `modified > 0` → WARN。
 - `git_changed=<commit,diff 的子集，或 unavailable>`：訓練中途有變時才出現，並 WARN。
 - `dirty_tree:` FAIL 時帶 `modified=`。
+- 預檢 FAIL 的 VERDICT 帶 `reason=`、命令本身的欄位（`run=`、`dataset=`、`plan=`）與錯誤自己的欄位；`--require-clean` 的錯誤欄位是 `modified=` 加 `commit=`（`not_found:` 時只有 `commit=none`）。
 
 ## 6. 錯誤與判決字彙
 

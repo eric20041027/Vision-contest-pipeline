@@ -19,7 +19,7 @@ from vcp.backup.schema import ROLES, TIER_OF, BackupRow, FileEntry, Manifest, Re
 from vcp.core.build import build_string
 from vcp.core.config import load_yaml_model
 from vcp.core.errors import IntegrityError, ValidationFailed
-from vcp.core.hashing import sha256_file
+from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import (
     DatasetPaths,
     artifact_dir,
@@ -35,7 +35,8 @@ from vcp.measure.ledger import JUDGEMENTS_LEDGER, READINGS_LEDGER, SIGMA_LEDGER
 from vcp.measure.prereg import list_preregs, load_prereg, prereg_path
 from vcp.measure.runs import load_run, run_dir
 from vcp.measure.schema import RunCard
-from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.ledger import complete_length
+from vcp.submit.location import locate, read_only
 from vcp.submit.profile import load_profile
 from vcp.submit.stage import load_staged, stage_json
 from vcp.train.records import events_path, has_record, train_dir, train_yaml
@@ -116,7 +117,12 @@ class Collector:
                 entry.for_.append(conclusion)
             return
         present = path.is_file()
-        if present:
+        if present and role == "submissions_log":
+            # spec 2026-09-28 §4.2: backup takes no lock, so the ledger may be mid-row; the
+            # manifest describes its whole rows only, and push sends exactly those bytes
+            size = complete_length(path)
+            sha256 = sha256_prefix(path, size)
+        elif present:
             sha256 = sha256_file(path)
             size = path.stat().st_size
         elif sha256 is None:
@@ -280,8 +286,9 @@ class Collector:
             )
         staged = load_staged(tpaths, submission_id)
         self.add(tpaths.submit_yaml, "submit_profile", conclusion)
-        if tpaths.submissions_log.is_file():
-            self.add(tpaths.submissions_log, "submissions_log", conclusion)
+        ledger = locate(tpaths, profile)  # spec 2026-09-28 §3.1: where submit.yaml puts it
+        if ledger.is_file():
+            self.add(ledger, "submissions_log", conclusion)
         self.add(stage_json(tpaths, submission_id), "stage", conclusion)
         if staged.artifact.kind == "file":
             self.add(
@@ -322,9 +329,7 @@ class Collector:
         for pid in list_preregs(dpaths):
             self._try(f"judgement:{pid}", self.walk_judgement, dpaths, pid, conclusion)
         if dpaths.submit_yaml.is_file():
-            for sid in SubmissionLedger(dpaths.submissions_log).ids():
-                if stage_json(dpaths, sid).is_file():
-                    self._try(f"submission:{sid}", self.walk_submission, dpaths, sid, conclusion)
+            self._try("submissions", self._walk_submissions, dpaths, conclusion)
         self.dataset_basics(dpaths, None, conclusion)
         if dpaths.splits_dir.is_dir():
             for p in sorted(dpaths.splits_dir.glob("*.json")):
@@ -338,6 +343,15 @@ class Collector:
             self.add(dpaths.raw_manifest, "raw_manifest", conclusion)
         for p in sorted(logs_dir(self.data_root).glob("vcp-*.jsonl")):
             self.add(p, "logs", conclusion)
+
+    def _walk_submissions(self, dpaths: DatasetPaths, conclusion: str) -> None:
+        """Every staged id of the ledger submit.yaml names, read without its lock (spec
+        2026-09-28 §4.2). A profile that does not load or a shared ledger not adopted yet is
+        stepped over like any other missing evidence."""
+        profile, _ = load_profile(dpaths)
+        for sid in read_only(dpaths, profile).ids():
+            if stage_json(dpaths, sid).is_file():
+                self._try(f"submission:{sid}", self.walk_submission, dpaths, sid, conclusion)
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from vcp.data.source_audit import write_source_audit
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import ProvenanceIndex
+from vcp.submit.location import shared_ledger
 
 
 def _dataset(roots, name, samples):
@@ -424,3 +425,26 @@ def test_legacy_index_missing_gap_metadata_requires_rebuild(roots):
 
     index.rebuild(roots.data, roots.configs)
     assert index.verify(roots.data, roots.configs).ok is True
+
+
+def test_a_shared_submissions_ledger_is_a_checkpointed_ledger_as_well(roots):
+    """spec 2026-09-28 §3.1: the ledger ``ledger: shared`` puts in the data root gets the same
+    prefix guard as the configs root's ledgers."""
+    _versions(roots)
+    paths = DatasetPaths.resolve("idx-test", data_root=roots.data, configs_root=roots.configs)
+    ledger = shared_ledger(paths)
+    ledger.parent.mkdir(parents=True)
+    row = {"event": "note", "ts": "2026-09-28T00:00:00.000Z", "text": "x"}
+    ledger.write_bytes(json.dumps(row).encode("utf-8") + b"\n")
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index.rebuild(roots.data, roots.configs)
+    connection = sqlite3.connect(index.path)
+    try:
+        keys = {r[0] for r in connection.execute("SELECT source_path FROM ingest_checkpoints")}
+    finally:
+        connection.close()
+    assert "data/submit/idx-test/submissions.jsonl" in keys
+    raw = ledger.read_bytes()
+    ledger.write_bytes(b"X" + raw[1:])
+    with pytest.raises(IntegrityError, match="prefix_drift"):
+        index.verify(roots.data, roots.configs)

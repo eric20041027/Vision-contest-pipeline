@@ -35,6 +35,8 @@ from vcp.train.attach import attach as attach_cli_evidence
 from vcp.train.attach import moved, preflight
 from vcp.train.checkpoints import expand, register, resolve_final
 from vcp.train.env import snapshot, venv_python
+from vcp.train.gitstate import changed_since, require_clean
+from vcp.train.gitstate import warning as git_warning
 from vcp.train.records import (
     TRAIN_DIR,
     append_event,
@@ -49,6 +51,7 @@ from vcp.train.schema import (
     CheckpointRecord,
     ConfigRef,
     ExportRef,
+    GitInfo,
     TrainRecord,
 )
 from vcp.train.upload import Runner, merge_uploads, upload
@@ -82,6 +85,7 @@ class RunSpec(BaseModel):
     notes: str = ""
     evidence: list[str] = Field(default_factory=list)  # NAME=PATH (spec 2026-09-26 §5.2)
     labels: list[str] = Field(default_factory=list)  # label_set ids
+    require_clean: bool = False  # VCP-041: FAIL before the first write on tracked changes
     command: list[str]
     on_line: Callable[[str], None] | None = None
     rclone_runner: Runner | None = None
@@ -110,6 +114,8 @@ class RunResult(BaseModel):
     evidence: int = 0
     labels: str = "dataset"
     evidence_changed: list[str] = Field(default_factory=list)
+    git: GitInfo | None = None  # VCP-041: the attempt's start record (spec 2026-09-27 §3.1)
+    git_changed: list[str] = Field(default_factory=list)
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -495,6 +501,8 @@ def train_run(spec: RunSpec) -> RunResult:
         trained_on=tuple(trained_on),
     )
     evidence = preflight(data_root, scope, spec.evidence, spec.labels)
+    if spec.require_clean:
+        require_clean(cwd)  # VCP-041 (spec 2026-09-27 §4.1): still before the first write
     card, record = _existing(spec, data_root, dataset_card, trained_on, chash)
     created = card is None
     if card is None or record is None:
@@ -541,7 +549,8 @@ def train_run(spec: RunSpec) -> RunResult:
         data_root, spec.run_id, "started", n, command=spec.command, cwd=str(cwd), seed=spec.seed
     )
     # step 6: environment snapshot
-    snap = snapshot(python, cwd)
+    patch_rel = f"{TRAIN_DIR}/git.{n}.patch"
+    snap = snapshot(python, cwd, patch=(run_root / patch_rel, patch_rel))
     env_rel = f"{TRAIN_DIR}/env.{n}.json"
     with (run_root / env_rel).open("w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(snap.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n")
@@ -587,6 +596,20 @@ def train_run(spec: RunSpec) -> RunResult:
         append_event(
             data_root, spec.run_id, "note", n, key="evidence_changed", value=",".join(changed)
         )
+    # VCP-041 (spec 2026-09-27 §4.3): HEAD and the tracked diff again, after the command.
+    delta = changed_since(cwd, snap.git) if snap.git is not None else None
+    git_changed = list(delta.changed) if delta is not None else []
+    if delta is not None and git_changed:
+        append_event(
+            data_root,
+            spec.run_id,
+            "note",
+            n,
+            key="git_changed",
+            value=",".join(git_changed),
+            commit=delta.commit,
+            diff_sha256=delta.diff_sha256,
+        )
     # spec 7.1: the receipts the child bound to this attempt become the run's access record.
     # F5: merged by artifact_id rather than replaced outright -- train.yaml's refs first (in
     # their own order), then any ref already on the card (e.g. a manual `ingest --receipt`
@@ -614,6 +637,11 @@ def train_run(spec: RunSpec) -> RunResult:
         warnings.append("venv=inherited")
     if changed:
         warnings.append(f"evidence_changed={','.join(changed)}")
+    git_line = git_warning(snap.git) if snap.git is not None else None
+    if git_line is not None:
+        warnings.append(git_line)
+    if git_changed:
+        warnings.append(f"git_changed={','.join(git_changed)}")
     info = provenance(card, data_root=data_root, configs_root=configs_root)
     observed_beyond = sorted(set(info.observed) - set(trained_on))
     if observed_beyond:
@@ -642,4 +670,6 @@ def train_run(spec: RunSpec) -> RunResult:
         evidence=len(current(card.evidence)),
         labels=labels_field(card.evidence),
         evidence_changed=changed,
+        git=snap.git,
+        git_changed=git_changed,
     )

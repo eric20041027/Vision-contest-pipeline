@@ -202,7 +202,7 @@ def _dataset_card(local: Path, paths: DatasetPaths, add: Adder) -> None:
 def _submissions_log(local: Path, paths: DatasetPaths, add: Adder) -> None:
     name = local.parent.name
     tpaths = DatasetPaths.resolve(name, data_root=paths.data_root, configs_root=paths.configs_root)
-    for row in SubmissionLedger(local).of("staged"):
+    for row in SubmissionLedger(local, complete_only=True).of("staged"):
         sid = str(row.submission_id)
         sj = tpaths.submission_dir(sid) / "stage.json"
         if row.sha256 and sj.is_file():
@@ -250,12 +250,17 @@ def _check_consistency(manifest: Manifest, paths: DatasetPaths) -> list[Drift]:
 # --- layer 3: timestamps ---------------------------------------------------------------------
 
 
-def _ledger_stamps(local: Path, label: str, bad: list[str]) -> None:
+def _ledger_stamps(local: Path, label: str, bad: list[str], *, partial_tail: bool = False) -> None:
+    """``partial_tail``: a last line without its newline is a row still being written, not a
+    bad stamp -- only for the submissions ledger, whose writers hold a lock (spec 2026-09-28
+    §4.2); anywhere else a torn line stays a finding."""
     prev = None
     with local.open("r", encoding="utf-8") as f:
         for lineno, line in enumerate(f, start=1):
             if not line.strip():
                 continue
+            if partial_tail and not line.endswith("\n"):
+                break
             try:
                 cur = parse_stamp(json.loads(line)["ts"])
             except (ValueError, KeyError, TypeError):
@@ -298,7 +303,7 @@ def _check_stamps(manifest: Manifest, paths: DatasetPaths) -> list[str]:
         if not local.is_file():
             continue
         if e.role in LEDGER_ROLES:
-            _ledger_stamps(local, e.key, bad)
+            _ledger_stamps(local, e.key, bad, partial_tail=e.role == "submissions_log")
         elif e.role in CARD_ROLES:
             _walk_stamps(_load_doc(local), e.key, bad)
     if paths.backup_log.is_file():  # the audit's own ledger, never listed in a manifest

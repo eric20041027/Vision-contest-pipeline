@@ -893,7 +893,7 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 
 ### VCP-038：配額重複計入與多寫入者
 
-**狀態：第 1 段 v0.10.0 已修（#28）；第 2–4 段已實作，隨 0.12.0 發出（spec `2026-09-28-vcp-shared-ledger-design.md`）。** 台帳還不認得某一發時 `sync` 會記成 foreign，之後 id 認領同一個 ref 也不會抵銷，配額多算一發。`arrivals()` 現在排除其實是自己上傳的 foreign ref（`uploaded` 自帶 ref，或 `scored` 綁到 id 且與該 id 的一發上傳相差不到 10 分鐘，最近的先配）；`sync` 對新 ref 分數沒變也寫 `scored` 列，同檔重傳才綁得上。第 2–4 段：`submit.yaml` 的 `ledger: shared` 讓同一個 data root 的 worktree 共用一份台帳正本（`vcp submit ledger adopt` 一次合併舊台帳），每個寫入命令整段持有作業系統檔案鎖；`upload` 先同步平台列表再算配額；`sync` 把台帳沒有的平台發（PENDING 也算）綁成 `uploaded(source=platform)`，`scored` 依 ref 冪等，最新分數依平台時間。跨機器仍是各機一份台帳（不在範圍）。
+**狀態：第 1 段 v0.10.0 已修（#28）；第 2–4 段已實作，隨 0.12.0 發出（spec `2026-09-28-vcp-shared-ledger-design.md`）。** 台帳還不認得某一發時 `sync` 會記成 foreign，之後 id 認領同一個 ref 也不會抵銷，配額多算一發。`arrivals()` 現在排除其實是自己上傳的 foreign ref（`uploaded` 自帶 ref，或 `scored` 綁到 id 且與該 id 的一發上傳相差不到 10 分鐘，最近的先配）；`sync` 對新 ref 分數沒變也寫 `scored` 列，同檔重傳才綁得上。第 2–4 段：`submit.yaml` 的 `ledger: shared` 讓同一個 data root 的 worktree 共用一份台帳正本（只由 `vcp submit ledger adopt` 建立：一次合併舊台帳，沒有就建空的），每個寫入命令整段持有作業系統檔案鎖；`upload` 先同步平台列表再算配額；`sync` 把台帳沒有的平台發（PENDING 也算）綁成 `uploaded(source=platform)`，`scored` 依 ref 冪等，最新分數依平台時間。跨機器仍是各機一份台帳（不在範圍）。
 
 ### VCP-039：多折同名 checkpoint 無法上傳
 

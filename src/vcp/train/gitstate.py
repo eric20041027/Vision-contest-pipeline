@@ -24,7 +24,8 @@ PATH_LIMIT = 50  # paths kept per list; the counts stay exact
 PATCH_LIMIT = 10 * 1024 * 1024  # a larger diff keeps its sha256 and size, not the file
 SHOWN_PATHS = 5  # paths named in a dirty_tree: message
 _CHUNK = 1024 * 1024
-# Each pin keeps the record a function of the repository, not of the user's git config:
+# Each pin takes one user setting out of the record (a few others, such as diff.context, can
+# still change diff_sha256, which is only ever compared within one run on one machine):
 # - --untracked-files=normal: status.showUntrackedFiles cannot hide untracked files.
 # - --ignore-submodules=untracked, on status and diff alike: a file a run writes inside a
 #   submodule is not a change (decision 1); a moved submodule pointer, or an edited tracked
@@ -58,15 +59,15 @@ DIFF_ARGS = (
     "--ignore-submodules=untracked",
     "--",
 )
-# git's repository-local variables (`git rev-parse --local-env-vars`) and the GIT_CONFIG_COUNT
-# pairs. Inherited from a git hook, `git submodule foreach` or a shell, they would point every
-# call at another repository and copy its content into the patch.
+# git's repository-local variables (`git rev-parse --local-env-vars`). Inherited from a git hook,
+# `git submodule foreach` or a shell, they would point every call at another repository and copy
+# its content into the patch. The config git passes through the environment
+# (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and its KEY/VALUE pairs) is kept, as git keeps it when
+# it switches to another repository itself: a container's safe.directory must still apply.
 _LOCAL_ENV = frozenset(
     {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_CONFIG",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_COUNT",
         "GIT_OBJECT_DIRECTORY",
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -80,7 +81,6 @@ _LOCAL_ENV = frozenset(
         "GIT_PREFIX",
     }
 )
-_CONFIG_PAIRS = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 
 
 @dataclass(frozen=True)
@@ -116,13 +116,9 @@ class _GitFailed(Exception):
 
 def _environment() -> dict[str, str]:
     """The environment of every git call: without git's repository-local variables, so only the
-    repository containing ``--cwd`` is looked at; with ``GIT_OPTIONAL_LOCKS=0``, so a look never
-    rewrites that repository's index."""
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in _LOCAL_ENV and not key.startswith(_CONFIG_PAIRS)
-    }
+    repository containing ``--cwd`` is looked at; with ``GIT_OPTIONAL_LOCKS=0``, so ``git status``
+    never rewrites that repository's index (``git diff`` may still refresh its stat cache)."""
+    env = {key: value for key, value in os.environ.items() if key not in _LOCAL_ENV}
     env["GIT_OPTIONAL_LOCKS"] = "0"
     return env
 

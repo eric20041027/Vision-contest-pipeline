@@ -261,3 +261,29 @@ def test_a_failed_patch_write_leaves_no_tmp_behind(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         record(repo, (patch, "train/git.1.patch"))
     assert not patch.exists() and not patch.with_name(patch.name + ".tmp").exists()
+
+
+def test_config_given_through_the_environment_still_applies(tmp_path, monkeypatch):
+    """Config passed through the environment (``GIT_CONFIG_COUNT`` pairs, the way containers and
+    CI mark a mounted checkout as a safe.directory) reaches vcp's git calls, as it reaches git
+    itself when git switches to another repository: only the variables that pick the repository
+    are dropped."""
+    repo = git_repo(tmp_path / "repo")
+    monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+    assert probe(repo) is None  # git refuses a repository it believes someone else owns
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "safe.directory")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "*")
+    assert probe(repo) is not None and record(repo) is not None
+
+
+def test_a_staged_edit_reverted_in_the_worktree_is_not_a_diff(tmp_path):
+    """spec §4.3: the index differs from HEAD (``MM``) while the worktree matches it, so
+    ``git diff HEAD`` is empty -- which counts as no diff, not as a change from a clean start."""
+    repo = git_repo(tmp_path / "repo")
+    start = record(repo)
+    (repo / "train.py").write_bytes(b"print('staged')\n")
+    git(repo, "add", "train.py")
+    (repo / "train.py").write_bytes(b"print('v1')\n")
+    assert record(repo).modified == 1  # the index still differs from HEAD
+    assert changed_since(repo, start).changed == ()

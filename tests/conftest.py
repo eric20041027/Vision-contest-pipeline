@@ -45,7 +45,14 @@ def isolated_git(tmp_path, monkeypatch):
     empty.write_bytes(b"")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+    monkeypatch.setenv("LC_ALL", "C")  # git's messages in English, whatever the machine's locale
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

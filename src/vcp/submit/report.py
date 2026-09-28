@@ -16,6 +16,7 @@ from vcp.measure.runs import load_run
 from vcp.submit.final import sealed_reading
 from vcp.submit.guards import QuotaState, quota_state
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.location import read_only
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
 from vcp.submit.stage import load_staged
@@ -104,7 +105,7 @@ def status(
 ) -> StatusView:
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, _ = load_profile(paths)
-    ledger = SubmissionLedger(paths.submissions_log)
+    ledger = read_only(paths, profile)  # spec 2026-09-28 §4.2: no lock, whole rows only
     now = utc_now()
     deadline_in = None
     if profile.deadline is not None:
@@ -159,7 +160,7 @@ def report(
 ) -> list[ReportRow]:
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, _ = load_profile(paths)
-    ledger = SubmissionLedger(paths.submissions_log)
+    ledger = read_only(paths, profile)  # spec 2026-09-28 §4.2: no lock, whole rows only
     eval_paths = DatasetPaths.resolve(
         profile.eval_dataset, data_root=data_root, configs_root=configs_root
     )

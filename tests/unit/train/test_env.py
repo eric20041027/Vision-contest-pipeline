@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import git_repo
 from vcp.core.build import build_string
 from vcp.core.errors import VcpError
 from vcp.train import env as envmod
@@ -42,6 +43,8 @@ def test_snapshot_uses_current_interpreter_and_repo_git(monkeypatch):
     assert snap.vcp_version == build_string() and snap.taken_at.endswith("Z")
     assert snap.gpus == [] and snap.nvidia_driver is None
     assert snap.git is not None and len(snap.git.commit) == 40 and isinstance(snap.git.dirty, bool)
+    assert snap.git.status_sha256 is not None and len(snap.git.status_sha256) == 64
+    assert snap.git.patch is None  # no destination given, so no file
     assert "pydantic" in snap.packages
 
 
@@ -118,3 +121,20 @@ def test_probe_failures_are_aborts(monkeypatch, tmp_path):
     monkeypatch.setattr(envmod, "PROBE", "print('[1, 2]')")
     with pytest.raises(VcpError, match="no JSON object"):
         snapshot(None, tmp_path)
+
+
+def test_snapshot_writes_the_patch_it_was_given(tmp_path, monkeypatch):
+    real_which = shutil.which
+    monkeypatch.setattr(
+        envmod.shutil,
+        "which",
+        lambda name, *a, **k: None if name == "nvidia-smi" else real_which(name),
+    )
+    repo = git_repo(tmp_path / "repo")
+    (repo / "train.py").write_bytes(b"print('v2')\n")
+    patch = tmp_path / "run" / "train" / "git.1.patch"
+    patch.parent.mkdir(parents=True)
+    snap = snapshot(None, repo, patch=(patch, "train/git.1.patch"))
+    assert snap.git is not None and snap.git.modified == 1
+    assert snap.git.patch == "train/git.1.patch" and patch.is_file()
+    assert snap.git.modified_paths == ["train.py"]

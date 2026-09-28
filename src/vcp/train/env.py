@@ -13,9 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from vcp.core.build import build_string, git_head
+from vcp.core.build import build_string
 from vcp.core.errors import VcpError
 from vcp.core.time import stamp
+from vcp.train.gitstate import record as git_record
 from vcp.train.schema import EnvSnapshot, GitInfo
 
 PROBE = """
@@ -91,14 +92,16 @@ def gpus() -> tuple[list[str], str | None]:
     return names, driver
 
 
-def git_info(cwd: Path) -> GitInfo | None:
-    """Commit and dirty flag of the repository containing ``cwd`` (the training working
-    directory, not vcp's own); None outside any repo."""
-    head = git_head(cwd)
-    return None if head is None else GitInfo(commit=head[0], dirty=head[1])
+def git_info(cwd: Path, *, patch: tuple[Path, str] | None = None) -> GitInfo | None:
+    """The git state of the repository containing ``cwd`` (the training working directory, not
+    vcp's own; spec 2026-09-27 §3). With ``patch`` the tracked diff is also written there. None
+    outside any repo."""
+    return git_record(cwd, patch)
 
 
-def snapshot(python: Path | None, cwd: Path) -> EnvSnapshot:
+def snapshot(
+    python: Path | None, cwd: Path, *, patch: tuple[Path, str] | None = None
+) -> EnvSnapshot:
     """spec 4.4: the venv's report plus what vcp sees from outside."""
     data = _probe(python or Path(sys.executable))
     names, driver = gpus()
@@ -107,6 +110,6 @@ def snapshot(python: Path | None, cwd: Path) -> EnvSnapshot:
         gpus=names,
         nvidia_driver=driver,
         vcp_version=build_string(),
-        git=git_info(cwd),
+        git=git_info(cwd, patch=patch),
         taken_at=stamp(),
     )

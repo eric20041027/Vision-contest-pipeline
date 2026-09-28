@@ -15,14 +15,15 @@
 | `submit init` | `--dataset`（test）`--eval-dataset --plan --sealed --platform manual|kaggle --metric` | `--competition`、`--kind file|kernel`、`--board-rule last|best`、`--slots`、`--quota`、`--day-tz`、`--day-start`、`--display-tz`、`--deadline <UTC>`、`--params`、`--writer`、`--writer-opt`、`--kaggle-command`、`--test-plan`（`all-v1`）、`--test-subset`（`test`） |
 | `submit stage` | `--dataset --id`（< 32 字）`--eval-run` | `--test-run`（file）、`--kind candidate|baseline|probe`、`--reason`、`--kernel --version --output --weights RUN[:sha]`（kernel）、`--writer-opt`、`--plugin` |
 | `submit verify` | `--dataset --id` | |
-| `submit upload` | `--dataset --id` | `--message`；VERDICT `confirmed=` `platform_ref=` `detail=`（CLI 沒確認就回讀列表：描述以 id 開頭 + 上傳前後 2 分鐘；`readback=` 記結果） |
+| `submit upload` | `--dataset --id` | `--message`、`--force "<理由>"`（同 id 再傳才需要，否則 `already_uploaded:`）、`--no-sync`（略過上傳前同步，WARN）；VERDICT `ledger=` `sync=` `bound=` `forced=` `confirmed=` `platform_ref=` `detail=`（CLI 沒確認就回讀列表：描述以 id 開頭 + 上傳前後 2 分鐘；`readback=` 記結果） |
 | `submit record` | `--dataset --id --at "YYYY-MM-DD HH:MM"` | `--tz platform|utc`、`--platform-ref` |
 | `submit score` / `sync` | `--dataset` (+ `--id --public/--private`) | sync 把別人的發記成 `foreign`，照數配額 |
 | `submit final` | `--dataset` | `--slots`、`--dry-run` |
 | `submit lock` / `unlock` | `--dataset --reason` | |
-| `submit status` / `report` | `--dataset` | 唯讀 |
+| `submit status` / `report` | `--dataset` | 唯讀（不上鎖） |
+| `submit ledger adopt` | `--dataset` | `--from PATH`（可重複；預設本 checkout 的 configs 台帳）；只在 `ledger: shared` 時用 |
 
-四道門（stage）：封槍 / 截止 → eval-test 配對（單模比 `weights_hash`，融合比 method / params / 成員遞迴）→ 準入判決（candidate 要 PASS；融合每位成員 PASS）→ 產檔。`Staged.provenance` 記候選等級，低於 `submit.yaml` 的 `require_provenance` → `provenance_required:`。輸出在 `submit/<test>/<id>/`（寫一次不改）；台帳 `submissions.jsonl` 列：staged / uploaded / scored / foreign / final / lock / unlock。`final` 依 sealed 讀數選 `final_slots` 個（同分看 public、再看 staged 時間），`board_rule=last` 時照 `needs_reupload` 重傳。
+四道門（stage）：封槍 / 截止 → eval-test 配對（單模比 `weights_hash`，融合比 method / params / 成員遞迴）→ 準入判決（candidate 要 PASS；融合每位成員 PASS）→ 產檔。`Staged.provenance` 記候選等級，低於 `submit.yaml` 的 `require_provenance` → `provenance_required:`。輸出在 `submit/<test>/<id>/`（寫一次不改）；台帳 `submissions.jsonl` 列：staged / uploaded / scored / foreign / final / lock / unlock；`ledger: configs` 在 `configs/datasets/<test>/`，`ledger: shared` 在 `<data_root>/submit/<test>/`；寫入命令持有 `<data_root>/locks/submissions-<hash16>.lock`。`final` 依 sealed 讀數選 `final_slots` 個（同分看 public、再看 staged 時間），`board_rule=last` 時照 `needs_reupload` 重傳。
 
 ## `vcp backup`
 | 命令 | 必填 | 其餘 |

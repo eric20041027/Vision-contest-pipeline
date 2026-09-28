@@ -123,7 +123,7 @@ def test_probe_failures_are_aborts(monkeypatch, tmp_path):
         snapshot(None, tmp_path)
 
 
-def test_snapshot_writes_the_patch_it_was_given(tmp_path, monkeypatch):
+def test_snapshot_writes_the_patch_it_was_given(tmp_path, monkeypatch, isolated_git):
     real_which = shutil.which
     monkeypatch.setattr(
         envmod.shutil,

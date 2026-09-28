@@ -36,6 +36,20 @@ def _plain_help_output(monkeypatch):
 
 
 @pytest.fixture
+def isolated_git(tmp_path, monkeypatch):
+    """git in this test reads none of the developer's configuration (an empty global file, no
+    system file: Git for Windows' system ``core.autocrlf=true`` stays out) and inherits no other
+    repository. Not autouse: the tests that build repositories with ``helpers.git_repo`` ask for
+    it, so they pass the same on any machine and on CI."""
+    empty = tmp_path / "_gitconfig"
+    empty.write_bytes(b"")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
 def roots(tmp_path, monkeypatch):
     data = tmp_path / "data"
     configs = tmp_path / "configs"

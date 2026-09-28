@@ -242,7 +242,7 @@ def test_upload_only_accepts_final(roots, tmp_path):
     assert "status=FAIL" in v and "'final'" in v and "garbage" in v
 
 
-def test_train_run_cli_git_fields(roots, tmp_path):
+def test_train_run_cli_git_fields(roots, tmp_path, isolated_git):
     seed_det(roots)
     repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
     r = _run(repo, "--seed", "3", "--framework", "fake")
@@ -255,6 +255,12 @@ def test_train_run_cli_git_fields(roots, tmp_path):
     assert r.exit_code == 1, r.output
     v = _verdict(r.output)
     assert "status=FAIL" in v and "dirty_tree" in v and "modified=1" in v and "run=r2" in v
+    assert "commit=" in v and "commit=none" not in v
+    r = _run(repo, "--seed", "3", "--framework", "fake", run="r4")
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "status=WARN" in v and "modified=1" in v
+    assert "warning: modified=1 tracked path(s)" in r.output
     work = tmp_path / "work"
     work.mkdir()
     (work / "fake_train.py").write_bytes(FAKE.encode())

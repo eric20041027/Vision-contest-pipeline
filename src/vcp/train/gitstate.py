@@ -13,6 +13,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,9 +24,25 @@ PATH_LIMIT = 50  # paths kept per list; the counts stay exact
 PATCH_LIMIT = 10 * 1024 * 1024  # a larger diff keeps its sha256 and size, not the file
 SHOWN_PATHS = 5  # paths named in a dirty_tree: message
 _CHUNK = 1024 * 1024
-STATUS_ARGS = ("status", "--porcelain=v1", "-z", "--untracked-files=normal")
-# fix round 1: pin a/ b/ prefixes (survives the user's diff.noprefix / diff.mnemonicPrefix) and
-# core.quotepath=false (same diff_sha256 for a non-ASCII path on any machine).
+# Each pin keeps the record a function of the repository, not of the user's git config:
+# - --untracked-files=normal: status.showUntrackedFiles cannot hide untracked files.
+# - --ignore-submodules=untracked, on status and diff alike: a file a run writes inside a
+#   submodule is not a change (decision 1); a moved submodule pointer, or an edited tracked
+#   file inside the submodule, still is.
+# - core.quotepath=false: a non-ASCII path gives the same diff_sha256 on every machine.
+# - --binary, --no-color, --no-ext-diff, --no-textconv: git's own diff bytes, which git apply
+#   takes back, whatever colour, external-diff or textconv settings are around.
+# - --src-prefix=a/ --dst-prefix=b/: diff.noprefix / diff.mnemonicPrefix cannot break git apply.
+# - --submodule=short: diff.submodule=log|diff cannot turn a pointer change into a summary git
+#   apply rejects, or inline the submodule's own files.
+# - the closing --: a top-level path named HEAD cannot make the revision ambiguous.
+STATUS_ARGS = (
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=normal",
+    "--ignore-submodules=untracked",
+)
 DIFF_ARGS = (
     "-c",
     "core.quotepath=false",
@@ -37,7 +54,33 @@ DIFF_ARGS = (
     "--no-textconv",
     "--src-prefix=a/",
     "--dst-prefix=b/",
+    "--submodule=short",
+    "--ignore-submodules=untracked",
+    "--",
 )
+# git's repository-local variables (`git rev-parse --local-env-vars`) and the GIT_CONFIG_COUNT
+# pairs. Inherited from a git hook, `git submodule foreach` or a shell, they would point every
+# call at another repository and copy its content into the patch.
+_LOCAL_ENV = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_SHALLOW_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+    }
+)
+_CONFIG_PAIRS = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 
 
 @dataclass(frozen=True)
@@ -67,14 +110,42 @@ class GitDelta:
     diff_sha256: str | None
 
 
-def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes] | None:
+class _GitFailed(Exception):
+    """git gave no answer. The message says why: git's first stderr line, or no git at all."""
+
+
+def _environment() -> dict[str, str]:
+    """The environment of every git call: without git's repository-local variables, so only the
+    repository containing ``--cwd`` is looked at; with ``GIT_OPTIONAL_LOCKS=0``, so a look never
+    rewrites that repository's index."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in _LOCAL_ENV and not key.startswith(_CONFIG_PAIRS)
+    }
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
+
+
+def _command(cwd: Path, args: Sequence[str]) -> list[str] | None:
+    """``git -C <cwd> <args>`` with the git on PATH; None when there is none."""
     exe = shutil.which("git")
-    if exe is None:
-        return None
+    return None if exe is None else [exe, "-C", str(cwd), *args]
+
+
+def _git(args: Sequence[str], cwd: Path) -> bytes:
+    """The stdout of one git command; raises ``_GitFailed`` when git fails or is missing."""
+    command = _command(cwd, args)
+    if command is None:
+        raise _GitFailed("git not found on PATH")
     try:
-        return subprocess.run([exe, "-C", str(cwd), *args], capture_output=True)
-    except OSError:
-        return None
+        proc = subprocess.run(command, capture_output=True, env=_environment())
+    except OSError as e:
+        raise _GitFailed(f"git could not start: {e}") from e
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise _GitFailed(lines[0].strip() if lines else f"git exited {proc.returncode}")
+    return proc.stdout
 
 
 def parse_porcelain(raw: bytes) -> tuple[list[str], list[str]]:
@@ -99,25 +170,29 @@ def parse_porcelain(raw: bytes) -> tuple[list[str], list[str]]:
     return modified, untracked
 
 
-def probe(cwd: Path) -> GitStatus | None:
-    """The status of the repository containing ``cwd``; None without git, outside a repository,
-    before its first commit, or when a git command fails."""
+def _inspect(cwd: Path) -> GitStatus:
+    """``probe``, raising ``_GitFailed`` with the reason instead of returning None."""
     top = _git(["rev-parse", "--show-toplevel"], cwd)
-    if top is None or top.returncode != 0:
-        return None
-    root = Path(top.stdout.decode("utf-8", errors="replace").strip())
+    root = Path(top.decode("utf-8", errors="replace").strip())
     head = _git(["rev-parse", "HEAD"], root)
-    status = _git(list(STATUS_ARGS), root)
-    if head is None or head.returncode != 0 or status is None or status.returncode != 0:
-        return None
-    modified, untracked = parse_porcelain(status.stdout)
+    raw = _git(STATUS_ARGS, root)
+    modified, untracked = parse_porcelain(raw)
     return GitStatus(
         top=root,
-        commit=head.stdout.decode("ascii", errors="replace").strip(),
-        raw=status.stdout,
+        commit=head.decode("ascii", errors="replace").strip(),
+        raw=raw,
         modified=tuple(modified),
         untracked=tuple(untracked),
     )
+
+
+def probe(cwd: Path) -> GitStatus | None:
+    """The status of the repository containing ``cwd``; None without git, outside a repository,
+    before its first commit, or when a git command fails."""
+    try:
+        return _inspect(cwd)
+    except _GitFailed:
+        return None
 
 
 def stream_diff(top: Path, patch: Path | None = None, limit: int | None = None) -> Diff | None:
@@ -125,15 +200,15 @@ def stream_diff(top: Path, patch: Path | None = None, limit: int | None = None) 
     fits in ``limit`` bytes (default ``PATCH_LIMIT``), ``.tmp`` first and then renamed. None when
     git fails."""
     cap = PATCH_LIMIT if limit is None else limit
-    exe = shutil.which("git")
-    if exe is None:
+    command = _command(top, DIFF_ARGS)
+    if command is None:
         return None
     digest = hashlib.sha256()
     size = 0
     kept: list[bytes] = []
     try:
         with subprocess.Popen(
-            [exe, "-C", str(top), *DIFF_ARGS], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_environment()
         ) as proc:
             stdout = proc.stdout
             if stdout is None:
@@ -151,8 +226,12 @@ def stream_diff(top: Path, patch: Path | None = None, limit: int | None = None) 
     written = False
     if patch is not None and 0 < size <= cap:
         tmp = patch.with_name(patch.name + ".tmp")
-        tmp.write_bytes(b"".join(kept))
-        os.replace(tmp, patch)
+        try:
+            tmp.write_bytes(b"".join(kept))
+            os.replace(tmp, patch)
+        except OSError:
+            tmp.unlink(missing_ok=True)  # no stray .tmp; the attempt still ABORTs
+            raise
         written = True
     return Diff(digest.hexdigest(), size, written)
 
@@ -185,21 +264,26 @@ def record(cwd: Path, patch: tuple[Path, str] | None = None) -> GitInfo | None:
 
 def require_clean(cwd: Path) -> None:
     """``--require-clean`` (spec 2026-09-27 §4.1), before the first write: a tracked change FAILs,
-    untracked files pass, and a tree git cannot see cannot be proven clean."""
-    status = probe(cwd)
-    if status is None:
-        raise ValidationFailed(f"not_found: git repository for --cwd {cwd}")
+    untracked files pass, and a tree git cannot see cannot be proven clean. The message says
+    why git gave no answer; both FAILs carry ``commit=`` (``none`` when there is no HEAD)."""
+    try:
+        status = _inspect(cwd)
+    except _GitFailed as e:
+        raise ValidationFailed(
+            f"not_found: git repository for --cwd {cwd} ({e})", fields={"commit": "none"}
+        ) from e
     if status.modified:
         shown = ", ".join(status.modified[:SHOWN_PATHS])
         raise ValidationFailed(
             f"dirty_tree: {len(status.modified)} tracked path(s) changed: {shown}",
-            fields={"modified": len(status.modified)},
+            fields={"modified": len(status.modified), "commit": status.commit[:12]},
         )
 
 
 def changed_since(cwd: Path, start: GitInfo) -> GitDelta:
     """spec 2026-09-27 §4.3: HEAD and the tracked diff again, no patch written. Untracked files
-    are not compared -- a run writing its outputs into the repository is expected."""
+    are not compared -- a run writing its outputs into the repository is expected. An empty
+    diff counts as no diff, at the start and now alike."""
     status = probe(cwd)
     if status is None:
         return GitDelta(("unavailable",), None, None)
@@ -208,12 +292,13 @@ def changed_since(cwd: Path, start: GitInfo) -> GitDelta:
         diff = stream_diff(status.top)
         if diff is None:
             return GitDelta(("unavailable",), status.commit, None)
-        diff_sha = diff.sha256
+        diff_sha = diff.sha256 if diff.size > 0 else None
+    start_sha = start.diff_sha256 if (start.patch_bytes or 0) > 0 else None
     changed = tuple(
         name
         for name, now, then in (
             ("commit", status.commit, start.commit),
-            ("diff", diff_sha, start.diff_sha256),
+            ("diff", diff_sha, start_sha),
         )
         if now != then
     )

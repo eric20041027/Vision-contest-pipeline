@@ -842,7 +842,7 @@ Path("weights/best.pt").write_bytes(b"best")
 """
 
 
-def test_git_state_of_the_training_tree(roots, tmp_path):
+def test_git_state_of_the_training_tree(roots, tmp_path, isolated_git):
     _seed(roots)
     repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
     clean = train_run(_spec(roots, repo))
@@ -861,7 +861,7 @@ def test_git_state_of_the_training_tree(roots, tmp_path):
     assert env["git"]["untracked_paths"] == ["weights/"]
 
 
-def test_require_clean_fails_before_the_first_write(roots, tmp_path, work):
+def test_require_clean_fails_before_the_first_write(roots, tmp_path, work, isolated_git):
     _seed(roots)
     repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
     (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# local tweak\n")
@@ -877,7 +877,7 @@ def test_require_clean_fails_before_the_first_write(roots, tmp_path, work):
     assert ok.attempt.status == "finished" and ok.git.modified == 0 and ok.git.untracked == 1
 
 
-def test_a_tracked_edit_during_training_is_a_warning(roots, tmp_path):
+def test_a_tracked_edit_during_training_is_a_warning(roots, tmp_path, isolated_git):
     _seed(roots)
     repo = git_repo(
         tmp_path / "repo", {"edit_train.py": EDIT_FAKE.encode(), "model.py": b"W = 1\n"}
@@ -891,7 +891,7 @@ def test_a_tracked_edit_during_training_is_a_warning(roots, tmp_path):
     assert notes[0]["commit"] == res.git.commit and len(notes[0]["diff_sha256"]) == 64
 
 
-def test_each_attempt_keeps_its_own_git_record(roots, tmp_path):
+def test_each_attempt_keeps_its_own_git_record(roots, tmp_path, isolated_git):
     _seed(roots)
     repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
     (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# tweak 1\n")

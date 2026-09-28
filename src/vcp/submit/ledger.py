@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from vcp.core.errors import ValidationFailed
 from vcp.core.time import parse_stamp
 from vcp.measure.ledger import read_rows
 from vcp.submit.schema import LedgerRow
@@ -21,6 +24,33 @@ def append_ledger_row(path: Path, row: LedgerRow) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(row.model_dump_json(exclude_none=True) + "\n")
+
+
+def complete_length(path: Path) -> int:
+    """Bytes up to and including the last newline: the part whose rows are whole. A last line
+    without its newline is a row still being written (spec 2026-09-28 §4.2); 0 when absent."""
+    if not path.is_file():
+        return 0
+    return path.read_bytes().rfind(b"\n") + 1
+
+
+def _complete_rows(path: Path) -> list[LedgerRow]:
+    """The rows of whole lines only, for readers that take no lock. The shared ``read_rows``
+    stays strict: only this ledger has writers that serialize through a lock, so only here is
+    a torn last line a write in progress rather than damage."""
+    if not path.is_file():
+        return []
+    data = path.read_bytes()
+    text = data[: data.rfind(b"\n") + 1].decode("utf-8")
+    rows: list[LedgerRow] = []
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(LedgerRow.model_validate_json(line))
+        except ValidationError as e:
+            raise ValidationFailed(f"bad ledger row: {e}", location=f"{path.name}:{lineno}") from e
+    return rows
 
 
 def _ours(
@@ -59,9 +89,14 @@ def _ours(
 
 
 class SubmissionLedger:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, complete_only: bool = False) -> None:
+        """``complete_only``: skip a last line still being written -- for readers that take no
+        lock (``status``, ``report``, backup). Writers read strictly inside the lock, where a
+        torn last line is a crashed writer's and must stop the command, not be appended to."""
         self.path = path
-        self.rows: list[LedgerRow] = read_rows(path, LedgerRow)
+        self.rows: list[LedgerRow] = (
+            _complete_rows(path) if complete_only else read_rows(path, LedgerRow)
+        )
 
     def append(self, row: LedgerRow) -> None:
         append_ledger_row(self.path, row)

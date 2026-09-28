@@ -1,7 +1,7 @@
 import pytest
 
 from vcp.core.errors import ValidationFailed
-from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger, append_ledger_row
+from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger, append_ledger_row, complete_length
 from vcp.submit.schema import Gate, LedgerRow
 
 T0 = "2026-09-05T00:00:00.000Z"
@@ -234,3 +234,29 @@ def test_bad_row_is_located(tmp_path):
         f.write('{"event": "lock", "ts": "x"}\n')
     with pytest.raises(ValidationFailed, match="s.jsonl:2"):
         SubmissionLedger(path)
+
+
+def test_a_last_line_still_being_written_is_not_a_row_for_a_reader(tmp_path):
+    """spec 2026-09-28 §4.2: a reader takes no lock, so a last line without its newline is a row
+    still being written. A writer reads strictly: a torn row it met inside the lock is a crashed
+    writer's, and appending after it would glue two rows together."""
+    path = tmp_path / "s.jsonl"
+    append_ledger_row(path, _staged("S1"))
+    whole = path.read_bytes()
+    with path.open("ab") as f:
+        f.write(_uploaded("S1", T1).model_dump_json(exclude_none=True).encode()[:25])
+    assert complete_length(path) == len(whole)
+    assert [r.event for r in SubmissionLedger(path, complete_only=True).rows] == ["staged"]
+    with pytest.raises(ValidationFailed, match="s.jsonl:2"):
+        SubmissionLedger(path)
+    assert complete_length(tmp_path / "absent.jsonl") == 0
+    assert SubmissionLedger(tmp_path / "absent.jsonl", complete_only=True).rows == []
+
+
+def test_a_bad_whole_row_still_fails_a_reader(tmp_path):
+    path = tmp_path / "s.jsonl"
+    append_ledger_row(path, LedgerRow(event="note", ts=T0, text="hi"))
+    with path.open("a", encoding="utf-8") as f:
+        f.write('{"event": "lock", "ts": "x"}\n')
+    with pytest.raises(ValidationFailed, match="s.jsonl:2"):
+        SubmissionLedger(path, complete_only=True)

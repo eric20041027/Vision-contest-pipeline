@@ -16,6 +16,7 @@ from vcp.core.config import dump_yaml_model
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.measure.measure import MeasureSpec, measure_run
+from vcp.submit.adopt import adopt
 from vcp.submit.final import final, lock, unlock
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.location import ledger_lock_file, shared_ledger
@@ -106,9 +107,14 @@ def _uploaded(sid):
 
 
 def test_shared_mode_writes_and_reads_the_data_roots_ledger(pair):
+    """A new contest on ``ledger: shared``: adopt with no history makes the empty shared ledger
+    (spec 2026-09-28 §4.1), and every command then reads and writes that one."""
     seed_eval_runs(pair)
     seed_judgements(pair)
     init_profile(_profile(ledger="shared"), **_kw(pair))
+    res = adopt(TEST, **_kw(pair))
+    assert (res.rows, res.sources, res.duplicates) == (0, 0, 0)
+    assert shared_ledger(pair.test_paths).read_bytes() == b""
     seed_test_runs(pair)
     for sid, eval_run, test_run, kind in (
         ("S1", "good", "good.test", "candidate"),

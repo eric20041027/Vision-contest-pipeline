@@ -29,6 +29,7 @@ from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
 from vcp.submit.stage import load_staged
 
 NOT_RANKED = ("probe", "not_uploaded")
+RESEND_REASON = "final re-send"
 
 
 def count_unseals(eval_paths: DatasetPaths, plan_id: str, subset: str) -> int:
@@ -88,6 +89,21 @@ class FinalResult:
     needs_reupload: str | None
     warnings: list[str]
     written: bool
+    resend: str | None = None  # how to send needs_reupload again (resend_hint)
+
+
+def resend_hint(profile: PlatformProfile, submission_id: str) -> str:
+    """What sends the chosen submission again when ``board_rule=last`` scores another upload
+    (final review I4). The id went up before, so ``upload`` needs ``--force`` like any re-send
+    (spec 2026-09-28 §4.5); final's lock lets the chosen id through. A manual platform has no
+    upload: the file goes up by hand and ``record`` writes it down (it only WARNs)."""
+    sid, test = submission_id, profile.dataset
+    if profile.platform == "manual":
+        return (
+            f"upload {sid} again by hand, then: vcp submit record --dataset {test} --id {sid} "
+            '--at "YYYY-MM-DD HH:MM"'
+        )
+    return f'send it again: vcp submit upload --dataset {test} --id {sid} --force "{RESEND_REASON}"'
 
 
 @contextmanager
@@ -228,7 +244,8 @@ def _final_locked(
     if not dry_run:
         ledger.append(row)
         ledger.append(LedgerRow(event="lock", ts=stamp(), reason="final"))
-    return FinalResult(row, chosen, unranked, needs_reupload, warnings, not dry_run)
+    resend = None if needs_reupload is None else resend_hint(profile, needs_reupload)
+    return FinalResult(row, chosen, unranked, needs_reupload, warnings, not dry_run, resend)
 
 
 def lock(

@@ -1,6 +1,7 @@
 """How vcp recognizes its own submission in a platform's list by the description it wrote.
-``sync`` (spec 6.3) looks for the id anywhere in it; the Kaggle upload's read-back (VCP-037)
-wants the stricter opening that every description vcp writes has (``<id> <message>``)."""
+Every description vcp writes opens with the id (``<id> <message>``). The Kaggle upload's
+read-back (VCP-037) accepts only that opening; ``sync`` (spec 6.3, 2026-09-28 §4.4) tries it
+first and falls back to an id mentioned anywhere, for descriptions written by hand."""
 
 from __future__ import annotations
 

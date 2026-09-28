@@ -18,7 +18,7 @@ from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp
 from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger
 from vcp.submit.location import transaction
-from vcp.submit.matching import mentions
+from vcp.submit.matching import leads, mentions
 from vcp.submit.platforms import PlatformSubmission, Runner, get_platform
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
@@ -64,17 +64,22 @@ def match_submission(
     file_names: dict[str, str],
     taken: set[str] | frozenset[str] = frozenset(),
 ) -> str | None:
-    """Plan decision 8 (a recorded platform ref) first, then spec 6.3's two rules. ``taken``
-    holds ids already matched in this sync, so the file-and-time rule moves on to the next
-    submission that uploaded the same file name. That rule looks only at uploads vcp or a person
-    attested: a binding is the platform's own entry, and letting it vouch for a same-named
-    neighbour within ten minutes would bind the neighbour to the id as well."""
+    """Plan decision 8 (a recorded platform ref) first, then spec 6.3's two rules. The
+    description rule first looks for the id the description opens with -- vcp writes
+    ``<id> <message>``, so ``S2 same as S1`` is S2's -- and only then for an id it merely
+    mentions (spec 2026-09-28 §4.4): each pass tries longer ids first, then ledger order.
+    ``taken`` holds ids already matched in this sync, so the file-and-time rule moves on to the
+    next submission that uploaded the same file name. That rule looks only at uploads vcp or a
+    person attested: a binding is the platform's own entry, and letting it vouch for a
+    same-named neighbour within ten minutes would bind the neighbour to the id as well."""
     for r in ledger.of("uploaded"):
         if r.platform_ref and r.platform_ref == p.platform_ref:
             return r.submission_id
-    for sid in sorted(ledger.ids(), key=len, reverse=True):
-        if mentions(p.description, sid):
-            return sid
+    ids = sorted(ledger.ids(), key=len, reverse=True)
+    for names in (leads, mentions):
+        for sid in ids:
+            if names(p.description, sid):
+                return sid
     at = parse_stamp(p.at)
     for sid in ledger.ids():
         if sid in taken or file_names.get(sid) != p.file_name:

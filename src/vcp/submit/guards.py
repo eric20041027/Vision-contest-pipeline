@@ -86,7 +86,11 @@ def already_uploaded(ledger: SubmissionLedger, submission_id: str) -> str | None
 
 
 def assert_not_uploaded(ledger: SubmissionLedger, submission_id: str) -> None:
-    """``upload`` refuses an id that went up before, unless ``--force`` gave a reason."""
+    """``upload`` refuses an id that went up before, unless ``--force`` gave a reason -- and says
+    so, since the chosen id's re-send after ``final`` meets this refusal too (final review I4)."""
     text = already_uploaded(ledger, submission_id)
     if text is not None:
-        raise ValidationFailed(text, fields={"uploads": len(ledger.uploads(submission_id))})
+        raise ValidationFailed(
+            f'{text}; pass --force "<reason>" to send it again',
+            fields={"uploads": len(ledger.uploads(submission_id))},
+        )

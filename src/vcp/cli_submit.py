@@ -491,6 +491,11 @@ def final_cmd(
             for e in (res.row.table or [])
         ]
         human += [f"warning: {w}" for w in res.warnings]
+        if res.resend is not None:
+            human.append(
+                f"needs_reupload: the board scores the last upload, and that is not "
+                f"{res.needs_reupload}; {res.resend}"
+            )
         warn = bool(res.unranked or res.needs_reupload or res.warnings)
         status: Status = "WARN" if warn else "OK"
         return status, fields, res.row.model_dump(mode="json", exclude_none=True), human
@@ -618,14 +623,17 @@ def adopt_cmd(
     sources: Annotated[
         list[Path] | None,
         typer.Option(
-            "--from", help="ledger to merge in (repeatable; default: this checkout's configs one)"
+            "--from",
+            help="another ledger to merge in (repeatable); this checkout's configs ledger is "
+            "always included",
         ),
     ] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
 ) -> None:
-    """Merge configs ledgers into the shared ledger once (ledger: shared)."""
+    """Create the shared ledger once (ledger: shared): merge this checkout's configs ledger and
+    every --from, or start it empty."""
 
     def fn() -> CmdResult:
         res = adopt(dataset, sources=sources, data_root=data_root, configs_root=configs_root)

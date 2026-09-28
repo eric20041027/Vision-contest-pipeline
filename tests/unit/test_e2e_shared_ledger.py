@@ -1,6 +1,7 @@
 # ruff: noqa: E501
 """VCP-038 parts 2-4 + VCP-014 end to end through the CLI (spec 2026-09-28 §8): two checkouts
-(two configs roots with the same git content) share one data root and ``ledger: shared``. One
+(two configs roots with the same git content) share one data root and ``ledger: shared``. Until
+one of them runs ``ledger adopt`` every submit command stops at ``not_adopted:``. Then one
 stages and uploads through a fake Kaggle CLI (a real subprocess); the other's status sees it,
 and its own upload of the same id is refused before anything reaches the platform."""
 
@@ -89,6 +90,12 @@ def test_two_checkouts_share_one_ledger(pair, tmp_path, monkeypatch):
     def run(*args: str):
         return runner.invoke(app, ["submit", *args])
 
+    r = run("status", "--dataset", "beach-test", *b)
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "not_adopted:" in v and "ledger=shared" in v, r.output
+    r = run("ledger", "adopt", "--dataset", "beach-test", *a)  # a new contest: nothing to merge
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "rows=0" in v and "sources=0" in v and "duplicates=0" in v, r.output
     r = run(
         "stage",
         "--dataset",
@@ -115,6 +122,7 @@ def test_two_checkouts_share_one_ledger(pair, tmp_path, monkeypatch):
     assert (
         r.exit_code == 1 and "already_uploaded: S1 was uploaded 1 time" in v and "uploads=1" in v
     ), r.output
+    assert "sync=ok" in v and "bound=0" in v  # the FAIL says what its pre-sync wrote
     assert len(json.loads(state.read_text(encoding="utf-8"))["submissions"]) == 1  # nothing sent
     for configs in (pair.roots.configs, other):
         assert not (configs / "datasets" / "beach-test" / "submissions.jsonl").exists()

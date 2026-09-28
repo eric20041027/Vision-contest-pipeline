@@ -279,6 +279,9 @@ def test_final_status_report_cli(pair):
     v = _verdict(r.output)
     assert "chosen=S1" in v and "needs_reupload=S1" in v and "dry_run=true" in v
     assert "ledger=configs" in v
+    # a manual platform has no upload: the re-send goes up by hand and record writes it down
+    assert 'vcp submit record --dataset beach-test --id S1 --at "YYYY-MM-DD HH:MM"' in r.output
+    assert "vcp submit upload" not in r.output
     r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--json"])
     assert r.exit_code == 0, r.output
     assert _json(r)["result"]["chosen"] == ["S1"]

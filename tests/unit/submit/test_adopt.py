@@ -4,6 +4,7 @@ the ``not_adopted:`` every submit command says before it."""
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -15,7 +16,7 @@ from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.submit.adopt import adopt, merge_ledgers
 from vcp.submit.ledger import SubmissionLedger
-from vcp.submit.location import ledger_lock_file, shared_ledger
+from vcp.submit.location import ledger_lock_file, locate, shared_ledger
 from vcp.submit.schema import Gate, LedgerRow, PlatformProfile
 
 runner = CliRunner()
@@ -110,10 +111,16 @@ def _ledger(path, rows):
     return path
 
 
-def _setup(roots, profile):
-    paths = DatasetPaths.resolve("t", data_root=roots.data, configs_root=roots.configs)
+def _setup(roots, profile, configs_root=None):
+    paths = DatasetPaths.resolve(
+        "t", data_root=roots.data, configs_root=configs_root or roots.configs
+    )
     dump_yaml_model(profile, paths.submit_yaml)
     return paths
+
+
+def _never_sleep(seconds):
+    raise AssertionError(f"adopt waited {seconds}s for a lock")
 
 
 def _kw(roots):
@@ -185,6 +192,76 @@ def test_the_cli_adopts_this_checkouts_configs_ledger_by_default(roots):
     assert [r.submission_id for r in SubmissionLedger(shared_ledger(paths)).rows] == ["S1"]
 
 
+@pytest.mark.parametrize("configs", ["missing", "empty"])
+def test_adopt_with_no_history_starts_an_empty_shared_ledger(roots, configs):
+    """spec 2026-09-28 §4.1: a new contest on ``ledger: shared`` runs adopt once too. With no
+    source row -- or no source file at all -- the one write makes an empty ledger."""
+    paths = _setup(roots, _profile())
+    if configs == "empty":
+        paths.submissions_log.write_bytes(b"")
+    r = runner.invoke(app, ["submit", "ledger", "adopt", "--dataset", "t"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v, r.output
+    sources = "sources=0" if configs == "missing" else "sources=1"
+    for part in ("ledger=shared", "rows=0", sources, "duplicates=0"):
+        assert part in v
+    assert shared_ledger(paths).read_bytes() == b""
+    assert not list(shared_ledger(paths).parent.glob(".*.tmp"))
+    assert locate(paths, _profile()) == shared_ledger(paths)  # from now on every command runs
+    r = runner.invoke(app, ["submit", "lock", "--dataset", "t", "--reason", "x"])
+    assert r.exit_code == 0 and "ledger=shared" in _verdict(r.output), r.output
+
+
+def test_a_checkout_without_history_cannot_start_the_shared_ledger_before_adopt(roots, tmp_path):
+    """The final review's probe: checkout A holds history, checkout B (same data root) never
+    submitted. B's first write used to create the shared ledger, and A's adopt then met
+    ``exists:`` with its history still outside. Now B stops at ``not_adopted:`` and creates
+    nothing, and A's adopt, naming B's ledger, takes both."""
+    configs_b = tmp_path / "configs-b"
+    a = _setup(roots, _profile())
+    b = _setup(roots, _profile(), configs_root=configs_b)
+    _ledger(a.submissions_log, [_staged("S1", T[0]), _uploaded("S1", T[1])])
+    b.submissions_log.write_bytes(b"")
+    lock_in_b = ["submit", "lock", "--dataset", "t", "--reason", "x", "--configs-root"]
+    r = runner.invoke(app, [*lock_in_b, str(configs_b)])
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "not_adopted:" in v and "ledger=shared" in v, r.output
+    assert not (roots.data / "submit").exists()
+    res = adopt("t", sources=[b.submissions_log], **_kw(roots))
+    assert (res.rows, res.sources, res.duplicates) == (2, 2, 0)
+    seen_by_b = SubmissionLedger(locate(b, _profile()))  # B now reads A's history too
+    assert seen_by_b.ids() == ["S1"] and len(seen_by_b.uploads("S1")) == 1
+    r = runner.invoke(app, [*lock_in_b, str(configs_b)])
+    assert r.exit_code == 0 and "ledger=shared" in _verdict(r.output), r.output
+
+
+def test_adopt_always_merges_this_checkouts_own_ledger(roots, tmp_path, monkeypatch):
+    """spec 2026-09-28 §4.1 (final-review amendment): ``--from`` adds sources, it never replaces
+    this checkout's configs ledger -- adopt is one shot, and leaving that ledger out would lose
+    its history for good. The same file named again, however it is spelled, is read once and
+    waits for no lock."""
+    paths = _setup(roots, _profile())
+    other = _ledger(tmp_path / "other-checkout" / "submissions.jsonl", [_staged("S2", T[2])])
+    _ledger(paths.submissions_log, [_staged("S1", T[0])])
+    own = [paths.submissions_log, paths.config_dir / ".." / "t" / "submissions.jsonl"]
+    if sys.platform == "win32":
+        own.append(Path(str(paths.submissions_log).upper()))
+    monkeypatch.setattr(lockmod.time, "sleep", _never_sleep)
+    res = adopt("t", sources=[other, *own, other], **_kw(roots))
+    assert (res.rows, res.sources, res.duplicates) == (2, 2, 0)
+    assert SubmissionLedger(res.path).ids() == ["S1", "S2"]
+
+
+def test_a_from_that_is_the_shared_ledger_itself_is_invalid_before_any_lock(roots, monkeypatch):
+    paths = _setup(roots, _profile())
+    _ledger(paths.submissions_log, [_staged("S1", T[0])])
+    monkeypatch.setattr(lockmod.time, "sleep", _never_sleep)
+    with pytest.raises(ValidationFailed, match="invalid: --from .* is the shared ledger itself"):
+        adopt("t", sources=[shared_ledger(paths)], **_kw(roots))
+    assert not shared_ledger(paths).exists()
+    assert not ledger_lock_file(paths, shared_ledger(paths)).exists()  # no lock was taken
+
+
 def test_adopt_refusals_write_nothing(roots, tmp_path):
     paths = _setup(roots, _profile("configs"))
     _ledger(paths.submissions_log, [_staged("S1", T[0])])
@@ -243,10 +320,15 @@ def test_adopt_locks_each_source_while_reading_it(roots, monkeypatch):
     ],
     ids=lambda a: a[0],
 )
-def test_every_submit_command_refuses_a_shared_ledger_before_adopt(roots, args):
-    """spec 2026-09-28 §4.1: 正本不存在、configs 台帳又有列 → 所有 submit 命令 FAIL not_adopted."""
+@pytest.mark.parametrize("configs", ["rows", "empty", "missing"])
+def test_every_submit_command_refuses_a_shared_ledger_before_adopt(roots, args, configs):
+    """spec 2026-09-28 §4.1: 正本不存在 → 所有 submit 命令 FAIL not_adopted，不管本 checkout 的
+    configs 台帳有沒有列，也不建正本."""
     paths = _setup(roots, _profile(platform="kaggle", competition="c1"))
-    _ledger(paths.submissions_log, [_staged("S1", T[0])])
+    if configs == "rows":
+        _ledger(paths.submissions_log, [_staged("S1", T[0])])
+    elif configs == "empty":
+        paths.submissions_log.write_bytes(b"")
     r = runner.invoke(app, ["submit", args[0], "--dataset", "t", *args[1:]])
     v = _verdict(r.output)
     assert r.exit_code == 1 and "not_adopted:" in v and "ledger=shared" in v, r.output

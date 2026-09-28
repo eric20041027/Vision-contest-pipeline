@@ -5,11 +5,14 @@ stamped, and the lock files never enter a manifest."""
 
 import hashlib
 
+import pytest
+
 from submit_fixtures import TEST
 from vcp.backup.evidence import Collector, build_manifest
 from vcp.backup.push import push
 from vcp.backup.verify import verify
 from vcp.core.config import dump_yaml_model
+from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.submit.adopt import adopt
 from vcp.submit.ledger import SubmissionLedger
@@ -87,3 +90,13 @@ def test_walk_all_steps_over_a_shared_ledger_not_adopted_yet(world):
     col.walk_all(paths)
     assert [s.split(": ", 1)[0] for s in col.skipped] == ["submissions"]
     assert "not_adopted" in col.skipped[0]
+
+
+def test_a_submission_conclusion_before_adopt_fails_not_adopted(world):
+    """The ledger is the submission's evidence: with ``ledger: shared`` and nothing adopted yet
+    there is no ledger to list, so the manifest is refused instead of written without it."""
+    paths = _to_shared(world)
+    with pytest.raises(ValidationFailed, match="not_adopted:") as ei:
+        build_manifest(TEST, "submission:S1", manifest_id="m4", **_kw(world))
+    assert ei.value.fields == {"ledger": "shared"}
+    assert not paths.backup_manifest("m4").exists() and not paths.backup_log.exists()

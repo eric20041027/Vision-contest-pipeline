@@ -159,6 +159,18 @@ def test_locked_and_deadline_and_long_id(ready):
         stage(_spec(ready, "S1", "good", "good.test"))
 
 
+def test_the_ledgers_name_is_not_a_submission_id(ready):
+    """Final review M8: ``ledger: shared`` keeps the ledger at ``submit/<test>/submissions.jsonl``
+    beside the submission directories (and backup's ``.bak-*`` copies next to it); an id of that
+    name, in any case, would put a directory in its place."""
+    for sid in ("submissions.jsonl", "Submissions.JSONL", "submissions.jsonl.bak-1"):
+        with pytest.raises(ValidationFailed, match=r"^invalid: submission id .* is reserved"):
+            stage(_spec(ready, sid, "good", "good.test"))
+    assert not ready.test_paths.submit_dir.exists()
+    assert not ready.test_paths.submissions_log.exists()
+    assert stage(_spec(ready, "submissions.jsonl2", "good", "good.test")).path.is_dir()
+
+
 def test_kernel_options_on_a_file_profile_are_refused(ready):
     with pytest.raises(ValidationFailed, match="kernel_options"):
         stage(_spec(ready, "S1", "good", "good.test", kernel="u/nb"))

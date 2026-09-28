@@ -103,6 +103,24 @@ def test_quota_counts_an_upload_the_platform_also_listed_as_foreign_once(tmp_pat
     assert quota_state(led, _profile(), now).used == 1  # VCP-038: it was 2
 
 
+def test_quota_counts_two_uploaded_rows_of_one_platform_ref_once(tmp_path):
+    """Final review M3: adopt can merge a person's ``record --platform-ref`` of an upload (one
+    checkout) with the binding a sync wrote for the same entry (another). One submission, one
+    arrival: the first of the two rows in ledger order. Rows without a ref count as before."""
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    now = utc_now()
+    at = stamp(now)
+    recorded = _uploaded("S1", at).model_copy(update={"platform_ref": "k7"})
+    bound = _uploaded("S1", at).model_copy(update={"source": "platform", "platform_ref": "k7"})
+    led.append(recorded)
+    led.append(bound)
+    assert quota_state(led, _profile(), now).used == 1 and led.arrivals() == [recorded]
+    assert len(led.uploads("S1")) == 2  # the rows themselves are all still there
+    led.append(_uploaded("S2", at))
+    led.append(_uploaded("S2", at))
+    assert quota_state(led, _profile(), now).used == 3
+
+
 def test_quota_counts_uploaded_and_foreign(tmp_path):
     led = SubmissionLedger(tmp_path / "s.jsonl")
     now = utc_now()
@@ -139,3 +157,5 @@ def test_an_id_with_any_upload_row_is_already_uploaded(tmp_path):
     with pytest.raises(ValidationFailed, match="already_uploaded: S1") as ei:
         assert_not_uploaded(led, "S1")
     assert ei.value.fields == {"uploads": 2}
+    # the refusal says how to override it (final review I4); record's WARN reuses `text` alone
+    assert str(ei.value) == f'{text}; pass --force "<reason>" to send it again'

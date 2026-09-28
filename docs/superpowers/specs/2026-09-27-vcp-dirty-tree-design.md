@@ -63,7 +63,7 @@
 所有命令都在 `--cwd` 所在 repo 的最上層目錄執行，也就是 `git -C <cwd> rev-parse --show-toplevel` 的結果。這樣可以避開 `diff.relative` 設定和子目錄的相對路徑。
 
 - 狀態：`git status --porcelain=v1 -z --untracked-files=normal`
-- diff：`git diff HEAD --binary --no-color --no-ext-diff --no-textconv`
+- diff：`git -c core.quotepath=false diff HEAD --binary --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/`
 
 解析規則：
 
@@ -71,6 +71,7 @@
 - 路徑以 UTF-8 解碼。無法解碼的位元組換成替代字元，這不影響 sha。
 - `-z` 格式裡，改名與複製的列後面多一個原路徑欄位，解析時略過它。
 - 明寫 `--untracked-files=normal`，讓使用者的 `status.showUntrackedFiles` 設定不會把未追蹤檔藏起來。
+- 明寫 `a/` / `b/` 前綴：使用者設了 `diff.noprefix` 或 `diff.mnemonicPrefix` 時，patch 仍能直接 `git apply`。`core.quotepath=false` 讓非 ASCII 檔名在不同機器上得到同一個 `diff_sha256`。
 
 ### 3.3 patch 檔
 

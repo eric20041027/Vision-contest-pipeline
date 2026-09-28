@@ -421,7 +421,7 @@ vcp submit watch --dataset ... --ref 56131417 --interval 60
 
 ### VCP-014：upload 回覆不確定時，缺少內建 reconciliation 與 retry safety
 
-**狀態：設計缺口。**
+**狀態：重傳護欄已實作，隨 0.12.0 發出（spec `2026-09-28-vcp-shared-ledger-design.md` §4.5）：`upload` 先把平台列表同步進台帳，遇到已有 `uploaded` 列的 id FAIL `already_uploaded:`，`--force "<理由>"` 才照傳。下面的 `reconcile` 與配額保留仍是建議。**
 
 正式 self submission 曾得到 `status=WARN confirmed=false`，但 Kaggle 其實已受理並產生 ref。若使用者直接 retry，可能浪費 quota 或形成重複 submission。
 
@@ -872,7 +872,7 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 | VCP-035 | DEFECT | 中高 | backup manifest 與 verify 以檔名去重，多折 run 的 checkpoint 被靜默丟棄 | v0.10.0（#24） |
 | VCP-036 | DEFECT | 中 | kernel 提交的 `--weights` run 不受 sealed／provenance／準入檢查 | v0.10.0（#25） |
 | VCP-037 | DEFECT | 低 | Kaggle kernel 上傳永遠 `WARN confirmed=false` | v0.10.0（#27） |
-| VCP-038 | FEATURE_GAP（含可拆出的 DEFECT） | 低中 | 同一發被 uploaded 與 foreign 各算一次配額；沒有多寫入者模型 | 第 1 段 v0.10.0（#28）；第 2–4 段待 spec |
+| VCP-038 | FEATURE_GAP（含可拆出的 DEFECT） | 低中 | 同一發被 uploaded 與 foreign 各算一次配額；沒有多寫入者模型 | 第 1 段 v0.10.0（#28）；第 2–4 段已實作（隨 0.12.0） |
 | VCP-039 | FEATURE_GAP | 低中 | `train upload` 對多折同名 checkpoint 沒有可區分的遠端名稱 | v0.10.0（#24） |
 | VCP-040 | FEATURE_GAP | 低中 | 沒有把證據檔以 SHA256＋角色綁進 run 紀錄的正式 API | 已實作（隨 0.11.0） |
 | VCP-041 | FEATURE_GAP | 低 | `train run` 對 dirty git 不 WARN、沒有 `--require-clean`、不記 dirty 路徑 | 已實作（隨 0.11.0） |
@@ -889,11 +889,11 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 
 ### VCP-037：Kaggle kernel 上傳無法確認
 
-**狀態：v0.10.0 已修（#27）。** CLI 2.2.4 對 code submission 只印伺服器 message（沒有成功字樣、不印 ref）。現在 CLI 印了 ref 就採用，否則有上限地回讀提交列表（描述以 id 開頭、時間落在這次上傳前後），`readback=` 記結果、`detail=` 讓平台回覆進 log；CLI 回 0 卻沒送出的檔案上傳改為 FAIL 不寫列。同 id 重傳的 `--force` 護欄（VCP-014）仍待辦。
+**狀態：v0.10.0 已修（#27）。** CLI 2.2.4 對 code submission 只印伺服器 message（沒有成功字樣、不印 ref）。現在 CLI 印了 ref 就採用，否則有上限地回讀提交列表（描述以 id 開頭、時間落在這次上傳前後），`readback=` 記結果、`detail=` 讓平台回覆進 log；CLI 回 0 卻沒送出的檔案上傳改為 FAIL 不寫列。同 id 重傳的護欄（VCP-014）已實作，隨 0.12.0 發出：`upload` 遇到已上傳過的 id FAIL `already_uploaded:`，`--force "<理由>"` 才照傳。
 
 ### VCP-038：配額重複計入與多寫入者
 
-**狀態：第 1 段 v0.10.0 已修（#28）；第 2–4 段待 spec。** 台帳還不認得某一發時 `sync` 會記成 foreign，之後 id 認領同一個 ref 也不會抵銷，配額多算一發。`arrivals()` 現在排除其實是自己上傳的 foreign ref（`uploaded` 自帶 ref，或 `scored` 綁到 id 且與該 id 的一發上傳相差不到 10 分鐘，最近的先配）；`sync` 對新 ref 分數沒變也寫 `scored` 列，同檔重傳才綁得上。仍開放：上傳前先讀平台、台帳位置可設定（多個 worktree 共用一份正本）、支援的多寫入者拓樸與 `merge=union`；PENDING 的一發在有分數之前綁不上。
+**狀態：第 1 段 v0.10.0 已修（#28）；第 2–4 段已實作，隨 0.12.0 發出（spec `2026-09-28-vcp-shared-ledger-design.md`）。** 台帳還不認得某一發時 `sync` 會記成 foreign，之後 id 認領同一個 ref 也不會抵銷，配額多算一發。`arrivals()` 現在排除其實是自己上傳的 foreign ref（`uploaded` 自帶 ref，或 `scored` 綁到 id 且與該 id 的一發上傳相差不到 10 分鐘，最近的先配）；`sync` 對新 ref 分數沒變也寫 `scored` 列，同檔重傳才綁得上。第 2–4 段：`submit.yaml` 的 `ledger: shared` 讓同一個 data root 的 worktree 共用一份台帳正本（`vcp submit ledger adopt` 一次合併舊台帳），每個寫入命令整段持有作業系統檔案鎖；`upload` 先同步平台列表再算配額；`sync` 把台帳沒有的平台發（PENDING 也算）綁成 `uploaded(source=platform)`，`scored` 依 ref 冪等，最新分數依平台時間。跨機器仍是各機一份台帳（不在範圍）。
 
 ### VCP-039：多折同名 checkpoint 無法上傳
 

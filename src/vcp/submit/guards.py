@@ -73,3 +73,20 @@ def assert_quota(state: QuotaState | None) -> None:
             f"{stamp(state.window.end)}",
             fields=state.fields(),
         )
+
+
+def already_uploaded(ledger: SubmissionLedger, submission_id: str) -> str | None:
+    """VCP-014 (spec 2026-09-28 §4.5): the sentence for an id that already has ``uploaded`` rows
+    -- vcp's, a person's, or a binding sync found on the platform -- or None."""
+    rows = ledger.uploads(submission_id)
+    if not rows:
+        return None
+    last = max(rows, key=lambda r: parse_stamp(str(r.at))).at
+    return f"already_uploaded: {submission_id} was uploaded {len(rows)} time(s), last at {last}"
+
+
+def assert_not_uploaded(ledger: SubmissionLedger, submission_id: str) -> None:
+    """``upload`` refuses an id that went up before, unless ``--force`` gave a reason."""
+    text = already_uploaded(ledger, submission_id)
+    if text is not None:
+        raise ValidationFailed(text, fields={"uploads": len(ledger.uploads(submission_id))})

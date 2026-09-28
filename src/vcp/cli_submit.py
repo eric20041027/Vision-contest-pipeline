@@ -275,22 +275,40 @@ def upload_cmd(
     dataset: DatasetOpt,
     submission_id: IdOpt,
     message: Annotated[str | None, typer.Option("--message", help="appended to the id")] = None,
+    force: Annotated[
+        str | None,
+        typer.Option("--force", help="upload an id that went up before; the reason is kept"),
+    ] = None,
+    no_sync: Annotated[
+        bool, typer.Option("--no-sync", help="skip reading the platform's list first (WARN)")
+    ] = False,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
 ) -> None:
-    """Upload a staged submission through the platform's CLI and record it."""
+    """Read the platform's list into the ledger, then upload a staged submission and record it."""
 
     def fn() -> CmdResult:
         out = upload(
-            dataset, submission_id, message=message, data_root=data_root, configs_root=configs_root
+            dataset,
+            submission_id,
+            message=message,
+            force=force,
+            no_sync=no_sync,
+            data_root=data_root,
+            configs_root=configs_root,
         )
         fields: dict[str, FieldValue] = {
             "dataset": dataset,
             "id": submission_id,
             "at": str(out.row.at),
             "confirmed": bool(out.row.confirmed),
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+            "sync": out.sync,
+            "bound": out.bound,
         }
+        if out.row.reason:
+            fields["forced"] = True
         if out.row.platform_ref:
             fields["platform_ref"] = out.row.platform_ref
         if out.result.readback:
@@ -300,6 +318,10 @@ def upload_cmd(
         if out.result.detail:  # the platform's redacted reply; the VERDICT is what the log keeps
             fields["detail"] = _clip(out.result.detail)
         human = [out.result.detail] if out.result.detail else []
+        if out.sync == "skipped":
+            human.append(
+                "warning: sync=skipped (--no-sync): the quota was counted from the ledger alone"
+            )
         if not out.row.confirmed:
             human.append(
                 f"unconfirmed: vcp could not tie this upload of {submission_id} to an entry on "
@@ -307,7 +329,7 @@ def upload_cmd(
                 f"entry near {out.row.at}: if there is one, another upload spends a submission. "
                 f"`vcp submit sync --dataset {dataset}` matches it later"
             )
-        status: Status = "OK" if out.row.confirmed else "WARN"
+        status: Status = "OK" if out.row.confirmed and out.sync == "ok" else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 
     run_command(
@@ -344,11 +366,14 @@ def record_cmd(
             "dataset": dataset,
             "id": submission_id,
             "at": str(out.row.at),
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         if out.quota is not None:
             fields.update(out.quota.fields())
-        if out.warnings:
+        if any(w.startswith("quota_overflow:") for w in out.warnings):
             fields["quota_overflow"] = True
+        if out.prior_uploads:
+            fields["already_uploaded"] = out.prior_uploads
         status: Status = "WARN" if out.warnings else "OK"
         human = [f"warning: {w}" for w in out.warnings]
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
@@ -379,7 +404,11 @@ def score_cmd(
             data_root=data_root,
             configs_root=configs_root,
         )
-        fields: dict[str, FieldValue] = {"dataset": dataset, "id": submission_id}
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "id": submission_id,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
         if row.public is not None:
             fields["public"] = row.public
         if row.private is not None:

@@ -176,7 +176,7 @@ kernel 類候選：`test_run` 為 `null`；`artifact` 為 `{"kind": "kernel", "k
 3. 每位候選的 sealed 讀數 = `measure/<eval_dataset>/readings.jsonl` 中 `run_id = eval_run`、`plan_id`、`subset = sealed_subset`、`metric`、`params_key(metric_params)` 的最新一筆；再驗兩件事：`prediction_sha` = `eval_run` 現在 `predictions[sealed_subset].sha256`（否則當缺，`why=stale_reading`）、`n_samples` = sealed 子集大小（否則當缺，`why=partial_reading`）。
 4. 有讀數者依（`higher_is_better` 取向的讀數 ↓，public ↓（缺 = 最低），`staged_at` ↑）排序，取 `slots` 位。
 5. 排序名單為空 → FAIL `reason=no_sealed_readings`；有候選缺讀數 → WARN `unranked=` 並在 `table` 記 `eligible=false why=…`。
-6. `board_rule=last` 且 `chosen[0]` ≠ 最後一列 `uploaded` 的候選 → WARN `needs_reupload=<id>`（決定已做，重傳是另一個動作：`record` / `upload` 同 id 再一列）。
+6. `board_rule=last` 且 `chosen[0]` ≠ 最後一列 `uploaded` 的候選 → WARN `needs_reupload=<id>`（決定已做，重傳是另一個動作：`record` / `upload` 同 id 再一列；0.12.0 起 `upload` 同一個 id 要 `--force "<理由>"`，`final` 會印出完整命令，見第 30 條）。
 7. `--dry-run` 只印決選表；否則 append `final`（含整張表與 `holdout_unseals` = `splits/<plan>.unseal.jsonl` 裡 `subset = sealed_subset` 的列數）再 append `lock`（`reason=final`）。
 
 ### 6.5 時間與配額的計算

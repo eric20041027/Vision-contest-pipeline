@@ -7,7 +7,7 @@
 | `train upload` | `--run --dest` | `--only final` |
 | `train status` | `--run` | `--verify`（重算 sha）；唯讀 |
 
-留下的檔：`runs/<run>/run.yaml`（開始就寫）、`train.yaml`（每事件整份重寫；`attempts[]`、`checkpoints[]`）、`train.log.jsonl`（只增）、`train/config.N.json`、`train/env.N.json`（套件版本、`vcp_version` build string、`git.commit`、`git.dirty`）、`train/console.N.log`。checkpoint 不搬動，只記路徑與 sha；`--upload` 的副本另記 sha 與驗證結果（rclone `copyto --checksum`）。
+留下的檔：`runs/<run>/run.yaml`（開始就寫）、`train.yaml`（每事件整份重寫；`attempts[]`、`checkpoints[]`）、`train.log.jsonl`（只增）、`train/config.N.json`、`train/env.N.json`（套件版本、`vcp_version` build string、`git`：`commit`、`dirty`、追蹤檔改動與未追蹤的數量和路徑、status 與 diff 的 sha256）、`train/git.N.patch`（追蹤檔的未提交差異，只在有改動時，10 MiB 以內）、`train/console.N.log`。checkpoint 不搬動，只記路徑與 sha；`--upload` 的副本另記 sha 與驗證結果（rclone `copyto --checksum`）。
 
 ## `vcp submit`
 | 命令 | 必填 | 其餘 |

@@ -8,7 +8,7 @@
 - 比賽膠水：`projects/<contest>/`（README / RUNBOOK / DESIGN、prepare.py、train.py、predict.py、metrics 模組、notebook 打包腳本、`requirements-*.txt`、專案 `.venv`）。
 
 ## `runs/<run>/`
-`run.yaml`（身分、`trained_on`、`access` 收據、`source.weights_hash`）、`predictions/<subset>.jsonl`、`history.jsonl`、`train.yaml` + `train.log.jsonl` + `train/{config.N.json,env.N.json,console.N.log}`、`fuse.json`（融合 run）。
+`run.yaml`（身分、`trained_on`、`access` 收據、`source.weights_hash`）、`predictions/<subset>.jsonl`、`history.jsonl`、`train.yaml` + `train.log.jsonl` + `train/{config.N.json,env.N.json,git.N.patch,console.N.log}`、`fuse.json`（融合 run）。
 
 ## `measure/<name>/`
 `readings.jsonl`、`judgements.jsonl`、`sigma.jsonl`（只增）；`anchors.json`（整份換寫，先寫 `anchors.log.jsonl`）。

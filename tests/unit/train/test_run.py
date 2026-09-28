@@ -5,7 +5,15 @@ import time
 
 import pytest
 
-from helpers import det_samples, det_with_runs, make_card, make_label_set, write_images
+from helpers import (
+    det_samples,
+    det_with_runs,
+    git,
+    git_repo,
+    make_card,
+    make_label_set,
+    write_images,
+)
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
@@ -822,3 +830,75 @@ def test_an_evidence_file_that_changes_during_the_run_is_a_warning(roots, work):
     assert kept.read_text(encoding="utf-8") == "original"  # the attached copy never moves
     notes = [e for e in read_events(roots.data, "r1") if e["event"] == "note"]
     assert any(e.get("key") == "evidence_changed" and e["value"] == "corpus" for e in notes)
+
+
+# VCP-041: a loop that edits a tracked file while it trains.
+EDIT_FAKE = """
+from pathlib import Path
+model = Path("model.py")
+model.write_bytes(model.read_bytes() + b"# edited while training\\n")
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best")
+"""
+
+
+def test_git_state_of_the_training_tree(roots, tmp_path, isolated_git):
+    _seed(roots)
+    repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
+    clean = train_run(_spec(roots, repo))
+    assert clean.git is not None and len(clean.git.commit) == 40 and clean.git.modified == 0
+    assert clean.git_changed == []  # weights/ is a new untracked output, not a change
+    assert not any(w.startswith("modified=") for w in clean.warnings)
+    (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# local tweak\n")
+    dirty = train_run(_spec(roots, repo, run_id="r2"))
+    assert dirty.git.modified == 1 and dirty.git.modified_paths == ["fake_train.py"]
+    assert dirty.git.patch == "train/git.1.patch"
+    run = run_dir(roots.data, "r2")
+    assert sha256_file(run / "train" / "git.1.patch") == dirty.git.diff_sha256
+    assert "modified=1 tracked path(s); patch train/git.1.patch" in dirty.warnings
+    env = json.loads((run / "train" / "env.1.json").read_text(encoding="utf-8"))
+    assert env["git"]["patch"] == "train/git.1.patch"
+    assert env["git"]["untracked_paths"] == ["weights/"]
+
+
+def test_require_clean_fails_before_the_first_write(roots, tmp_path, work, isolated_git):
+    _seed(roots)
+    repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
+    (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# local tweak\n")
+    with pytest.raises(ValidationFailed, match="dirty_tree: 1 tracked path"):
+        train_run(_spec(roots, repo, require_clean=True))
+    assert not run_dir(roots.data, "r1").exists()
+    with pytest.raises(ValidationFailed, match="not_found: git repository"):
+        train_run(_spec(roots, work, require_clean=True))
+    assert not run_dir(roots.data, "r1").exists()
+    git(repo, "commit", "-q", "--no-verify", "-am", "keep the tweak")
+    (repo / "notes.txt").write_bytes(b"untracked is fine")
+    ok = train_run(_spec(roots, repo, require_clean=True))
+    assert ok.attempt.status == "finished" and ok.git.modified == 0 and ok.git.untracked == 1
+
+
+def test_a_tracked_edit_during_training_is_a_warning(roots, tmp_path, isolated_git):
+    _seed(roots)
+    repo = git_repo(
+        tmp_path / "repo", {"edit_train.py": EDIT_FAKE.encode(), "model.py": b"W = 1\n"}
+    )
+    res = train_run(_spec(roots, repo, command=[sys.executable, "edit_train.py"]))
+    assert res.attempt.status == "finished"
+    assert res.git.modified == 0 and res.git_changed == ["diff"]
+    assert "git_changed=diff" in res.warnings
+    notes = [e for e in read_events(roots.data, "r1") if e.get("key") == "git_changed"]
+    assert len(notes) == 1 and notes[0]["value"] == "diff"
+    assert notes[0]["commit"] == res.git.commit and len(notes[0]["diff_sha256"]) == 64
+
+
+def test_each_attempt_keeps_its_own_git_record(roots, tmp_path, isolated_git):
+    _seed(roots)
+    repo = git_repo(tmp_path / "repo", {"fake_train.py": FAKE.encode()})
+    (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# tweak 1\n")
+    first = train_run(_spec(roots, repo))
+    (repo / "fake_train.py").write_bytes(FAKE.encode() + b"# tweak 2\n")
+    second = train_run(_spec(roots, repo, resume=True))
+    train = run_dir(roots.data, "r1") / "train"
+    assert (train / "git.1.patch").is_file() and (train / "git.2.patch").is_file()
+    assert first.git.diff_sha256 != second.git.diff_sha256
+    assert second.git.patch == "train/git.2.patch"

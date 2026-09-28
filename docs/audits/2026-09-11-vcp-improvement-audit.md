@@ -875,7 +875,7 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 | VCP-038 | FEATURE_GAP（含可拆出的 DEFECT） | 低中 | 同一發被 uploaded 與 foreign 各算一次配額；沒有多寫入者模型 | 第 1 段 v0.10.0（#28）；第 2–4 段待 spec |
 | VCP-039 | FEATURE_GAP | 低中 | `train upload` 對多折同名 checkpoint 沒有可區分的遠端名稱 | v0.10.0（#24） |
 | VCP-040 | FEATURE_GAP | 低中 | 沒有把證據檔以 SHA256＋角色綁進 run 紀錄的正式 API | 已實作（隨 0.11.0） |
-| VCP-041 | FEATURE_GAP | 低 | `train run` 對 dirty git 不 WARN、沒有 `--require-clean`、不記 dirty 路徑 | 待 spec（Wave 1c，VCP-004 的一片） |
+| VCP-041 | FEATURE_GAP | 低 | `train run` 對 dirty git 不 WARN、沒有 `--require-clean`、不記 dirty 路徑 | 已實作（隨 0.11.0） |
 | VCP-042 | FEATURE_GAP | 低 | run card 無法宣告實際使用的標籤集 | 已實作（隨 0.11.0，與 VCP-040 同一件） |
 | VCP-043 | FEATURE_GAP | 低 | 訓練子程序拿不到 attempt 編號 | v0.10.0（#26） |
 
@@ -905,7 +905,7 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 
 ### VCP-041：dirty 工作樹沒有警告也沒有細節
 
-**狀態：待 spec（Wave 1c）。** `train run` 只記 `dirty: true`，不 WARN、沒有 `--require-clean`、不記哪些路徑，事後無法證明只是無關的未追蹤檔。方向：dirty 時 WARN 並把 commit / dirty 放進 VERDICT、`--require-clean` 在第一次寫入前 FAIL、選擇性記 porcelain 雜湊與截斷的路徑清單。
+**狀態：已實作，隨 0.11.0 發出（spec `2026-09-27-vcp-dirty-tree-design.md`）。** `train run` 原本只記 `dirty: true`，不 WARN、沒有 `--require-clean`、不記哪些路徑，事後無法證明只是無關的未追蹤檔。現在 `env.<n>.json` 的 `git` 記追蹤檔改動與未追蹤的數量和路徑、status 與 diff 的 sha256，追蹤檔的 diff 存成 `train/git.<n>.patch`；只有追蹤檔的改動才 WARN（`modified=`），`--require-clean` 在第一次寫入前 FAIL `dirty_tree:`；結束時 HEAD 或追蹤檔的 diff 變了 → WARN `git_changed=`。VERDICT 帶 `commit=` / `modified=` / `untracked=`。
 
 ### VCP-043：子程序拿不到 attempt 編號
 

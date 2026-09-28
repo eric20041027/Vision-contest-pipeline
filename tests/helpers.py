@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -567,15 +568,19 @@ GIT_CONFIG = (
     "-c",
     "init.defaultBranch=main",
 )
+GIT_LOCAL_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 
 
 def git(repo: Path, *args: str) -> str:
     """git in ``repo`` with a throwaway identity and none of the machine's global surprises
-    (autocrlf, signing); commits pass ``--no-verify`` at the call site. Skips without git."""
+    (autocrlf, signing); commits pass ``--no-verify`` at the call site. Skips without git. An
+    inherited ``GIT_DIR`` / ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE`` is dropped, so ``repo`` is
+    the repository it acts on even in a test that sets them for the code under test."""
     exe = shutil.which("git")
     if exe is None:
         pytest.skip("git is not installed")
-    proc = subprocess.run([exe, *GIT_CONFIG, "-C", str(repo), *args], capture_output=True)
+    env = {key: value for key, value in os.environ.items() if key not in GIT_LOCAL_VARS}
+    proc = subprocess.run([exe, *GIT_CONFIG, "-C", str(repo), *args], capture_output=True, env=env)
     if proc.returncode != 0:
         raise AssertionError(
             f"git {' '.join(args)} failed ({proc.returncode}): "

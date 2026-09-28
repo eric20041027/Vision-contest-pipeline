@@ -15,6 +15,8 @@ from vcp.train.gitstate import (
 )
 from vcp.train.schema import GitInfo
 
+pytestmark = pytest.mark.usefixtures("isolated_git")
+
 EMPTY_SHA = hashlib.sha256(b"").hexdigest()
 
 
@@ -85,7 +87,7 @@ def test_tracked_changes_are_recorded_with_a_patch_that_applies(tmp_path):
     git(clone, "apply", "--check", str(patch))
     with pytest.raises(ValidationFailed, match="dirty_tree: 4 tracked path") as caught:
         require_clean(repo)
-    assert caught.value.fields["modified"] == 4
+    assert caught.value.fields == {"modified": 4, "commit": info.commit[:12]}
 
 
 def test_limits_truncate_the_lists_and_drop_a_large_patch(tmp_path, monkeypatch):
@@ -109,13 +111,16 @@ def test_limits_truncate_the_lists_and_drop_a_large_patch(tmp_path, monkeypatch)
 
 def test_outside_a_repository_or_without_git(tmp_path, monkeypatch):
     assert probe(tmp_path) is None and record(tmp_path) is None
-    with pytest.raises(ValidationFailed, match="not_found: git repository"):
+    with pytest.raises(ValidationFailed, match="not_found: git repository") as caught:
         require_clean(tmp_path)
+    assert "(fatal: not a git repository" in str(caught.value)  # M1: git's own first line
+    assert caught.value.fields == {"commit": "none"}
     repo = git_repo(tmp_path / "repo")
     monkeypatch.setattr(gitstate.shutil, "which", lambda name, *a, **k: None)
     assert record(repo) is None
-    with pytest.raises(ValidationFailed, match="not_found: git repository"):
+    with pytest.raises(ValidationFailed, match="not_found: git repository") as caught:
         require_clean(repo)
+    assert str(caught.value).endswith("(git not found on PATH)")
 
 
 def test_changed_since_looks_at_head_and_the_tracked_diff_only(tmp_path):
@@ -173,3 +178,86 @@ def test_a_repository_with_no_commits_yet(tmp_path):
     assert probe(repo) is None and record(repo) is None
     with pytest.raises(ValidationFailed, match="not_found: git repository"):
         require_clean(repo)
+
+
+def _with_submodule(tmp_path):
+    """A repository whose second commit adds a submodule at ``vendor`` (a local repository)."""
+    lib = git_repo(tmp_path / "lib", {"lib.py": b"X = 1\n"})
+    repo = git_repo(tmp_path / "repo")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(lib), "vendor")
+    git(repo, "commit", "-q", "--no-verify", "-m", "add submodule")
+    return repo
+
+
+def test_files_written_inside_a_submodule_are_not_a_change(tmp_path):
+    """I1: by default porcelain prints `` M vendor`` for an untracked file inside the submodule
+    while ``git diff HEAD`` is empty -- a false dirty_tree:, modified= and git_changed=diff."""
+    repo = _with_submodule(tmp_path)
+    start = record(repo)
+    (repo / "vendor" / "runs").mkdir()
+    (repo / "vendor" / "runs" / "x").write_bytes(b"an output the run wrote")
+    assert record(repo).modified == 0
+    require_clean(repo)
+    assert changed_since(repo, start).changed == ()
+    (repo / "vendor" / "lib.py").write_bytes(b"X = 99\n")  # tracked content still counts
+    assert record(repo).modified_paths == ["vendor"]
+
+
+def test_a_submodule_pointer_change_applies_whatever_the_users_diff_submodule(tmp_path):
+    """I2: ``diff.submodule=log`` must not turn the patch into a ``Submodule vendor a..b:``
+    summary that ``git apply`` rejects (exit 128, no valid patches)."""
+    repo = _with_submodule(tmp_path)
+    git(repo, "config", "diff.submodule", "log")
+    (repo / "vendor" / "lib.py").write_bytes(b"X = 2\n")
+    git(repo / "vendor", "commit", "-q", "--no-verify", "-am", "bump")
+    patch = tmp_path / "git.1.patch"
+    info = record(repo, (patch, "train/git.1.patch"))
+    assert info.modified_paths == ["vendor"] and info.patch == "train/git.1.patch"
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", str(repo), str(clone))  # the submodule is not initialised
+    git(clone, "apply", "--check", str(patch))
+
+
+def test_an_inherited_git_dir_cannot_point_the_probes_at_another_repository(tmp_path, monkeypatch):
+    """I3: ``GIT_DIR`` left by a git hook, ``git submodule foreach`` or a shell must not make
+    vcp record another repository, or copy that repository's content into the patch."""
+    repo = git_repo(tmp_path / "repo")
+    other = git_repo(tmp_path / "other", {"secret.cfg": b"token=old\n"})
+    (other / "secret.cfg").write_bytes(b"token=new\n")
+    (repo / "train.py").write_bytes(b"print('v2')\n")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    head = git(repo, "rev-parse", "HEAD").strip()  # helpers.git drops GIT_DIR as well
+    assert probe(repo).commit == head
+    patch = tmp_path / "git.1.patch"
+    info = record(repo, (patch, "train/git.1.patch"))
+    assert info.commit == head and info.modified_paths == ["train.py"]
+    data = patch.read_bytes()
+    assert b"print('v2')" in data and b"secret" not in data and b"token" not in data
+
+
+def test_a_top_level_file_named_head_does_not_make_the_diff_ambiguous(tmp_path):
+    """I4: without the closing ``--`` a top-level path named HEAD makes ``git diff HEAD`` exit
+    128 (both revision and filename) and a dirty run records no git at all."""
+    repo = git_repo(tmp_path / "repo", {"train.py": b"print('v1')\n", "HEAD": b"not a ref\n"})
+    (repo / "train.py").write_bytes(b"print('v2')\n")
+    patch = tmp_path / "git.1.patch"
+    info = record(repo, (patch, "train/git.1.patch"))
+    assert info is not None and info.modified == 1 and info.patch == "train/git.1.patch"
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", str(repo), str(clone))
+    git(clone, "apply", "--check", str(patch))
+
+
+def test_a_failed_patch_write_leaves_no_tmp_behind(tmp_path, monkeypatch):
+    """M6: the error still propagates (the attempt ABORTs), but no ``.tmp`` is left."""
+    repo = git_repo(tmp_path / "repo")
+    (repo / "train.py").write_bytes(b"print('v2')\n")
+    patch = tmp_path / "git.1.patch"
+
+    def refuse(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(gitstate.os, "replace", refuse)
+    with pytest.raises(OSError, match="disk full"):
+        record(repo, (patch, "train/git.1.patch"))
+    assert not patch.exists() and not patch.with_name(patch.name + ".tmp").exists()

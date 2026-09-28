@@ -23,6 +23,7 @@ from vcp.core.time import stamp
 from vcp.measure.metrics import effective_params, get_metric
 from vcp.measure.plugins import load_plugins
 from vcp.submit.actions import record, score, upload
+from vcp.submit.adopt import adopt
 from vcp.submit.final import final, lock, unlock
 from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import report
@@ -32,6 +33,8 @@ from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
 
 submit_app = typer.Typer(no_args_is_help=True, help="submission governance commands")
+ledger_app = typer.Typer(no_args_is_help=True, help="where the submissions ledger lives")
+submit_app.add_typer(ledger_app, name="ledger")
 
 DatasetOpt = Annotated[str, typer.Option("--dataset", help="test dataset name")]
 IdOpt = Annotated[str, typer.Option("--id", help="submission id (path-safe, under 32 chars)")]
@@ -607,3 +610,43 @@ def report_cmd(
         return "OK", {"dataset": dataset, "rows": len(rows)}, payload, human
 
     run_command("submit.report", json_mode, data_root, fn, context={"dataset": dataset})
+
+
+@ledger_app.command("adopt")
+def adopt_cmd(
+    dataset: DatasetOpt,
+    sources: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--from", help="ledger to merge in (repeatable; default: this checkout's configs one)"
+        ),
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Merge configs ledgers into the shared ledger once (ledger: shared)."""
+
+    def fn() -> CmdResult:
+        res = adopt(dataset, sources=sources, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "ledger": "shared",
+            "rows": res.rows,
+            "sources": res.sources,
+            "duplicates": res.duplicates,
+        }
+        human = [
+            f"adopted {res.rows} row(s) from {res.sources} ledger(s) into {res.path} "
+            f"({res.duplicates} duplicate(s) dropped)",
+            "vcp no longer reads the configs ledger; whether git keeps it is your call",
+        ]
+        payload = {
+            "path": str(res.path),
+            "rows": res.rows,
+            "sources": res.sources,
+            "duplicates": res.duplicates,
+        }
+        return "OK", fields, payload, human
+
+    run_command("submit.ledger.adopt", json_mode, data_root, fn, context={"dataset": dataset})

@@ -235,11 +235,11 @@ def test_a_checkout_without_history_cannot_start_the_shared_ledger_before_adopt(
     assert r.exit_code == 0 and "ledger=shared" in _verdict(r.output), r.output
 
 
-def test_adopt_always_merges_this_checkouts_own_ledger(roots, tmp_path, monkeypatch):
-    """spec 2026-09-28 §4.1 (final-review amendment): ``--from`` adds sources, it never replaces
-    this checkout's configs ledger -- adopt is one shot, and leaving that ledger out would lose
-    its history for good. The same file named again, however it is spelled, is read once and
-    waits for no lock."""
+def test_a_source_named_again_is_read_once_and_waits_for_no_lock(roots, tmp_path, monkeypatch):
+    """spec 2026-09-28 §4.1 (final-review amendment): the same file named again, however it is
+    spelled -- this checkout's own ledger included -- is read once and waits for no lock. That
+    ``--from`` adds to this checkout's ledger instead of replacing it is pinned by
+    ``test_a_checkout_without_history_cannot_start_the_shared_ledger_before_adopt``."""
     paths = _setup(roots, _profile())
     other = _ledger(tmp_path / "other-checkout" / "submissions.jsonl", [_staged("S2", T[2])])
     _ledger(paths.submissions_log, [_staged("S1", T[0])])

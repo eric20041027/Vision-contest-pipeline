@@ -107,13 +107,16 @@ def test_a_second_holder_waits_then_aborts_naming_the_first(tmp_path):
 def test_the_wait_is_a_minute_in_half_second_steps(tmp_path, monkeypatch):
     assert (lock.WAIT_SECONDS, lock.RETRY_SECONDS) == (60.0, 0.5)
     slept: list[float] = []
-    monkeypatch.setattr(lock.time, "sleep", slept.append)
     path = tmp_path / "x.lock"
     proc, pid = _hold(path)
     try:
-        with pytest.raises(VcpError, match=rf"locked: l held by test\.holder \(pid {pid} on "):
-            with file_lock(path, command="b", label="l"):
-                pass
+        # ``lock.time`` is the time module itself, and on POSIX ``Popen.wait(timeout=...)`` in
+        # ``_release`` polls with ``time.sleep`` too: patch it only while the lock is asked for.
+        with monkeypatch.context() as m:
+            m.setattr(lock.time, "sleep", slept.append)
+            with pytest.raises(VcpError, match=rf"locked: l held by test\.holder \(pid {pid} on "):
+                with file_lock(path, command="b", label="l"):
+                    pass
     finally:
         _release(proc)
     assert slept == [0.5] * 120

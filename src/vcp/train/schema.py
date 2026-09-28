@@ -112,7 +112,17 @@ class TrainRecord(_Strict):
 
 class GitInfo(_Strict):
     commit: str
-    dirty: bool
+    dirty: bool  # any porcelain output, untracked files included (meaning unchanged)
+    # VCP-041 (spec 2026-09-27 §3.1): what `dirty` is made of. The defaults keep an older
+    # env.json valid; vcp itself never reads env.json back.
+    modified: int = 0
+    untracked: int = 0
+    modified_paths: list[str] = Field(default_factory=list)
+    untracked_paths: list[str] = Field(default_factory=list)
+    status_sha256: str | None = None
+    diff_sha256: str | None = None
+    patch_bytes: int | None = None
+    patch: str | None = None
 
 
 class EnvSnapshot(_Strict):

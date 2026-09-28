@@ -136,3 +136,40 @@ def test_changed_since_without_git(tmp_path, monkeypatch):
     start = record(repo)
     monkeypatch.setattr(gitstate.shutil, "which", lambda name, *a, **k: None)
     assert changed_since(repo, start).changed == ("unavailable",)
+
+
+def test_a_patch_applies_whatever_the_users_diff_prefix_settings(tmp_path):
+    """spec 2026-09-27 §3.2 (fix round 1): a repo-local ``diff.noprefix`` or
+    ``diff.mnemonicPrefix`` must not break the plain ``git apply`` the run-restore promise
+    (spec §3.3) depends on."""
+    for i, setting in enumerate(("diff.noprefix", "diff.mnemonicPrefix")):
+        repo = git_repo(tmp_path / f"repo{i}")
+        git(repo, "config", setting, "true")
+        (repo / "train.py").write_bytes(b"print('v2')\n")
+        patch = tmp_path / f"git{i}.patch"
+        info = record(repo, (patch, "train/git.1.patch"))
+        assert info.patch == "train/git.1.patch" and patch.is_file()
+        clone = tmp_path / f"clone{i}"
+        git(tmp_path, "clone", "-q", str(repo), str(clone))
+        git(clone, "apply", "--check", str(patch))
+
+
+def test_diff_sha256_is_the_same_whatever_the_users_quotepath_setting(tmp_path):
+    """spec 2026-09-27 §3.2 (fix round 1): ``core.quotepath`` must not change what gets hashed,
+    so two machines with different settings agree on the same non-ASCII change."""
+    shas = []
+    for i, value in enumerate(("true", "false")):
+        repo = git_repo(tmp_path / f"repo{i}", {"données.py": b"z = 3\n"})
+        git(repo, "config", "core.quotepath", value)
+        (repo / "données.py").write_bytes(b"z = 4\n")
+        shas.append(record(repo).diff_sha256)
+    assert shas[0] is not None and shas[0] == shas[1]
+
+
+def test_a_repository_with_no_commits_yet(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    assert probe(repo) is None and record(repo) is None
+    with pytest.raises(ValidationFailed, match="not_found: git repository"):
+        require_clean(repo)

@@ -24,7 +24,20 @@ PATCH_LIMIT = 10 * 1024 * 1024  # a larger diff keeps its sha256 and size, not t
 SHOWN_PATHS = 5  # paths named in a dirty_tree: message
 _CHUNK = 1024 * 1024
 STATUS_ARGS = ("status", "--porcelain=v1", "-z", "--untracked-files=normal")
-DIFF_ARGS = ("diff", "HEAD", "--binary", "--no-color", "--no-ext-diff", "--no-textconv")
+# fix round 1: pin a/ b/ prefixes (survives the user's diff.noprefix / diff.mnemonicPrefix) and
+# core.quotepath=false (same diff_sha256 for a non-ASCII path on any machine).
+DIFF_ARGS = (
+    "-c",
+    "core.quotepath=false",
+    "diff",
+    "HEAD",
+    "--binary",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
 
 
 @dataclass(frozen=True)

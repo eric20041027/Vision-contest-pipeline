@@ -575,9 +575,12 @@ def git(repo: Path, *args: str) -> str:
     exe = shutil.which("git")
     if exe is None:
         pytest.skip("git is not installed")
-    proc = subprocess.run(
-        [exe, *GIT_CONFIG, "-C", str(repo), *args], capture_output=True, check=True
-    )
+    proc = subprocess.run([exe, *GIT_CONFIG, "-C", str(repo), *args], capture_output=True)
+    if proc.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(args)} failed ({proc.returncode}): "
+            f"{proc.stderr.decode('utf-8', errors='replace').strip()}"
+        )
     return proc.stdout.decode("utf-8", errors="replace")
 
 

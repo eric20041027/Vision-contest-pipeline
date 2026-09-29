@@ -1,7 +1,7 @@
 import pytest
 
 from vcp.core.errors import ValidationFailed
-from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger, append_ledger_row
+from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger, append_ledger_row, complete_length
 from vcp.submit.schema import Gate, LedgerRow
 
 T0 = "2026-09-05T00:00:00.000Z"
@@ -234,3 +234,58 @@ def test_bad_row_is_located(tmp_path):
         f.write('{"event": "lock", "ts": "x"}\n')
     with pytest.raises(ValidationFailed, match="s.jsonl:2"):
         SubmissionLedger(path)
+
+
+def test_a_last_line_still_being_written_is_not_a_row_for_a_reader(tmp_path):
+    """spec 2026-09-28 §4.2: a reader takes no lock, so a last line without its newline is a row
+    still being written. A writer reads strictly: a torn row it met inside the lock is a crashed
+    writer's, and appending after it would glue two rows together."""
+    path = tmp_path / "s.jsonl"
+    append_ledger_row(path, _staged("S1"))
+    whole = path.read_bytes()
+    with path.open("ab") as f:
+        f.write(_uploaded("S1", T1).model_dump_json(exclude_none=True).encode()[:25])
+    assert complete_length(path) == len(whole)
+    assert [r.event for r in SubmissionLedger(path, complete_only=True).rows] == ["staged"]
+    with pytest.raises(ValidationFailed, match="s.jsonl:2"):
+        SubmissionLedger(path)
+    assert complete_length(tmp_path / "absent.jsonl") == 0
+    assert SubmissionLedger(tmp_path / "absent.jsonl", complete_only=True).rows == []
+
+
+def test_a_bad_whole_row_still_fails_a_reader(tmp_path):
+    path = tmp_path / "s.jsonl"
+    append_ledger_row(path, LedgerRow(event="note", ts=T0, text="hi"))
+    with path.open("a", encoding="utf-8") as f:
+        f.write('{"event": "lock", "ts": "x"}\n')
+    with pytest.raises(ValidationFailed, match="s.jsonl:2"):
+        SubmissionLedger(path, complete_only=True)
+
+
+def test_latest_score_is_by_platform_time_and_a_manual_score_counts_as_oldest(tmp_path):
+    """spec 2026-09-28 §4.6: not file order -- a later sync may append an older upload's score."""
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(_staged("S1"))
+    led.append(_scored("S1", "k2", T2))
+    led.append(_scored("S1", "k1", T1))  # appended later, happened earlier
+    assert led.latest_score("S1").platform_ref == "k2"
+    manual = LedgerRow(event="scored", ts=T2, submission_id="S1", source="manual", public=0.1)
+    led.append(manual)
+    assert led.latest_score("S1").platform_ref == "k2"  # no at: older than any platform time
+    led.append(_scored("S1", "k2", T2).model_copy(update={"public": 0.6}))
+    assert led.latest_score("S1").public == 0.6  # the same moment, a later row: the correction
+    only_manual = SubmissionLedger(tmp_path / "m.jsonl")
+    for ts, public in ((T0, 0.1), (T1, 0.2)):
+        only_manual.append(
+            LedgerRow(event="scored", ts=ts, submission_id="S2", source="manual", public=public)
+        )
+    assert only_manual.latest_score("S2").public == 0.2
+
+
+def test_score_for_ref_is_the_newest_row_of_that_entry(tmp_path):
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(_scored("S1", "k1", T1))
+    led.append(_scored("S1", "k2", T2))
+    led.append(_scored("S1", "k1", T1).model_copy(update={"public": 0.6}))
+    assert led.score_for_ref("S1", "k1").public == 0.6
+    assert led.score_for_ref("S1", "k3") is None and led.score_for_ref("S2", "k1") is None

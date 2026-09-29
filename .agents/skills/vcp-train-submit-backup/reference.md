@@ -15,14 +15,21 @@
 | `submit init` | `--dataset`（test）`--eval-dataset --plan --sealed --platform manual|kaggle --metric` | `--competition`、`--kind file|kernel`、`--board-rule last|best`、`--slots`、`--quota`、`--day-tz`、`--day-start`、`--display-tz`、`--deadline <UTC>`、`--params`、`--writer`、`--writer-opt`、`--kaggle-command`、`--test-plan`（`all-v1`）、`--test-subset`（`test`） |
 | `submit stage` | `--dataset --id`（< 32 字）`--eval-run` | `--test-run`（file）、`--kind candidate|baseline|probe`、`--reason`、`--kernel --version --output --weights RUN[:sha]`（kernel）、`--writer-opt`、`--plugin` |
 | `submit verify` | `--dataset --id` | |
-| `submit upload` | `--dataset --id` | `--message`；VERDICT `confirmed=` `platform_ref=` `detail=`（CLI 沒確認就回讀列表：描述以 id 開頭 + 上傳前後 2 分鐘；`readback=` 記結果） |
-| `submit record` | `--dataset --id --at "YYYY-MM-DD HH:MM"` | `--tz platform|utc`、`--platform-ref` |
+| `submit upload` | `--dataset --id` | `--message`、`--force "<理由>"`（同 id 再傳才需要，否則 `already_uploaded:`；`final` 之後的重傳也要）、`--no-sync`（略過上傳前同步，WARN）；VERDICT `ledger=` `sync=` `bound=` `forced=` `confirmed=` `platform_ref=` `detail=`（CLI 沒確認就回讀列表：描述以 id 開頭 + 上傳前後 2 分鐘；`readback=` 記結果）；同步之後才 FAIL 也帶 `sync=` `bound=` |
+| `submit record` | `--dataset --id --at "YYYY-MM-DD HH:MM"` | `--tz platform|utc`、`--platform-ref`（已經在某個 `uploaded` 列 → `exists:`） |
 | `submit score` / `sync` | `--dataset` (+ `--id --public/--private`) | sync 把別人的發記成 `foreign`，照數配額 |
 | `submit final` | `--dataset` | `--slots`、`--dry-run` |
 | `submit lock` / `unlock` | `--dataset --reason` | |
-| `submit status` / `report` | `--dataset` | 唯讀 |
+| `submit status` / `report` | `--dataset` | 唯讀（不上鎖） |
+| `submit ledger adopt` | `--dataset` | `--from PATH`（可重複；本 checkout 的 configs 台帳一定收）；只在 `ledger: shared` 時用；建共用正本的唯一方法，沒有舊台帳就建空的 |
 
-四道門（stage）：封槍 / 截止 → eval-test 配對（單模比 `weights_hash`，融合比 method / params / 成員遞迴）→ 準入判決（candidate 要 PASS；融合每位成員 PASS）→ 產檔。`Staged.provenance` 記候選等級，低於 `submit.yaml` 的 `require_provenance` → `provenance_required:`。輸出在 `submit/<test>/<id>/`（寫一次不改）；台帳 `submissions.jsonl` 列：staged / uploaded / scored / foreign / final / lock / unlock。`final` 依 sealed 讀數選 `final_slots` 個（同分看 public、再看 staged 時間），`board_rule=last` 時照 `needs_reupload` 重傳。
+四道門（stage）：封槍 / 截止 → eval-test 配對（單模比 `weights_hash`，融合比 method / params / 成員遞迴）→ 準入判決（candidate 要 PASS；融合每位成員 PASS）→ 產檔。`Staged.provenance` 記候選等級，低於 `submit.yaml` 的 `require_provenance` → `provenance_required:`。id 不能是台帳的名字 `submissions.jsonl`（`invalid:`）。輸出在 `submit/<test>/<id>/`（寫一次不改）；台帳 `submissions.jsonl` 列：staged / uploaded / scored / foreign / final / lock / unlock；`ledger: configs` 在 `configs/datasets/<test>/`，`ledger: shared` 在 `<data_root>/submit/<test>/`；寫入命令持有 `<data_root>/locks/submissions-<hash16>.lock`。`final` 依 sealed 讀數選 `final_slots` 個（同分看 public、再看 staged 時間），`board_rule=last` 而最後一發不是選中的就 WARN `needs_reupload=`，並印出重傳命令：Kaggle 是 `vcp submit upload --dataset T --id <選中> --force "final re-send"`（選中的 id 不受封槍擋，但它上傳過，要 `--force`），手動平台是網頁重傳後 `record`。
+
+台帳的操作細節：
+- 寫入命令與 `status` 成功（OK / WARN）時 VERDICT 帶 `ledger=`；失敗時只有 `not_adopted:`、`not_shared:` 帶。
+- `upload` 從上傳前同步、平台上傳到回讀都拿著鎖；其他 checkout 的寫入者最多等 60 秒，之後 ABORT `locked:`，重跑即可。
+- 寫到一半就當掉的寫入者會留下沒有換行的最後一列：唯讀命令略過它；寫入者在鎖內嚴格讀，殘列解析不了就 FAIL `bad ledger row`。處理：先確定沒有 vcp 寫入者在跑，刪掉那個殘列（它從沒被當成一列讀過）；有 provenance 索引就再跑 `vcp provenance rebuild`（檢查點可能記了殘列的位元組，截掉之後 `sync` 會 `prefix_drift:`）。
+- `ledger: shared` 時，一個 checkout 跑 `vcp provenance rebuild` / `sync` 碰上別的 checkout 正在寫正本，可能 FAIL `canonical_drift: inputs changed …`；重跑即可。
 
 ## `vcp backup`
 | 命令 | 必填 | 其餘 |

@@ -25,6 +25,7 @@ from vcp.provenance.graph import (
 )
 from vcp.provenance.schema import ProvenanceEdge, ProvenanceEntity, SampleChange, StatusRecord
 from vcp.provenance.views import compute_statuses, compute_statuses_for_entities
+from vcp.submit.location import shared_ledgers
 
 SCHEMA_VERSION = 2
 _FINGERPRINT_MODULUS = 1 << 256
@@ -415,6 +416,7 @@ def _write_statuses(
 def _checkpoint_files(data_root: Path, configs_root: Path) -> list[tuple[str, Path]]:
     candidates = [
         *(configs_root.rglob("*.jsonl") if configs_root.is_dir() else []),
+        *shared_ledgers(data_root),  # spec 2026-09-28 §3.1: ledger: shared lives here
         *((data_root / "measure").rglob("*.jsonl") if (data_root / "measure").is_dir() else []),
         *((data_root / "runs").glob("*/history.jsonl") if (data_root / "runs").is_dir() else []),
         *((data_root / "runs").glob("*/train.log.jsonl") if (data_root / "runs").is_dir() else []),

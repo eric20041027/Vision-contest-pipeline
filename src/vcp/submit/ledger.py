@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from vcp.core.errors import ValidationFailed
 from vcp.core.time import parse_stamp
 from vcp.measure.ledger import read_rows
 from vcp.submit.schema import LedgerRow
@@ -14,6 +17,12 @@ from vcp.submit.schema import LedgerRow
 # this module; a test keeps the two equal).
 TWIN_WINDOW = timedelta(minutes=10)
 
+_BEFORE_ANY = datetime.min.replace(tzinfo=UTC)  # where a score without a platform time sorts
+
+
+def _when(row: LedgerRow) -> datetime:
+    return parse_stamp(row.at) if row.at else _BEFORE_ANY
+
 
 def append_ledger_row(path: Path, row: LedgerRow) -> None:
     """One JSON object per line; ``None`` fields are left out so a row carries only its event's
@@ -21,6 +30,33 @@ def append_ledger_row(path: Path, row: LedgerRow) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as f:
         f.write(row.model_dump_json(exclude_none=True) + "\n")
+
+
+def complete_length(path: Path) -> int:
+    """Bytes up to and including the last newline: the part whose rows are whole. A last line
+    without its newline is a row still being written (spec 2026-09-28 §4.2); 0 when absent."""
+    if not path.is_file():
+        return 0
+    return path.read_bytes().rfind(b"\n") + 1
+
+
+def _complete_rows(path: Path) -> list[LedgerRow]:
+    """The rows of whole lines only, for readers that take no lock. The shared ``read_rows``
+    stays strict: only this ledger has writers that serialize through a lock, so only here is
+    a torn last line a write in progress rather than damage."""
+    if not path.is_file():
+        return []
+    data = path.read_bytes()
+    text = data[: data.rfind(b"\n") + 1].decode("utf-8")
+    rows: list[LedgerRow] = []
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(LedgerRow.model_validate_json(line))
+        except ValidationError as e:
+            raise ValidationFailed(f"bad ledger row: {e}", location=f"{path.name}:{lineno}") from e
+    return rows
 
 
 def _ours(
@@ -59,9 +95,14 @@ def _ours(
 
 
 class SubmissionLedger:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, complete_only: bool = False) -> None:
+        """``complete_only``: skip a last line still being written -- for readers that take no
+        lock (``status``, ``report``, backup). Writers read strictly inside the lock, where a
+        torn last line is a crashed writer's and must stop the command, not be appended to."""
         self.path = path
-        self.rows: list[LedgerRow] = read_rows(path, LedgerRow)
+        self.rows: list[LedgerRow] = (
+            _complete_rows(path) if complete_only else read_rows(path, LedgerRow)
+        )
 
     def append(self, row: LedgerRow) -> None:
         append_ledger_row(self.path, row)
@@ -86,20 +127,38 @@ class SubmissionLedger:
         return self.of("uploaded", submission_id)
 
     def latest_score(self, submission_id: str) -> LedgerRow | None:
+        """The newest score by platform time (spec 2026-09-28 §4.6), not by file order: a later
+        sync may append an older upload's score. A row without ``at`` (``vcp submit score``)
+        counts as older than every platform-timed row; ledger order breaks ties, so a
+        corrected score of the same moment wins."""
         rows = self.of("scored", submission_id)
+        if not rows:
+            return None
+        return rows[max(range(len(rows)), key=lambda i: (_when(rows[i]), i))]
+
+    def score_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
+        """The newest ``scored`` row of one platform entry of this id, in ledger order."""
+        rows = [r for r in self.of("scored", submission_id) if r.platform_ref == platform_ref]
         return rows[-1] if rows else None
 
     def arrivals(self) -> list[LedgerRow]:
         """Every upload the platform saw -- ours (``uploaded``) and others' (``foreign``) -- in
         platform-time order. A foreign upload may have multiple append-only snapshots while its
         platform status changes; only its newest snapshot is an arrival, and a foreign ref that
-        is one of our own uploads is none (``_ours``). Stamps share one format, so string order
-        is time order; at the same stamp our uploads come before others', each in ledger
-        order."""
+        is one of our own uploads is none (``_ours``). Two ``uploaded`` rows carrying one ref
+        are one platform entry (adopt can merge a ``record --platform-ref`` from one checkout
+        with another's sync binding): the first in ledger order is its arrival. Stamps share one
+        format, so string order is time order; at the same stamp our uploads come before
+        others', each in ledger order."""
         latest_foreign: dict[str, LedgerRow] = {}
         uploads: list[LedgerRow] = []
+        upload_refs: set[str] = set()
         for row in self.rows:
             if row.event == "uploaded":
+                if row.platform_ref:
+                    if row.platform_ref in upload_refs:
+                        continue
+                    upload_refs.add(row.platform_ref)
                 uploads.append(row)
             elif row.event == "foreign" and row.platform_ref:
                 latest_foreign[row.platform_ref] = row

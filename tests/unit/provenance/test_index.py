@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from helpers import det_samples, det_with_runs, make_card
+from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError
 from vcp.core.paths import DatasetPaths, provenance_index_path
 from vcp.data.dataset import Dataset
@@ -14,6 +15,10 @@ from vcp.data.source_audit import write_source_audit
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import ProvenanceIndex
+from vcp.submit.adopt import adopt
+from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.location import shared_ledger
+from vcp.submit.schema import LedgerRow, PlatformProfile
 
 
 def _dataset(roots, name, samples):
@@ -423,4 +428,71 @@ def test_legacy_index_missing_gap_metadata_requires_rebuild(roots):
         index.verify(roots.data, roots.configs)
 
     index.rebuild(roots.data, roots.configs)
+    assert index.verify(roots.data, roots.configs).ok is True
+
+
+def test_a_shared_submissions_ledger_is_a_checkpointed_ledger_as_well(roots):
+    """spec 2026-09-28 §3.1: the ledger ``ledger: shared`` puts in the data root gets the same
+    prefix guard as the configs root's ledgers."""
+    _versions(roots)
+    paths = DatasetPaths.resolve("idx-test", data_root=roots.data, configs_root=roots.configs)
+    ledger = shared_ledger(paths)
+    ledger.parent.mkdir(parents=True)
+    row = {"event": "note", "ts": "2026-09-28T00:00:00.000Z", "text": "x"}
+    ledger.write_bytes(json.dumps(row).encode("utf-8") + b"\n")
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index.rebuild(roots.data, roots.configs)
+    connection = sqlite3.connect(index.path)
+    try:
+        keys = {r[0] for r in connection.execute("SELECT source_path FROM ingest_checkpoints")}
+    finally:
+        connection.close()
+    assert "data/submit/idx-test/submissions.jsonl" in keys
+    raw = ledger.read_bytes()
+    ledger.write_bytes(b"X" + raw[1:])
+    with pytest.raises(IntegrityError, match="prefix_drift"):
+        index.verify(roots.data, roots.configs)
+
+
+def _checkpoint_keys(index):
+    connection = sqlite3.connect(index.path)
+    try:
+        return {r[0] for r in connection.execute("SELECT source_path FROM ingest_checkpoints")}
+    finally:
+        connection.close()
+
+
+def test_sync_after_a_contest_adopts_the_shared_ledger_adds_its_checkpoint(roots):
+    """The path every existing contest takes (spec 2026-09-28 §4.1): the index was built while
+    ``ledger: configs``, with rows in the configs ledger; then ``ledger: shared`` and adopt.
+    Adopt leaves the configs ledger as it was and the shared ledger is new, so ``sync`` adds a
+    checkpoint for it instead of reporting drift."""
+    _versions(roots)
+    paths = DatasetPaths.resolve("idx-new", data_root=roots.data, configs_root=roots.configs)
+    profile = PlatformProfile(
+        dataset="idx-new",
+        eval_dataset="idx-old",
+        plan_id="p",
+        sealed_subset="holdout",
+        platform="manual",
+        board_rule="last",
+        metric="accuracy",
+        writer="scores_csv",
+        created_at="2026-09-28T00:00:00.000Z",
+    )
+    dump_yaml_model(profile, paths.submit_yaml)
+    history = SubmissionLedger(paths.submissions_log)
+    for text in ("staged by the only writer", "uploaded by the only writer"):
+        history.append(LedgerRow(event="note", ts="2026-09-28T01:00:00.000Z", text=text))
+    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index.rebuild(roots.data, roots.configs)
+    assert "configs/datasets/idx-new/submissions.jsonl" in _checkpoint_keys(index)
+    dump_yaml_model(profile.model_copy(update={"ledger": "shared"}), paths.submit_yaml)
+    assert adopt("idx-new", data_root=roots.data, configs_root=roots.configs).rows == 2
+    index.sync(roots.data, roots.configs)  # no canonical_drift, no prefix_drift
+    keys = _checkpoint_keys(index)
+    assert {
+        "configs/datasets/idx-new/submissions.jsonl",
+        "data/submit/idx-new/submissions.jsonl",
+    } <= keys
     assert index.verify(roots.data, roots.configs).ok is True

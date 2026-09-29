@@ -5,10 +5,18 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from vcp.core.time import parse_stamp
 from vcp.data.access.schema import Grade
@@ -20,6 +28,7 @@ FinalRule = Literal["best_sealed"]
 CandidateKind = Literal["candidate", "baseline", "probe"]
 Admission = Literal["PASS", "waived"]
 PairingMode = Literal["single", "fusion", "kernel"]
+LedgerMode = Literal["configs", "shared"]  # where submissions.jsonl lives (spec 2026-09-28 §3.1)
 Event = Literal["staged", "uploaded", "scored", "foreign", "final", "lock", "unlock", "note"]
 EVENTS = get_args(Event)
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -107,6 +116,7 @@ class PlatformProfile(_Strict):
     writer_opts: dict[str, str] = Field(default_factory=dict)
     kaggle_command: list[str] = Field(default_factory=lambda: ["kaggle"])
     require_provenance: Grade = "declared"
+    ledger: LedgerMode = "configs"
     created_at: str
 
     @field_validator("display_tz")
@@ -138,6 +148,16 @@ class PlatformProfile(_Strict):
         if self.quota is not None:
             return self.quota.day_tz
         return "UTC"
+
+    @model_serializer(mode="wrap")
+    def _omit_the_default_ledger(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """``ledger: configs`` is never written, so ``vcp submit init`` still writes what 0.11
+        reads. An older vcp refuses ``ledger:`` (``extra_forbidden``), which is what should
+        stop it once a profile says ``shared`` (spec 2026-09-28 §7)."""
+        data: dict[str, Any] = handler(self)
+        if self.ledger == "configs":
+            data.pop("ledger", None)
+        return data
 
 
 class PairMember(_Strict):

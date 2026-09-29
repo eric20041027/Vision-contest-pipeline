@@ -274,7 +274,10 @@ def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
     outputs.append(r.output)
     assert r.exit_code == 0, r.output
     v = _verdict(r.output)
-    assert "scored=2" in v and "foreign=1" in v and "refreshed=0" in v and "status=WARN" in v
+    # S1's and S2's scores came in with the syncs the S2 and S3 uploads ran first (spec
+    # 2026-09-28 §4.3): this one only meets the teammate
+    assert "scored=0" in v and "foreign=1" in v and "refreshed=0" in v and "status=WARN" in v
+    assert "bound=0" in v and "ledger=configs" in v
     r = _run("sync", "--dataset", "beach-test")
     assert "scored=0" in _verdict(r.output) and "foreign=0" in _verdict(r.output)
     # the teammate's row later turns COMPLETE with a score: a refresh, not a second arrival

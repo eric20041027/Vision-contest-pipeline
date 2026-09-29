@@ -293,6 +293,43 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "VCP-038/014 (0.12.0)",
+        "submit: one lock per ledger between processes (a waiter aborts naming the holder and "
+        "reads only after it has the lock; a second take in one process is refused at once); "
+        "upload reads the platform's list before the quota; an entry the ledger has no upload "
+        "for is bound and counts once; a description that opens with an id is that id's; an id "
+        "already uploaded needs --force, also after final; sync writes scored once per ref and "
+        "the latest score is by platform time; ledger: shared is one ledger in the data root "
+        "for every checkout, created only by adopt",
+        {
+            "tests/unit/core/test_lock.py": [
+                "test_a_holder_in_another_process_blocks_until_it_is_killed",
+                "test_a_lock_this_process_holds_is_refused_at_once",
+            ],
+            "tests/unit/submit/test_transactions.py": [
+                "test_a_command_waits_for_the_lock_and_then_sees_what_the_holder_wrote",
+            ],
+            "tests/unit/submit/test_actions.py": [
+                "test_the_platforms_list_is_read_into_the_ledger_before_the_quota",
+                "test_an_upload_found_on_the_platform_is_bound_and_blocks_a_second_upload",
+                "test_force_uploads_again_and_keeps_the_reason",
+                "test_after_final_the_chosen_id_goes_up_again_only_with_force",
+            ],
+            "tests/unit/submit/test_sync.py": [
+                "test_a_pending_upload_the_ledger_never_recorded_is_bound_to_its_id",
+                "test_two_scores_of_one_id_are_written_once_and_the_latest_is_by_platform_time",
+                "test_a_bound_entry_does_not_pull_a_same_named_neighbour_into_its_id",
+                "test_a_description_that_opens_with_an_id_is_that_ids_before_any_id_it_mentions",
+            ],
+            "tests/unit/submit/test_adopt.py": [
+                "test_two_checkouts_ledgers_merge_by_ts_and_their_shared_history_is_kept_once",
+                "test_a_checkout_without_history_cannot_start_the_shared_ledger_before_adopt",
+                "test_every_submit_command_refuses_a_shared_ledger_before_adopt",
+            ],
+            "tests/unit/test_e2e_shared_ledger.py": ["test_two_checkouts_share_one_ledger"],
+        },
+    ),
 ]
 
 

@@ -32,7 +32,7 @@
 
 ## 完成的定義
 
-- 全套測試綠、覆蓋率 ≥ 80%（現在 95.27%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
+- 全套測試綠、覆蓋率 ≥ 80%（現在 95.35%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
 - 每個 CLI 命令仍以 VERDICT 收尾、exit code 對、`--json` 可解析；沒有任何憑證進 repo / 台帳 / log。
 - 後記、spec 補充決定、`docs/reference/cli.md`、AGENTS.md / CLAUDE.md、對應 skill 已更新；PR 合併、需要時 tag 已 push。
 

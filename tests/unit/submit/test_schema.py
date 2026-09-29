@@ -164,3 +164,15 @@ def test_paths(roots):
     assert paths.submission_dir("S1") == roots.data / "submit" / "t" / "S1"
     with pytest.raises(ValidationFailed):
         paths.submission_dir("bad name")
+
+
+def test_the_ledger_field_defaults_to_configs_and_is_written_only_when_shared():
+    """spec 2026-09-28 §3.1, §7: ``ledger: configs`` stays out of the file, so a profile that
+    keeps the configs ledger is what 0.11 wrote and reads."""
+    p = _profile()
+    assert p.ledger == "configs" and "ledger" not in p.model_dump(mode="json")
+    shared = _profile(ledger="shared")
+    assert shared.model_dump(mode="json")["ledger"] == "shared"
+    assert PlatformProfile.model_validate(shared.model_dump(mode="json")) == shared
+    with pytest.raises(ValidationError):
+        _profile(ledger="git")

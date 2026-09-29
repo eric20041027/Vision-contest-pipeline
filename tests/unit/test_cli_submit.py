@@ -145,6 +145,7 @@ def test_stage_and_verify_cli(pair):
     assert "status=WARN" in v and "admission=PASS" in v and "pairing=single" in v
     assert "rows=50" in v and "writer=scores_csv" in v
     assert "missing=0" in v and "config_hash=unchecked" in v
+    assert "ledger=configs" in v
     r = _stage("S2", "bad", "bad.test")
     assert r.exit_code == 1 and "not_admitted" in _verdict(r.output)
     r = _stage("S2", "bad", "bad.test", "--kind", "probe", "--reason", "look")
@@ -213,6 +214,8 @@ def test_upload_verdict_carries_the_platform_ref_and_detail_into_the_log(roots, 
         return UploadOutcome(row, UploadResult(ref is not None, ref, reply, readback), None)
 
     monkeypatch.setattr(cli_submit, "upload", fake_upload)
+    # the fake has no submit.yaml behind it for the VERDICT's ledger= to read
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
     r = runner.invoke(app, ["submit", "upload", "--dataset", "beach-test", "--id", "S1"])
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=OK" in v and "confirmed=true" in v
@@ -275,6 +278,10 @@ def test_final_status_report_cli(pair):
     assert r.exit_code == 0, r.output
     v = _verdict(r.output)
     assert "chosen=S1" in v and "needs_reupload=S1" in v and "dry_run=true" in v
+    assert "ledger=configs" in v
+    # a manual platform has no upload: the re-send goes up by hand and record writes it down
+    assert 'vcp submit record --dataset beach-test --id S1 --at "YYYY-MM-DD HH:MM"' in r.output
+    assert "vcp submit upload" not in r.output
     r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--json"])
     assert r.exit_code == 0, r.output
     assert _json(r)["result"]["chosen"] == ["S1"]
@@ -362,3 +369,67 @@ def test_verify_fusion_checks_output_but_does_not_rehash_members(pair):
     r = runner.invoke(app, args)
     assert r.exit_code == 1, r.output
     assert "run=fuse-test" in _verdict(r.output)
+
+
+def test_upload_cli_passes_force_and_no_sync_and_renders_the_new_fields(roots, monkeypatch):
+    from vcp import cli_submit
+    from vcp.submit.actions import UploadOutcome
+    from vcp.submit.platforms import UploadResult
+    from vcp.submit.schema import LedgerRow
+
+    seen: dict = {}
+
+    def fake_upload(dataset, submission_id, **kw):
+        seen.update(kw)
+        row = LedgerRow(
+            event="uploaded",
+            ts="2026-09-28T08:00:00.000Z",
+            submission_id=submission_id,
+            at="2026-09-28T08:00:00.000Z",
+            source="vcp",
+            platform_ref="7",
+            message=submission_id,
+            confirmed=True,
+            profile_sha256="p" * 64,
+            reason=kw["force"],
+        )
+        if kw["no_sync"]:
+            return UploadOutcome(row, UploadResult(True, "7", "ok"), None, sync="skipped")
+        return UploadOutcome(row, UploadResult(True, "7", "ok"), None, sync="ok", bound=2)
+
+    monkeypatch.setattr(cli_submit, "upload", fake_upload)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "shared")
+    base = ["submit", "upload", "--dataset", "beach-test", "--id", "S1"]
+    r = runner.invoke(app, [*base, "--force", "scorer was down"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "forced=true" in v
+    assert "sync=ok" in v and "bound=2" in v and "ledger=shared" in v
+    assert seen["force"] == "scorer was down" and seen["no_sync"] is False
+    r = runner.invoke(app, [*base, "--no-sync"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "sync=skipped" in v and "bound=0" in v
+    assert "forced" not in v and "--no-sync" in r.output
+
+
+def test_upload_cli_refuses_an_empty_force_reason(roots):
+    r = runner.invoke(
+        app, ["submit", "upload", "--dataset", "beach-test", "--id", "S1", "--force", ""]
+    )
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "invalid: --force needs a reason" in v
+
+
+def test_record_cli_warns_on_an_id_already_uploaded(pair):
+    from vcp.core.time import utc_now
+
+    _ready(pair)
+    assert _stage("S1", "good", "good.test").exit_code == 0
+    at = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+    args = ["submit", "record", "--dataset", "beach-test", "--id", "S1", "--tz", "utc", "--at", at]
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0 and "already_uploaded" not in _verdict(r.output)
+    assert "ledger=configs" in _verdict(r.output)
+    r = runner.invoke(app, args)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "already_uploaded=1" in v
+    assert "quota_overflow" not in v and "already_uploaded: S1 was uploaded 1 time(s)" in r.output

@@ -15,7 +15,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 量測 | `vcp eval ingest/measure/anchor/sigma/preregister/judge/status/report` | run 預測檔、`readings.jsonl`、預登記（git）、`judgements.jsonl` |
 | 融合 | `vcp fuse recipe/build/ablate` | 配方（git）、`runs/fuse-<id>/fuse.json` |
 | 訓練 | `vcp train run/upload/status` | `run.yaml`、`train.yaml`、checkpoint sha、access receipt |
-| 提交 | `vcp submit init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report` | `submit.yaml`、`submissions.jsonl`、`stage.json` |
+| 提交 | `vcp submit init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report`、`vcp submit ledger adopt` | `submit.yaml`、`submissions.jsonl`（`ledger: shared` 時在 data root）、`stage.json` |
 | 備份 | `vcp backup manifest/push/verify/pull/status` | manifest（git）、`backup.log.jsonl` |
 | 產物 | `vcp artifact create/show/verify/lineage/status/relink/clean` | `artifacts/<kind>/<id>/manifest.json`（有它才是產物） |
 | provenance | `vcp provenance rebuild/sync/ingest/impact/stale/explain/graph/status/verify-index` | 可刪除的衍生索引（SQLite 預設；PostgreSQL optional）；`graph` 把它畫成 Mermaid 圖 |

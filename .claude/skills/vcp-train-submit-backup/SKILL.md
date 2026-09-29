@@ -37,6 +37,8 @@ uv run vcp submit final --dataset D-test --dry-run && uv run vcp submit final --
 ```
 kind 只有 `candidate | baseline | probe`：baseline / probe 要 `--reason`，admission 記 waived；probe 永不進 final。不要發明 legacy / emergency。任何一道門不過，`stage` 就 FAIL 且不寫任何檔或台帳列。使用者說「判決 FAIL 沒關係，先丟上去看分數」時：不能當 candidate；可以提議 `--kind probe --reason "…"`（留紀錄、佔配額、不進 final）或 `--kind baseline`（可進 final 但不是準入候選），由使用者選；上傳本身仍要授權。kernel 提交用 `--kernel user/notebook --version N --output file --weights RUN[:sha]`，要先在授權內拿到真正成功的 notebook 版本。
 
+台帳在哪：`submit.yaml` 的 `ledger: configs`（預設，台帳跟著 git）或 `shared`（`<data_root>/submit/<test>/submissions.jsonl`，同一個 data root 的 worktree 共用一份）。改成 `shared` 前每個寫入者都先升到 0.12.0。共用正本只由 adopt 建立，切換的順序是：(1) 把 `ledger: shared` commit，並在每個 worktree 拉下來——從這時起每個 submit 命令（`status` 也是）都停在 `not_adopted:`；(2) 在任一個 checkout 跑一次 `uv run vcp submit ledger adopt --dataset D-test [--from <另一個 worktree 的 configs 台帳>]…`：本 checkout 的台帳一定會收，其他 worktree 的用 `--from` 一個都別漏（adopt 只有一次，漏掉的歷史之後收不進來）；(3) 沒有舊台帳的新比賽也跑一次，它建空的正本。`ledger_conflict:` = 兩邊對同一個 id stage 了不同的東西，先查清楚再合。寫入命令彼此會等（最多 60 秒，否則 ABORT `locked:`，訊息寫著誰拿著；`upload` 從同步、上傳到回讀都拿著鎖）。`upload` 先讀平台列表再算配額：讀不到就 FAIL `sync_failed:`，確定要略過才加 `--no-sync`（WARN）；台帳不知道的平台發會補成 `uploaded(source=platform)`（`bound=`），同步寫的列留著，之後的 FAIL 也帶 `sync=`、`bound=`。同一個 id 已上傳過 → FAIL `already_uploaded:`；真要再傳用 `--force "<理由>"`，理由進台帳。`final` 說 `needs_reupload=` 時也一樣：照它印出的命令重傳（`--force "final re-send"`）。寫到一半的殘列、provenance 要重跑的情況見 [reference.md](reference.md)。
+
 ## 備份
 ```bash
 uv run vcp backup manifest --dataset D-test --conclusion submission:SUB34 --id sub34   # 從結論反向走證據圖，寫進 git
@@ -52,6 +54,6 @@ uv run vcp backup status --dataset D-test
 
 ## 常見錯誤
 - 把 RUNBOOK 的命令當已完成；staged ≠ uploaded；local `remote_copy` ≠ 異機備份；`rclone_conf=unknown` ≠ absent。
-- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（`unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上）。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。
+- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（`unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上）。vcp 自己擋同 id 重傳（FAIL `already_uploaded:`），確定要再傳才加 `--force "<理由>"`。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。
 - 直接上傳既有 CSV 再補紀錄：先釐清來源，無法證明身分的檔只能如實標示。
 - 在 main checkout 的 venv 啟動訓練：用比賽釘版 worktree 的 `vcp.exe`（見 `vcp-release-and-environments`）。

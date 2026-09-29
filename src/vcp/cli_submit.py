@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -17,12 +18,14 @@ from vcp.cli_common import (
 )
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
+from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.measure.metrics import effective_params, get_metric
 from vcp.measure.plugins import load_plugins
 from vcp.submit.actions import record, score, upload
+from vcp.submit.adopt import adopt
 from vcp.submit.final import final, lock, unlock
-from vcp.submit.profile import init_profile
+from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
@@ -30,6 +33,8 @@ from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
 
 submit_app = typer.Typer(no_args_is_help=True, help="submission governance commands")
+ledger_app = typer.Typer(no_args_is_help=True, help="where the submissions ledger lives")
+submit_app.add_typer(ledger_app, name="ledger")
 
 DatasetOpt = Annotated[str, typer.Option("--dataset", help="test dataset name")]
 IdOpt = Annotated[str, typer.Option("--id", help="submission id (path-safe, under 32 chars)")]
@@ -41,6 +46,13 @@ DETAIL_MAX = 160  # characters of the platform's reply a VERDICT carries
 
 def _clip(text: str, limit: int = DETAIL_MAX) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def ledger_mode(dataset: str, *, data_root: Path | None, configs_root: Path | None) -> str:
+    """The ``ledger=`` VERDICT field (spec 2026-09-28 §5): where this dataset's submit.yaml puts
+    the ledger. Read after the command succeeded, so the profile is known to load."""
+    paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+    return load_profile(paths)[0].ledger
 
 
 @submit_app.command("init")
@@ -196,6 +208,7 @@ def stage_cmd(
             "eval_run": st.eval_run,
             "pairing": st.pairing.mode,
             "admission": st.gate.admission,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         if st.test_run:
             fields["test_run"] = st.test_run
@@ -265,22 +278,40 @@ def upload_cmd(
     dataset: DatasetOpt,
     submission_id: IdOpt,
     message: Annotated[str | None, typer.Option("--message", help="appended to the id")] = None,
+    force: Annotated[
+        str | None,
+        typer.Option("--force", help="upload an id that went up before; the reason is kept"),
+    ] = None,
+    no_sync: Annotated[
+        bool, typer.Option("--no-sync", help="skip reading the platform's list first (WARN)")
+    ] = False,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
 ) -> None:
-    """Upload a staged submission through the platform's CLI and record it."""
+    """Read the platform's list into the ledger, then upload a staged submission and record it."""
 
     def fn() -> CmdResult:
         out = upload(
-            dataset, submission_id, message=message, data_root=data_root, configs_root=configs_root
+            dataset,
+            submission_id,
+            message=message,
+            force=force,
+            no_sync=no_sync,
+            data_root=data_root,
+            configs_root=configs_root,
         )
         fields: dict[str, FieldValue] = {
             "dataset": dataset,
             "id": submission_id,
             "at": str(out.row.at),
             "confirmed": bool(out.row.confirmed),
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+            "sync": out.sync,
+            "bound": out.bound,
         }
+        if out.row.reason:
+            fields["forced"] = True
         if out.row.platform_ref:
             fields["platform_ref"] = out.row.platform_ref
         if out.result.readback:
@@ -290,6 +321,10 @@ def upload_cmd(
         if out.result.detail:  # the platform's redacted reply; the VERDICT is what the log keeps
             fields["detail"] = _clip(out.result.detail)
         human = [out.result.detail] if out.result.detail else []
+        if out.sync == "skipped":
+            human.append(
+                "warning: sync=skipped (--no-sync): the quota was counted from the ledger alone"
+            )
         if not out.row.confirmed:
             human.append(
                 f"unconfirmed: vcp could not tie this upload of {submission_id} to an entry on "
@@ -297,7 +332,7 @@ def upload_cmd(
                 f"entry near {out.row.at}: if there is one, another upload spends a submission. "
                 f"`vcp submit sync --dataset {dataset}` matches it later"
             )
-        status: Status = "OK" if out.row.confirmed else "WARN"
+        status: Status = "OK" if out.row.confirmed and out.sync == "ok" else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 
     run_command(
@@ -334,11 +369,14 @@ def record_cmd(
             "dataset": dataset,
             "id": submission_id,
             "at": str(out.row.at),
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         if out.quota is not None:
             fields.update(out.quota.fields())
-        if out.warnings:
+        if any(w.startswith("quota_overflow:") for w in out.warnings):
             fields["quota_overflow"] = True
+        if out.prior_uploads:
+            fields["already_uploaded"] = out.prior_uploads
         status: Status = "WARN" if out.warnings else "OK"
         human = [f"warning: {w}" for w in out.warnings]
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
@@ -369,7 +407,11 @@ def score_cmd(
             data_root=data_root,
             configs_root=configs_root,
         )
-        fields: dict[str, FieldValue] = {"dataset": dataset, "id": submission_id}
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "id": submission_id,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
         if row.public is not None:
             fields["public"] = row.public
         if row.private is not None:
@@ -399,6 +441,8 @@ def sync_cmd(
             "foreign": res.foreign,
             "refreshed": res.refreshed,
             "unconfirmed": len(res.unconfirmed),
+            "bound": res.bound,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
         status: Status = "WARN" if res.foreign or res.unconfirmed else "OK"
@@ -406,6 +450,7 @@ def sync_cmd(
             "matched": res.matched,
             "unconfirmed": res.unconfirmed,
             "refreshed": res.refreshed,
+            "bound": res.bound,
         }
         return status, fields, payload, human
 
@@ -436,6 +481,7 @@ def final_cmd(
             "unranked": len(res.unranked),
             "holdout_unseals": res.row.holdout_unseals or 0,
             "dry_run": dry_run,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         if res.needs_reupload:
             fields["needs_reupload"] = res.needs_reupload
@@ -445,6 +491,11 @@ def final_cmd(
             for e in (res.row.table or [])
         ]
         human += [f"warning: {w}" for w in res.warnings]
+        if res.resend is not None:
+            human.append(
+                f"needs_reupload: the board scores the last upload, and that is not "
+                f"{res.needs_reupload}; {res.resend}"
+            )
         warn = bool(res.unranked or res.needs_reupload or res.warnings)
         status: Status = "WARN" if warn else "OK"
         return status, fields, res.row.model_dump(mode="json", exclude_none=True), human
@@ -464,12 +515,12 @@ def lock_cmd(
 
     def fn() -> CmdResult:
         row = lock(dataset, reason, data_root=data_root, configs_root=configs_root)
-        return (
-            "OK",
-            {"dataset": dataset, "locked": True},
-            row.model_dump(mode="json", exclude_none=True),
-            [],
-        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "locked": True,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
+        return "OK", fields, row.model_dump(mode="json", exclude_none=True), []
 
     run_command("submit.lock", json_mode, data_root, fn, context={"dataset": dataset})
 
@@ -486,12 +537,12 @@ def unlock_cmd(
 
     def fn() -> CmdResult:
         row = unlock(dataset, reason, data_root=data_root, configs_root=configs_root)
-        return (
-            "OK",
-            {"dataset": dataset, "locked": False},
-            row.model_dump(mode="json", exclude_none=True),
-            [],
-        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "locked": False,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
+        return "OK", fields, row.model_dump(mode="json", exclude_none=True), []
 
     run_command("submit.unlock", json_mode, data_root, fn, context={"dataset": dataset})
 
@@ -512,6 +563,7 @@ def status_cmd(
             "staged": st.staged,
             "uploaded": st.uploaded,
             "foreign": st.foreign,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         warn = False
         if st.quota is None:
@@ -563,3 +615,46 @@ def report_cmd(
         return "OK", {"dataset": dataset, "rows": len(rows)}, payload, human
 
     run_command("submit.report", json_mode, data_root, fn, context={"dataset": dataset})
+
+
+@ledger_app.command("adopt")
+def adopt_cmd(
+    dataset: DatasetOpt,
+    sources: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--from",
+            help="another ledger to merge in (repeatable); this checkout's configs ledger is "
+            "always included",
+        ),
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Create the shared ledger once (ledger: shared): merge this checkout's configs ledger and
+    every --from, or start it empty."""
+
+    def fn() -> CmdResult:
+        res = adopt(dataset, sources=sources, data_root=data_root, configs_root=configs_root)
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "ledger": "shared",
+            "rows": res.rows,
+            "sources": res.sources,
+            "duplicates": res.duplicates,
+        }
+        human = [
+            f"adopted {res.rows} row(s) from {res.sources} ledger(s) into {res.path} "
+            f"({res.duplicates} duplicate(s) dropped)",
+            "vcp no longer reads the configs ledger; whether git keeps it is your call",
+        ]
+        payload = {
+            "path": str(res.path),
+            "rows": res.rows,
+            "sources": res.sources,
+            "duplicates": res.duplicates,
+        }
+        return "OK", fields, payload, human
+
+    run_command("submit.ledger.adopt", json_mode, data_root, fn, context={"dataset": dataset})

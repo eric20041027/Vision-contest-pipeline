@@ -15,6 +15,65 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.12.0] - 2026-09-29
+
+RSNA Knee 第二輪回報的 VCP-038 第 2–4 段與 VCP-014（#33）；tag `v0.12.0` 打在發版 PR 的合併
+commit 上。MINOR 的理由：
+- `submit.yaml` 新欄位 `ledger: configs | shared`（`configs` 不寫出）。
+- 新命令 `vcp submit ledger adopt`。
+- 新選項：`submit upload --no-sync / --force "<理由>"`。
+- VERDICT 新欄位：`ledger=`（寫入命令與 `status`）、`sync=`、`bound=`、`forced=`、`uploads=`、
+  `already_uploaded=`、`rows=`、`sources=`、`duplicates=`。
+- `reason=` 新字：`sync_failed:`、`already_uploaded:`、`not_adopted:`、`not_shared:`、
+  `ledger_conflict:`。`locked:` 也用在等不到台帳鎖、以及同一個程序重入同一把鎖的 ABORT 上；既有的
+  `invalid:`、`exists:`、`not_found:` 用在新情境。
+- 台帳寫入內容的改變：
+  - `uploaded` 的新來源 `source=platform`（同步綁上的平台發）與 `reason` 欄位（`--force` 的理由）；
+  - `scored` 依 ref 冪等，`sync` 不再每次重寫。
+
+### Added
+- `ledger: shared`：台帳正本放在 `<data_root>/submit/<test>/submissions.jsonl`，同一個 data root 的
+  worktree 共用一份。
+  - 正本只由 `vcp submit ledger adopt [--from PATH]…` 建立。本 checkout 的 configs 台帳一定收，
+    `--from` 再加；依 `ts` 合併一次，相同的列只留一份，同 id 的 `staged` 不同 → `ledger_conflict:`。
+  - 沒有舊台帳也要跑一次，它建立空的正本。還沒 adopt 前，每個 submit 命令（含 `status`、`report`）
+    都 FAIL `not_adopted:`。
+  - `--from` 指到正本自己 → `invalid:`；同一個來源換個寫法再給一次，只讀一次。
+- 台帳鎖 `vcp.core.lock`：`<data_root>/locks/submissions-<hash16>.lock`，Windows 用
+  `msvcrt.locking`、其他平台用 `fcntl.flock`。
+  - 寫入命令整段持有，拿到鎖才重讀台帳。
+  - 等 60 秒拿不到 → ABORT `locked:`，訊息寫著持有者的命令、pid、主機與時間。
+  - 同一個程序重入同一把鎖 → 立刻 `locked:`，不等。
+- `submit upload` 先把平台列表同步進台帳再算配額（讀不到 → `sync_failed:`；`--no-sync` 略過、
+  WARN）。同步之後才 FAIL 時，VERDICT 帶 `sync=` / `bound=`，同步寫的列留在台帳。
+- 重傳護欄（VCP-014）：同一個 id 已上傳過 → FAIL `already_uploaded:`，訊息說明要加
+  `--force "<理由>"` 才照傳。`final` 需要重傳時印出完整命令。
+- `submit sync` 把對上 id 卻沒有對應上傳的平台發（PENDING 也算）寫成 `uploaded(source=platform)`，
+  算配額也擋重傳；VERDICT `bound=`。
+
+### Changed
+- `submit sync`：
+  - 只在 ref 還沒有 `scored` 列、或分數或狀態變了才寫；「最新分數」依平台時間 `at`。
+  - 用描述配對時，先找以 id 開頭的描述，沒有才找提到 id 的（`S2 same as S1` 是 S2 的）。
+  - 檔名＋時間的配對只看 vcp 與手動的上傳。
+- `submit record`：
+  - 補記已上傳過的 id → WARN `already_uploaded=<n>`（仍寫列）。
+  - `--platform-ref` 已經有 `uploaded` 列 → FAIL `exists:`，不寫。配額裡同一個 ref 的上傳只算一次。
+- `submit stage` 不收 `submissions.jsonl` 這個 id（`invalid:`）。
+- `status`、`report`、備份不上鎖，略過還沒寫完的最後一列；備份的走訪與驗證、provenance 的檢查點
+  跟著台帳位置走。
+
+### 相容性
+- 新 vcp 照讀舊台帳與舊 `submit.yaml`。`configs` 模式除了加鎖、上傳前同步、綁定與護欄，其他行為
+  不變，既有台帳不必遷移。
+- 舊 vcp 讀得動新台帳（用到的欄位都是既有的），但不會加鎖；讀到帶 `ledger:` 的 `submit.yaml` 會
+  FAIL `extra_forbidden`。
+- 切到 `shared` 的程序：
+  1. 每個寫入者都先升到 0.12.0。
+  2. 每個 worktree 都 commit 並拉到 `ledger: shared`；之後所有 submit 命令都停在 `not_adopted:`。
+  3. 在任一個 checkout 跑一次 `vcp submit ledger adopt --dataset T --from <其他 worktree 的 configs
+     台帳>…`；本 checkout 的一定會收進來。
+
 ## [0.11.0] - 2026-09-28
 
 RSNA Knee 第二輪回報的 VCP-040 + 042（#30）與 VCP-041（#31）；tag `v0.11.0` 打在發版 PR 的合併

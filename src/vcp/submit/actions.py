@@ -95,10 +95,16 @@ class UploadOutcome:
     bound: int = 0  # uploaded rows of source=platform the pre-upload sync wrote (§4.4)
 
 
+def _known_refs(ledger: SubmissionLedger) -> frozenset[str]:
+    """Every platform ref the ledger already holds, in any row: earlier submissions."""
+    return frozenset(r.platform_ref for r in ledger.rows if r.platform_ref)
+
+
 def _unclaimed(result: UploadResult, ledger: SubmissionLedger) -> UploadResult:
-    """A ref the ledger already holds is an earlier submission's, not this upload's (VCP-037):
-    a read-back can meet the last upload of the same id while this one is not listed yet."""
-    known = {r.platform_ref for r in ledger.rows if r.platform_ref}
+    """A ref the ledger already holds is an earlier submission's, not this upload's (VCP-037).
+    The read-back looks past such refs itself (spec 2026-10-04 §6.1); this guards a ref the
+    CLI printed, and a platform that ignores ``known_refs``."""
+    known = _known_refs(ledger)
     if result.platform_ref is None or result.platform_ref not in known:
         return result
     return replace(result, confirmed=False, platform_ref=None, readback="known_ref")
@@ -171,7 +177,9 @@ def _send(
     if reason is None:
         assert_not_uploaded(p.ledger, submission_id)
     msg = f"{submission_id} {message}".strip() if message else submission_id
-    result = get_platform(p.profile.platform).upload(p.staged, p.artifact, msg, p.profile, runner)
+    platform = get_platform(p.profile.platform)
+    known = _known_refs(p.ledger)
+    result = platform.upload(p.staged, p.artifact, msg, p.profile, runner, known_refs=known)
     result = _unclaimed(result, p.ledger)
     row = LedgerRow(
         event="uploaded",

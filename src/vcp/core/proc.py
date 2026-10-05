@@ -21,6 +21,24 @@ def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
+def timed_runner(seconds: float) -> Runner:
+    """``default_runner`` with a time limit: past it the child is killed and
+    ``subprocess.TimeoutExpired`` raised. For calls made while a lock is held -- a submissions
+    list inside the ledger's transaction (spec 2026-10-04 §6.3) -- never for an upload itself."""
+
+    def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=seconds,
+        )
+
+    return run
+
+
 def redact(text: str) -> str:
     text = _KV.sub(lambda m: f"{m.group(1)}=<redacted>", text)
     text = _BEARER.sub("bearer <redacted>", text)

@@ -19,6 +19,8 @@ class ManualPlatform:
         message: str,
         profile: PlatformProfile,
         runner: Runner | None,
+        *,
+        known_refs: frozenset[str] = frozenset(),
     ) -> UploadResult:
         raise ValidationFailed(
             "manual_platform: this profile has no upload API; upload by hand, then "

@@ -11,6 +11,10 @@ An upload the CLI's answer does not confirm is read back from the submissions li
 CLI 2.2.4 answers a code submission with the server's message alone -- no success phrase, no
 ref -- so the answer alone never confirmed one. The same CLI exits 0 on a file upload that
 failed before anything was submitted; its words for that are a FAIL here, not a WARN.
+
+A CLI that exits non-zero is read back too (VCP-047): it can lose its answer after the platform
+took the upload. Every read-back looks past the refs the ledger already holds, and every call
+for the list gets ``LIST_TIMEOUT`` seconds -- the list is read while the ledger's lock is held.
 """
 
 from __future__ import annotations
@@ -19,14 +23,15 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from vcp.core.errors import PlatformError, ValidationFailed, VcpError
+from vcp.core.errors import PlatformError, PlatformTimeout, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_text
-from vcp.core.proc import last_line
+from vcp.core.proc import last_line, timed_runner
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.matching import leads
 from vcp.submit.platforms.base import (
@@ -38,9 +43,6 @@ from vcp.submit.platforms.base import (
     redact,
 )
 from vcp.submit.schema import PlatformProfile, Staged
-
-if TYPE_CHECKING:
-    import subprocess
 
 log = logging.getLogger("vcp")
 
@@ -59,10 +61,17 @@ READBACK_DELAYS = (0.0, 2.0, 5.0, 10.0)
 READBACK_SKEW = timedelta(minutes=2)
 PAGE_SIZE = "200"
 MAX_PAGES = 100
+# Seconds one call for the submissions list may take (spec 2026-10-04 §6.3): such calls run
+# while the ledger's lock is held. An upload itself has no limit -- a big file can take long.
+LIST_TIMEOUT = 120.0
 _EMPTY = {"", "none", "null", "nan"}
 
 
-def _command(profile: PlatformProfile, runner: Runner | None) -> tuple[list[str], Runner]:
+def _command(
+    profile: PlatformProfile, runner: Runner | None, *, timeout: float | None = None
+) -> tuple[list[str], Runner]:
+    """The CLI and the runner to call it with; ``timeout`` bounds each call of the real CLI (an
+    injected runner keeps its own time)."""
     if runner is None:
         exe = profile.kaggle_command[0]
         if shutil.which(exe) is None:
@@ -70,14 +79,18 @@ def _command(profile: PlatformProfile, runner: Runner | None) -> tuple[list[str]
                 f"kaggle_not_found: {exe!r} is not on PATH; set kaggle_command in submit.yaml",
                 fields={"command": exe},
             )
-        runner = default_runner
+        runner = default_runner if timeout is None else timed_runner(timeout)
     return list(profile.kaggle_command), runner
 
 
+def _cli_error(proc: subprocess.CompletedProcess[str]) -> str:
+    """The redacted last line a failed CLI printed: stderr first, else stdout."""
+    return last_line((proc.stderr or "").strip() or (proc.stdout or ""))
+
+
 def _failed(proc: subprocess.CompletedProcess[str]) -> PlatformError:
-    text = (proc.stderr or "").strip() or (proc.stdout or "")
     return PlatformError(
-        f"kaggle CLI failed (exit {proc.returncode}): {last_line(text)}",
+        f"kaggle CLI failed (exit {proc.returncode}): {_cli_error(proc)}",
         fields={"exit_code": proc.returncode},
     )
 
@@ -164,7 +177,11 @@ class KagglePlatform:
         message: str,
         profile: PlatformProfile,
         runner: Runner | None,
+        *,
+        known_refs: frozenset[str] = frozenset(),
     ) -> UploadResult:
+        """``known_refs``: the refs the ledger already holds; a read-back looks past them (spec
+        2026-10-04 §6.1)."""
         base, run = _command(profile, runner)
         cmd = [*base, "competitions", "submit"]
         if staged.artifact.kind == "kernel":
@@ -176,7 +193,9 @@ class KagglePlatform:
         started = utc_now()
         proc = run(cmd)
         if proc.returncode != 0:
-            raise _failed(proc)
+            return self._after_failure(
+                proc, staged.submission_id, started, profile, runner, known_refs
+            )
         detail = last_line(proc.stdout)
         if UPLOAD_FAILED in proc.stdout.lower():
             raise PlatformError(
@@ -188,8 +207,45 @@ class KagglePlatform:
             return UploadResult(confirmed=True, platform_ref=printed.group(1), detail=detail)
         if SUCCESS in proc.stdout.lower():
             return UploadResult(confirmed=True, platform_ref=None, detail=detail)
-        ref, outcome = self._read_back(staged.submission_id, started, profile, runner)
+        ref, outcome = self._read_back(staged.submission_id, started, profile, runner, known_refs)
         return UploadResult(ref is not None, ref, detail, readback=outcome)
+
+    def _after_failure(
+        self,
+        proc: subprocess.CompletedProcess[str],
+        submission_id: str,
+        started: datetime,
+        profile: PlatformProfile,
+        runner: Runner | None,
+        known: frozenset[str],
+    ) -> UploadResult:
+        """spec 2026-10-04 §6: the CLI can lose its answer after the platform took the upload,
+        so a non-zero exit is read back too -- the same window and matching, inside the same
+        ledger transaction. A match is the upload (recorded; the command WARNs); anything else
+        fails without a row: ``upload_failed:`` when nothing for the id was listed,
+        ``upload_unconfirmed:`` when vcp cannot tell."""
+        head = f"kaggle CLI failed (exit {proc.returncode}): {_cli_error(proc)}"
+        ref, outcome = self._read_back(submission_id, started, profile, runner, known)
+        if ref is not None:
+            return UploadResult(
+                True, ref, _cli_error(proc), readback=outcome, exit_code=proc.returncode
+            )
+        fields = {"exit_code": proc.returncode, "readback": outcome}
+        if outcome == "not_listed":
+            raise PlatformError(
+                f"upload_failed: {head}; for {sum(READBACK_DELAYS):g} s the platform listed no "
+                f"submission whose description opens with {submission_id}, so it may be sent "
+                "again: the next upload reads the list first and stops at already_uploaded: if "
+                "it shows up late -- under --no-sync, look at the platform first",
+                fields=fields,
+            )
+        raise PlatformError(
+            f"upload_unconfirmed: {head}; read-back {outcome}: vcp cannot tell whether the "
+            "platform took this upload. Before sending it again, look on the platform for a "
+            f"{submission_id} submission near {stamp(started)}; if one is there, "
+            "`vcp submit sync` records it",
+            fields=fields,
+        )
 
     def _read_back(
         self,
@@ -197,14 +253,17 @@ class KagglePlatform:
         started: datetime,
         profile: PlatformProfile,
         runner: Runner | None,
+        known: frozenset[str] = frozenset(),
     ) -> tuple[str | None, Readback]:
         """The ref of the submission this upload just made, and how the looks went:
-        ``matched`` (one listed entry opens with the id and is stamped between the moment the
-        CLI started and the moment it returned, give or take ``READBACK_SKEW``), ``ambiguous``
-        (two), ``not_listed``, ``failed`` or ``interrupted``. The CLI accepted the upload, so
-        nothing here may fail it: a look that breaks only ends the wait, and ``sync`` settles
-        the rest."""
+        ``matched`` (one listed entry opens with the id, is stamped between the moment the CLI
+        started and the moment it returned, give or take ``READBACK_SKEW``, and is not a ref
+        the ledger holds -- an earlier upload of the id, still listed, is looked past: spec
+        2026-10-04 §6.1), ``ambiguous`` (two), ``known_ref`` (only refs the ledger holds),
+        ``not_listed``, ``failed`` or ``interrupted``. Nothing here raises: a look that breaks
+        only ends the wait."""
         earliest, latest = started - READBACK_SKEW, utc_now() + READBACK_SKEW
+        seen_known = False
         for delay in READBACK_DELAYS:
             try:
                 time.sleep(delay)
@@ -219,22 +278,32 @@ class KagglePlatform:
             except Exception as e:  # anything at all: the upload happened, its row must follow
                 log.warning("kaggle read-back failed: %s", redact(f"{type(e).__name__}: {e}"))
                 return None, "failed"
-            if len(refs) == 1:
-                return next(iter(refs)), "matched"
-            if refs:
+            fresh = refs - known
+            seen_known = seen_known or len(fresh) < len(refs)
+            if len(fresh) == 1:
+                return next(iter(fresh)), "matched"
+            if fresh:
                 return None, "ambiguous"  # two uploads of this id in the window: which is it?
-        return None, "not_listed"
+        return None, "known_ref" if seen_known else "not_listed"
 
     def list_submissions(
         self, profile: PlatformProfile, runner: Runner | None
     ) -> list[PlatformSubmission]:
-        base, run = _command(profile, runner)
+        """Every page of the list; each call of the real CLI gets ``LIST_TIMEOUT`` seconds (spec
+        2026-10-04 §6.3), then ``PlatformTimeout``."""
+        base, run = _command(profile, runner, timeout=LIST_TIMEOUT)
         cmd = [*base, "competitions", "submissions", "--format", "json", "--page-size", PAGE_SIZE]
         cmd.append(str(profile.competition))
         out: list[PlatformSubmission] = []
         token: str | None = None
         for _ in range(MAX_PAGES):
-            proc = run(cmd + (["--page-token", token] if token else []))
+            try:
+                proc = run(cmd + (["--page-token", token] if token else []))
+            except subprocess.TimeoutExpired:
+                raise PlatformTimeout(
+                    "kaggle CLI timed out: no answer to `competitions submissions` within "
+                    f"{LIST_TIMEOUT:g} s"
+                ) from None
             if proc.returncode != 0:
                 raise _failed(proc)
             page, token = parse_submissions(proc.stdout)

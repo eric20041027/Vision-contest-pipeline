@@ -1,11 +1,12 @@
 import json
 import logging
 import subprocess
+import sys
 from datetime import timedelta
 
 import pytest
 
-from vcp.core.errors import PlatformError, ValidationFailed, VcpError
+from vcp.core.errors import PlatformError, PlatformTimeout, ValidationFailed, VcpError
 from vcp.core.time import parse_stamp, stamp
 from vcp.submit.platforms import get_platform, kaggle
 from vcp.submit.platforms.base import redact
@@ -136,7 +137,7 @@ def test_manual_platform_refuses(tmp_path):
         p.list_submissions(_profile(platform="manual"), None)
 
 
-def test_kaggle_upload_commands_and_outcomes(tmp_path):
+def test_kaggle_upload_commands_and_outcomes(tmp_path, no_wait):
     p = get_platform("kaggle")
     art = tmp_path / "submission.csv"
     art.write_text("id\n", encoding="utf-8")
@@ -146,11 +147,14 @@ def test_kaggle_upload_commands_and_outcomes(tmp_path):
     assert runner.calls == [  # the success phrase confirms it: no read-back
         ["fake-kaggle", "competitions", "submit", "-f", str(art), "-m", "S1 note", "-q", "c1"]
     ]
-    runner = FakeRunner([(1, "", f"401 Unauthorized key={SECRET}")])
-    with pytest.raises(PlatformError, match="exit 1") as ei:
+    # a failed CLI is read back (VCP-047): nothing listed, so nothing was submitted
+    looks = [_listing()] * len(kaggle.READBACK_DELAYS)
+    runner = FakeRunner([(1, "", f"401 Unauthorized key={SECRET}"), *looks])
+    with pytest.raises(PlatformError, match=r"upload_failed: kaggle CLI failed \(exit 1\)") as ei:
         p.upload(_staged(), art, "S1", _profile(), runner)
-    assert SECRET not in str(ei.value) and ei.value.fields == {"exit_code": 1}
-    assert ei.value.status == "FAIL"
+    assert SECRET not in str(ei.value)
+    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed"}
+    assert ei.value.status == "FAIL" and runner.calls[1:] == [LIST] * len(looks)
 
 
 def _kernel_upload(runner):
@@ -266,6 +270,7 @@ def test_a_failing_read_back_leaves_the_upload_unconfirmed_instead_of_failing(
     [
         (OSError("kaggle vanished"), "failed"),
         (RuntimeError("anything at all"), "failed"),
+        (subprocess.TimeoutExpired(["kaggle"], 120), "failed"),  # a list that hung (VCP-047)
         (KeyboardInterrupt(), "interrupted"),
     ],
 )
@@ -412,3 +417,78 @@ def test_failure_message_falls_back_to_stdout(tmp_path):
     with pytest.raises(PlatformError, match="denied on stdout") as ei:
         p.upload(_staged(), art, "S1", _profile(), runner)
     assert SECRET not in str(ei.value)
+
+
+# --- VCP-047: a failed CLI is read back; known refs are looked past; lists time out -----------
+
+CLI_DOWN = (1, "", f"('Connection aborted.', RemoteDisconnected('closed')) key={SECRET}")
+LOOKS = len(kaggle.READBACK_DELAYS)
+TWO_IN_THE_WINDOW = _listing((51234, "S1", 0), (51230, "S1 b", 1))
+ONLY_THE_KNOWN_ONE = _listing((51234, "S1", 0))
+
+
+def _upload(runner, *, known=frozenset()):
+    return get_platform("kaggle").upload(
+        _staged("kernel"), None, "S1", _profile(submission_kind="kernel"), runner, known_refs=known
+    )
+
+
+def test_a_failed_cli_is_read_back_and_an_upload_the_list_shows_is_returned(no_wait):
+    runner = FakeRunner([CLI_DOWN, _listing((51234, "S1", 0))])
+    res = _upload(runner)
+    assert (res.confirmed, res.platform_ref, res.readback) == (True, "51234", "matched")
+    assert res.exit_code == 1 and runner.calls[1:] == [LIST]
+    assert "Connection aborted" in res.detail and SECRET not in res.detail
+
+
+@pytest.mark.parametrize(
+    ("answers", "known", "word", "outcome"),
+    [
+        ([_listing()] * LOOKS, frozenset(), "upload_failed", "not_listed"),
+        ([TWO_IN_THE_WINDOW], frozenset(), "upload_unconfirmed", "ambiguous"),
+        ([(2, "", f"503 key={SECRET}")], frozenset(), "upload_unconfirmed", "failed"),
+        ([ONLY_THE_KNOWN_ONE] * LOOKS, frozenset({"51234"}), "upload_unconfirmed", "known_ref"),
+    ],
+    ids=["not-listed", "ambiguous", "list-failed", "only-a-known-ref"],
+)
+def test_a_failed_cli_the_list_does_not_settle_fails(no_wait, answers, known, word, outcome):
+    runner = FakeRunner([CLI_DOWN, *answers])
+    with pytest.raises(PlatformError, match=rf"{word}: kaggle CLI failed \(exit 1\)") as ei:
+        _upload(runner, known=known)
+    assert ei.value.fields == {"exit_code": 1, "readback": outcome}
+    assert ei.value.status == "FAIL" and SECRET not in str(ei.value)
+
+
+def test_a_failed_cli_whose_read_back_is_interrupted_fails_unconfirmed(no_wait):
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(args, 1, "", "connection reset")
+        raise KeyboardInterrupt
+
+    with pytest.raises(PlatformError, match="upload_unconfirmed:") as ei:
+        _upload(runner)
+    assert ei.value.fields == {"exit_code": 1, "readback": "interrupted"}
+
+
+def test_a_read_back_looks_past_the_refs_the_ledger_holds(no_wait):
+    """spec 2026-10-04 §6.1: a --force re-send while the earlier upload is still listed."""
+    earlier = _listing((51230, "S1", 1))
+    both = _listing((51230, "S1", 1), (51234, "S1 again", 0))
+    res = _upload(FakeRunner([(0, KERNEL_REPLY, ""), earlier, both]), known=frozenset({"51230"}))
+    assert res.confirmed and res.exit_code == 0
+    assert (res.platform_ref, res.readback) == ("51234", "matched")
+
+
+def test_a_list_that_hangs_is_cut_off_after_the_timeout(monkeypatch):
+    """spec 2026-10-04 §6.3: every list call gets LIST_TIMEOUT seconds, and a real child that
+    overruns it is killed."""
+    assert kaggle.LIST_TIMEOUT == 120.0
+    monkeypatch.setattr(kaggle, "LIST_TIMEOUT", 0.5)
+    profile = _profile(kaggle_command=[sys.executable, "-c", "import time; time.sleep(5)"])
+    with pytest.raises(
+        PlatformTimeout, match="no answer to `competitions submissions` within 0.5 s"
+    ):
+        get_platform("kaggle").list_submissions(profile, None)

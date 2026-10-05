@@ -36,6 +36,9 @@ class UploadResult:
     platform_ref: str | None
     detail: str
     readback: Readback | None = None  # None: no read-back happened
+    # The CLI's own exit status: not 0 only when it failed and the read-back found the upload
+    # anyway (spec 2026-10-04 §6.1) -- the row is written, the command WARNs.
+    exit_code: int = 0
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,8 @@ class Platform(Protocol):
         message: str,
         profile: PlatformProfile,
         runner: Runner | None,
+        *,
+        known_refs: frozenset[str] = frozenset(),
     ) -> UploadResult: ...
 
     def list_submissions(

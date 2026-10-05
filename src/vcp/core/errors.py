@@ -72,6 +72,11 @@ class PlatformError(VcpError):
     status = "FAIL"
 
 
+class PlatformTimeout(PlatformError):
+    """An external tool's CLI gave no answer within its time limit and was stopped. The command
+    that waited names it under its own word -- ``sync_failed:`` for a submissions list."""
+
+
 class AccessDeniedError(VcpError):
     """A role-scoped accessor refused a read the caller was not authorised for. Actionable:
     open the access with the subset in its allowed set, or stop reading it."""

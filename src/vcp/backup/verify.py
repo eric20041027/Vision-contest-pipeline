@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from vcp.artifact import store
+from vcp.backup.completeness import Gap, manifest_gaps
 from vcp.backup.dest import Destination, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
@@ -34,10 +35,13 @@ from vcp.measure.runs import prediction_path
 from vcp.measure.schema import RunCard
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.schema import Staged
+from vcp.train.checkpoints import newest_per_path
 from vcp.train.schema import TrainRecord
 
 SKIP_KEYS = frozenset({"downloaded_at"})
-REASONS = ("mismatch", "missing", "drift", "bad_stamps")
+# `reason=` priority. manifest_incomplete leads (spec 2026-10-04 §4.2): its remedy is a new
+# manifest, which makes every other finding about this one moot.
+REASONS = ("manifest_incomplete", "mismatch", "missing", "drift", "bad_stamps")
 Adder = Callable[[str, str, str], None]
 
 
@@ -56,6 +60,8 @@ class VerifyResult:
     copy_problems: list[str]
     drift: list[Drift]
     bad_stamps: list[str]
+    # spec 2026-10-04 §4.2: files the manifest's runs registered that it does not list
+    incomplete: list[Gap] = field(default_factory=list)
 
     @property
     def first_bad(self) -> str | None:
@@ -63,7 +69,8 @@ class VerifyResult:
 
     @property
     def problems(self) -> list[str]:
-        out = list(self.copy_problems)
+        out = [f"manifest_incomplete:{g.what}" for g in self.incomplete]
+        out += self.copy_problems
         out += [f"drift:{d.what}" for d in self.drift]
         out += [f"bad_stamps:{b}" for b in self.bad_stamps]
         return out
@@ -151,8 +158,7 @@ def _run_card(local: Path, paths: DatasetPaths, add: Adder) -> None:
 
 def _train_record(local: Path, paths: DatasetPaths, add: Adder) -> None:
     rec = load_yaml_model(local, TrainRecord)
-    newest = {c.path: c for c in rec.checkpoints}  # per path: a --resume that changed bytes wins
-    for path, c in newest.items():
+    for path, c in newest_per_path(rec.checkpoints).items():
         p = resolve_stored_path(c.path, paths.data_root)
         if p.is_file():
             add(f"{rec.run_id}/train.yaml:checkpoints.{path}", c.sha256, sha256_file(p))
@@ -339,8 +345,9 @@ def verify(
             # standing in for what a `--dest` run could not tell us this time.
             copies_error = exc
     drift = _check_consistency(manifest, paths)
+    gaps = manifest_gaps(manifest, paths)  # the consistency layer's other half (§4.2)
     bad = _check_stamps(manifest, paths)
-    res = VerifyResult(manifest_id, dest, copies, problems, drift, bad)
+    res = VerifyResult(manifest_id, dest, copies, problems, drift, bad, gaps)
     BackupLedger(paths.backup_log).append(
         BackupRow(
             event="verify",
@@ -351,6 +358,7 @@ def verify(
             copies=copies,
             drift=len(drift),
             bad_stamps=len(bad),
+            incomplete=len(gaps) or None,
             first_bad=res.first_bad,
             error=str(copies_error) if copies_error is not None else None,
         )

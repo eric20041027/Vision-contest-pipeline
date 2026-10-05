@@ -1,17 +1,29 @@
 """``vcp backup status`` (read-only): each manifest's last push and verify, the tiers never
-pushed, and whether an rclone config file is still on this machine."""
+pushed, whether it is complete, and whether an rclone config file is still on this machine.
+
+Completeness is recomputed from the manifest every time (spec 2026-10-04 §4.2): a verify row
+written before 0.13.0 never asked, so a passing one cannot vouch for a manifest that lists fewer
+files than its runs registered. Without the run records on this machine the rows' own
+``incomplete`` decides; with none, a manifest written before 0.10.0 stays ``unchecked``."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
+from vcp.backup.completeness import checkable, manifest_gaps
 from vcp.backup.dest import rclone_conf_state
 from vcp.backup.ledger import BackupLedger
+from vcp.backup.manifest import load_manifest
 from vcp.backup.push import TIERS
-from vcp.backup.schema import BackupRow
+from vcp.backup.schema import BackupRow, Manifest
+from vcp.core.build import parse_build_string
+from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.proc import Runner
+
+# The first release whose manifests list every checkpoint path (VCP-035).
+COMPLETE_SINCE = (0, 10, 0)
 
 
 @dataclass(frozen=True)
@@ -25,10 +37,17 @@ class ManifestStatus:
     pushed_tiers: list[int]
     verified: bool
     local_ok: bool
+    incomplete: int | None = 0  # files its runs registered that it does not list; None: unknown
 
     @property
     def unpushed_tiers(self) -> list[int]:
         return [t for t in TIERS if t not in self.pushed_tiers]
+
+    @property
+    def completeness(self) -> str:
+        if self.incomplete is None:
+            return "unchecked"
+        return "incomplete" if self.incomplete else "complete"
 
 
 @dataclass(frozen=True)
@@ -41,10 +60,19 @@ class StatusView:
     def unverified(self) -> list[str]:
         return [m.manifest_id for m in self.manifests if not m.verified]
 
+    @property
+    def incomplete(self) -> list[str]:
+        return [m.manifest_id for m in self.manifests if m.incomplete]
+
+    @property
+    def unchecked(self) -> list[str]:
+        return [m.manifest_id for m in self.manifests if m.incomplete is None]
+
 
 def local_ok(row: BackupRow) -> bool:
-    """The two layers that need no destination: local consistency and timestamps."""
-    return not row.drift and not row.bad_stamps
+    """The two layers that need no destination: local consistency -- completeness included
+    (spec 2026-10-04 §4.3) -- and timestamps."""
+    return not row.drift and not row.bad_stamps and not row.incomplete
 
 
 def passed(row: BackupRow) -> bool:
@@ -61,6 +89,36 @@ def passed(row: BackupRow) -> bool:
     )
 
 
+def _load(paths: DatasetPaths, manifest_id: str) -> Manifest | None:
+    try:
+        return load_manifest(paths, manifest_id)
+    except ValidationFailed:
+        return None  # gone or unreadable: nothing about it can be verified
+
+
+def _older_than_complete(build: str) -> bool:
+    try:
+        version = parse_build_string(build).version
+    except ValueError:
+        return True
+    return tuple(int(part) for part in version.split(".")) < COMPLETE_SINCE
+
+
+def gaps_of(
+    manifest: Manifest | None, paths: DatasetPaths, verifies: list[BackupRow]
+) -> int | None:
+    """How many files the manifest's runs registered that it does not list -- or None when this
+    machine cannot tell (spec 2026-10-04 §4.2)."""
+    if manifest is None:
+        return None
+    if checkable(manifest, paths):
+        return len(manifest_gaps(manifest, paths))
+    recorded = max((v.incomplete or 0 for v in verifies), default=0)
+    if recorded:
+        return recorded
+    return None if _older_than_complete(manifest.vcp_version) else 0
+
+
 def status(
     dataset: str,
     *,
@@ -75,6 +133,8 @@ def status(
         mid = str(row.manifest_id)
         pushes = ledger.of("push", mid)
         verifies = ledger.of("verify", mid)
+        gaps = gaps_of(_load(paths, mid), paths, verifies)
+        complete = gaps == 0
         covered = max((int(p.tier or 0) for p in pushes if p.failed == []), default=0)
         out.append(
             ManifestStatus(
@@ -85,8 +145,9 @@ def status(
                 last_push=pushes[-1] if pushes else None,
                 last_verify=verifies[-1] if verifies else None,
                 pushed_tiers=[t for t in TIERS if t <= covered],
-                verified=any(passed(v) for v in verifies),
-                local_ok=any(local_ok(v) for v in verifies),
+                verified=complete and any(passed(v) for v in verifies),
+                local_ok=complete and any(local_ok(v) for v in verifies),
+                incomplete=gaps,
             )
         )
     return StatusView(dataset, out, rclone_conf_state(runner))

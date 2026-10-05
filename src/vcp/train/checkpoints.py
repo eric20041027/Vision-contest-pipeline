@@ -8,6 +8,7 @@ file on disk is still the one that was trained.
 from __future__ import annotations
 
 import glob as globlib
+from collections.abc import Iterable
 from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
@@ -65,6 +66,18 @@ def register(
     if not added:
         return record, []
     return record.model_copy(update={"checkpoints": [*record.checkpoints, *added]}), added
+
+
+def newest_per_path(checkpoints: Iterable[CheckpointRecord]) -> dict[str, CheckpointRecord]:
+    """The newest record of every checkpoint path, paths in the order first registered.
+    Registration appends, so a later record of the SAME path is a ``--resume`` that changed its
+    bytes -- history, not a second checkpoint -- while five folds that each write ``model.pt``
+    are five paths (VCP-035). Backup's walk, its verify, its completeness rule and ``train
+    upload`` all count checkpoints this one way."""
+    newest: dict[str, CheckpointRecord] = {}
+    for c in checkpoints:
+        newest[c.path] = c
+    return newest
 
 
 def mark_final(record: TrainRecord, path: str, sha256: str) -> TrainRecord:

@@ -193,12 +193,18 @@ def verify_cmd(
             )
             if res.copies["absent"]:  # listed as gone when the manifest was written
                 fields["absent"] = res.copies["absent"]
+        fields["incomplete"] = len(res.incomplete)  # always printed, like drift (§4.2)
         fields["drift"] = len(res.drift)
         fields["bad_stamps"] = len(res.bad_stamps)
         if res.first_bad is not None:
             fields["first_bad"] = res.first_bad
         status: Status = "OK" if res.ok else "FAIL"
         human = [f"copies: {res.copies}" if res.copies else "copies: not checked (no --dest)"]
+        human += [
+            f"manifest_incomplete: {g.what} is not listed ({g.key}); write a new manifest "
+            "under a new id"
+            for g in res.incomplete
+        ]
         human += res.copy_problems
         human += [
             f"drift: {d.what} expected {d.expected[:12]} actual {d.actual[:12]}" for d in res.drift
@@ -209,6 +215,7 @@ def verify_cmd(
             "copy_problems": res.copy_problems,
             "drift": [asdict(d) for d in res.drift],
             "bad_stamps": res.bad_stamps,
+            "incomplete": [asdict(g) for g in res.incomplete],
         }
         return status, fields, payload, human
 
@@ -294,11 +301,23 @@ def status_cmd(
             "dataset": dataset,
             "manifests": len(view.manifests),
             "unverified": len(view.unverified),
+            "incomplete": len(view.incomplete),
             "rclone_conf": view.rclone_conf,
         }
         notes: list[str] = []
         if not view.manifests:
             notes.append("no manifests yet: run `vcp backup manifest`")
+        if view.incomplete:
+            notes.append(
+                "manifest_incomplete: these list fewer files than their runs registered: "
+                f"{', '.join(view.incomplete)}; write a new manifest under a new id, then push "
+                "and verify it"
+            )
+        if view.unchecked:
+            notes.append(
+                "completeness unchecked (written before vcp 0.10.0, and this machine lacks their "
+                f"run records): {', '.join(view.unchecked)}"
+            )
         if view.unverified:
             notes.append(
                 "no verify covered every tier's copies at a destination: "
@@ -312,7 +331,7 @@ def status_cmd(
             f"pushed_tiers={','.join(map(str, m.pushed_tiers)) or '-'}  "
             f"last_push={m.last_push.ts if m.last_push else '-'}  "
             f"last_verify={m.last_verify.ts if m.last_verify else '-'}  "
-            f"verified={m.verified}  local_ok={m.local_ok}"
+            f"verified={m.verified}  local_ok={m.local_ok}  completeness={m.completeness}"
             for m in view.manifests
         ] + notes
         payload = {
@@ -330,6 +349,8 @@ def status_cmd(
                     ),
                     "verified": m.verified,
                     "local_ok": m.local_ok,
+                    "completeness": m.completeness,
+                    "incomplete": m.incomplete,
                 }
                 for m in view.manifests
             ],

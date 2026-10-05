@@ -28,6 +28,7 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import resolve_stored_path
 from vcp.core.proc import Runner
 from vcp.core.time import stamp
+from vcp.train.checkpoints import newest_per_path
 from vcp.train.schema import CheckpointRecord, TrainRecord, UploadRecord
 
 NAME_COLLISION = "name_collision"
@@ -93,9 +94,7 @@ def _targets(record: TrainRecord, only_final: bool) -> dict[str, CheckpointRecor
     are worked out over every path of the run, so ``--final`` uploads under the same name a full
     upload would.
     """
-    current: dict[str, CheckpointRecord] = {}
-    for c in record.checkpoints:
-        current[c.path] = c
+    current = newest_per_path(record.checkpoints)
     names = remote_names(current)
     return {names[path]: c for path, c in current.items() if c.final or not only_final}
 

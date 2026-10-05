@@ -14,6 +14,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from vcp.backup.completeness import manifest_gaps
 from vcp.backup.dest import Destination, RcloneDest, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
@@ -159,6 +160,14 @@ def push(
             "holds no credential",
             fields={"dest": dest},
         )
+    gaps = manifest_gaps(manifest, paths) if tier == 3 or forget_remote else []
+    if tier == 3 and gaps:  # spec 2026-10-04 §4.2: before any byte moves, and no push row
+        raise ValidationFailed(
+            f"manifest_incomplete: {len(gaps)} file(s) its runs registered are not in manifest "
+            f"{manifest_id!r} (first {gaps[0].what}); write a new manifest under a new id, then "
+            "push and verify that one",
+            fields={"incomplete": len(gaps)},
+        )
     chosen = [f for f in manifest.files if f.kind == "file" and f.present and f.tier <= tier]
     with tempfile.TemporaryDirectory(prefix="vcp-push-") as tmp:
         sent = _send(target, chosen, _sources(chosen, paths, Path(tmp)))
@@ -195,6 +204,12 @@ def push(
     if forget_remote and isinstance(target, RcloneDest):
         left = _unverified(manifest, chosen, target)
         listed = sum(1 for f in manifest.files if f.kind == "file")
+        if gaps:  # spec 2026-10-04 §4.2: what was never listed was never pushed either
+            raise ValidationFailed(
+                f"forget_refused: manifest {manifest_id!r} lacks {len(gaps)} file(s) its runs "
+                "registered; write a new manifest under a new id and push every tier of it",
+                fields={**counts, "unverified": len(left), "incomplete": len(gaps)},
+            )
         if left or sent.verified == 0 or listed == 0:
             raise ValidationFailed(
                 f"forget_refused: {len(left)} file(s) of the manifest are not verified at "

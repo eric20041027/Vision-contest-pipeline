@@ -202,6 +202,7 @@ class BackupRow(_Strict):
     copies: dict[str, int] | None = None
     drift: int | None = None
     bad_stamps: int | None = None
+    incomplete: int | None = None  # spec 2026-10-04 §4.3: verify rows, written only when > 0
     first_bad: str | None = None
     error: str | None = None
     pulled: int | None = None

@@ -330,6 +330,46 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             "tests/unit/test_e2e_shared_ledger.py": ["test_two_checkouts_share_one_ledger"],
         },
     ),
+    (
+        "VCP-044/045/046/047 (0.13.0)",
+        "provenance: an index serves one checkout -- another root's index read at this root's "
+        "path is root_mismatch:, never prefix drift, and PostgreSQL sync never replaces another "
+        "root's generation; backup: a manifest that lacks a file its runs registered is caught "
+        "by verify, status and a tier-3 push, and a local remote_copy travels to the destination "
+        "and is checked there before the credential may go; submit: a failed kaggle CLI is read "
+        "back, and an upload the list shows is recorded once",
+        {
+            "tests/unit/provenance/test_index_roots.py": [
+                "test_two_configs_roots_on_one_data_root_both_verify_ok",
+                "test_another_roots_index_fails_root_mismatch_not_prefix_drift",
+                "test_a_damaged_ledger_in_the_same_root_is_still_prefix_drift",
+            ],
+            "tests/unit/provenance/test_postgres_incremental.py": [
+                "test_postgres_sync_never_replaces_another_roots_generation",
+                "test_postgres_generation_without_roots_fails_closed_until_rebuilt",
+            ],
+            "tests/unit/backup/test_completeness.py": [
+                "test_a_manifest_written_the_091_way_lists_one_fold_and_is_incomplete",
+                "test_verify_reports_manifest_incomplete_with_its_count",
+                "test_status_recomputes_so_an_old_passing_row_cannot_vouch",
+                "test_a_tier_3_push_of_an_incomplete_manifest_fails_before_any_byte_moves",
+            ],
+            "tests/unit/backup/test_local_copies.py": [
+                "test_a_tier_3_push_to_rclone_sends_a_local_copy_from_its_checkpoint",
+                "test_rows_written_before_013_do_not_vouch_for_a_local_copy",
+                "test_forget_remote_refuses_until_the_local_copy_is_at_the_destination",
+            ],
+            "tests/unit/submit/test_actions.py": [
+                "test_a_failed_cli_whose_upload_the_list_shows_is_recorded_once",
+                "test_a_failed_cli_the_list_does_not_show_fails_and_writes_nothing",
+                "test_a_failed_cli_vcp_cannot_settle_fails_unconfirmed_and_writes_nothing",
+            ],
+            "tests/unit/test_e2e_backup.py": [
+                "test_an_old_incomplete_manifest_is_caught_and_replaced",
+                "test_a_local_copy_reaches_the_rclone_destination_before_the_credential_goes",
+            ],
+        },
+    ),
 ]
 
 

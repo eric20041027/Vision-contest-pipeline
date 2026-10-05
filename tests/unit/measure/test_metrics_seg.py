@@ -126,7 +126,7 @@ def test_gold_polygon_vs_same_polygon_as_rle_scores_perfectly(encoding):
         assert _run(name, samples, card, preds).value == pytest.approx(1.0)
 
 
-# --- registration details beyond the brief's own applicable_metrics() check.
+# --- registration details: each segmentation metric's defaults, direction and version.
 
 
 def test_registered_declares_defaults_and_direction():

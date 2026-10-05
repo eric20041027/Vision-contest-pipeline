@@ -5,15 +5,27 @@ ledger."""
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import signal
 import subprocess
+import sys
 from collections.abc import Callable
+from typing import Any
 
 Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
 _KV = re.compile(r"(?im)(key|token|secret|password|authorization)\s*[=:]\s*.+$")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
 _LONG = re.compile(r"[A-Za-z0-9+/_-]{32,}")
+# A timed child leads its own process group (POSIX: its own session), so that on a timeout the
+# kill can reach everything it started.
+_OWN_GROUP: dict[str, Any] = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    if sys.platform == "win32"
+    else {"start_new_session": True}
+)
 
 
 def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -21,20 +33,42 @@ def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """End ``proc`` and everything it started. A wrapper -- a ``uv tool`` shim -- runs the real
+    program as a child that keeps the pipes open, so killing the wrapper alone would leave its
+    caller waiting for that child."""
+    if sys.platform == "win32":
+        # /T the whole tree, /F forcibly. No check: a tree that already ended is fine.
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        with contextlib.suppress(ProcessLookupError):  # the group is gone already
+            os.killpg(proc.pid, signal.SIGKILL)
+
+
 def timed_runner(seconds: float) -> Runner:
-    """``default_runner`` with a time limit: past it the child is killed and
+    """``default_runner`` with a time limit: past it the child's whole process tree is killed and
     ``subprocess.TimeoutExpired`` raised. For calls made while a lock is held -- a submissions
     list inside the ledger's transaction (spec 2026-10-04 §6.3) -- never for an upload itself."""
 
     def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        with subprocess.Popen(
             args,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=seconds,
-        )
+            **_OWN_GROUP,
+        ) as proc:
+            try:
+                stdout, stderr = proc.communicate(timeout=seconds)
+            except BaseException:
+                # The time limit, or Ctrl+C -- which a child in its own group no longer receives:
+                # either way, as ``subprocess.run`` does, the child must not outlive the call.
+                _kill_tree(proc)
+                proc.communicate()  # collect what is left once the pipes close
+                raise
+        return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
     return run
 

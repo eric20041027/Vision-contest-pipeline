@@ -2,11 +2,13 @@ import json
 import logging
 import subprocess
 import sys
+import time
 from datetime import timedelta
 
 import pytest
 
 from vcp.core.errors import PlatformError, PlatformTimeout, ValidationFailed, VcpError
+from vcp.core.proc import default_runner, timed_runner
 from vcp.core.time import parse_stamp, stamp
 from vcp.submit.platforms import get_platform, kaggle
 from vcp.submit.platforms.base import redact
@@ -492,3 +494,43 @@ def test_a_list_that_hangs_is_cut_off_after_the_timeout(monkeypatch):
         PlatformTimeout, match="no answer to `competitions submissions` within 0.5 s"
     ):
         get_platform("kaggle").list_submissions(profile, None)
+
+
+# A wrapper (a `uv tool` shim, say) runs the real program as a child that keeps the pipes open.
+# The child beats into a file for at most 30 s, so a survivor would end by itself.
+BEAT = (
+    "import sys, time\n"
+    "for _ in range(600):\n"
+    "    open(sys.argv[1], 'a').write('.')\n"
+    "    time.sleep(0.05)\n"
+)
+WRAPPER = f"import subprocess, sys\nsubprocess.run([sys.executable, '-c', {BEAT!r}, sys.argv[1]])\n"
+
+
+def test_a_timeout_ends_the_whole_process_tree(tmp_path):
+    """spec 2026-10-04 §6.3: a wrapper whose child outlives the limit is cut off at the limit,
+    and the child does not keep running."""
+    beat = tmp_path / "beat"
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        timed_runner(1.0)([sys.executable, "-c", WRAPPER, str(beat)])
+    assert time.monotonic() - started < 10  # waiting for the child would have taken 30 s
+    assert beat.exists(), "the child never started within the limit"
+    time.sleep(0.3)  # a moment for the kill to land, then see whether the child still beats
+    beats = beat.stat().st_size
+    time.sleep(0.5)
+    assert beat.stat().st_size == beats
+
+
+def test_a_call_that_finishes_in_time_returns_what_default_runner_returns():
+    """The tree-kill rewrite leaves alone what a call that ends before the limit returns."""
+    code = "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"
+    args = [sys.executable, "-c", code]
+    timed, plain = timed_runner(30)(args), default_runner(args)
+    assert timed.returncode == 3 and timed.stdout.strip() == "out" and timed.stderr.strip() == "err"
+    assert (timed.args, timed.returncode, timed.stdout, timed.stderr) == (
+        plain.args,
+        plain.returncode,
+        plain.stdout,
+        plain.stderr,
+    )

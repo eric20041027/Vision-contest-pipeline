@@ -2,7 +2,7 @@
 
 ## 三條機械鐵則
 1. 取時只能用 `vcp.core.time.utc_now()` / `stamp()`。ruff TID251 會擋 `datetime.now` / `utcnow` / `today` / `time.time`；唯一例外是 `src/vcp/core/time.py`。
-2. 每個 CLI 命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；exit 0 / 1（FAIL）/ 2（ABORT）。命令永不互動提問；`--json` 時結果 JSON 到 stdout、VERDICT 到 stderr。
+2. 每個 CLI 命令以 `VERDICT cmd=... status=OK|WARN|FAIL|ABORT ...` 收尾；exit 0 / 1（FAIL）/ 2（ABORT）。命令永不互動提問；`--json` 時結果 JSON 到 stdout、VERDICT 到 stderr。命令以 `run_command(context=)` 保留失敗時已知的識別欄位（dataset / run / recipe / id / root 等）；可選值未給時省略。
 3. venv 隔離：核心 `vcp` 一個 venv（`uv sync`）；訓練框架各自 venv，以 editable 裝 `vcp`；量測 venv 凍結後禁 install。
 
 ## 通用性原則
@@ -30,7 +30,7 @@
 - `uv run vcp data materialize --name X --mode npy|png [--resize L] [--stack-seq]`
 - `uv run vcp eval measure --run R`（護欄 → 讀數；`--unseal --reason` 才動 sealed 子集）/ `uv run vcp eval judge --dataset D --prereg ID [--strict]`
 - `uv run vcp eval status --dataset D` / `uv run vcp eval report --dataset D`（兩者唯讀）；比賽自己的指標或格式以 `--plugin projects.<contest>.metrics` 登記
-- `uv run vcp fuse recipe --dataset D --id R --plan P --method wbf|mean|rank_mean --member RUN[:W]…` / `uv run vcp fuse ablate --dataset D --recipe R --preregister --metric M`（每位成員一份準入預登記，交給 `vcp eval judge`；先 ablate 再 measure）
+- `uv run vcp fuse recipe --dataset D --id R --plan P --method wbf|mean|rank_mean --member RUN[:W]…` / `uv run vcp fuse ablate --dataset D --recipe R --preregister --metric M [--replace]`（每位成員一份準入預登記，交給 `vcp eval judge`；先 ablate 再 measure）
 - `uv run vcp train run --run R --dataset D --plan P --export DIR --venv ENV --seed N --checkpoints "…" --final "…" [--upload DEST] -- <訓練命令>` / `uv run vcp train status --run R`（唯讀）/ `uv run vcp train upload --run R --dest DEST`（冪等）
 - `uv run vcp submit stage --dataset T --id S --eval-run E --test-run R` / `uv run vcp submit upload --dataset T --id S`（Kaggle）或 `record --at "…"`（手動）/ `uv run vcp submit final --dataset T`（決選 + 封槍）/ `uv run vcp submit status --dataset T`（唯讀）
 - `uv run vcp backup manifest --dataset D --conclusion submission:ID|judgement:P|run:R|all [--id M]` / `uv run vcp backup push --dataset D --manifest M --dest DEST [--tier 1|2|3] [--forget-remote]`（先小後大、逐檔驗、冪等）/ `uv run vcp backup verify --dataset D --manifest M [--dest DEST [--tier N]]`（副本 / 一致性 / 時戳三層；`--tier` 只限副本層）/ `uv run vcp backup pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` / `uv run vcp backup status --dataset D`（唯讀）
@@ -40,12 +40,18 @@
 - `uv run vcp data diff --from A --to B [--id I] [--plugin M --policy P]` / `uv run vcp provenance rebuild|sync|status|verify-index [--backend sqlite|postgresql] [--pg-service S]` / `uv run vcp provenance ingest --artifact I [--backend postgresql --pg-service S --strategy incremental|full|auto --policy ID]` / `uv run vcp provenance impact --dataset D [--sample S] [--backend ...]` / `uv run vcp provenance stale --head D [--backend ...]` / `uv run vcp provenance explain --entity type:id [--backend ...]` / `uv run vcp provenance graph --out FILE.html|.md|.mmd [--dataset D | --entity type:id] [--head D] [--detail overview|full]`（唯讀：只讀索引、只寫 `--out`，`--out` 不能落在 data root）
 
 ## 版本
-- SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1 落地。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。
+- SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1 全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006），稽核 §11 Wave 1 的第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。
 - `src/vcp/__init__.py` 的 `__version__` 是唯一來源（`pyproject.toml` 動態讀它）。產物的 `vcp_version` 是 `vcp.core.build.build_string()`——版本 + commit + dirty（`0.2.0+g<sha>.dirty`），`vcp version` 印同一字串；每個 release 一個 `vX.Y.Z` annotated tag。`0.1.0` 是未發版的開發期，該時期的產物回推不到單一 commit（CHANGELOG 有說明）。
 
 ## 文件
+- 比賽的實際基準流程：`projects/<contest>/RUNBOOK.md`（真實命令、讀數、外部待續條件）；設計與裁決：同目錄 `DESIGN.md`。Windows 訓練命令使用獨立 venv 的絕對 interpreter；checkpoint 綁定的前處理 / 模型檔不可在訓練後靜默改動。
 - PostgreSQL provenance 操作與安全邊界：`docs/guides/POSTGRESQL_PROVENANCE.md`；研究方法、live 證據與尚缺證據：`docs/benchmarks/postgres-provenance-v1.md`；十項證據總結（給課程與外部讀者）：`docs/benchmarks/postgres-provenance-report-v1.md`；課程簡報素材完整版：`docs/benchmarks/postgres-provenance-course-brief-v1.md`；交接：`docs/handover/POSTGRESQL_ADAPTIVE_PROVENANCE_HANDOFF.md`。
 - 命令參考：`docs/reference/cli.md`（原 README 的完整命令表；README 自 2026-09-15 起只放概觀與 quickstart，英文主檔 + `README.zh-TW.md`）。可執行的入門範例：`examples/quickstart.py`（CI 會跑）。
 - 設計 spec：`docs/superpowers/specs/`；實作計畫：`docs/superpowers/plans/`；賽後報告：`docs/postmortems/`
 - Skills（`.claude/skills/`，`.agents/skills/` 是給 Codex 的鏡射，改一邊要 `cp -r` 到另一邊；給人看的路由圖、時機表與委派模板在 `docs/guides/AGENT_SKILLS.md`；`.claude/` 同時是 Claude Code plugin `vcp` 的根（`.claude/.claude-plugin/plugin.json`，marketplace 在 repo 根的 `.claude-plugin/marketplace.json`），別的專案裝了之後用 `/vcp:<skill>` 呼叫，plugin 版本與 `__version__` 同步）：任何 session 先讀 `vcp-orientation`（層、台帳、VERDICT、不可變等級、文件地圖與 skill 路由）；跑或接手比賽以 `vcp-running-contests` 為入口，它再指向 `vcp-contest-onboarding`（Day 1）、`vcp-data-pipeline`（資料層）、`vcp-eval-and-fuse`（量測與融合準入）、`vcp-train-submit-backup`（訓練、提交、備份）、`vcp-provenance`（資料改版、索引、PostgreSQL、基準量測）、`vcp-provenance-graph`（把索引畫成比賽的 provenance 圖）、`vcp-release-and-environments`（發版、venv / worktree、訓練中的禁區、PR 慣例）、`vcp-extend-registry`（十二個登記軸）。
-- 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。`AGENTS.md` 是本檔給 Codex 的同步版本，改一邊要改另一邊。
+- 交接：`docs/handover/HANDOVER.md`（現況、程式碼地圖、待辦、流程、陷阱）與 `docs/handover/CODEX_PROMPT.md`（接續開發的完整指示）；開放待辦在各後記（`docs/superpowers/plans/*-followups.md`）的最後一節。`CLAUDE.md`（Claude Code 讀）與 `AGENTS.md`（Codex 讀）逐位元相同：改了一份就整份複製到另一份，`diff CLAUDE.md AGENTS.md` 不該有輸出。
+
+## 給 Codex / 其他代理
+- 先讀本檔與 `docs/handover/HANDOVER.md`，再讀要改的那一層的 spec 與後記；spec 的「補充決定」以程式碼為準。
+- 一件事一個分支，一個 commit 一件事（`type(scope): 說明`，scope 可省，不加 co-author trailer），不用 `git add -A`；每個行為變更先寫失敗的測試；commit 前 `uv run ruff check . && uv run ruff format --check .`，合併前全套 `uv run pytest --cov=vcp`。
+- 裁決（spec 沒說的決定）與處置寫進該層後記的最後一節；不對 markdown 跑 `ruff format`；測試重寫台帳 / 卡一律 `newline="\n"`。

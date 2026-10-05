@@ -1,0 +1,482 @@
+old	new	date	subject
+561cc46df4b9bc4be8d25e83717bfac718fe6fa7	d4e49e5d6799866973c50cd2492027f1e0c276dd	2026-09-28	Merge pull request #34 from eric20041027/chore/release-0.12.0
+dd496215ecbbfd82111c2c4e52439b0b6c969810	d6c2d20fea0b59925fb6d63e71317468e4b3ba1e	2026-09-28	chore(release): v0.12.0
+7ebaa16e92cafe5e8a47863bb79d5cb322a0a1d6	891938c82272d2b93d7b6c8fac0fe95ab1d0ae0e	2026-09-28	Merge pull request #33 from eric20041027/feat/vcp-038-shared-ledger
+b7a9abb81abf6fd342d4d9fcb463495b31784b4c	7dd9851873c90a2e94591ecd511e95227f2b3db6	2026-09-28	docs: VCP-038 後記（裁決、已知限制、待辦）
+f2c9c3b8a678d202ca8398822425d81b59d546b1	e8ddafa3b399c6c5cd41b5a56e925911d9e44d29	2026-09-28	test: 鎖的等待測試只在取鎖那段換掉 sleep
+b4a569300990aa6fa4132043a369fea3e161926d	88da12286378335b483902e6b971c88a56cc3db9	2026-09-28	docs: 共用台帳的最終審查修訂：spec、命令參考、skill、CLAUDE.md / AGENTS.md、治理 spec、稽核
+a8be9be12cb96527d9accb0dbe571deaf005af4d	30de4031b05e41997c1c5474844e8f44dcff17e5	2026-09-28	fix(submit): 最終審查修正：正本只由 adopt 建立，adopt 一定收本 checkout 的台帳
+419af8dcef60ce2b1e9f3b34757d7de44bf7a51f	fb41c964f517756d4f00e84886374ce27ecc31e2	2026-09-28	docs: 共用台帳的命令參考、spec 修訂、skill、稽核狀態與端到端測試
+73a7b945fe03f8c51dbbfeaf821bd93b9b1a0d0f	1eef159be0137c6cd4022d5d85aac18de7bba66f	2026-09-28	feat(backup): 備份走訪與驗證、provenance 檢查點跟著台帳位置，略過寫到一半的列
+65f1b3f98d7a656c88c758876a878073b03f9077	8aebe89628d91c33b547c36bb712684102e4f167	2026-09-28	fix(submit): adopt 讀每份來源台帳時也拿它的鎖
+01e6971df51a8443734b443398aca21d7e6b3eee	144509760da5f1cf87d15483c614805794385529	2026-09-28	feat(submit): vcp submit ledger adopt 把各 checkout 的台帳合併成共用正本
+aa7c2d9d021f468a1862a1392ac8faa59769b808	558cf109fbd7b782e92dcf21d488124feca3561c	2026-09-28	feat(submit): upload 先同步平台再算配額、同 id 重傳要 --force、record 補記只 WARN
+51973c6b9e390278784a3a24de7343f2d8780651	ab2ca29fb164ab06e9357544c28f986cd026438a	2026-09-28	feat(submit): sync 綁定台帳沒有的平台發、依 ref 冪等、最新分數依平台時間
+92bcb667c92117e4341cb5bf99bc6135694afcbf	8415ab5541af67964084ec21a585e1eec31888ee	2026-09-28	feat(submit): stage / final / lock / unlock 整段是交易，status / report 跟著台帳位置，VERDICT ledger=
+5e9b783722207699b5ba3e36c82a368ada1705e7	be9964e788ca4ca1230fe90772418d5d4c2ebfb2	2026-09-28	feat(submit): submit.yaml 的 ledger 欄位、台帳位置解析與交易、唯讀略過寫到一半的列
+051b51f3345988cc37fab5ce65558d513a3fe364	34e33d1072e15889fc534f056752c6540c5a3fbb	2026-09-28	feat(core): 台帳鎖 vcp.core.lock：Windows msvcrt、其他平台 fcntl，等不到就 ABORT locked:
+2c2cd1075ac74bcd86f22c6c22273771d0666e03	a37142c0fce2e03582d2ec711752084aab837685	2026-09-28	docs(plan): VCP-038 共用台帳與 VCP-014 的實作計畫
+0d1754670a7b66d72dbbb5fbc6f0d6c77b4820ee	edc33937c0ef49a7984f82b2f5783d1ac6d8a462	2026-09-28	docs(spec): VCP-038 第 2–4 段與 VCP-014：共用台帳正本、加鎖與上傳前同步
+341d94ab3c32024845a80dc806f1b93e7791eb91	fc6b6a7afdad88fb929ffa78425b63859634ea47	2026-09-28	Merge pull request #32 from eric20041027/chore/release-0.11.0
+96f2a8c07bd98c34b4543a18640039039de860f8	ebd9d883e2f828a82f006432dea048c8c8d64e86	2026-09-28	chore(release): v0.11.0
+a55d7dd002d8f28f3fc5d2d18e7864ed7fca75ad	02015e4ada10ffe7edcba75a1eb66149f5e14953	2026-09-28	Merge pull request #31 from eric20041027/feat/vcp-041-dirty-tree
+8034ffaa8fd6698c25631a5ab34ac889806faac6	123d0c5e390c9bee2387f67d56b45fedcdfadad3	2026-09-27	docs: VCP-041 後記（裁決、已知限制、待辦）
+d35143ed3dc7cfdd654b0e581b26fa355daf279e	7b99b4543947af04ff5f284178d2462c74c7b05f	2026-09-27	fix(train): git 子程序保留環境變數給的設定（safe.directory），只清掉選 repo 的變數
+f15960eb394c8a94c55d715befe5e524abfe8b81	27975f9f9b8c3d061177c91d58bd595c96273c31	2026-09-27	docs: dirty 工作樹 spec 修訂（§3.2、§4.1、§4.3、§5）、cli.md 與 skill 補機密提醒、orientation 地圖加 git patch
+c658d59ff400c0b706f7a6190dc0791d1cf4f5f1	88875df9cd70513923dfa18fc3c90c8992c9ee91	2026-09-27	fix(train): submodule 未追蹤檔不算改動、diff 固定 submodule 格式與 --、git 子程序不繼承 GIT_DIR、錯誤帶原因與 commit=
+9ee46d60d1db0abf326e0bf909fc3a001c839b2b	e32ac351d34df74baef0e425956f330a05b15adb	2026-09-27	docs(skill): train run 留下的檔補上 git patch 與 git 欄位
+f017fe856a81b1ef0e53261c90d6af2764172b87	b204cb41c42031bf606c19ffc7aa6fd9a1c91372	2026-09-27	docs: dirty 工作樹的命令參考、spec 修訂、skill 與稽核狀態
+767635e87b64a00308d4a191f59f86fc9f5c31a1	184b03af522cfd4a26aa8b210398e1b0bb612dee	2026-09-27	feat(train): train run --require-clean、追蹤檔改動與中途變動的 WARN、VERDICT commit/modified/untracked
+195f69b53cce9748429a151f884ca2baa18c5c57	4bad0b0d40959f1577ae7be3312343b83a8487af	2026-09-27	feat(train): 環境快照帶完整 git 狀態並寫 patch
+90572c8704526f6e6e8d1787f42feacde8aac9db	b9da9329f7a8d3967aedb0b0045fe57d1c8da3ac	2026-09-27	fix(train): patch 固定 a/ b/ 前綴與 quotepath，git apply 不受使用者設定影響
+352909532bddf3371d50b4acd061251f1e3b2d8c	b599d8c79b441a3b66e2cbda157a3678145668be	2026-09-27	feat(train): 工作樹的 git 狀態：改動與未追蹤路徑、兩個 sha、patch
+4c57ec6269739be1ef582b571a4a41e63a5ba007	a399fbe6c198dd3de071c0d6f407a861e85bf780	2026-09-27	docs(plan): VCP-041 dirty 工作樹的實作計畫
+7e2e21c0674b36ef3a45667b4b85ecc5f867a375	5a068c2e2f97202fd35c37d1332393d657cc8819	2026-09-27	docs(spec): VCP-041 dirty 工作樹的 WARN、--require-clean 與 patch
+ed228ef6b7338afb3d480b45291cfc5ffdb3c175	eb7088a58e307c25c9b0a0eddceeb5df11e74754	2026-09-27	Merge pull request #30 from eric20041027/feat/vcp-040-run-evidence
+dc324502a134d2be4e7e9891ed42bee4bf1a44f6	4819b54a16c5e58b1fbf0fe7444e607759055b1a	2026-09-27	docs: VCP-040/042 後記（裁決、已知限制、待辦）
+bb063181e097b99d6a7184bb40fa6d954e5c2b74	3f28cdeef157dd940e594cc2a7566a416989d733	2026-09-26	docs: 證據與標籤集的 spec 修訂（§4.2、§6.2、§7）、一個 id 一列、e2e 補證據邊
+bfc42f3556fd127a9018dfa43aa17b108dff1b14	5703b0dbb54cfb77013ab257eaa168080ec74ac1	2026-09-26	fix(labels): 無表頭 CSV 不外洩、duplicate 不蓋 id、outside 合計、空 id 與全外部的處理、讀檔前後比對
+d0e924b2077532bd1c15eb29117b757e76dd498b	a51a3b6a14d0aa08d1e05d889620021ce1248b99	2026-09-26	fix(evidence): 證據檔名先驗、Session 附上前查名稱衝突、錯誤欄位不撞成功欄位
+8f872d574052a4794ca78d0368e40cb6d6ad8497	a4875d06e3af77da7f748b6d8fff4de6cfd4238d	2026-09-26	docs: 稽核的 VCP-040/042 改寫成已發出的內容，skill 說明 --id-field 與 --id-col
+03a9e4db6d25cb7f8838d42703c7721b8d1d542b	7408c4b76301c9fdd0f0c06b247355b69b6bf98c	2026-09-26	docs: 證據與標籤集的命令參考、spec 修訂、skill 與端到端測試
+9ee3789f2b0a3a3bef8857fcfa2d1d605404a15f	77d09ded4680adef1227b2dbbb50ffdae0b8ec56	2026-09-26	feat(provenance): 證據與標籤集連到 run，壞掉的參照讓 run broken
+4bda134f3761576bb7a27dc4f67e0e1bdd0805cb	4ae0b44a1f23dfe51ac07cf20fbaaf8a76d7b974	2026-09-26	feat(backup): 備份清單收證據與標籤集，一致性層比對 run 釘住的 manifest
+f01997ca2337455d5b857bd13dbad239b7088ebd	f3be12d9e059b1ebaa5467da65b3fde039cb7e0a	2026-09-26	feat(status): train status 的證據與 --verify、eval status 的 labels
+9192df60dbddae4ec46c43d7c3b29f03ff6980e8	ed8848dd74c2904e7a3d227436eb638a717f52e6	2026-09-26	feat(measure): eval ingest --evidence / --labels
+0179ceed9d15c19c5859dcccbc367045cd5f208d	2fd47a705d28f1f95ef34d08f86d2e39a23cf96f	2026-09-26	fix(train): train run 在第一次寫入前檢查證據名稱衝突
+711cbe37c0c487943d4bed75e96744a9d181f841	ed9ae02b783c23e2b2e7491df66ea7a9ff86b4b8	2026-09-26	feat(train): train run --evidence / --labels，結束時比對證據原檔
+17a1c44fbc314d2520f38f70b6e949eac4cb948f	2628a7084bfdbc8033ee60cd9f700883af824f5d	2026-09-26	feat(train): Session.attach_evidence / attach_labels
+029de5ecfea1f08b81543b8f1dc486588b963343	a9ad193fc76a025c0ced9a672657ce5ed0f37c5c	2026-09-26	feat(data): 附上證據與標籤集：evidence 產物、相容檢查、完整性檢查
+730fd483a4b3ab26b13c35021047960f96b09081	99145946c9961e813432a67dc49c63d7fcd6017f	2026-09-26	feat(cli): vcp data labels
+b84936495f0c9697dc43f68441b6b0d9cfee911b	98b8f20c9d6ef3f061a422d294ea0b81c40d8e08	2026-09-26	feat(data): 標籤集 label_set：對切分 plan 驗證、擋落在其他子集的列
+3b52449fcc10408e76e5f757726e53f06e900505	bce7c885566add0ef14289c28ae88afc65d623c7	2026-09-26	feat(data): run 的證據參照 EvidenceRef、清單規則與空清單不寫出
+4f6e58f31ef6024b16a8607400c2d2ebcddc67c9	d8c3c9df6f08deccf6cbe52f4305559600c5598f	2026-09-26	docs(plan): run 的證據檔與標籤集實作計畫（VCP-040 + VCP-042）
+1c6e2a7018b1d1358b51676cc1d831c389ef62b9	cb90e156887fb18e4a012c82222ab3d4c0c5af9c	2026-09-26	docs(spec): run 的證據檔與標籤集（VCP-040 + VCP-042）
+69918fce1cdb772e992cc6ac27b3bf64ca895c2b	afb6396bb8381ef9dc76e9915a02de06bfccbfe1	2026-09-25	Merge pull request #29 from eric20041027/chore/release-0.10.0
+364eeebad70e7921950de31f852bc53a548478bf	4b7fea46e10ac79e39b3af7ce418ead4fd5cc09a	2026-09-25	chore(release): v0.10.0
+b6230d6850032090ad937e501f95feef86ba523a	48abceaed030732da6832cd8dc84aa47fa19811e	2026-09-25	Merge pull request #28 from eric20041027/fix/vcp-038-foreign-dedup
+339cc186115d7b0aeb46b4921ccf70bbeda3e2bf	08d7d75fdf93d54fa7a7dd011586519c5fac53a3	2026-09-25	Merge remote-tracking branch 'origin/main' into fix/vcp-038-foreign-dedup
+72bf27950688565e1907d28f7a1bed4ad2e30e47	dddc0151d503c09e295b776eeb9830fa36b17668	2026-09-25	Merge pull request #27 from eric20041027/fix/vcp-037-kaggle-confirm
+35492fb8481c807eb8abaa7a44e4a3870f58968d	9029a8c51e4783b0be7e5d13fc81f25419b2d0b1	2026-09-25	Merge branch 'main' into fix/vcp-037-kaggle-confirm
+65c1e7059f9f6156fe5e021affe0d3a07dcaa763	1e3a94d901df2b701a9687a8c3807cc63d00a9e5	2026-09-25	Merge pull request #26 from eric20041027/feat/vcp-043-attempt-env
+5c82243fd17f63ea273fbc726679ac071a2f8719	dd244ee743e0f233d2d78540fc7219c5c6f0a16f	2026-09-25	Merge remote-tracking branch 'origin/main' into fix/vcp-038-foreign-dedup
+e7b8cd268763a06826a05cd22456fbc28f60c4b3	012aad9e61ac2d96f3fcbc0aca15be2246357521	2026-09-25	Merge remote-tracking branch 'origin/main' into fix/vcp-037-kaggle-confirm
+3afcdddc515c21f93dc79aa46fa1668927a188cc	4b0fe2c60a6f18df1faab887d4bb945ca0697cf2	2026-09-25	Merge branch 'main' into feat/vcp-043-attempt-env
+7886962307aab43acd914af577ee63f42603419a	5307cb4d3f7791fad453c9e1b335288de1f4d69b	2026-09-25	Merge pull request #25 from eric20041027/fix/vcp-036-kernel-weights
+3a83e199d15334f3c985b52eac43c62b06f1e397	cda953d9980862c62c1c7c95aecb1b37fd482904	2026-09-25	Merge remote-tracking branch 'origin/main' into feat/vcp-043-attempt-env
+6fb824a59c00327099b2933d0f1936efacc80d59	5d816e9a3f5e3745fd63464fd1b3f5ad5e492330	2026-09-25	Merge branch 'main' into fix/vcp-036-kernel-weights
+60196fbc9ea07e22d98a292dd074c9728e49d5d4	d45c545f1353c88c8f51ad37f5e3acbbadc21522	2026-09-25	Merge pull request #24 from eric20041027/fix/vcp-035-checkpoint-paths
+1f4bbcaea67ee8ffc486589c86ac4b72dfe07a0e	5d7e00fe992b21691d5d9000aba67ce3a697b84d	2026-09-25	fix(submit): 未確認的提示改成永遠正確的做法；readback 用 Literal
+20cb9c105b9fd4d3961a93980560c0324b11005f	bf7e1b5251e36d65346e82bb4f660e0163ce38c8	2026-09-25	fix(submit): 自己的上傳不再同時算成 uploaded 與 foreign（VCP-038 第 1 段）
+d0d6c1dd7106ebce989069687e76e5cd46b11741	bbe765a44fc8ef5b6fb3772ef4979cdb6fcd4bf2	2026-09-25	fix(train): checkpoint、note 與收據都讀 Session.attempt；補崩潰後 --resume 的測試
+820a94fff3a67d65b9e5adc09886e7069918109c	9b21fa63ee10fe484484057e0952ac137a223b81	2026-09-25	fix(submit): Kaggle 上傳以回讀列表確認，kernel 不再永遠 WARN（VCP-037）
+7f04ff7957a712ec86afd68ee12f94c6ed662a2e	96e3a83aa9acf79f6779689066eaf005c4635d6d	2026-09-25	feat(train): 子程序拿得到 attempt 編號，Session.attempt 公開（VCP-043）
+9beda93a10599ea8a5ddcf000167791a2ec81867	17666a5b1d3d452a7310e5c6b69da5b748cbc01b	2026-09-25	fix(submit): kernel 提交的權重必須是被判決的那組（VCP-036）
+ec3494166e48782298f5da936736ab82736cb51f	3b912ba001cff6c5befc8c35df4a7ac6c236891a	2026-09-25	fix(backup): remote_copy 只認這個路徑自己的遠端名稱；沒有檔名的路徑回報清楚的錯誤
+cfc7b22f2647fbd7d03a6c65b8040fbdfa3dfa75	0a7cc1514198527067ca3a5c8b7faa54a5e9e5dc	2026-09-25	fix(backup,train): checkpoint 以路徑為身分，同名的多折 checkpoint 不再被丟掉（VCP-035、VCP-039）
+69851d33a924fbcfd7d0f9b658d8e962104f8659	6ec0fd760c05fc4ee27b2070e899bf17281d63af	2026-09-24	Merge pull request #23 from eric20041027/plugin-manifest
+2f5943972a59af2abdd017752414ffd740149871	e7a75c367cb718305a272519463e4c346bc93cfc	2026-09-24	chore(release): v0.9.1
+48cbb510358bc2e3a870dbafd81f1469d230c6b5	8c731281bac76e596deb980f35dab704bfd08faf	2026-09-24	feat(skills): vcp 的 skill 打包成 Claude Code plugin，任何專案都能用
+44b4357c03bcdd15561bc008826d7e6766acae7d	111615477e593f0bcf27e0bd4a87da3eb5e35940	2026-09-23	Merge pull request #21 from eric20041027/codex/provenance-sqlite-gaps-20260923
+d09d279645f0701928f53ee501bbc19bbd2011e8	e514d4baab9d54f3e90250060921c6949c98f89f	2026-09-23	Merge branch 'main' into codex/provenance-sqlite-gaps-20260923
+1db6443d513e11f2d163b6fbe204587ee1768938	3786b8467f9012b6a4f3e185e64069fad1f62cbc	2026-09-23	Merge pull request #22 from eric20041027/provenance-graph
+4d8b8057e128e899d23d1f91269e44ef24003a55	245ef0896697686e561b567918200db155e03840	2026-09-23	chore(release): v0.9.0
+538f87313b2b6f7dff92b0da097c950aa44d9737	0eeeda2bd3f9c904bdc800e5eeaf2bcc15cea7ab	2026-09-23	docs(skills): 新增 vcp-provenance-graph skill 並接上路由
+61589d331597e3b3295f7872a5ad2206de6a7a57	465341bd9ed3d82dd527b822cade395e91fca9db	2026-09-23	fix(cli): 終端機 code page 編不出的字元改印跳脫，不再弄丟 VERDICT
+91def36e99d8a52fa7380aa64868fd0a2e9e6691	13959c8077cec6528b952b3b193b3605afabf3f6	2026-09-23	feat(provenance): vcp provenance graph 把索引畫成 Mermaid 圖
+3f46b1a9307bfbe33c5a4762a46e9f98878eab76	e83c6d7dafa9ae8b50541e293537fd5d6594fd32	2026-09-23	fix(provenance): preserve SQLite graph gaps for exact verification
+f30715d27947d93af4dd7cdfb1d537e84f6815b2	7184f30ce61c6c9027f002ffb73fbce3a2624a05	2026-09-21	Merge pull request #20 from eric20041027/readme-hero
+f39884ce99f8f8f81d08e599a1ce64199c5bb4a8	24453a2a34b99bb85e66ee98514a1931d0dfaf9d	2026-09-21	docs(readme): skill 時機表回到 README（Working with an AI agent 小節），同步繁中版與文件地圖
+65e7767eed08f291607946d98fce68eb233dc653	079e34ca987c75bf0b220d130c6c0be418f59abf	2026-09-21	docs(readme): 改成產品式入口——hero 終端輸出、對象與非對象、60 秒 demo、一張流程圖；skill 表移到 docs/guides/AGENT_SKILLS.md
+7eba40bf6565bf75cdd3704ad9825ac80ab7bcd4	9af11b24273c07f5cfad61a582525750f98610dc	2026-09-21	Merge pull request #19 from eric20041027/docs-refresh
+50e0011c15baae90ec7f74b99de4e390f2a9bd93	71e0b8124bf0c6b670fd8b03ba503130e4251cc8	2026-09-21	docs: README 加比賽流程圖與 skill 用法/時機，文件同步到 0.8.1 與九個 skill
+f941ad895490153a3d27cf1b3e5a08871ccd9ea8	a1f958e6541d2aefd98498a4eadc50e24a1121e0	2026-09-21	Merge pull request #18 from eric20041027/skills-refresh
+2fc72d6a6278685d32301d1505c95a50e9531bc9	2f8477f087115b043bc29913baf031e64df44d6a	2026-09-21	docs(skills): 補齊 vcp 的 skill 集——新增 orientation、eval-and-fuse、train-submit-backup、provenance、release-and-environments，更新既有四個
+5b6120024907a9638cc3c50025e6b3481b8650dc	6b723648b115d90ffb78e1ec17b038cfcbea10a7	2026-09-21	Merge pull request #17 from eric20041027/release-0.8.1
+b2d8634bd4fb673e7cc9f45ee4f75f5a6bd37e0c	07f756eba89d5f24ab50a5c1e47fef67503da749	2026-09-21	chore(release): v0.8.1
+5bb370821d92ffa50d5f2c041f2cc4db903f8763	00c040fd461fb38f896aa7a4b4be432a0ad78cab	2026-09-20	Merge pull request #16 from eric20041027/docs-course-brief
+9a756115de9980ef40b609ca094f0a770e0784bd	4a16f41c973990313bd79f928fd7b58dd7ad6430	2026-09-20	Merge pull request #15 from eric20041027/fix-receipt-nonce
+e1fbe37ca866e7e8bb403dc59fdb0f7d53bddfa7	4dd64e58f45c84202585bdafc4feb995d4f40047	2026-09-20	docs(provenance): 課程簡報素材完整版 postgres-provenance-course-brief-v1.md
+635ee5445decbc22f145c9fcf999d204a6a24aec	e67e957f36952bb5d99bf5b3c7fbac0b21454093	2026-09-20	fix(access): standalone receipt id 的 nonce 從 16 bit 加寬到 64 bit
+8de872aeddd4dde69341068d790e002996837a1a	38ea8555fc64f0e03b305817de4d05064c41907c	2026-09-20	Merge pull request #14 from eric20041027/provenance-real-rsna-v1
+7e0b40b3fd5ecbbfa9ece1fd8fff754b1ad914ba	db2712d5cc6adf7c549a99cf98ac6ddde3b84927	2026-09-20	docs(provenance): 十項證據總結 postgres-provenance-report-v1.md（給課程與外部讀者）
+a7a261e54be5aa1dd8f38932c307c93b6b3e0b2b	14a74c7ecec64571fa15b2378ad30b9c640133b5	2026-09-20	docs(provenance): 保存 real RSNA six-method v1（3 個真實 transition，18 列全 ok、parity 18/18）
+32f0f6552263cc7895974a08d043fa7294511e9f	0cdec33be237c17f892662e6420bdfbd3dae09b8	2026-09-20	Merge pull request #13 from eric20041027/provenance-heldout-v1
+5012ddac68a82a4ebade32090c555f79c611146b	0344a2c67e14b8157aebeb3812de01ee3d823e3e	2026-09-20	docs(provenance): 保存正式 held-out v1（aggregate gate PASS 1.018 / 1.017，every-scenario 在 1K FAIL）
+2644e8301eb3289940039fdf46fc65f963543fd7	cc1e842e9c5f3834bd51058bbc11957f22dec7a1	2026-09-18	Merge pull request #12 from eric20041027/provenance-six-method-v1
+839ed5980d6935b419cdbe2b194f506d038c01f7	056d4df92ba6aa99c045cc31b27c7d7eed565e3e	2026-09-18	docs(provenance): 保存正式 six-method v1（1K–100K，648 列全 ok、parity 648/648）
+6ab2b7a34dd8fcd3027ff22febffdbbe210d9fd9	10e9693a8de327b96870a4b456e6ab58f80faea8	2026-09-16	Merge pull request #11 from eric20041027/provenance-calibration-v2
+1f6ddebc3ad5fab805c6583c88f5015261d50b00	fa6aede132fb077fb74b03b03150bc9595824578	2026-09-16	docs(provenance): 保存正式 calibration v2 與 policy postgres-adaptive-v1-9f4e58346529
+cb0f8667e64cd21c115ad51b4ce4e3bebf7291b9	301298854a3b81ffb7f5db47f7d5be0212d940c8	2026-09-16	fix(provenance): 驗證模型接受 runtime_environment() 新增的 OS 版本欄位
+b1512ae4101611e9e7e642d460f1f59c065a3bdc	91a3548bbc5579ff3c9c2d421c741d894689d72e	2026-09-15	Merge pull request #10 from eric20041027/opensource-scaffolding
+a3771ff2553c5f1f2641cadc55dfb6452f89a6b2	2ca4c6d9029c997c74f715844a93584e77a61b16	2026-09-15	docs(reference): 修正搬檔後失效的三個相對連結
+acf2e18262163875a64ffb38be55cd93862ebeca	c0f90b2ed55dad5e7d8c0022c72eaa7301a095e9	2026-09-15	test: 在 import 前關掉 typer 的 help 樣式，前一個修正不夠
+ef5ecd35ea1f5e10dcc477d7a97b4ecada5191ae	c6eeb344e3897349dc4d2a388886b4f2d37bd43a	2026-09-15	test: help 輸出強制關色，讓 CLI 測試在 CI 也成立
+dae9a2bc14753dee8cfc0a337b929220737d7747	cafce78592c745cc45d0b532f5bebefa5bfa2f7f	2026-09-15	chore(meta): 加上 MIT 授權與開源專案規格檔案
+e6d73a8cc3591cf804ba9ae04a650b8c5cc36e07	492782bf8d8e475a0abda91f33c49a95cfd20b92	2026-09-15	docs(readme): README 改為開源門面，命令表移到 docs/reference/cli.md
+48b592109dfbb2e3b4a9fbd68ce17091f98249c5	37951c7d832f9cf71912d6ab3b81916b32e6c941	2026-09-15	docs(examples): 新增端到端 quickstart 範例
+ce456eef00e63c976f93ea69f2abcf96c8a8510b	7b51a3f919f7a5d5cbf29a91a1110f57a468d20a	2026-09-15	feat(cli): 讓 python -m vcp 可用
+a537f35f441675879a7fe3f087aa01349e19bc7c	e6424a5436c4c4c363c6ac468743c588cfd1a73e	2026-09-15	Merge pull request #9 from eric20041027/drop-1m-scenarios
+e336f09206df5eb11db16696254f6285649af732	183db8139636f9a1a9ebddf9a88bc6763090e9a9	2026-09-15	perf(provenance): 正式 adaptive 矩陣移除 1M，改為 1K/10K/100K
+283c6fac347395fa1aad00616a779949c1dff0bc	dd0ceb88cfa37a5adb7f4fab0ab3ef02a272d679	2026-09-15	Merge pull request #8 from eric20041027/provenance-exploratory-v1
+5f281af638b82b9b48f20803d3a1374ca483f0e3	6ee6c133cc7f78491dd20d5dccd7d3ac63d48864	2026-09-15	docs(provenance): pending 表的 six-method 列維持 Absent
+89f7c3468d80792af67b714788d9c6fe4dd9069e	d643133f3367292fc1be8b052218d9f7353fab03	2026-09-15	docs(provenance): 保存 1K–100K 五方法探路矩陣與給 Data_Base agent 的回報
+f7fe955dfc547af33bc165a70ab99836b911dfa8	7eed0c3f190c5e4caf69bf4fb97361417cebee5c	2026-09-15	Merge pull request #7 from eric20041027/provenance-evidence
+4c6ab2a30045a27b5c9c9934e417919785b00277	b0d422ed0d1254b98f43edb57ec5d4abb09abe99	2026-09-15	perf(provenance): 串流重放 dataset_diff，先整檔驗證再逐筆進 graph
+d87b449df3e3ecfcfb0557a4711605a41439dcc8	a751494cc97f09e6f1cba9d69e61042f09763a93	2026-09-15	Merge pull request #6 from eric20041027/visual-guide-finish
+b7b39dd53127643b107ad925d3d414a80d3b49dc	b05ecd74d500433b803d8f6f6955242207a9b046	2026-09-15	docs(guides): 補完視覺導覽的兩張圖並連結 README 與 HANDOVER
+9219789620ddea1e8f36661479a3726cc15675c5	e3d691e18f3636204cd2e54fda0885dcf64bd27e	2026-09-15	Merge pull request #5 from eric20041027/codex/postgresql-adaptive-provenance
+d2d45102ad3bdd77950e0bc9cee8acec35f32a8e	f0f65303e60c2fe3350e16f690ffc7b9a9908e1f	2026-09-15	test(provenance): 文件證據邊界測試更新為 live integration 已有、其餘仍缺
+94ed7eead9a2e446d3daf965305157cf606c3bc4	361688a083c65137c284f5d181244a1b01580821	2026-09-15	Merge pull request #4 from eric20041027/codex/dataset-evolution-provenance
+7631a17226236ca3091e4e6090d08146732754bc	7128320d9d16036d03704bebecc3ba0ee71ac80e	2026-09-15	docs(release): 0.7.0 / 0.8.0 標記為已發版並同步 CLAUDE.md
+6966ca3e6ca51cb4151839a9500d556d6d7266a2	f68446e18de957b13eb3bfb2c9158aa44c9cb01c	2026-09-15	docs(provenance): 保存 2026-09-14 的 live PostgreSQL 證據與中止紀錄
+fd92de2fd0b7b8cba333e98e426681ef60073bf1	2f98c331bc770cfd6ae2d62a7f0d47e1d444708b	2026-09-14	perf(provenance): stream historical diff fixtures
+d0a0dcc7c9fcf09584cb5c69e5368ade5b3471d8	f05f03c3f51158d53756256d34e10e6295bd13e9	2026-09-14	perf(provenance): stream synthetic samples
+3bde664837abf941f6e453a2ececf38641a9ff58	e71bf9df09546babafcd46069a70d99803ca517f	2026-09-14	perf(provenance): bound live benchmark memory
+d8cc334a268907e952c0ae251de1bd043df2629f	57045df92ff5d300c4d82a7bb1b201ed38ad2388	2026-09-14	test(provenance): exercise live checkpoint rollback
+af0318830001c7ad12e16371a2cf44f15ae1be3d	0ca45ebce2a001d09b6dbad94e1f0e3d4b4e41d6	2026-09-14	test(provenance): harden live benchmark evidence
+8611b5237d2cd82e1df822b6b55f1b212a0dfab6	5fc13ef7b5488b34f62c0627f126fd5c2d2ddcec	2026-09-14	docs(provenance): refresh final regression evidence
+7eaef001c987af4f341ec8533ca33b4d9e00fed9	bcc486cf2eacca6043c34578c732a18010402a76	2026-09-14	fix(provenance): avoid sqlite adapter historical graph loads
+b465b03ec17247d9016943bc8946457763237051	84753a77b0ed40adbeb5666f25c0d0434a24ee48	2026-09-13	docs(provenance): clarify benchmark preflight
+87bf2cc493720206f731224609b7043182304dce	f3e5bb005999722d49f575971b02ab0ec378e49c	2026-09-13	fix(provenance): accept unnamed host log records
+017203d8e211581d91b0b53afcfdbd5d6a7eee37	0ef51f8e4fc68f842665df7d83762cd74378f282	2026-09-13	fix(provenance): guard PostgreSQL diagnostics and cleanup
+be19f95fc597b8933c07ef554b8c886d40a06afb	343fff6a3b8cade32ecb38f7d170c0fbcc7c109b	2026-09-13	fix(provenance): pin compound reads and serialize PostgreSQL bootstrap
+015fd70fb0858db3e00f88f8d5096ce919e66b94	bfcfe5eaf08f2720ae5022665bf6734e351eba4f	2026-09-13	docs(provenance): refresh postgres regression evidence
+915073588a26fd468c626fc4874b315ac770d631	49d8cb7cae620239eb3c318f2cef7af0308f173e	2026-09-13	test(integration): isolate shared real-data imports
+e505c3e61dc4be9937c5af204a61732a64ed48b9	fdfb665ec61ec323ba68cee593bc17f800bbb308	2026-09-13	docs(provenance): document postgres adaptive backend
+f82fea4bb5a969804d6d68b583f701d510c836ac	cdb98e920d229b803ee68f45d37ede3cc8fde14d	2026-09-13	fix(provenance): reject calibration no-op workload leakage
+8c964681116726da3c5ffeadaaab68c2fbdc2a4b	ca96d651a9c7ea2dde7e02203a7d49a03b50e54e	2026-09-13	fix(provenance): bind adaptive fitting to scenario identities
+00f60bd0438de95fb73cdf4f8d6ed273d6b7bda9	39c1b8e79d9c3126a507e716bfea1b6f27a59e88	2026-09-13	fix(provenance): enforce complete adaptive experiments
+ed7230ccd97cb29849cf39f1bc848386190683eb	0f53350a6685c23618ed19644f8ed1ecd6fbc7aa	2026-09-13	perf(provenance): calibrate and evaluate adaptive policy
+45ad5621ebda224edf4effadaf441585c6dc4638	02dbd187bd07bc359a3fdf147123ebf5e42612eb	2026-09-13	fix(provenance): release completed benchmark fixtures
+37601c704a924ae5dc1df25b7258986f1f0a462f	60880f5abce35e889ab400a303594a5e3292a978	2026-09-13	perf(provenance): compare adaptive postgres maintenance
+62eb3ce57e49659a2e10ff7988570604b946888c	a4e3000dabafc4ada1df7b2b242f321fa6fe531a	2026-09-13	test(provenance): add postgres integration harness
+0743d8d0ad53233abd51fc860ae8b5353cce59af	a36b76d77d31ba7799753ef22a4e6f07141a0c05	2026-09-13	feat(cli): select provenance backend strategy
+0c9a7d0641d94d140b7d4c9ccb449282f2396502	8dd77bf7be032beaf96d8fbc0bc13917fefee2ff	2026-09-13	fix(docs): restore immutable adaptive implementation plan
+b8d183a501460b2bb0726d816a6d7ce43c094524	39ff74a510cd4259a989da4274316fdbb8215a88	2026-09-13	feat(provenance): select adaptive maintenance
+9c98f3a574cd8c3a9da9677cb4dc0e7057060873	5348ae4cc7d15dfa5dbc13d54716aafe2d60e83f	2026-09-13	fix(provenance): reject duplicate calibration keys
+fc748e063322497ea021d1f2a80a6e037ace480b	1802a6add413a65deb6842c18c30eb24d987b40f	2026-09-13	fix(provenance): validate policy evidence safely
+3d73f9aae31b1c233d072f0b7229edba9725f539	c6fc8fbbb53a0e02537c63ed60b42393c704225f	2026-09-13	feat(provenance): add adaptive strategy policy
+5a83025a8f3b25e74a7a9bdad629bbf95e99f8fb	7dc1efeabce8faad5c71519e6b3aefd1d8d139bf	2026-09-13	fix(provenance): preserve oracle ordering and checkpoint pins
+c2f497b06e07ff30143d8879fdd6c7a80934ccfb	9bccf9dc98f2d993d56a7bc8c0018ff45edf13b1	2026-09-13	feat(provenance): add postgres incremental ingest
+89412263fb6c6839ec6cfcb731bf76d34fe7e0b0	f9f0578a8a28ea3696fa6b6566498758e0ef70ed	2026-09-13	fix(provenance): preserve postgres rebuild inputs
+a31722bfc500bad03d5235165129f486b612355a	f8bf0b76e514d997e1640e4a52a69b3e7c33e9ad	2026-09-13	feat(provenance): add postgres full rebuild
+b5d219f0fe76e4146bd53a8a3927563e0538e4ad	1ea4a199bf739dd061cf2612a3ecd62301ac47ac	2026-09-13	fix(provenance): protect postgres schema marker
+ed65bef52b18e0f68bfe8bf66da9eaecb2d4d6ee	107ae0f0fe77cfea4c64712cccc82a40ee214039	2026-09-13	feat(provenance): define postgres schema
+44779692ac41744a55176e1cb0f20db2b3569d6e	0a82aee44196f485690697997a98c76accc83160	2026-09-13	feat(provenance): add optional postgres connection
+bb2b4422d69f524ebb48361cb56b097bd25950cf	226a64765045ded7519d589f89b8de9e1e8bf22b	2026-09-13	test(provenance): cover sqlite maintenance classifications
+065e0f043032072a02b39a639546ac3acbffb4b4	9c134b0bb259664e66a78bb734944af87837d305	2026-09-13	feat(provenance): add backend contract
+33dd3ba0c08ccdb4b9435f92fb36a91b2d197e6c	25db0d6cc2f6f33cc3c5550cff34bd6340ac5158	2026-09-13	docs(provenance): plan adaptive postgres backend
+a625331f4230e8ddf68a67c4bc5c2333705365a9	453994df099017ed058f8ee2988f1cff8679a578	2026-09-13	docs(handover): summarize dataset provenance work
+6ba42b8be579068bf5e9bb0173f90c30efa4bc38	6d249cfb103c282ac11b660b1accf300fa401c15	2026-09-13	feat(provenance): add dataset evolution tracking
+09af0cc04f35248b8000bf3232285ebe61780980	212b5eb78f00bee36b56e4c234dfdb3f5832d7ee	2026-09-13	Merge pull request #3 from eric20041027/wave1b2-source-audit
+6cca9954fc746897d88cb5a22b08517674ea3e10	95fa914315d5265059d49564cc0353d2a55e3738	2026-09-13	docs(plan): Plan 10 後記——執行期裁決、已知限制與開放待辦（稽核 Wave 1b-2）
+91b0b9be370481b58f88e6ffbe764143f1fc0000	520e527235f6b285421ca550f31b2002c6068efb	2026-09-13	docs: 稽核壞掉的處置寫進 README / CLAUDE.md / AGENTS.md，spec §15.13
+0451ac0d3cb7b880bbe167db350f2ca980ef38c4	9afdcb21fe46f1ccbc90e4297668fb9d76eef00b	2026-09-13	fix(data): export VERDICT 印 source_audit=missing 欄位；稽核壞掉 / 半途的訊息給出處置
+f3a43facdfe73609913f92d405a0d23f935d2932	7a5c84a9145e2f0aa62a7bcf8b010dfeb495ef26	2026-09-13	chore(release): v0.6.0——稽核 Wave 1b-2（來源稽核與選取列存取）
+8665f99f2863367538aa5a22f668c73076d3106f	e044d0ef09897e3ec2bc8ea9dc2ef4205f37b557	2026-09-13	test(integration): 改名 test_audited_access 避免與 unit 的 test_source_audit 模組名衝突
+a62272c851ca4978bb03a157a148c35d3cfdae2b	eccbdc38938a4d7aa0667dbd405f69b21af90f4f	2026-09-13	fix(measure): measure 的 VERDICT 也印 source_audit=missing 欄位
+1f0538ad93b04bcb7da3fead6ded27c99a58da20	c57f5036d42c17a6f54e17e2493b69d4a4ec8571	2026-09-13	feat(backup,test): 證據圖收 source_audit、端到端劇本、門檻列、真資料唯讀測試、RUNBOOK 註記
+91435993f411172849309bf96650906134e76246	5ab56b559d4825ef8804824035509ab5ba7c64d5	2026-09-13	feat(consumers): train run / measure / export 缺 source_audit 時 WARN，measure / export / stage 印 identity
+c7df88fa2bee5e59d03e29542f9702e0878b6f45	de0e4d7617e869ab95cbc16a281d7d5404ce990a	2026-09-13	feat(data): import / validate 結束自動產 source_audit，VERDICT 記 id 與 created|reused
+8230797eae53107a2593fc153c8dcd91877ba728	81ed4fad7df569b49f54ca3f987684388bcc7397	2026-09-13	feat(access): open 走 source_audit 不再整檔 hash，讀列先比 sha，收據記 identity
+c5a1ccb4765e6ddc6661642c028ce0ffad60c0ba	0339c0d508798049bffdbb89968cc0dbbbc9abef	2026-09-12	test(data): source_audit 覆蓋延後錯誤分支與 load 的各項獨立檢查
+e7de48357503901c9ce306e0404d823e46696b71	39ff2173d59218da636a575b241869a88a431394	2026-09-12	feat(data): source_audit 產物——一趟建逐列 sha 索引、content-addressed 重用、驗證載入
+0438df7e89892572e2a979d927666ba59c7f4709	c4b6db3a169682bfe97b67704596e42c0e0cbf8b	2026-09-12	docs(plan): Plan 10 來源稽核與選取列存取實作計畫（稽核 Wave 1b-2）
+c967d9c78d034562fa90bea1b6dcbbe46eca1751	d17f0420bc487f2d9eb0dcb371f7afdd0b1e4fcd	2026-09-12	docs(spec): 稽核 Wave 1b-2 來源稽核與選取列存取設計
+19864ac3f6b8742af3dc1908172472407c5abff2	005f14986660aed8f3dcfc47a08a010f60c446c3	2026-09-12	Merge pull request #2 from eric20041027/wave1b-receipts
+b4b1706f19dd31ae3853b85e4244f6011635dfd1	0e2cc7a6b3a4094f07ab7f4cf70feb5584ba47b1	2026-09-12	docs(plan): Plan 9 後記——執行期裁決、已知限制與開放待辦（稽核 Wave 1b-1）
+4e9407a2fbef311b4a549f4c2023c2800d139997	e526cd3dfdcc6bf0ee721aebe15bce812d5006e3	2026-09-12	docs(readme): 自寫 PyTorch loop 範例改用 with MaterializedReader
+cf3bc3b1ce6dcd63679452b7eac89e899504fd95	7343948dd7cf85f1f30515bcd3d40bee10b1ecbd	2026-09-12	test(submit): 補 final 的 observed_sealed 分支覆蓋
+7b42b16b39789cdda48abf00b1aa635d8e0bddef	61dc78121d5066d33afe481f99bc96265f03a633	2026-09-12	fix(train): reader 在 run 下核對 name/plan_id，--resume 合併而非覆蓋 access
+260b51bb409cb205364e404b6af9e23d9d5b54e9	1a954a509a5b713088e482ce036299b330b1bd67	2026-09-12	fix(measure): provenance 多驗 dataset/run_id，失效收據不再抹掉 observed，補 spec §4.3/§16
+e162659759911a2e2b3eaab397baec285a2046e2	e6b4b0f54eec3ee60fcdeb0700ee4756fae0dc90	2026-09-12	fix(access): close 後讀取一律拒絕，_build_receipt 併入 writer context 才留 failure.json
+6ed7ee7f197167e1b4ce5af1ebccdc8131940f82	e402b464d5599bd9a2ad6064517b87f19083074c	2026-09-12	docs(spec): §16 第 20 條改為八處呼叫點；README ingest 列 --receipt 加反引號
+1d1ab96458d2031f392ad9549f31a8f7fff6a5ba	e7f670027710c5fe151be99a2418fd840ca63fce	2026-09-12	chore(release): v0.5.0——稽核 Wave 1b-1（角色範圍存取與收據）
+f926521766775a1b17ef03c19e0c2518425a5b3f	d74babdf79c320b84a13ca7f9f592600eafb3b6e	2026-09-12	feat(backup,rsna,test): 證據圖收收據、RSNA 訓練走 with reader、端到端劇本、門檻列、真資料唯讀測試
+c7b90bfc3b6022b2f20a1cf75032652582303c26	c9d6b8b38df5ef269c45b3de1849f7a659165e8b	2026-09-12	fix(submit): status 對缺 stage.json 的提交印 -，唯讀命令不依賴資料根完整
+176303d114a2cac183a921fb8ae350b0b675b001	96c43da8984dbf97faca7c3b4bc81e9ee2a2a326	2026-09-12	feat(submit): require_provenance、observed_sealed、Staged / final 的 provenance，test 子集經存取器
+36147fbfe2b322ccc2290257e368dd13e99fb54d	d891713a33ee75b44acb2f0f0542d7e72f87dab7	2026-09-12	feat(measure): judge——候選或基準讀過主張子集即 INVALID contaminated，記 provenance
+4086ad0e2334be4221a31c42d8bccf1e2546c55e	23cb32622c42683838d6f3f596addf1b999064fb	2026-09-12	fix(measure): eval status 對算不出 provenance 的 run 記 provenance_failed 而不中止
+402e585aae3bed67c63e2f1ff5d99a5a6e8c8650	71621d38448640bb8c5d9f2a0598847ed993286d	2026-09-12	feat(measure): ingest --receipt、measure 以宣告 ∪ 觀測選乾淨基底並走存取器、status / report 印 provenance
+27a35b4122c25458b3458414370679edb0eb4201	897952dfd0b964cf58e21bc50b8fde79463ab057	2026-09-12	feat(train): train run 父程序 card-only，收據抄進 run.yaml，觀測超出宣告則 WARN
+d5ef08a09036641e6bbdaf4afb47077bc9c6c354	ad9550ecf5c7107d9abb31ecb794c4a158a37201	2026-09-12	fix(train): reader 建構失敗時關閉自己開的存取器，測試改用 with
+c6aa79e3a2cd395bc60cedb2d4b818f30a613888	187089254bca7429a4a5e2299212641eaf1e2c29	2026-09-12	feat(train): Session.access 綁定收據到 attempt、MaterializedReader 走存取器並成為 context manager
+e3f4ee803ef233254c04a27969028223ff052656	82711dc0ebf33fa267d15bcbe60917ad7997a97f	2026-09-12	test(measure): 融合 run 的 provenance 取最弱成員並聯集觀測
+44fb3e72217b073a2650fb57c316b29e04cb2b10	c90e44c77f9de803e963f3933a6d75663b78c93d	2026-09-12	feat(measure): RunCard.access、Reading / Judgement.provenance、三級 provenance 與 attach_receipts
+f3988f49af3801264e6b9b8d898711a51364d300	bcc15c3a4b548295d7f0ee4cde1477b189f7aead	2026-09-12	feat(data): export 走 DatasetAccess，manifest 與 VERDICT 記收據
+de1d07f9f236e30ed1211cc1adfcada8bbd4639a	965ae076a8e242f2a075bea60c5b9792861aba2c	2026-09-12	fix(access): unseal 留痕失敗時收據以 failed 結案，不留孤兒 claim
+66671f47f978997bcba08a032d18a17e27d6e263	8f4dfc67347cc3e1141db8ac8e7020b04fb0a29a	2026-09-12	fix(access): 讀取驗 sample_id、單一 sealed 子集且 unseal 最後寫、roles 不可為空、mismatch 走 IntegrityError、收據 inputs 只列 samples
+0b782b75ecfd240a74825f637f0d2568796dc135	5f51bf8eb342b54fd260ec5da41303921ba8a4e1	2026-09-12	feat(access): DatasetAccess——行首 peek 索引、角色授權、拒絕計數、收據產物在 open claim / close commit
+848d13e97f71afe5f341357c0b13e034fbf8883a	bcb0ce261f06be74b795259fe7986c6b3923e608	2026-09-12	fix(access): 所有 sha 欄位都驗 64 hex，補失敗案例測試
+1ea9c97f433f322193fed6a57b52f10deacab34b	10fba62df15262c8d9bc5615ca07787fa3bee6ec	2026-09-12	feat(access): AccessReceipt / AccessRef 模型與 provenance 等級
+3614fad950f9f32d82d554943aa5a9ffd7f37f8f	9c88fbad938920d621d324c9f077d6a64001b4b9	2026-09-12	feat(data): Dataset.load_card、append_unseal、AccessDeniedError；assert_run_matches 收 card
+8bfed656c775c8d0f513f77ea47f50a4e5954109	ac8435ab4b9cfb9f8bc99965ba8111b092fe8986	2026-09-12	docs(plan): Plan 9 角色範圍存取與收據實作計畫（稽核 Wave 1b-1）
+06e3dc3827d802066c23601b8f8ab6c1a9bcda88	2532a5c2349bd714a08010e2bbc392f1111e8508	2026-09-12	docs(spec): 稽核 Wave 1b-1 角色範圍存取與收據設計
+49216a88a0537d74219acb130935944cd1b43895	66838010da135b0ba9b95d3e6218c45ab360f3e3	2026-09-12	Merge pull request #1 from eric20041027/worktree-spec-artifacts
+8ac428f9f9e90cc48c3f8623203243908eee6242	d49e00e304f34124d986bfe470a0b88789c33236	2026-09-12	docs(artifact): README 範例路徑、spec §16.17、HANDOVER 程式碼地圖、clean 不碰台帳的斷言
+5e83345090b94631e1f7ab0656cb0ab04474c1bf	4c13a56e0e6cd899ac9fea54433c895f3051dbef	2026-09-12	fix(artifact): 目錄被 clean 移走後 writer 拒絕續寫；create 先驗檔名與重複
+1c5b6edda259f7ffb9d3d0c588a455c4ee93b6fd	04cc3d51642d6cfaf0be62037d88b2a04ed2b648	2026-09-12	fix(artifact): verify 重驗 supersedes 的舊 manifest sha（VCP-005 的最後一環）
+e5aadccd183b7eb8a1c8c553437e878e58f923f3	d9fd6687adf28b020578181af384511832623cbd	2026-09-12	chore(release): v0.4.0——稽核 Wave 1a（不可變產物層 vcp artifact 與 core/atomic）
+8afb828e01150e074f468a183cd224e861d428d8	03cf086f4f516239cfea37b5a74badd12bfb60a0	2026-09-12	test(artifact): 選型 job 端到端劇本、回歸門檻列、真資料唯讀掃描
+b3cb135cf349da59533d8dc14b5b33f37e53b012	29005f253a046983e71ed4529603be9f6672c974	2026-09-12	feat(cli): vcp artifact create / show / verify / lineage / status / relink / clean
+b058ad7d35f5ede81b6b529ae268ca19784ab0f0	5ef2dfd0046e9b6a145ceaee23198bc86fb854c6	2026-09-12	feat(artifact): scan 三態分類與 clean 寬限期清理
+976469908ce509eba4fbd921332a31aa039bef9c	27d19d571cd7c2ba45b6963fd10d495647649643	2026-09-12	feat(artifact): supersession——open 查舊產物、commit 驗 sha 並記台帳、lineage / head / relink
+d034dc443a005b772c0de1b696ab1ab648d49d70	e982fef07e4dff0e246f895f87904b2187547fa3	2026-09-12	feat(artifact): verify 四項檢查與 reuse 的完整 spec 相等
+b75791a323d21e66cda12a05a98eb5c76fdd3389	61088f59a7d3cf7bb07d5b014760eeca6adb48b7	2026-09-12	feat(artifact): ArtifactWriter——mkdir 搶 id、write_once 逐檔、manifest 最後寫
+b530da554f0bc1f3fd27785680cc1cb37511333b	861c64d722804bc3de78de7f1842120e4098df3c	2026-09-12	test(artifact): row_for 的直接測試
+3e1bb2bd5d85f604c83e54f0623f8b71198aa00c	3529555fcbe1b383bf39f3bf351bedcdb13e3db0	2026-09-12	feat(artifact): supersession 台帳、三態載入、input 解析與 spec 比對
+117dd5e8a5a709999f2f09e506908c295bcc9ded	fab3308f87d1a63f58382e0b322088730b719dfb	2026-09-11	feat(artifact): 資料模型——spec、manifest、id_pattern 對欄位、檔名規則、supersession 列
+2eb56772e4110efbc7f2d70e946693df80fc0413	44a2a23217888614ddfd81c1dccc264f02439ccf	2026-09-11	refactor: split plan、預登記、融合配方、backup manifest 改經 write_once_text
+a6706743dae9b32ec0a20cdc755f3a155ab6ecfb	33f5e262ffcd2dea01d15d7d3fedf3fb462e33ff	2026-09-11	refactor(core): artifact_dir 與 check_relative_path 進 core/paths，config 加 dump_yaml_text
+01ffcde28999ad253877583eaa8764d9ada67bc2	7d17215ecd69b4d12ddf0e72b11ac63a372b4e4e	2026-09-11	feat(core): write_once 原子原語——同目錄暫存、fsync、目標不存在才 replace
+8b044e7367a1998bb07f01035b72870999e660de	78b25089c2776a604b8831f21cf95a0e7c2c22df	2026-09-11	docs(plan): Plan 8 不可變產物層實作計畫（稽核 Wave 1a）
+e0aa60c8d9c68406daf2bf9ebb355a74260742a3	da9e62fac37c1872f43fff0818e180bc0fb0f3e9	2026-09-11	docs(spec): 稽核 Wave 1a 不可變產物層設計，附稽核文件副本
+29ba998eec9a81126b830236225e8e5af2c3ce15	756395d68f39c465075d2b6a412ac3f37130e01f	2026-09-11	chore(release): v0.3.0——稽核 Wave 0（prereg SHA 綁定、foreign 狀態刷新、回歸門檻）
+73ae5c5a81986acf4791bb48f7d9e1e75bd75ff5	5c6d865876f1525ca0cdc38eaf2a82706835452a	2026-09-11	test: release 回歸門檻——稽核 §11 點名的六個修正 commit 加 Wave 0 兩項，各對應其測試函式，刪掉任一個即紅
+654ee8fd3036a749395587c7aaef7bbd3158780d	b71261799bd3b171f120ce4048f9b480a8a92e6e	2026-09-11	feat(submit): sync 的 VERDICT 帶 refreshed=（已知 foreign ref 的新快照數）；補狀態序列測試；spec §17-26
+4ba517944e704470e18d7090243c1349bca30875	dc6907226262c2bf0eb0b6cfcd33da47209c27ce	2026-09-11	fix(measure): 預登記綁定的錯誤走 reason= 字彙（not_found: / mismatch:）並帶 prereg= 欄位；spec §17 記 Wave 0 決定
+ce2d8d83c7246cc9440771cf495dd723aff16eb3	585d865d62ab1f3756339a7b4e1f7aa64ac71b37	2026-09-08	fix(submit): refresh scored foreign submissions
+eee6158d0b3d3a5afcdd6e6b1ed19a80e99e377c	e4153d8e56a8c485156d85562709a97e1f608d89	2026-09-08	fix(measure): bind prereg files to logged sha
+f83d634ff2c3d66e03a650789524a8f2e856205c	fceaa4ea06a0e580dc0a3e36642cda7f1a2ff195	2026-09-11	chore(release): v0.2.0——CHANGELOG 與版本規則；AGENTS / CLAUDE / 交接文件補發版步驟
+1ae6c9460c761ffea0b783a1115d7d0c3e94a659	e711c468ff54968cbef01f51cf2db4c4fbaa21c8	2026-09-11	feat(core): 版本升到 0.2.0；vcp_version 改記可解析的建置身分（版本 + commit + dirty）
+03aecc35558d4fa223f6765d1950a35cca5aa775	cea1979b2d1c215a4299e94e6e0c5f60e5b71706	2026-09-07	docs(skill): 新增完整比賽操作與人機交接指南
+6bd2313871a55fff822ee7d28b7212a9330003d6	25519fd773891aad206624862fdfc7b9efbdf19c	2026-09-07	docs(rsna-knee): 保存本機備份證據與來源版本
+8b1f77764defd823168dfe2c4b1e200c68372b10	a1ced8944a8a00e6673ad67581a1ec6ce3f4183c	2026-09-07	feat(rsna-knee): 跑通影像基準量測融合並產出離線 notebook
+d9b2331d5ac1a77f59d729c924f267ad2a862b79	f33beef194cce0d91dffedb3f3c55573ce975da1	2026-09-07	fix(cli): 失敗時保留四層命令識別欄位
+7c31c3de5ff1b12127813416a70aeae498f14734	b410eef6c3079dc63afdaf6faaa1e6691de86ae6	2026-09-07	fix(fuse): 遺失紀錄時要求完整重建所有子集
+12a9cd446cde179ab66d74b05dc6a7963a04335d	62fc80f980606b88e30ac645ee6550200342980b	2026-09-07	fix(submit): 統一事件來源並對齊上傳檢查順序
+6a4cc58e6ede38aea7b610fe67b17f76b5c80755	bd8233abd2f1a1229033297ff4d7ff476db26500	2026-09-07	test(submit): 補表頭防護與巢狀配對及驗證測試
+b0091fe94d35cb46d29714bcafe4cca9543973c4	9552351afa6c1d9d30a0b8d23a11980e58619155	2026-09-07	docs: AGENTS.md 改為 CLAUDE.md 的 Codex 同步版（十二個變異軸、提交 / 備份路徑與命令、交接指引）；.agents/skills 入庫；CLAUDE.md 補交接文件指引
+96faab9e3a073f8a3b2cc3d605425a00f3c48797	1884f7fa0749ea74e2daf5f6c704242ef2d04c83	2026-09-07	docs: Plan 4 / Plan 5 後記 §8 記 Hygiene B 處置；交接文件（docs/handover/HANDOVER.md、CODEX_PROMPT.md）與 Hygiene C 的 brief 入庫
+e5dbfee73fe3dc626733a6b2e9ffccb995e1863a	f018db3aedb824fae0e59363e4a973f939903497	2026-09-07	fix(fuse,train): FUSE_FRAMEWORK 由量測層擁有（去掉 measure → fuse 的反向依賴）；status 的 superseded 每路徑一筆、--json 也列 unbacked；mark_final 與缺 fuse.json 重建的說明對齊實際行為
+6e6598b32b43a2f028bfa7a0706d5013beb916c6	49f4e8b76b3a4eaaf7f43cf8fdb7c22be44266aa	2026-09-07	fix(train): --cwd 不存在是 not_found；final=skipped 措辭依 attempt 狀態；upload / status 去掉沒用的 --configs-root；status 另計 superseded；README 示範加註；補六個測試
+068bbab28b6d9c6097666b84526c6edcc6e85a19	46ed3109d4ce3caa14caa5eb4ba60d235ad19593	2026-09-07	fix(train): execute() 任何例外都終止子程序並回傳；每個 attempt 記自己的 command / seed / venv；--resume 把上一個 running 標成 interrupted；Ctrl+C 也有 VERDICT；Session 只 hash 一次；append_event 拒絕保留鍵
+de91ea8013acc01a9ae52fdd2617f8d8d2fc729e	7340a9002bb08fede792ef208e207088c857c770	2026-09-07	fix(fuse): ingest 拒絕對融合 run 加子集；plan hash 檢查統一走 assert_plan_matches；allow_unknown 提示不綁命令；RankMean / check_existing_run 的錯誤欄位；ablate --replace；補七個測試
+af2726b62057b6d279f92d7b8d0f95f401b74c5d	cb02e978dfaebf756cae480718430f3ab8c6a14a	2026-09-07	docs: Plan 3 後記 §7、Plan 2c 後記 §7 記 Hygiene A 處置；Plan 4 後記第 10 項標記已修
+8554bf991a6b0c60e700d721268db654f49ca3ae	3ba114438f5bb82b1ea6edfaf157aa28d26fd745	2026-09-07	fix(measure): bootstrap 可用重抽少於兩次也是 too_many_skipped（不再回 nan）；spec §15-7 與兩則測試註解對齊 A3 / A6
+efc7c4909a08ced3f1804b6a39c471379b43dedf	a4f9436ed022a8cdcda7fce327add4575b4c0d2b	2026-09-07	fix(measure): PredictionFile 記 format_version；σ_p 估計記預測 sha；預登記寫檔失敗不留半份；門檻拒絕非正值；anchors 暫存檔名唯一；--method 說明不寫死內建名
+1477257d4b50e2627de574678a7931e0b66d1071	8990ac8b25f0602b34380e50a2bab1284c279735	2026-09-07	fix(measure): bootstrap 對命中守門的重抽記 skipped 而非整個中止；VERDICT 欄位名對齊（existing= / deltas= / anchor dataset=）；指標名進登記表時驗證；常數與布林字串單一來源
+b6d8590f1235cf5229fff7a4aa9ef339aa2c9de7	ebca830cf624331ce4b9f3342da50b465171a367	2026-09-07	fix(data): 標註的 view 索引超出範圍是 FAIL 而非裸 IndexError；build_plan 拒絕零樣本的 eval / sealed 子集；YOLO 匯出 manifest 記錄匯出的 view 索引
+e4062bc8b783c6ba45bdaf55599381559ec64b20	08aea8799699c2498052ab0c87db828a75b5794a	2026-09-06	docs: Plan 6 後記 §8 記 Plan 6c 處置；提交治理 spec §17 補第 16–20 條（逐發分數、stage VERDICT、FAIL 字彙、決選次序鍵改寫、台帳時戳驗證）
+76bf65cd9b588735a51258b2516fb5d3bb1d5f86	0d3512f2e0a3e21becd32420f6bd38b9f690b90e	2026-09-06	fix(submit): assign_scores 不依賴上傳列的順序（平台時間同距離時取 at 較晚者）；status 的 unscored 看 at 最新的那一發
+8bc50c833a8ae1dae4ef67cc5fe9ae86502ac912	44bf05bca563ab6d428827be960a71b2680c17e5	2026-09-06	fix(submit): 逐發配分數改用時間最近的上傳（平台時間）或最近的前一發（手動），不再互相搶佔
+50adb0b2db2528764651ad2951880c4e564e88fc	f188fda868bce56c0e85dd51273cd968df36a0d6	2026-09-06	fix(submit): 決選的 staged_at 取 stage.json；排序鍵的 public 也依指標方向（含 lower-is-better 測試）；台帳列的 ts / at 必須是 UTC stamp；補 25 小時 DST 與 foreign 開頭的 report 測試
+9fb9807324e90ded359a66005c14f0fec3b4c1c2	cc1c2ed1c2d235cd1803a2c15a1da4816a87bfa6	2026-09-06	fix(submit): stage 的 VERDICT 帶 missing= 與 config_hash=；plan 子集查不到是 FAIL；錯誤模式的選項不再靜默忽略
+832726bfb5d82c87986add8237f1e92169bbb2ee	3fe50a82ed21351c49a443bbca0fa4a06cb72bde	2026-09-06	fix(submit): report / status 對重傳 id 逐發配分數（sync 的 scored 列記 at 與 platform_ref）；kaggle 的 fileName / status / submittedBy 進台帳前 redact；kaggle.py 改用 core.proc.last_line
+a6101306f78ba9775319bcc9a2f33cd3dce8e81b	2ee74483db5728f89911c643ae5550910bc43c61	2026-09-06	docs: Plan 7 後記 §7 記 Plan 7c 處置；spec §14 補 Plan 7c 決定並改正「不寫 verify 列」；open_dest docstring 去掉過時的訓練層指涉
+ea96c8cde0d5f4d63921d475e2519286213f216c	a9ebb572bbb5ea49e6f661a84cbdeb45c7d9e804	2026-09-06	refactor(train): train upload 的 rclone 路徑改用 backup/dest.py 的 RcloneDest（hashsum 失敗與非 sha256 是 PlatformError、rclone 不在是 rclone_not_found ABORT）；spec §11 補 --tier 註
+b2e9335db36ba9c6ddf41b0bf8286a25640a89b3	442671e88025eca2b5e2308643e72a05436ad6be	2026-09-06	feat(cli): run_command 的 context 讓失敗 VERDICT 保留 dataset / manifest / dest；dest_kind 搬到 backup/dest.py，Windows 上單字母加冒號視為磁碟
+7b96884105392a46cd73ff53824b5277757bf64f	39011c833df03a2368668d34e9c6a4ea1ab97067	2026-09-06	fix(backup): pull 的本機複製 OSError 也還原 .bak 並記列；verify 副本層出錯仍寫 verify 列（error 欄位）；時戳標籤用 root/path；測試補 external_skipped 的 CLI 呈現與 UNSUPPORTED 的 redact
+ecae161609e863e3c550c5fe007447aebe06f872	b52480a24920569d93aa7c4fde422d2cc1fa9991	2026-09-06	docs: Plan 7 後記（裁決 R0–R7、各任務審查、最終審查 14 項與修正波、再審殘餘、10 項待辦、方法筆記）；備份審計 spec §14 補充決定；計畫補執行期修正一節
+0f078c9cf4f35696ee64b22692506f9562dfdc3d	e92c9a0ef592c2107f1ecadb2db644eec28db0bc	2026-09-06	fix(backup): push 的複製或讀回失敗一律 verified=0、全部列入 failed（否則 status 會把該 tier 當已備份）；--forget-remote 的說明改成整份清單
+98155b6eef0a92cf22871537818333f77bb0f93c	5d6f33f0e92b4b828119825b522c65eca48f9c3a	2026-09-06	fix(backup): external 的 source 兩種絕對路徑（Windows 磁碟、posix）在任何平台都認得——清單會跨機器旅行
+021f31329e2c93df73f361a217ff6a6c26dcd4f0	bc3203658718f44e0cf9440ee9783dd4780ecb96	2026-09-06	fix(backup): status 只在 tier 3 副本層也過才算 verified（另報 local_ok）；all 走法容忍失聯的引用；pull 台帳列專屬欄位；測試不碰真 rclone；文件
+55687c6038b4a3126e8d9a381d3102b401fe6329	5968ee647da05b51da6876fc62fb37604b0df0da	2026-09-06	fix(backup): --forget-remote 要整份清單在目的地驗證通過；absent 不算副本失敗；.bak 只在新檔驗過才留；hashsum 失敗與非 sha256 是 PlatformError
+8c6b5c4494c89fcf5624b776a8e0aab23f20b6fb	781c7df327e87bddc1c1ba6e0e3554918aad0b88	2026-09-06	fix(backup): 台帳快照——push 推清單那一刻的前 N 位元組、pull 視長大為已有；清單路徑必須是根下的相對路徑，pull 只還原到根內與既有目錄
+883da62a101aa4b678905ed191edfd24bc3fc933	edac1f581b8635448090bb343bf936dcb7d10b39	2026-09-06	test(backup): 端到端（本機 vault 與假 rclone、--forget-remote、隱私掃描）與 RSNA 真資料證據圖；README / CLAUDE.md 補備份審計命令
+4e73723f096b3acb5a4c7d2c0aa012093f2b09d3	b8be02c31a21afb1bd509baef0b4b3473091734a	2026-09-06	feat(backup): pull（讀回驗證、衝突不覆蓋、.bak 留舊檔）、status（每份清單的推送 / 驗證與 rclone 設定檔存在與否）與兩個 CLI 命令
+b140b33f45b89bf6fbb3a697bc9ceb8ec5a5815f	ea438dc0913c675266ff041b5df5335aca6a93f7	2026-09-06	docs: Plan 7 R5——Task 7 的 CLI pull 測試在 --tier 3 前先刪本機 last.pt（本機相同 → skipped 是冪等，不會 missing）
+c4e313a44c406214c5e5df4d2e14e7c3eb20fece	fb952b63f950f15226f351beacce47f815ef05be	2026-09-06	feat(backup): verify 的副本層可用 tier 限定（預設 3 = 全查），verify 列記 tier
+46396f40972e8f9f5a7222ae7da75153927cddca	fa29f3d09f506f5a0e0217e4d476e408af81498e	2026-09-06	docs: Plan 7 R4——verify 加 --tier 限定副本層（預設 3 = 全查）；Task 7 測試與 Task 8 端到端在 push --tier 2 後以 --tier 2 verify；決定 21
+3aa2e410b046534c9e6a1e759ea9b94ef172853e	fdaf2324b4a77693d181eba2f4a5868f745e9d27	2026-09-06	feat(backup): verify 三層（副本 / 本機一致性 / 時戳）與 vcp backup verify
+3ce62470e9263024e450897b12d65289029dd335	2c0af8a114707d5253058eb5c01f53dcf1ba2e85	2026-09-06	docs: Plan 7 R3——Task 6 / Task 8 測試重寫台帳與卡時一律 newline="\n"（Windows 會寫成 CRLF，前綴 sha 才會誤判 drift）
+96a044e4f306ff033b8f8b081c8b718caf5c7be3	1c2c9942a6712f7ea5dd3dc96d227b15fee0425a	2026-09-06	feat(backup): 目的地抽象（本機 / rclone）、逐檔驗證的冪等 push、--forget-remote 與 vcp backup push
+74bdd9e17b6b9692865375d2eeda6e232fa3fd70	881728dd7fce2e38a69396e46f7c97779b504402	2026-09-06	feat(backup): judgement / submission / all 走法、build_manifest 與 vcp backup manifest
+c44047c2b92d4a6ddb2c20d39fe58bb5a620e28f	7b1262b134cef1518b1bde194d895ce8f804564e	2026-09-06	feat(backup): 證據圖的 run 走法（預測、融合成員遞迴、訓練紀錄與 checkpoint / remote_copy、dataset 與量測台帳）與結論解析
+5b8ea981af21ecb005ae05f9a777da8b28c73d60	0c49edf297d73c8e0436e374d607e1bf9ca223c4	2026-09-06	feat(backup): 清單與台帳的資料模型（角色 / tier / remote_copy）、只增台帳、清單檔讀寫、backup 路徑
+ee11adca9e28e3bb684e1c970f6564e7f4d6efe7	38897c9dba9ee5cb1575b7f2a8be9e55998ba255	2026-09-06	refactor(core): 子程序 runner 與 redact 收進 vcp/core/proc.py；訓練層 rclone 錯誤訊息也 redact
+96d73445f670e7a4175f9799d9276a49ce7d2ad0	2edef1b0b22fef667921746c9297e02753bc4917	2026-09-06	docs: Plan 7 修正 Task 7 的 pull 測試（空 store 的假 remote 是 missing 不是 mismatch；改用 hashsum 誠實但 copyto 給錯位元組的假 remote）
+dd85d2549abc20627f8d307629c0d80eb0ad23c4	12b2881fa7038836758c51241db196ed2e4610dc	2026-09-06	docs: 子專案 6 備份審計層實作計畫（8 個任務：core/proc.py 搬家、schema / 台帳 / 清單、證據圖四種走法、dest + push、verify 三層、pull + status、端到端與文件）
+27e0682647c728cf2b1ef602354575857ef5eba3	f40c7399457be10c9b563f5a27f675c12a02959f	2026-09-06	docs: 子專案 6 備份審計層設計 spec v1（證據圖反向生成清單、tier 先小後大、rclone/本機推送逐檔驗證、verify 三層、pull、--forget-remote、core/proc.py）
+5dcffc0757412b4bc7724a9d5f8645371484d513	c2d461dbfccabe6367588d771db1e55e0e453622	2026-09-06	docs: Plan 6 後記（預檢 R0、裁決 R1–R12、各任務審查發現、最終審查與修正輪、10 項待辦）；提交治理 spec §17 補充決定；計畫補執行期修正清單
+36f3f067b0314f7b4db92baf823dc1e3f9819120	0ee4ec740c2523a401d46f0b542d86679fbd83ea	2026-09-06	fix(submit): final --slots 的範圍檢查交給函式本身，CLI 一律以 VERDICT 收尾
+174cee0ce4496ad71d201958b782f8e454f10163	e1b0e4913cf9e911d72c9458f87e0bbd27c3010c	2026-09-06	fix(submit): final 的 --slots 必須 ≥ 1；sync 略過缺 stage.json 的 id、非有限分數改 FAIL；Staged 建構納入清理守衛；kaggle 失敗訊息以非空白串流為準；writer 測試斷言無 CR
+a5c367e95321b2c092ce63ac00d444035e6182ff	6c36ba3bffe6f3b5c8b828760b912ac87b25b6df	2026-09-06	test(submit): 隱私掃描斷言至少掃到一個檔案（不得空轉通過）
+26f2410cffa4112e8be0739726b971a16e492a03	93c1433cd5933c5caa6599fe8a07c996469165ca	2026-09-06	test(submit): 端到端（手動平台與假 Kaggle CLI：配額、sync、失敗上傳、隱私掃描）、RSNA 真資料 writer；README 與 CLAUDE.md 加 vcp submit
+63774fb2703eacc854d439c7a2be7e1c9c38992f	1ea411880455dc2eca5b7f77c6f8a9ad425d3d7b	2026-09-06	feat(submit): final（best_sealed 決選、決選表、自動封槍）、lock / unlock、status、report（last-vs-last）與 CLI
+652669b285f6ee142da30565ecc5b81d51f764e0	69984d61132e8c00f0a9e7963ce147d522a961db	2026-09-06	fix(submit): sync 依平台時間順序處理列（最新分數最後寫入）；_mentions 回到純字界比對，修正測試預期
+60482020260fe275e49289db234133eaf0438316	fab609878de4ed891720098d464437b2751da263	2026-09-06	feat(submit): upload（Kaggle、配額）、record（手動平台時間換算）、score、sync（配對、foreign、去重）與 CLI
+80a0aa7b2abb91a06c9c43d983a55702825ee4b0	ed5be5e9073a3d86dc3f02efe6fa09fc41d02e58	2026-09-06	feat(submit): 守衛（封槍、截止、配額）與 vcp submit stage / verify（四道門、產檔、stage.json、台帳列、位元級重現）
+690d9c181b9d7aa085b3204b365aebb6445de774	949f92d5defb4d47c6de1eff1f6084e8fb2af461	2026-09-06	fix(submit): kaggle 回應解析失敗的訊息也經 redact（platform_response 不得帶原始值）
+4bb59687392654823c0b1171988fd0a5730c7997	1b522704ca31b507f1729127f73612ccee2a87db	2026-09-06	feat(submit): 平台登記表與 redact；manual 平台；kaggle 經 CLI 上傳（含 kernel）與 submissions 回讀（翻頁、分數與時間解析）
+4d76830f4ce2e246fd6c6dcf04effe58bfa907f7	f3a4c84bfc8a92894b1a029f5aa7c76637f66a35	2026-09-06	feat(submit): eval / test 配對核對（單模比權重 hash、融合逐成員遞迴）與準入門（PASS 判決、成員準入、判決過期）
+1f484aea65d177ef095c31595e44a00ad9a1f286	6cf6c1b5b06e6826d864da8058eea18fe0503d51	2026-09-06	fix(submit): coco_results 只把標準十進位 id 轉成 int，零填充的 id 保持字串以免撞號
+92a155d84095179d6d70ffae0f3523e166752afe	c4ba8485a4d9ede2db5d1f144a9f6212c69c61cf	2026-09-06	feat(submit): coco_results 與 csv_boxes writer（決定性 JSON / CSV、box_format 與 coords 轉換）
+61acb0ba7aa7f49e562164fdc43d595c4a871daa	5d4f0f3ffb4baeebe0f642bad8fc4dda13bcb33f	2026-09-06	fix(submit): scores_csv 要求 card 有類別才能命名欄位（拿掉無法往返的 targets 鍵聯集後備）
+83cbeca8935fb13176f25f0f1c8a2f4697d89b2f	5b6cac13632046ce5f0e62498cb440f1a633b707	2026-09-06	feat(submit): writer 登記表（決定性、id 對映、選項檢查）與 scores_csv
+c1df0df573576efcc3ece99006e3ae59a6899f7e	4365ab91146d23fe21f9412d0585f6186d2731aa	2026-09-06	feat(submit): 平台設定檔載入與 vcp submit init（建 test dataset 的單子集 plan）；submit 測試夾具
+fd6439bb9f4b653fac633c9a334b417c04ce8401	d7f4c5e353150dd1f5ac2789a65f3e8ca674919c	2026-09-06	docs: 修正 Plan 6 Task 3 的 CLI 選項片段（ruff format 把獨立片段的 = None, 變成 tuple）
+6b6da79d7c9ce616782fd1d26daaf67b12e4ae82	f4e5b24e85b84620bf062603a596292b8750e7f1	2026-09-06	feat(eval): ingest --weights / --config 把檔案 sha256 寫進 run 的 weights_hash / config_hash（test 側 run 的身分來源）
+0500c660ddfe85ca100dd60a895b88d49ab99457	6b97b6ff3a918bc96de2728b4b16f77640653071	2026-09-06	fix(submit): 拿掉 timewin 裡沒有作用的 noqa 註解（專案未啟用 DTZ 規則）
+0f1f5130ddedcd93633e02164897ba7dfeeaec13	d8580b7de3fa44a044682582fc1f75048cc587e2	2026-09-06	feat(submit): 配額視窗（day_start @ day_tz 的牆鐘一天）與平台時間換算
+ee29648d9070f957c438fef8d9875950aa85ac71	2c21792e34f957166e1323dc8bd07e919ee4db4a	2026-09-06	feat(submit): 提交層資料模型（平台設定檔、候選快照、台帳事件）、只增台帳、submit 路徑、tzdata 依賴
+50badc5ee5f26f74fb3f66260a32f8eb9dcb60e5	ef8ec24c33dbbb471f67fea6906a98787184fd1d	2026-09-06	docs: 子專案 5 提交治理層實作計畫（12 個任務：schema/台帳、時間視窗、ingest --weights、設定檔與 init、三個 writer、配對與準入門、平台與 Kaggle、stage/verify、upload/record/score/sync、final/status/report、端到端與文件）
+b324f713f990b1d8a8508127f6da97b001786f4d	b6e8c8c37d4127ca6db7e066ec912ba533c17cf5	2026-09-05	docs: 子專案 5 提交治理層設計 spec v1（候選 = eval/test run 配對、準入門無 override、配額狀態機、best_sealed 決選、writers / platforms 登記表、Kaggle 零憑證）
+cf2e216f020cde0ddbbbeab2585d4d26c92d896a	5be8478d4d8d7d6940a8cfea43bcef452d4e3063	2026-09-05	docs: Plan 5 後記（裁決 R1–R10、各任務審查發現、最終審查、10 項待辦）；訓練 spec §14 補充決定；計畫補執行期修正清單
+5b766a9388216924f683fbe766509fe42e645075	c59f2d4d2ee2e824a6acfad7526130f6ceca54f4	2026-09-05	fix(train): execute() 的 Popen 改用 with 區塊，命令結束後確實關閉子行程管線
+151a2f6edb81b1d24ffae3df153194ced1d73f22	429f779be84e5d591862fc85d8340ed590b2e239	2026-09-05	fix(train): run 命令結束後重讀紀錄避免蓋掉 session 寫入；status 改以 sha256 判斷 backed；upload 不再誤判 resume 換權重為撞名；weights_hash 覆寫前留痕
+a7088b5b8baa1ba839bfbafbc022bc27a5844445	a237445e6963de99752bf3a68b7a16641b5939c3	2026-09-05	docs: README 的 vcp train Python 示範改成 ruff format 穩定的寫法（全庫 format --check 乾淨）
+85ab6dd5cb9fb1a2420bc4beff81f1916aa9083b	d96f7137ef2bf121d85eea5aa2fd2a66cd845c67	2026-09-05	test(train): 端到端訓練到量測流程、RSNA 真資料讀取器；README 與 CLAUDE.md 加 vcp train
+8649b54327aa36d42a57f07b3b22c286767842d4	cf644fb953fdcb19ead1a163caca39e1d2fbad93	2026-09-05	feat(train): MaterializedReader（依 manifest 讀快取、子集限制、驗 sha）與 Session（自寫 loop 登記 checkpoint 與 note）
+9942e6014f7ba685a00311582416ddf6f4d654c3	a3ec531614f303b0cd5001be8e36cb2e4b0669d2	2026-09-05	fix(train): 上傳事件只記新出現的副本——冪等重跑不再灌 train.log.jsonl（upload_run 與 run._upload_all）
+0edf78c11c9b38d9fc87784e6587846a425a21f8	27f2341eaad9f5d7e3f63cfe600f6e62589c7bde	2026-09-05	feat(train): vcp train upload（事後補傳、冪等）與 vcp train status（唯讀；無副本 / 漂移 / 未結束皆 WARN）
+8d4e8058b85d0ea73110e7ef21e6f16de1e31aaa	4845205150085f4c5f12a4bf16014803a476da7f	2026-09-05	fix(train): 命令可執行性預檢改對 --cwd 解析相對路徑（command_found）
+2bd1f79a33309f5b1af48c4d61b998882ccb52e4	7c5d410b4f6eee6f64b576ff44f57200265767a8	2026-09-05	feat(train): vcp train run——trained_on 由 export manifest 推導、寫 run 後快照、tee 執行、登記 checkpoint、上傳驗證
+ca7f34ac8cd42bb582594422fc1bee9dbe9e125d	35cfc9cb95997440c9065064251e471884a741cf	2026-09-05	style(train): upload.py 與測試回到計畫原文，只保留 ruff format 的換行；補回被刪掉的註解
+f1a90eb2e8c7ba039c1105954b435ae91dc535ca	cbdf5747ba52aa2845714bf4f3047a1ad6e228cd	2026-09-05	feat(train): checkpoint 上傳——本機目錄讀回驗 sha、rclone copyto + hashsum 驗證、冪等
+a33d0a4a3159d06ad03c8c3067b91337a93baf3a	65af3cc1b72a22d79c72ce4853adf1f89310ae28	2026-09-05	feat(train): checkpoint 登記——(path, sha256) 身分、--final 恰一命中、漂移檢查
+12e0bd178e367545f0ae9095facc227e2798f9f1	314bc49dc3415b063d0ca0df01b0c711d45dfeb5	2026-09-05	feat(train): 環境快照——venv 的 python 自報套件與 torch/CUDA，vcp 補 GPU、git、版本
+1cd28759266bcb5b27b649716a971808cf06a24b	cb5ce49ba79fc260575ab1e8cb6ca5ccb51e1608	2026-09-05	fix(train): ConfigRef.copy 改名 copied_to——避免遮蔽 BaseModel.copy 的 pydantic 警告
+929b44a102f5e24405afdf5effbd5e261dd58ca4	c93a0c6fa18d89d12dcbff4c84c82b985370f4a6	2026-09-05	feat(train): 訓練紀錄的資料模型、train.yaml 快照與 train.log.jsonl 事件
+594885551b851c57191a0025bc24015ebe7783bf	9d489d32b100dd14fb51e517cd1e4431583f098a	2026-09-05	docs: 子專案 3 訓練層實作計畫（8 個任務：schema/records、環境快照、checkpoint、上傳、train run、upload/status、reader/session、端到端與文件）
+0d8f0ab8df85d99e0d7a2c2aa381f7d0d1a6a1a6	d8176e5fcb9af300aec2197aa2967160a3f24d34	2026-09-05	docs: 子專案 3 訓練層設計 spec v1（vcp train run|upload|status 包裝器 + 紀錄器、trained_on 由 export manifest 推導、checkpoint sha 與 rclone/本機上傳驗證、MaterializedReader 與 Session API）
+67984ac53f6cccec6fdb01576c85e04fa4a0882e	d4ec8cf183bc932a58608f95f8ee418cad15816b	2026-09-05	docs: Plan 4 後記（預檢與執行期裁決、8 任務的審查發現、最終審查與修正輪、待辦）；spec §14 補充決定；計畫修正 sample= 與夾具預設
+c9b2461ae684851bd1a7cef057ceb939f96fa438	ebc4a177fb4ab6c721c78f09a99ca4fad9d20c4e	2026-09-05	refactor(cli): _csv 收斂成 cli_common.parse_csv（eval/fuse 共用）；wbf 補 IoU 等於門檻的邊界測試與人工核對紀錄；README 補 ablate 無 --replace 時的建議流程
+203a13a1fb0867a0b0f0c6fbb4822d1d8f2f6f95	c4adb1e3109e28157e77b7b50ed21469aa25be86	2026-09-05	fix(fuse): ablate --bases 檢查搬到任何寫入之前；build 每次重建 fuse.json 中繼資料、只沿用舊 subset；load_record 驗 run_id 相符；content_sha 改與 write_predictions 共用序列化
+41689c008f203bff227fe42cf9e1b8da786cc6ca	54222edd8ee9555c895588a17f4b9414c2a763ba	2026-09-05	test(fuse): 端到端準入流程、multilabel 分數融合、插件融合器、RSNA 真資料；README 與 CLAUDE.md 加 vcp fuse
+cbb3243b25363eafe1147af6a737984b7abcc7f5	f40799f7589a9fc426cc658ba60c03551cefe003	2026-09-05	feat(fuse): ablate——每位成員一份 minus 變體與準入預登記，全有或全無；measured_subsets 公開
+2207e86bcac8c061bb3fdb43d842bd5f22bd6ccd	2cb5553c7f056f8c065a049a5d070ffba6a384e3	2026-09-05	feat(fuse): build——逐 subset 融合、全驗證後一次寫入、fuse.json 記成員與輸出 sha
+d29caa978a3e2ce9fd8fa16c062281bd4eabf06e	918d776a2cc0c6ca78e8aee8d86c9cb93c98e99b	2026-09-05	feat(fuse): 成員驗證與 vcp fuse recipe——驗成員後把配方寫進 git
+3b49863d5d474caf9aa8a0938023078a41ddc7e9	f5680d93a1712da9d1916d4c929945e778bdb300	2026-09-05	feat(fuse): mean 與 rank_mean 分數融合器
+bc780fa42f92ec8fcc28b1d7ef8d52efef90f4da	45f8a96de74fe15efc6ee03e8699225a8956a890	2026-09-05	feat(fuse): wbf 融合器——像素座標的 weighted boxes fusion，語意對齊 ensemble-boxes
+0de36bc83553bdcc4a69b90843fd25b3b825ee8c	75bc0797812725f8005047b6850c8322a8a4fe18	2026-09-05	feat(fuse): 融合器協定、FUSERS 登記表、參數解析 helper、payload 適用性
+86fc4db733a9851e87d0ff31c6a63ac0693ec4fd	8f0f1b08a3929aca1c606cad2a76b29243ab5697	2026-09-05	feat(fuse): 配方與融合紀錄的資料模型、配方檔寫了不改
+604ec7029649e7896f46b442cd7b8b6abf78bac6	adcded87b2efbacea605df79254e2f50250fd839	2026-09-05	docs: 子專案 4 融合層實作計畫（8 個任務：schema/配方、登記表、wbf、mean/rank_mean、members+recipe、build、ablate、端到端與文件）
+0c257de2d05ba803eb8537140f8c47475f78ddb3	3ead5e703e962f3a210e236f585b85ff38f46f11	2026-09-05	docs: 子專案 4 融合層設計 spec v1（配方進 git、FUSERS 登記表 wbf/mean/rank_mean、build 位元級重現、ablate 產準入預登記交給 judge）
+31f23047964319db687db26d57154cdb4516f9d3	0bde10cc04598cc98cfdd0d2a360706abed8ac22	2026-09-05	docs: Plan 3 後記（預檢裁決、12 個任務的審查發現與處置、最終審查、待辦）
+c59b07506f28155b9fb2dfe4323aebdf3a5e10c0	c6b848811374625694fab5d02ff6e3a5587f9fa2	2026-09-05	fix(report): status 計數壞 run 卡時也接住 UnicodeDecodeError；spec §15 記錄 macro_f1 不升版的理由
+bf157be1afbae7f590d32ef8d7d9ae1dc364283a	2aadc31c2db1cb999364c3760913013aa69e3803	2026-09-05	docs: 修掉三個與程式碼不符的說法，README 補 sigma 的 --params 與 σ_p 估法插件
+00a908b5769af45bfc8f4ac92ab31a1a020c3290	37131687e775242005f47e582f19dca71634feeb	2026-09-05	test(eval): 補上 spec 13.1 / 13.2 兩項驗收的證據，並釘住判決列 delta 與兩個讀數的接縫
+e6f3b61afb71622e6bd0ec7012663424d5322830	a1d9fffa1424381443f8e873adaa97c5e09a335e	2026-09-05	fix(eval): ingest 的 VERDICT 子集大小改名 in_subset=；判決列補 metric_version
+132699df0d5ca1802448dd1ad09d7ce96de32a0d	afa143864fc0b9c57dc81b7488685d2bb5040c1b	2026-09-05	feat(sigma): σ_p 方法軸補上公開登記 API（register_sigma_method / SigmaContext / 活的方法清單）
+73c3b82ddb21f460a843295551cfd5313cde4f4d	f62a71e8703e8e1adaaf1aa1e091d4505c61ece3	2026-09-05	fix(metrics): macro_f1 對子集裡沒有 gold 的類別記 None 並排除在巨集平均外
+1def97e7ec513d7424ee5a289fa2abc68e7eb96d	5f143de0aae4a70175f43e2f47059587b6107c07	2026-09-05	fix(report): report 每個主張只留最新判決、兩個篩選都到判決半邊；status/report 拒收不存在的資料集；壞 run 卡改計數
+e23bd75823fb793df7bc9ed3fadfda47a3e7f5a8	7ab522dc333831eb56f40a5df740fbb544996a4a	2026-09-05	docs+chore: README 更正 --plugin 只有前六個命令有；report.py 兩個空 list 補型別註記
+e78b787cf8855586f516c57a27ee6f85bc52e137	af4139ff8661859724f9feac24aee23c37584e51	2026-09-05	test(cli): status 的孤兒 WARN 與 sigma[...] 欄位補 CLI 測試（spec 13.6 的驗收條件）
+77330ed7c8fae2978165e17aa42134f3c8b1f3cb	de86c9af2a774507a567c196e7fd0d675bba18cb	2026-09-05	docs: README 量測層 vcp eval 一節、CLAUDE.md 常用命令與台帳路徑、spec §15 收錄 Plan 3 的計畫層決定
+db803bdcff3921eb3cfcef951c23d2b94da5a56f	f9aa1bdc81cf8a9982eebed7c38ce14889e9ecbc	2026-09-05	feat(measure,cli): vcp eval status / report、--plugin 搬家、護欄 VERDICT 欄位、端到端與 RSNA 真資料測試
+eec7c588f93c29a988f656891c6d6000c0d56485	586aa7dbaf40281aa3e9a478633e52792532531d	2026-09-05	fix(measure): export manifest sha 改記在每個子集的預測檔，第二個子集不再被當成衝突
+b7aea42e8df4732a197852ade1da020a27d0101b	ba82e417d8ddce7cca9531dd1e1f379b603b866e	2026-09-05	fix(measure): judge 核對讀數 sha 時缺少子集項目也走定位的 ValidationFailed
+c4acd5297534acda57389b73d911c539cab8a50d	083780d413d92f6c331632602f8e690a5a6a4db7	2026-09-05	fix(measure,cli): judge 補上有限性防線、--unseal/--reason 與過期讀數防護
+84359dd990f3457eb4780a29730178a57e64af7d	b57f0ebc4d2a3f6105550010e257093211f64821	2026-09-05	feat(measure,cli): 預登記（先寫死、append log）與判決（配對 bootstrap、雙基底、σ_p 條件、INVALID）——vcp eval preregister / judge
+ea34b64fa3efe061b78c16652315c7f5726a0f03	bc40af25c68dba8cd11f6e8d97edbc71bc31b399	2026-09-05	fix(measure): sigma 的 estimate_id 不把 run 解析方式算進身分
+ed1a6e1f6e801c650b76ae6e042393dbc4077b27	1dc24d367a5849cf222472ecd2d963fa859b51c9	2026-09-05	fix(measure,cli): sigma 補負 seed 與重複子集防呆、bootstrap 錨點預設與五個小修
+14affb050a97bb927f9b7830ede16eb926e9d42d	0e8af6c4034249f002f8aceb3442ac3f9bf9c331	2026-09-05	feat(measure,cli): 配對 bootstrap、σ_p 三法（splithalf / bootstrap / prior）與 vcp eval sigma
+cbce58b4bf141b81661716bd9ff1d974d55517c4	50328848af8daf16d8f70a071b47fca755e5f6bd	2026-09-05	fix(measure): set_anchor 的 os.replace 失敗時清掉 .tmp 殘檔
+621c32a7d5183159d6ec91f3ced5484e48615d63	213a2ac75c39768caf28f5117f9dd222538da8bc	2026-09-05	fix(measure): tolerance 防呆、anchors.json 例外包裝、set_anchor 原子寫入、guardrail 補稽核與 reading_id
+526c06303013cf9313e189bd64a0175e9747019c	0dcb11c1cfdbeed5fd20cc3becce216f9b9c80a1	2026-09-05	feat(measure,cli): 讀數台帳（只 append、reading_id 去重）、錨點護欄、measure_run 與 vcp eval measure / anchor
+03f9b327cfbb6c3084f61fa560ce33177f94d5b6	19bc80879906d983a6568a6e0ab636b75069abb3	2026-09-05	test(measure): 混合表示法測試的 pycocotools oracle 只對該測試靜音函式庫的過時警告
+3618b9b4a553377e1885c95e8b9ab8a8ac5a39d4	0cce4cfd91fe16375f278ba2c8cdf0dd27e0cef7	2026-09-05	fix(measure): 在 masks 的唯一 decode 呼叫點定向過濾 pycocotools 的 NumPy 2 過時警告
+486c3b787b28ab3a3dc5f16313c7e133e0f6196d	70d0bfcdd35c9228ba2a37cf3febcdb79145246c	2026-09-04	fix(measure): 統一 polygon 與 RLE 的柵格化基準,修正 mask 解碼例外與定位
+2b81d0e612d61ea06ad52187caed33b27399187c	ee7ae7c33e57bc3be01396ebe9381c175ed2697f	2026-09-04	feat(measure): mask 柵格化(polygon / RLE)與 dice / miou 指標
+33ea3d9d25db601204bab8c96344a6cb7a603ecd	963be168ad449cb6610e06309634bbe5aa016a80	2026-09-04	fix(measure): coco_map 全空預測分支的 gold 類別排除 crowd，與 pycocotools 語意一致
+587b83619e7dec141044c9e5e03a01bdd31ccf55	3ea78c4a97ba86ea64a64e433a0d7de31d4a939d	2026-09-04	fix(measure): coco_map 修復輪次一——iscrowd 誠實入帳、box 補 view 防呆、全空預測類別分辨、綁分排序測試補殺傷力
+9fdcb339a3f1e20f17a03c2a6ed56ac0f1c14318	f23bb8a8b965d7fe2c2a887ce524e35218d8b766	2026-09-04	feat(measure): coco_map 指標(pycocotools,iou 50/75/50:95,逐類 AP)
+9602b58a56cf6c2153e728c1a29de7eeb914eb61	e5d948a56efc52bb32b9669520d27ee3f7278244	2026-09-04	fix(measure): 指標修復輪次一——空子集防呆、regression gold 缺欄位、higher_is_better 方向宣告
+e11c11df61f991939d1a18cbf22081d5814dab7a	af0489e18ca18b5d2121ef4bccd76cd9403648d1	2026-09-04	feat(measure): 指標登記表與 accuracy / macro_f1 / log_loss / macro_auc / rmse / mae
+8bf20adb41bb108bef757cc1c98f36514d5edd45	4013333b0a37d06afa4f67ebf27ce170bd73ea19	2026-09-04	fix(measure): 既有 run 的來源欄位衝突訊息不再宣稱 --replace 能解
+ef6e69198871c6134ad95a50f443da5dbec387b5	ffd777e9a008f13cada04e09aadecb2193ba6ba4	2026-09-04	fix(measure,cli): --export-manifest 不再靜默丟棄、--plugin 接線加 CLI 測試、allow_unknown 可被發現、預測檔路徑單一來源
+63a73941249430ec69d6f8dd684b099f1923d924	2ceec6d2e235580ae81a3bcda10a184b793348c5	2026-09-04	feat(measure,cli): ingest 流程與 vcp eval ingest——run 建立與核對、替換留 history、未知 id 失敗封閉
+af43075cc929cf1d604153d8251061ab35eb574b	eb5c9248d71c7983f11cc584dd32f5a2a1b5dab5	2026-09-04	fix(measure): coco_results/yolo_txt 修復輪次一：mask 形狀、匯出清單驗證、多視角防呆
+08673423c2488a5253f27a9a8e239258da37dbaa	73bdbe25cb280046e937f39c301434521cd278f8	2026-09-04	feat(measure): coco_results 與 yolo_txt 轉換器（以匯出 manifest 對回 sample_id）
+d8a4433abf3faf6d7e99c47fbba6e5a234b0ffbe	fcd72b611c1d22522d8cad4f92664aa2fa89a561	2026-09-04	fix(measure): scores_csv 的適用任務由登記表推導，並補齊使用者輸入的錯誤語意
+da2825035b6b6938de6b3a88106db3db1b3d1a85	a02a8282d5e42f260553e42f682e68d6bd0f3929	2026-09-04	feat(measure): 轉換器登記表與 jsonl / scores_csv 轉換器
+d7f124b7214f5974b69f55193e5340c62228d133	649686d9fe63eb1ddc777c725bbe2f0786c68cd0	2026-09-04	fix(measure): 缺列規則改由任務登記表推導，並釘住夾具與 history 時戳的契約
+d110a42d9ff5fe89c4f32ee84f2ea240e26d9314	2e60d0293249c9968bdd20ac8846161ff1381da3	2026-09-04	feat(measure): 量測 schema、標準預測檔讀寫與驗證、run 目錄與 history、測試夾具
+79620271386f913a5ff8fed64516efc99f3243d2	f336cf00d0cb1599a6cef326ad40d84d63b021c3	2026-09-04	test(exporters): 用巢狀 view 路徑釘住 YOLO manifest images 的鍵是扁平化後的檔名
+a52905f8314ae4af1b68a3b64493ea20494ee703	d3690f245547f82506bfbed726c8caaf870c70ed	2026-09-04	feat(core,cli): eval extra、GuardrailError、量測路徑、YOLO manifest images 對照、CLI 共用層拆出 cli_common
+29d401aaa1da0b52d1c7e53b4464c3adbcf21ae6	12b4451ad4ac51f1f14414b8d4b81729a9fb31e1	2026-09-04	docs: Plan 2c 後記（裁決、全分支審查的 8 個發現與處置、殘餘修正、待辦）
+afd4cb5ef6aa241cadca7c4ec55e936a73c82116	0ec256d45a3a5644b50c1c4488bead0c8664fcfa	2026-09-04	fix(materialize): 重做的工作不留舊列、單張序列一樣堆成 S×H×W、堆疊與逐 view 檔名撞名即 FAIL
+b12c9efb1b7c31396bd53d0c66e0c16a356a8dc7	d4d0deb5e2ad1db9186bfc66f3a4fd68068d61c1	2026-09-04	fix(materialize): 單張序列以 seq_id 命名、快取比對加來源與輸出路徑、堆疊列一律取代逐 view 列
+9ae587973769b6c03b1c24872940c98770a3567a	2c114bcc96bf30290d1895634420f77937a41319	2026-09-04	docs: spec v5 §16 收錄 Plan 2b/2c 的計畫層決定；Plan 2b 後記標記完成項目
+c186052af25744b817b36cf14b13ff9bac4ca10e	c690b77ce3076b688f5bdeef88ab676db86e7281	2026-09-04	fix(audit): 越界優先於重複、boxes 與 polygons 共用尺寸快取、summary 與 VERDICT 記錄略過的檢查
+b83d02f45d264f60238c0ba943efc90eebfa2657	d5c619300b58fa6dfa5de2233fecb69b5af7094c	2026-09-04	test(cli): materialize 選項拒絕的斷言移到刪檔之前並檢查原因文字；skill 契約更新 decode_series 簽名
+92570e4f1cf45e0e72850c3a7fd6e1d4d1a18444	8e8d9eb5f749988c808821635bc59762cc53fadd	2026-09-04	fix(materialize): 每列記 srcs、decode_series 帶 EXIF 政策、孤兒輸出清理、堆疊列取代逐 view 列、--window 只對 png、uint8 MONOCHROME1 反相
+45bce05ea90f8df89b4ffc05d659b8b70d523ea1	e1e8af7d07d76d3ae4f5097c6e7e861a511378e8	2026-09-04	test: --decoder 測試去套套邏輯、dicomio 預設法線與 rescale dtype 階梯、dev 群組與 extra 同步守門
+8a3f0a854f0b0552eab7b429a84cc1088cf748c0	fc424ebdb2a232871550b9bfa3c93d6132e24c62	2026-09-04	docs: Plan 2c hygiene 實作計畫（測試補強、materialize 小修、coords 稽核邊角、spec v5 §16）
+ab574b86096db4dc29c30730bd195c65eba68953	8e4751f2bd8143017f2280ab679115377aa896ad	2026-09-04	docs: Plan 3 實作計畫（量測層：schema、轉換器、指標、台帳與護欄、σ_p、預登記與判決、status/report、e2e 與真資料測試）
+5a3f6ee5478501088bd5a16846b698d87905d3ad	98f895f07906316e5e6f12854342c29782ee11a5	2026-09-03	docs: 量測層 spec v1（預測檔契約、run 與不可變台帳、指標與轉換器登記表、護欄、預登記與判決、σ_p、準入規則）
+68abe77a0f419ec88f874c5c59e49cb157eda4ee	78c28e29ee2dfede9662808383ffba6c83c83e62	2026-09-03	feat(rsna-knee): 200-study 子集的資料集卡（dicom 匯入，58 gold / 142 unlabeled，raw manifest full）
+85a1d5e6c1702ce36b1f894df4ec5ff881194786	51049ce378e8eaac8c5f560e8cad8c142c4be539	2026-09-03	fix(projects): zip Range 下載器以區段跨度切分區塊，不再跨越不相鄰 study 之間的大量無用位元組
+cc462ccc4b48b439f93994c8be8699010100ea94	b5d139adabab26c4f98ccf7570d4259027c87313	2026-09-03	chore(projects): zip Range 下載器降低記憶體——64 MiB 區塊、串流讀取、slots、選完檔案即釋放索引、預設 2 路
+393f1b7b285e4e0de8fb28f84e9f7adb6d16a414	b4ecfeaf1fe9328b47719e2254530b544095c101	2026-09-03	chore(projects): Kaggle 打包 notebook 在比賽資料未掛載時明確報錯並列出可用輸入
+665fa6303d754e57f4e9ad29f417d38c8e504f70	ec99705dd36555f1bfc4a8693fe5d7f09827d8b3	2026-09-03	chore(projects): RSNA Knee 子集改以整包 zip 的 HTTP Range 讀取下載（避開逐檔 API 配額），整合測試 README 同步
+0f0981e342e422e6cf56b5603030ab8b6dedf002	f75b0ddd36bd83f84f7d7cef2489e2e3cfee58ff	2026-09-03	chore(projects): RSNA Knee 子集改由 Kaggle notebook 打包——產生器與可貼上的 notebook 腳本（兩個 part，各低於 20 GB 輸出上限）
+48184ef7dcfb6fda5114d70fb47a5baddda13c05	7886fc137b8712471deee79481e55a9e8d9d1cf0	2026-09-03	docs(skills): 三個專案 skill——vcp-data-pipeline、vcp-extend-registry、vcp-contest-onboarding（依無 skill 基準測試的缺口撰寫並驗證）
+a7a95d5158d9bcc32ca5f39343c26716840192df	9d4c433701ba0e1ba97ea556b6ae1886bebfa3fd	2026-09-03	docs: Plan 2b 執行後記（裁決紀錄與 Plan 3 待辦）
+58e92ca9044744bf5990e09a94f68a9ed471df31	3d7b6d2c93a2ff0d65ef5eaa681939eb83ab77af	2026-09-03	docs: README/CLAUDE.md 修正 materialize 與 EXIF 描述
+e0d703dc8b42e03512cbc8bbd66819ce1dbbc32d	dd3621506207aa61d5dc4344d9591ec223f8c831	2026-09-03	fix(materialize,cli): exif_policy 納入 skip 規則、目錄 view 只列解碼器家族的檔案、--decoder 先驗證、VERDICT 基底欄位優先
+365d166c0e0d92d2e63725c6c68e29736b5ff04d	02a1729506ece18282934efd5c807d5ac9635136	2026-09-03	fix(data): dedup 只稽核影像 view、乾淨重匯清除 import_skipped、COCO oriented+JSON 尺寸即失敗、dicom task 選項先於掃描驗證
+ab19c9582169b652bf8435aeda683e99ecfaf438	e083fb6dac2c0725ef57c2399a4c9cb0ae51ae01	2026-09-03	test(integration)+docs: RSNA Knee 真資料測試、dicom→materialize 端到端流程、README 命令總表與 Kaggle 用法
+ba822f8c1e8e297ab5e66412843d1e5e488a6b54	9f8adb24ae8a7a7c74a9f723b17722186299f72a	2026-09-03	test(exporters): 以合成匯出器證明 manifest 基底鍵優先於匯出器附加鍵
+ca26c3c8aede89acea4e23544578b16454058f7d	a6daadbf0bc1ba00a69591ea77996cf5c806b7c5	2026-09-03	fix(data,cli): YOLO manifest categories 與 images= 欄位、_place_image 只在權限不足時退回複製、old_card=unreadable、CLI 層補 unlabeled 與空子集 WARN 測試
+96483621c4accded47b14558ec57428c65f1050c	ac8c0307bc5ea1c027c674686db5d6b78835d2e4	2026-09-03	fix(materialize): skip 規則比對解碼器名並不再以逐 view 列充當堆疊、manifest 只保留本輪規劃且未失敗的列、png 體積判定與 squeeze、plan_jobs 接 image_root
+6650b994c3bc278cb6a8ed32f75babe26ab2d0d8	a0e4f311b4f30e8506812c13557c2f2f8a70be14	2026-09-03	feat(data): vcp data materialize——npy/png 快取、resize、stack-seq、window、可搬移 manifest、failed.jsonl、process pool
+b371de7115c2727f237b718c273ee2490bd71103	57d012d8e569d12d54b9b07c02fd3f508135b298	2026-09-03	fix(importers): dicom 選項驗證先於 header 掃描；workers/seq_csv 重複 id/meta_cols=series 改為 ValidationFailed
+00067f0486bfb896c2dcfec5598ee5c02dc8f7f8	ef3167af8480b591df30eeb7eeaa26a0aa084981	2026-09-03	feat(importers): dicom 匯入器——header 分組、切片排序、study/series 兩層級、labels/seq CSV join、PatientID 分組
+15c22312276c1377f5491790581c3c183f7e1c47	2ac5484ad137ecdf5345f47235a2d0ecb728c76a	2026-09-03	fix(data): dicomio 容錯非序列的位置/方向 tag；dicom 解碼器 RescaleSlope=0 不再視為缺省
+0bd92aea00dfea5c074faeab8af6b8c3c70f37ca	7f732698a5f6a4e3cb88617ae3f2726467559a43	2026-09-03	feat(data): dicomio（header 讀取、切片排序)、解碼器登記表（image、dicom)、window/resize、合成 DICOM 夾具
+599d9c22c15014c1d8400ef73f84d986e0ca44bb	6da02343d1e998e990bc07073739e47cf91143ea	2026-09-03	feat(audit): coords 改報可疑框、無尺寸 view 依 exif_policy 補尺寸後越界與匯入被擋列；新增 --min-box-px/--max-aspect/--max-cover，校正 tiny 樣本預期為 WARN
+7015566cfc38e3478793fdfe6a2220493410f47d	193a754d5e8e7a1443df450b9d5fa7e726c903f3	2026-09-03	feat(data): EXIF 方向政策——匯入器記錄 exif_orientation 並依政策對調尺寸、exif_rotated 計數與 WARN、匯出 manifest 記錄政策；ExportOutput 取代 tuple 回傳
+0bf9527a688d99193563797d85e9f6391171523b	cd70d16037c53b44cbe5243b7f0e039fffddc5f7	2026-09-03	chore(projects): RSNA Knee 子集下載腳本（檔案清單續跑、依 gold+隨機 study 保留原佈局下載）
+7e2d1c8429fb8478ff11c75392074bea02fcc9fe	ca330ac521610c40a43c02ec8c67b38f11531d1e	2026-09-03	feat(data): card 新增 exif_policy 與 raw_manifest_mode、dir_manifest sizes 模式、import --raw-manifest；dev 群組加 pydicom/pylibjpeg
+30b2ab3e3f36324cb5fbbaa8f840c6da3860f2ca	cf0dfa8313317dd3ae3729490a732ae056df66e9	2026-09-03	docs: Plan 2b 預檢修正——Task 5 非 DICOM 檔測試的 rows_read 應為 10
+821d8d8da9bf609cc9e2055c67d09576d3d7c57a	becba4cd68de81a2f1b2ad169367555dc8c154ca	2026-09-03	docs: Plan 2b 實作計畫（dicom 匯入器、materialize、EXIF 與 coords 稽核落地、hygiene、RSNA 真資料測試）
+c30afbefd91d3570eb337461ba6aa34f8bed3011	caf0ccd82ac3882151f0a15fc1a6f43dd4c026f9	2026-09-03	docs: spec §15 自審修正（series view 解碼順序、unsized view、stack-seq 語意、整合測試斷言不寫死、交叉引用）
+08169be67af9a966106359baa7a9b93a25379e47	12765a3a3afe6d7921b0ccd09ebf4af8338e5b94	2026-09-03	docs: spec v4 §15（EXIF 政策、coords 稽核職責、dicom 匯入器、materialize、raw manifest 模式、Plan 2b 驗收）
+c2bbe7d14bb5cf17f61b107edd08476dc7953fba	1ba85141eb8733018fc4ab2499c2266436724f11	2026-09-03	docs: Plan 2a 執行後記（裁決紀錄與 Plan 2b 待辦）
+67d65e267a9316fe09b534b8a4c83a3a42c03472	92a577a1ca8a50a916e9b6cdb2e1325d5bb19898	2026-09-03	fix(data,core): 匯出器影像／標籤命名空間分離、YAML 解析錯誤轉 ValidationFailed、subset 對無效 group_key 即失敗
+9133cd8a884ce16f3d34805b90244f39ee1f14c8	2f38bee85d69f20f3839cdcfbbdceed5bf7f808b	2026-09-03	test: read_text 一律指定 utf-8
+b55996fbf18f12ef488ee9e903c348c8aae9384b	4e325a16978814eca64963f9d942e0505c268043	2026-09-03	fix(data,cli): subset 依 plan 的 group_key 重驗、空子集匯出 WARN、audit --json 保留各項 VERDICT
+9d7db069a7c8df5a246e594582c6b26e622e2f00	e10f797241f6448b2890c67e81696ef6cb09efd6	2026-09-03	fix(data): YOLO 標籤名碰撞即失敗、yolo 匯入器 labels 目錄檢查與 unlabeled 計數、空 CSV 即失敗、舊 card 不可讀仍計 plans
+e36f099e798e217b334108856b4432af95c2d32a	4964690c8002b0506ae0e9caad47ed0150a27eeb	2026-09-03	test: 端到端流程（csv_boxes → audit → split --group-from-audit → export）與覆蓋率補強
+bc6de369b80b36b5244f74982a7ee1053d1c4679	513dffa91eea6296d919238abcd4a7849bc07e4d	2026-09-03	test: 整合測試骨架（VCP_REALDATA_ROOT、缺資料即 skip）與海廢真實資料驗證
+0adc697fb2fd50b5a8c066aa3e1370d58b295dab	0d52af3d82405ff6532ee14c459189c4fe73d197	2026-09-03	feat(data,cli): 進場稽核（座標、dHash 近重複與 test 重疊、來源揭露）與 vcp data audit
+23227c6ae7188c1fb209b8561aaf301adca2258b	869e9ec8dcba23fb0cccdb9222bf030a2b3b8987	2026-09-03	fix(data): 多 view 未指定改 ABORT、COCO 遮罩 area 保留/計算、YOLO 攤平碰撞即失敗
+fde7f3dcd9ea0e1b04bc79d1163470afaf47c02d	88aee4fd617d473cbc6e71bd3a434782dc790799	2026-09-03	feat(data,cli): coco/yolo 匯出器、manifest.json、vcp data export（含 sealed 開封）
+e4e04cd9421e4b1c1269c01c06035c10105b3e63	345a4113da4cacd5060c00ba73e89cc37d12d22d	2026-09-03	fix(data): image_csv 類別排序完全確定；imagefolder 無影像即失敗
+cf7a3a908d4e8ebd080469986018ed6963b311e7	fffe4288e0fec73e06c46b3f9a06a5afd8aaa35c	2026-09-03	feat(data): imagefolder 與 image_csv 匯入器（cls/multilabel/regression 自動判定、gold_col）
+77a0a4a49778fb9d52bcd7758382a0fb63d4ab73	13fec6198b47cc07527f8d8e264932adfa0ce707	2026-09-03	fix(data): yolo load_names 對非 mapping 的 YAML 回報位置
+fdc78bbfef6dce29af42b4816079d264341bd886	2bb1945444f4fd71e22841ad3fd79a12525239cc	2026-09-03	feat(data): yolo 匯入器（classes.txt / data.yaml 類別、正規化 cxcywh → 絕對 xywh、缺標籤即負樣本）
+4f95d488d5f0c7d016318be7b09ca6946ce9c3e7	e52f52293e846c4ee86122e52c96a43bef5bd30d	2026-09-03	fix(data): coco 匯入器拒絕重複 image id、數值欄位壞掉時回報位置
+be6a92a7d5718b9d08152b7902478a7b4773f485	779a3343737c76c15c02fa3293fadc16d6e04eaa	2026-09-03	feat(data): coco 匯入器（det/seg、polygon 與 RLE 原樣、未知 image_id 跳過並 WARN）
+3c451d0f0e4c08c0d71620e4ea60f6a1d5f377a8	c4cc8970daa59a27cdb4cd9fe79b2bc041ea96dc	2026-09-03	feat(data): csv_boxes 匯入器（欄位對照、box_format/coords、abort|skip 壞列、負樣本）
+ac521649fdbcc912e159d69e651871a882eba24e	0f320da72dfe76260507cf97d7b9c0c4b377683c	2026-09-03	style(test): CSV BOM 夾具改用 \ufeff 跳脫序列
+07e1608e047ac4b12e1fa0b340bd480b82a4f330	7c1099127eb5430c62afd46806579cc307f96171	2026-09-03	feat(data): 匯入器共用工具（影像探索、header 尺寸、CSV 讀取、load_categories 搬家）
+480a18c7c2f02242a0c508072da4b58ab3cf77e8	a470cb030e36be7660223e1a7b7e741fc6b7c755	2026-09-03	fix(data): jsonl 匯入器相對 src 時不再重複拼接 image_root
+0385c3b0639f819e42dc538dce1e779fcedb9ac3	58873ea8f707fc17fae9560f8dbcaefdb14227ec	2026-09-03	feat(data): finalize_import 先驗證再算 manifest、card 路徑相對化、覆寫既有資料集時回報 plans_invalidated
+30bc60ed0c3fe1859bed0a22db08420e59cf90f7	48ca36c17a58429f52badbf8ca135090423635e4	2026-09-03	fix(core,data): 路徑可攜性（store_path）、configs root 缺失即報錯、subset 重驗不變量、regression 非空、seed stride
+ca51d24921b6d2a2926f65e6464eec5fc1b390c4	e4d486d770b6c23003799d75e0f692f76f6986ea	2026-09-03	docs: Plan 2a 實作計畫（影像匯入器、匯出器、稽核、整合測試、Plan 1 遺留修正）
+51b1f2eb96d7b76d20d433a9a28b1f5cfcffda6e	db0381de4ff7914f4d4a813db239c94d974e6a36	2026-09-03	docs: spec v3 — §14 補充決定（路徑可攜、匯入覆寫 WARN、匯出/稽核細節、Plan 1 遺留修正、Plan 2a/2b 切分）
+f007fdbe69f87841930785f4486e0e936350a78b	f9172d90cb16bb1457630c959a2f7dfc14811d57	2026-09-02	docs: Plan 1 執行後記（裁決紀錄與 Plan 2 待辦）
+0fdafcdd1f7661b23c99a53d28c47b4c7d547082	d8351b7b47e970bbc0006acf12f5849cc7bb072a	2026-09-02	style: ruff format 修正單行斷行（test_split_generate.py）
+57663c189966c9453649863853a503d68692a661	d52a3dabd64c3586a4887085c82ab2b5ee5e58c7	2026-09-02	test: 移除未被引用的 e2e 夾具
+1470984f32dd86b9f79f3cb6951a447df3ed36a1	2831da830e33082c6c116b4a8cccc68d58684218	2026-09-02	refactor: Dataset 不可變外露、config 改 PEP 695 泛型並移除 UP047 ignore
+9ba3472abe3e9c7fca7a630f2f5172070c2dbe05	48a2cc25564c8522edcc9befd6c7b65750091f77	2026-09-02	fix(cli): 驗證 groups.json、空子集 WARN、--strategy、plan 最後寫入、_logger 全例外保護、JSON 分流測試
+b446697325110cc46f91ef5ccd0689f08f78d48f	a9ecd559a4955b00e51dee2f3a454a31fcf66c2e	2026-09-02	fix(data): 分布表用 plan 的分層鍵、零寬向量退回隨機、回報空子集、策略登記表接線
+af323bb6a709ebcd4774b1e251c79bc52cc9885c	747cbd265aacc00d7907c70fdf290dd9f7adc9f4	2026-09-02	test: 所有測試自動使用暫存資料/設定根目錄
+79d7d08352b05d3b9a4a8d0f97ec1e5bc5f3e57c	51f9bd69a868f01030e46402c2e53a70e5888e1f	2026-09-02	style: ruff 排除 docs，還原文件內的程式碼區塊
+734e587f9d323c28cf0224d7ea933b80f47ed97e	28db50fa237246075c9269f660a6466b760b8253	2026-09-02	test: Plan 1 整體驗證；補覆蓋率測試與 e2e 夾具
+2c460d6a0038039f6a973c51f037e7737502e8f6	3467e754bcba94a37eb6438ecf30c4fc9bc60468	2026-09-02	style: ruff format 全 repo
+ea47a3dbfa26a19d5c73369142b4b87e4dd5157d	8925cee48c7c6f8b635d49521945b0af24eebcc9	2026-09-02	fix(cli): version 命令也以 VERDICT 收尾（鐵則不設例外）
+94e35483390c087eb846aa982db3aa8079155afd	a59a6ab13fd6f978fc5dc52c8ec4f5ffea02a73b	2026-09-02	feat(cli): vcp data import/validate/split/lineage，VERDICT 收尾與 --json
+ab319690f8a4ac9eae51790117181f4e988d6bc0	fc9b1f9b86001a923a29501d2a09d23bd1ba1907	2026-09-02	feat(data): Dataset.subset 含 sealed 開封留痕；lineage 乾淨基底推導
+28154a9e2312436921f52053713df805523f8480	1e1dd57d86b970762b7b626e6e4c40b98674cad0	2026-09-02	fix(data): 向量分層抽樣修整到剛好 n 個並在產生器加大小不變量
+4b89756e36e39386ad1e65586892eeeebbd48813	b8a5340a721c6e942e7ce4791484e6e2de20fab4	2026-09-02	feat(data): 固定切分產生器（分層/分組/gold-only）、分布表、策略登記表
+518557d40f0121399f1302dc1f854f810b59f2c2	0946fe45ce2d33929f3221a31e82cec70be6e88c	2026-09-02	feat(data): 切分方案模型、--subsets 解析、存取與不變量檢查
+524e43b5c48967456dce7d8352329b4fb92cc148	d9bca861947c2d42a678add7dc625fba3dc7c150	2026-09-02	feat(data): 匯入器介面/登記表與 jsonl 直通匯入器
+579c721605a38dd15ab1da822dedf92f258dfa61	16f1617cd5ee02bd90039dbacb5a185600a3ef52	2026-09-02	feat(data): Dataset 載入/驗證/儲存與 samples.jsonl 讀寫；測試建構器
+9146eb40ce6504034e2d5f8c20679df170642115	e5fccbb7ff0fc623b4b5170d174838e0380f2c9b	2026-09-02	style(test): 換行整理 test_tasks 超長行以符合 ruff E501
+aea9f3ab84996cc958e04c60609eef2bdbef06c1	78e190acb2d5f14e031d53df9edeb15ad20ef0f7	2026-09-02	feat(data): 任務登記表（cls/multilabel/regression/det/seg 的驗證與分層鍵）
+c33952bced4423ff072375227c66c18f4a598096	01d6f414dcdcaa9ce69fe22eb0501a802ca6309e	2026-09-02	feat(data): 標準資料格式 schema（sample/view/labels/card）
+da416e023195621f0d5583e0efd151af0c0291e9	07e72c29e1d589a3da9c1fb500e8b890414f09f0	2026-09-02	fix(core): format_value 以 fullmatch 判斷裸值，避免尾端換行穿透 VERDICT 行
+667c43c2769a64baff55f27443d926d051215f59	862b703f6192664701e7cedbb374657536879cf3	2026-09-02	feat(core): Verdict 終局行、狀態序、JSON lines 日誌
+53c7189e1daa73d8c8693c1740f15034a5a1aaf0	70db9eead4b84b205b3f381ea726288b063c9053	2026-09-02	feat(core): 資料/設定根目錄解析、DatasetPaths、YAML 模型讀寫
+b4d1a2f609c9fdfd0657161bb453283ea4d35d91	2ad81e7bc945f8b34fd1f40c3c2cf893e490cfa2	2026-09-02	feat(core): 錯誤階層（帶 VERDICT status）與 hash / 目錄 manifest 工具
+65a37d327d7634487e620bd5c55bfa9e877cc7af	f2e7ce1cbc93470fe551ad6de7a49deca2dbd96a	2026-09-02	feat(core): utc_now/stamp/parse_stamp 與 ruff banned-api 驗證測試
+4d6ed000bfc8342f3deed9ab412ba7b1b0fbc780	71fa6674aeed092451ab1ff894d850b4a8b7b58c	2026-09-02	chore: vcp 專案骨架（uv、pydantic、typer、ruff banned-api、pytest）
+8b08e5cf9966d303ebda31bf17264b3d4408caf3	97a5832f0f465314fb2d1b020cd46b3b009dfb37	2026-09-02	docs: Plan 1 實作計畫（骨架、core、schema、任務登記表、Dataset、jsonl 匯入、切分、lineage、CLI）
+3ff49b28a1814e77334f78a5aad6a099989c554e	4777e62ca34a0f1173bb817e4db8eef80755d1ff	2026-09-02	docs: spec v2 提高通用性，移除綁定特定比賽的假設
+2ad8882ebe72b16ca6f5fa1a1f0d04b1c6160d3d	b7685d71b815fd788e0f53d54966fb7fc23155ad	2026-09-02	docs: spec 自審修正 ImportSpec 介面、csv_boxes 來源佈局、驗收條件 9
+430d25c506e761d9368aee1c497a4701499f3ad1	c4e9b99fc8a400646389d995256a1ff85e4ca24d	2026-09-02	docs: 加入海廢賽後報告與 vcp 骨架/資料層設計 spec

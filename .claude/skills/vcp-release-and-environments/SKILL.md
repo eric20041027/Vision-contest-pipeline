@@ -6,7 +6,7 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 # 發版、環境與 git 慣例
 
 ## 版本規則（CHANGELOG 表頭是權威）
-- SemVer 停在 `0.x`。**MINOR**：寫進產物／台帳的內容或語意改了，或 CLI 契約改了（命令、選項、VERDICT 欄位、exit code、`reason=` 字彙、登記項）。**PATCH**：其餘（bug、訊息、效能、測試、文件、內部重構）。`1.0.0` 留給稽核 Wave 1 落地。
+- SemVer 停在 `0.x`。**MINOR**：寫進產物／台帳的內容或語意改了，或 CLI 契約改了（命令、選項、VERDICT 欄位、exit code、`reason=` 字彙、登記項）。**PATCH**：其餘（bug、訊息、效能、測試、文件、內部重構）。`1.0.0` 留給稽核 Wave 1 全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 Wave 1 的第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
 - 「登記項改變」只指 `src/vcp` 內建登記表；`projects/<contest>/` 以 `--plugin` 登記的指標、轉換器、融合器等不動框架，**不需要發版**，也不算 MINOR。
 - `src/vcp/__init__.py` 的 `__version__` 是唯一來源；產物寫 build string `X.Y.Z[+g<commit>[.dirty]]`。發版前的產物帶 `+g<sha>` 是合法的，不必為了「好看」發版；為比賽開跑前發一個 PATCH 讓產物寫乾淨版號是可以的。
 

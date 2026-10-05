@@ -120,11 +120,11 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 
 ## Status and roadmap
 
-`0.12.0`, pre-1.0: artifact and ledger formats are stable enough to build on; the CLI contract can still change on a minor version ([CHANGELOG.md](CHANGELOG.md) says what each bump means).
+`0.12.0`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
 
 - **Proven end to end** on a local RSNA knee subset — data, training, judgement, staging, backup — and in use for that competition now.
 - **PostgreSQL provenance backend**: five live evidence sets (integration 51/51; a 1,224-measurement calibration; a 3,672-measurement six-method benchmark at 1K–100K entities; a held-out evaluation whose aggregate gate passes at 1.018 / 1.017; a real-data track), with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured, and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. Details: [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).
-- **Next**: audit wave 1c (code snapshot and authorisation receipts) is the last item before `1.0.0`; then adaptive policy v2.
+- **Next**: audit wave 1c (code snapshot and artifact authorisation, VCP-004/006). `1.0.0` comes once all of audit wave 1 has landed, 1c included; items 4 (a selected-row accessor for one large array) and 5 (a synthetic plugin end to end, then migrating the contest prototypes) of wave 1 in the audit's §11 come after 1.0, and so does adaptive policy v2.
 
 ## Documentation
 

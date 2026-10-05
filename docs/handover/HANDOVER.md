@@ -12,7 +12,7 @@
 | 2 | 量測層 | `src/vcp/measure` | `vcp eval ingest\|measure\|anchor\|preregister\|judge\|sigma\|status\|report` |
 | 4 | 融合層 | `src/vcp/fuse` | `vcp fuse recipe\|build\|ablate` |
 | 3 | 訓練層 | `src/vcp/train` | `vcp train run\|upload\|status` |
-| 5 | 提交治理 | `src/vcp/submit` | `vcp submit` ×12（init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report） |
+| 5 | 提交治理 | `src/vcp/submit` | `vcp submit` ×13（init/stage/verify/upload/record/score/sync/final/lock/unlock/status/report/ledger adopt） |
 | 6 | 備份審計 | `src/vcp/backup` | `vcp backup manifest\|push\|verify\|pull\|status` |
 | 7 | Dataset evolution provenance | `src/vcp/provenance` | `vcp data diff`、`vcp provenance rebuild\|sync\|ingest\|impact\|stale\|explain\|status\|verify-index` |
 | 稽核 Wave 1a/1b | 不可變產物、access receipt、source audit | `src/vcp/artifact`、`src/vcp/data/access`、`src/vcp/data/source_audit.py` | `vcp artifact create\|show\|verify\|lineage\|status\|relink\|clean`；收據與稽核由 export / train / validate 自動留下 |
@@ -24,31 +24,39 @@
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`）。Codex 的 `codex/dataset-evolution-provenance`（0.7.0）與 `codex/postgresql-adaptive-provenance`（0.8.0）已各以一個 PR 合併，tag 打在合併 commit。Codex 的 PR #21（SQLite 索引保存 graph gaps）2026-09-23 合併，隨 0.9.1 發出：0.9.0 以前建的 SQLite 索引讀取時 FAIL `mismatch: graph_gaps metadata; rebuild required`，每個 data root `rebuild` 一次（RSNA 的索引也是）。
 - 版本：`0.12.0`（tag `v0.12.0`，2026-09-29，MINOR：VCP-038 第 2–4 段與 VCP-014——共用台帳正本（`ledger: shared`、`vcp submit ledger adopt`）、寫入命令的檔案鎖、上傳前同步、PENDING 綁定、同 id 重傳要 `--force`；PR #33）；`0.11.0`（tag `v0.11.0`，2026-09-28，MINOR：RSNA 第二輪回報的 VCP-040 + 042——run 讀的證據檔與標籤集（`vcp data labels`、`train run --evidence / --labels`、`Session.attach_evidence / attach_labels`、`eval ingest --evidence / --labels`）——與 VCP-041——dirty 工作樹（`--require-clean`、`modified=` WARN、`train/git.<n>.patch`、`git_changed=`）；PR #30、#31）；`0.10.0`（tag `v0.10.0`，2026-09-25，MINOR：RSNA 第二輪回報的五件——kernel 權重必須是被判決的那組、Kaggle 上傳回讀確認、同一發不再被 uploaded 與 foreign 各算一次、多折同名 checkpoint 的備份與上傳、子程序的 `VCP_ATTEMPT`；PR #24–#28）；`0.9.1`（tag `v0.9.1`，2026-09-24，PATCH：skill 打包成 Claude Code plugin `vcp`、帶上 PR #21）；`0.9.0`（tag `v0.9.0`，2026-09-23，MINOR：`vcp provenance graph` 把索引畫成 Mermaid 圖，加 skill `vcp-provenance-graph`）；`0.8.1`（tag `v0.8.1`，2026-09-21，PATCH：串流 replay、`python -m vcp`、receipt nonce 加寬、開源門面；五份 provenance 證據齊全後、RSNA 訓練開跑前發）；`0.8.0`（tag `v0.8.0`）= PostgreSQL Adaptive Provenance：未給 `--backend` 仍是 SQLite，PostgreSQL 是 optional、noncanonical、可重建的 derived index；`0.7.0`（tag `v0.7.0`）= Dataset Evolution 與 Incremental Impact Provenance；`0.6.0`（tag `v0.6.0`）= 稽核 Wave 1b-2 source audit；`0.5.0` = Wave 1b-1；`0.4.0` = Wave 1a；規則與發版步驟在 `CHANGELOG.md` 表頭。下一步：稽核 Wave 1c（程式碼快照與授權，VCP-004/006）；provenance 的開放項在 PostgreSQL 後記最後一節（policy v2、full rebuild 後 VACUUM、EXPLAIN、Linux live、1M）。
 - 測試：`uv run pytest --cov=vcp` 在 0.12.0 = 1924 passed / 76 skipped，覆蓋率 95.35%（0.11.0 是 1830 / 76 / 95.27%，0.10.0 是 1748 / 76 / 95.07%，0.9.1 是 1685 / 76 / 95.03%，0.9.0 是 1677 / 76 / 95.01%，0.8.1 是 1612 / 76 / 94.85%；PostgreSQL 整合案例未配置 service 時 skip；CI 的 ubuntu `postgres` job 有 Docker Compose 的 17.11）。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
-- 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` → 9 passed / 3 skipped（marine-debris 未匯入）。
+- 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` 收 15 個唯讀測試，其中 `test_artifact_status`、`test_access_receipts`、`test_audited_access` 是之後加的，還沒有在真資料上跑過的紀錄（跑過就把數字補在這裡）；有紀錄的最後一次是 2026-09-07 的另外 12 個：9 passed / 3 skipped（marine-debris 未匯入）。
 - 環境：Windows 11、`uv` 管 Python 3.12、typer 0.27。本次實查 `uv tool list` 為空，Kaggle 改用 `uvx --from kaggle==2.2.4 kaggle`（profile 已設定，可讀自己的 notebooks）；rclone 1.75.1 官方 portable binary 與 PATH 用法見 RSNA RUNBOOK §9，實測 `rclone_conf=absent`。RSNA 比賽在獨立工作區 `C:/Users/smallfire123123/Desktop/RSNA_Knee_Abnormality_Detection`（自己的 `vcp-data`、`configs`、`projects/rsna-knee`、核心 venv 與訓練 venv），兩個 venv 自 2026-09-21 起 editable 指向釘在 tag `v0.8.1` 的 detached worktree `Vision-contest-pipeline-v081-rsna`（規則見 `vcp-release-and-environments` skill）；repo 內的 `projects/rsna-knee/.venv` 仍指 main，是開發用。torch 2.11.0+cu128。
 - Skills：`.claude/skills/` 十個（`vcp-orientation` 入口 + 九個；`vcp-provenance-graph` 是 0.9.0 加的），鏡射到 `.agents/skills/`（`test_skills_plugin` 擋兩邊不一致）；`.claude/` 也是 Claude Code plugin `vcp`，別的專案以 `/vcp:<skill>` 呼叫，安裝方式在 `docs/guides/AGENT_SKILLS.md`；路由與時機在 README「Working with an agent」一節與 CLAUDE.md / AGENTS.md 的「文件」。
 
 ## 3. 程式碼地圖
 
 ```
-src/vcp/core      time（唯一時鐘）errors（VERDICT 狀態）log（VERDICT 行 / jsonl log）paths（DatasetPaths）
-                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact）atomic（write_once 原語）
+src/vcp/core      time（唯一時鐘）errors（VERDICT 狀態）log（VERDICT 行 / jsonl log）paths（DatasetPaths、path_id）
+                  hashing config（YAML ↔ pydantic、is_true）proc（子程序 runner + redact、timed_runner）atomic（write_once 原語）
+                  lock（跨程序檔案鎖）build（build string）
 src/vcp/data      schema tasks（任務登記表）dataset split（plan、assert_plan_matches）lineage
-                  importers/ exporters/ audit/ materialize/ dicomio
-src/vcp/measure   schema runs（run.yaml、FUSE_FRAMEWORK）predictions converters/ metrics/ ingest
+                  importers/ exporters/ audit/ materialize/ dicomio access/（DatasetAccess 與收據）source_audit
+                  labels（label_set）evidence evidence_ref（run 讀過的證據）
+src/vcp/measure   schema runs（run.yaml、FUSE_FRAMEWORK）predictions converters/ metrics/ masks ingest
                   measure（護欄 → 讀數）anchors ledger（三個台帳檔名）prereg judge sigma stats report plugins
+                  provenance（receipt > export > declared）
 src/vcp/fuse      schema recipes（配方進 git）fusers/（wbf/mean/rank_mean）members build（fuse.json）ablate
-src/vcp/train     schema records（train.yaml + train.log.jsonl）env checkpoints upload run session reader status
-src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）timewin guards pairing gate
+src/vcp/train     schema records（train.yaml + train.log.jsonl）env gitstate（dirty 工作樹）checkpoints upload
+                  attach（--evidence / --labels）run session reader status
+src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）location（台帳位置與交易）adopt
+                  timewin guards pairing matching kernel gate
                   writers/（scores_csv/coco_results/csv_boxes）platforms/（manual/kaggle）stage actions sync final report
-src/vcp/backup    schema ledger manifest evidence（證據圖）dest（本機 / rclone）push verify pull status
+src/vcp/backup    schema ledger manifest completeness（清單完整性）evidence（證據圖）dest（本機 / rclone）
+                  push verify pull status
 src/vcp/artifact  schema（pydantic 模型、check_file_name）ledger（supersession.jsonl 讀寫）store（load/reuse/verify）
                   writer（ArtifactWriter：claim/write/commit）lineage（chain/successors/head/forks）clean（scan/clean）
-src/vcp/provenance schema/policy/diff（dataset_diff artifact）graph/views（full oracle）backend（SQLite adapter / optional PostgreSQL）postgres（v1 normalized derived index）strategy（immutable adaptive policy）index（SQLite cache）
+src/vcp/provenance schema/policy/diff（dataset_diff artifact）graph/views（full oracle）roots（索引服務的 root）
+                  backend（SQLite adapter / optional PostgreSQL）postgres + postgres_schema（v1 normalized derived index）
+                  strategy（immutable adaptive policy）index（SQLite cache）render + render_mermaid（provenance graph）
 src/vcp/cli*.py   每層一個 typer app（含 cli_artifact.py 的 `vcp artifact` 群：create/show/verify/lineage/status/
                   relink/clean）；cli_common.run_command 統一 VERDICT / exit code / --json / context
 projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
-tests/            unit/<layer>、integration（真資料）、helpers.py、submit_fixtures.py、backup_fixtures.py
+tests/            unit/<layer>、integration（真資料）、performance/、helpers.py、submit_fixtures.py、backup_fixtures.py
 configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git
 ```
 
@@ -98,19 +106,20 @@ acceptance 表已無空格（calibration v1 與 1M memory gate v2–v4 被 RAM �
 
 ## 6. 開放的待辦（依優先序）
 
-1. **Hygiene C 已完成**：兩個 commit `6a4cc58`、`12a9cd4`；處置與驗證見 Plan 6 後記 §9。
-2. **接續修復已完成**：遺失 `fuse.json` 時拒絕不完整紀錄，`--replace` 重建所有宣告子集（`7c31c3d`，Plan 4 §9）；eval / fuse / train / submit 的 26 個命令全部採用 `run_command(context=)`（Plan 7 §8）。歷史「未做」清單已逐層核對，處置在各後記最新節；不要依舊節再做一遍。
-3. **效能回合**（都刻意延後）：Plan 2c §5-2（materialize 的 `is_dir`/`stat` 兩百萬次）、Plan 3 §5-4（seg 指標配置、護欄重算、judge 載兩次）、Plan 7 §5-6。
-4. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）、Plan 5 checkpoint TOCTOU 仍延後；`Manifest.data_root` 刻意保留作人讀來源標記。
-5. **RSNA Knee 已實跑本機基準**：200 study 固定切分、PNG256、兩個種子訓練、預登記 / macro AUC / judge、平均融合消融、test profile、離線 bundle 已完成；讀數與命令見 `projects/rsna-knee/RUNBOOK.md`。seed 43 與融合均未準入，第一個 seed 42 是 baseline。**尚未完成外部里程碑**：指定私有 Kaggle dataset 上傳待核准，notebook 執行 / 提交 / scored / sealed final 未發生；備份目的地未提供。不要把手冊中待執行命令當成已完成，也不要先解封 holdout。
-6. **Windows 命令解析**：裸 `python` 可啟動到 venv 以外，即使 `--venv` 探針正確；專案已用絕對 interpreter 完成訓練，通用解析修復另列 Plan 5 §10，與效能回合分開。
-7. **本機證據已備份**：`knee-local-v1` 結論 `all`、51 項驗證成功；兩份權重、notebook bundle、Git source bundle 均已存 `C:/vcp-backup/rsna-knee`。這是同機副本；異機撤離仍待目的地，先將權重 upload 到該遠端後再產新清單，勿把指著 C 槽的 remote_copy 當異機證據。
-8. **PostgreSQL Adaptive Provenance 外部驗收（2026-09-20 五份證據齊全；接手點是 policy v2 與 Linux CI）**：live integration 已過（v3）。依序：(1) production graph loader 的 canonical replay 改串流——已完成（`open_dataset_diff`：先整檔驗證、再逐筆重放，API 與 exact parity 不變；Codex 2026-09-14 量到 1M 場景在 `baseline_graph_build` 把約 41 萬筆 diff 事件全部常駐，peak 5.7 GiB）；(2) 探路矩陣已跑完（`docs/benchmarks/postgres-provenance-exploratory-v1.md`：1K–100K 五方法各 1 次，8.5 小時，parity 全過，incremental 在每個非零 ratio 都快於 full）；(3) 1M 已於 2026-09-15 裁決移出正式矩陣（Plan 12 後記 §1；每 split 108 場景 / 612 次重複），calibration 已完成（2026-09-16，14.5 小時，policy `postgres-adaptive-v1-9f4e58346529`，12/12 切片沒有交會點；發布時撞到生產者／消費者 schema 漂移，處置見 evidence record 的發布註記與 Plan 12 後記 §4）；(4) six-method 含 adaptive 已完成（2026-09-18，`docs/benchmarks/postgres-provenance-six-method-v1.json`：648 列全 ok、parity 648/648、crossover 12/12 `not_observed`；adaptive 在 10K/100K 永遠 INCREMENTAL、在 1K 因絕對 RMSE 信心帶永遠 FULL——policy 凍結不改，Plan 12 後記 §5；PostgreSQL full rebuild 100K 75–140 s、重建後 dead tuples 使 storage 約 2 倍），real RSNA track 已完成（2026-09-20，`docs/benchmarks/postgres-provenance-real-rsna-v1.json`：r3→r4→r5→r6 三個 transition、18 列全 ok、parity 18/18、真實變更比例 100% / 98.7% / 0%；adaptive FULL / FULL / NO_OP，第二個 transition 選錯慢 1.79 倍——信心帶問題在真實資料上重現，Plan 12 後記 §7）；(5) 另一 process 的 frozen held-out 已完成（2026-09-20，`docs/benchmarks/postgres-provenance-heldout-v1.json`：324 列全 ok、overlap 0、aggregate gate PASS 1.018 / 1.017、every-scenario diagnostic 36/92 > 1.05 全在 1K 的信心帶問題；執行中被使用者誤啟動的訓練程序中止一次，一個場景因汙染跡象重量，看管程式改成只認命令列帶 bench 標記的 python——見 evidence record §Held-out 正式結果與 Plan 12 後記 §6）。長跑用 `C:/vcp-data/bench/supervise.py`（不進 repo）看管：機器空閒才跑、遊戲或低記憶體即停並丟棄進行中場景；主機閒置時可用記憶體可能只剩 5 GB（驅動 nonpaged pool 洩漏，重開機可解）。保存 machine-readable outputs、PostgreSQL numeric server version、policy ID / 精確 policy SHA、parity 與 honest p50/p95 gate 結果；不得用 skips、offline doubles 或 held-out refit 替代。Linux CI（Docker Compose host）證據仍缺。
-9. **RSNA 第二輪回報（2026-09-25）剩下的**：
+已完成的不再列（Hygiene C、遺失 `fuse.json` 的接續修復、`run_command(context=)` 全面採用；處置在 Plan 4、6、7 的後記）。歷史「未做」清單已逐層核對，處置在各後記最新節；不要依舊節再做一遍。
+
+1. **效能回合**（都刻意延後）：Plan 2c §5-2（materialize 的 `is_dir`/`stat` 兩百萬次）、Plan 3 §5-4（seg 指標配置、護欄重算、judge 載兩次）、Plan 7 §5-6。
+2. **設計層級**：Plan 3 §5-12 的跨程序鎖（兩個程序同時 append 同一 `reading_id`）、Plan 5 checkpoint TOCTOU 仍延後；`Manifest.data_root` 刻意保留作人讀來源標記。
+3. **repo 內的開發副本已實跑本機基準（2026-09-07；比賽本身在另一個工作區）**：200 study 固定切分、PNG256、兩個種子訓練、預登記 / macro AUC / judge、平均融合消融、test profile、離線 bundle 已完成；讀數與命令見 `projects/rsna-knee/RUNBOOK.md`。seed 43 與融合均未準入，第一個 seed 42 是 baseline。**這份副本沒有外部里程碑**：指定私有 Kaggle dataset 上傳待核准，notebook 執行 / 提交 / scored / sealed final 在這裡都未發生，備份目的地也未提供；比賽工作區後來的實際上傳、回讀與異機備份見稽核文件第 16、17 節（紀錄在那個工作區，不在本 repo）。不要把手冊中待執行命令當成已完成，也不要先解封 holdout。
+4. **Windows 命令解析**：裸 `python` 可啟動到 venv 以外，即使 `--venv` 探針正確；專案已用絕對 interpreter 完成訓練，通用解析修復另列 Plan 5 §10，與效能回合分開。
+5. **repo 內開發副本的本機證據已備份（同一份副本，2026-09-07）**：`knee-local-v1` 結論 `all`、51 項驗證成功；兩份權重、notebook bundle、Git source bundle 均已存 `C:/vcp-backup/rsna-knee`。這是同機副本；異機撤離仍待目的地，先將權重 upload 到該遠端後再產新清單，勿把指著 C 槽的 remote_copy 當異機證據。0.13.0 起，清單裡只在這台機器上的 `remote_copy` 會跟著 `backup push --tier 3` 送到異機目的地、在那裡驗（VCP-046）；推、驗之前仍不算異機證據。
+6. **PostgreSQL Adaptive Provenance 外部驗收（2026-09-20 五份證據齊全；接手點是 policy v2 與 Linux CI）**：live integration 已過（v3）。依序：(1) production graph loader 的 canonical replay 改串流——已完成（`open_dataset_diff`：先整檔驗證、再逐筆重放，API 與 exact parity 不變；Codex 2026-09-14 量到 1M 場景在 `baseline_graph_build` 把約 41 萬筆 diff 事件全部常駐，peak 5.7 GiB）；(2) 探路矩陣已跑完（`docs/benchmarks/postgres-provenance-exploratory-v1.md`：1K–100K 五方法各 1 次，8.5 小時，parity 全過，incremental 在每個非零 ratio 都快於 full）；(3) 1M 已於 2026-09-15 裁決移出正式矩陣（Plan 12 後記 §1；每 split 108 場景 / 612 次重複），calibration 已完成（2026-09-16，14.5 小時，policy `postgres-adaptive-v1-9f4e58346529`，12/12 切片沒有交會點；發布時撞到生產者／消費者 schema 漂移，處置見 evidence record 的發布註記與 Plan 12 後記 §4）；(4) six-method 含 adaptive 已完成（2026-09-18，`docs/benchmarks/postgres-provenance-six-method-v1.json`：648 列全 ok、parity 648/648、crossover 12/12 `not_observed`；adaptive 在 10K/100K 永遠 INCREMENTAL、在 1K 因絕對 RMSE 信心帶永遠 FULL——policy 凍結不改，Plan 12 後記 §5；PostgreSQL full rebuild 100K 75–140 s、重建後 dead tuples 使 storage 約 2 倍），real RSNA track 已完成（2026-09-20，`docs/benchmarks/postgres-provenance-real-rsna-v1.json`：r3→r4→r5→r6 三個 transition、18 列全 ok、parity 18/18、真實變更比例 100% / 98.7% / 0%；adaptive FULL / FULL / NO_OP，第二個 transition 選錯慢 1.79 倍——信心帶問題在真實資料上重現，Plan 12 後記 §7）；(5) 另一 process 的 frozen held-out 已完成（2026-09-20，`docs/benchmarks/postgres-provenance-heldout-v1.json`：324 列全 ok、overlap 0、aggregate gate PASS 1.018 / 1.017、every-scenario diagnostic 36/92 > 1.05 全在 1K 的信心帶問題；執行中被使用者誤啟動的訓練程序中止一次，一個場景因汙染跡象重量，看管程式改成只認命令列帶 bench 標記的 python——見 evidence record §Held-out 正式結果與 Plan 12 後記 §6）。長跑用 `C:/vcp-data/bench/supervise.py`（不進 repo）看管：機器空閒才跑、遊戲或低記憶體即停並丟棄進行中場景；主機閒置時可用記憶體可能只剩 5 GB（驅動 nonpaged pool 洩漏，重開機可解）。保存 machine-readable outputs、PostgreSQL numeric server version、policy ID / 精確 policy SHA、parity 與 honest p50/p95 gate 結果；不得用 skips、offline doubles 或 held-out refit 替代。Linux CI（Docker Compose host）證據仍缺。
+7. **第二輪回報（2026-09-25）剩下的**：
    - VCP-040 + 042 與 VCP-041 已隨 0.11.0 發出（PR #30、#31）。開放項在兩份後記的最後一節：`docs/superpowers/plans/2026-09-26-vcp-run-evidence-followups.md`、`2026-09-27-vcp-dirty-tree-followups.md`。
    - VCP-038 第 2–4 段與 VCP-014 已隨 0.12.0 發出（PR #33）：`ledger: shared` 的共用台帳正本（只由 `vcp submit ledger adopt` 建立）、寫入命令的檔案鎖、上傳前同步、PENDING 綁定、重傳護欄、`sync` 依 ref 冪等與依平台時間的最新分數。開放項在後記 `docs/superpowers/plans/2026-09-28-vcp-shared-ledger-followups.md` §3。
    - 仍開放：平台列表 `ref` 的格式驗證；跨機器的台帳（各機一份、`merge=union`）不在範圍。
    - 處置表在稽核文件第 16 節。
+8. **第三輪回報（VCP-044～047）**：隨 0.13.0 處理（spec `docs/superpowers/specs/2026-10-04-vcp-round3-fixes-design.md`，處置表在稽核文件第 17 節）。刻意不在範圍、留給之後：`train status` 的 `backed=` 仍把本機上傳算成已備份；`backup pull` 還原後的完整性 WARN；索引路徑的覆寫（環境變數或選項，要加是 MINOR）。
 
 ## 7. 開發流程（這個 repo 一直這樣做）
 
@@ -129,6 +138,7 @@ acceptance 表已無空格（calibration v1 與 1M memory gate v2–v4 被 RAM �
 - 計畫裡的測試輸入要先問「這個輸入真的會造成那個條件嗎」——歷史上三次實作者停下來（NEEDS_CONTEXT）都是計畫的測試錯、程式對。
 - 台帳是快照：備份清單寫下後台帳還會長，`push` 推清單那一刻的前 N 位元組、`verify` 用前綴 sha、`pull` 視長大為已有。
 - `--forget-remote` 要整份清單在目的地驗過才刪憑證；帶 `present=false` 條目的清單永遠不能 forget。
+- GitHub 上的歷史在 2026-10 改寫過一次（hash 全部換了，見 CHANGELOG 的版本規則）。本機的 `refs/archive/pre-rewrite-2026-10/` 保留了舊歷史，釘在舊 commit 上的 worktree 照常能用；舊 hash 對新 hash 查 `docs/reference/commit-map-2026-10.tsv`。
 
 ## 9. 交接時的數字
 

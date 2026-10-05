@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -509,17 +510,52 @@ WRAPPER = f"import subprocess, sys\nsubprocess.run([sys.executable, '-c', {BEAT!
 
 def test_a_timeout_ends_the_whole_process_tree(tmp_path):
     """spec 2026-10-04 §6.3: a wrapper whose child outlives the limit is cut off at the limit,
-    and the child does not keep running."""
+    and the child does not keep running. The limit leaves a slow runner time for two
+    interpreter start-ups before the first beat."""
     beat = tmp_path / "beat"
     started = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired):
-        timed_runner(1.0)([sys.executable, "-c", WRAPPER, str(beat)])
+        timed_runner(3.0)([sys.executable, "-c", WRAPPER, str(beat)])
     assert time.monotonic() - started < 10  # waiting for the child would have taken 30 s
     assert beat.exists(), "the child never started within the limit"
     time.sleep(0.3)  # a moment for the kill to land, then see whether the child still beats
     beats = beat.stat().st_size
     time.sleep(0.5)
     assert beat.stat().st_size == beats
+
+
+def test_a_timed_child_is_in_no_new_group_on_windows_and_in_a_new_session_on_posix(monkeypatch):
+    """A child in a new Windows process group ignores Ctrl+C, and the wait for it cannot be
+    interrupted, so Ctrl+C would do nothing until the call ended. ``taskkill /T`` finds the tree
+    by parent pid and needs no group. On POSIX the child leads a new session: ``killpg`` ends
+    it, and the caller's wait is interrupted by Ctrl+C either way."""
+    spawned = []
+    real = subprocess.Popen
+
+    def spy(*args, **kwargs):
+        spawned.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    timed_runner(30)([sys.executable, "-c", "pass"])
+    [kwargs] = spawned
+    if sys.platform == "win32":
+        assert not kwargs.get("creationflags", 0) & subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert kwargs["start_new_session"] is True
+
+
+def test_a_root_the_tree_kill_missed_is_still_ended(monkeypatch):
+    """Should ``taskkill`` or ``killpg`` leave the child running, ``proc.kill()`` ends it, so the
+    call still returns at the limit rather than when the child is done."""
+    if sys.platform == "win32":
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1))
+    else:
+        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        timed_runner(0.5)([sys.executable, "-c", "import time; time.sleep(20)"])
+    assert time.monotonic() - started < 10  # waiting for the child would have taken 20 s
 
 
 def test_a_call_that_finishes_in_time_returns_what_default_runner_returns():

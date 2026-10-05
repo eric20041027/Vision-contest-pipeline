@@ -19,13 +19,11 @@ Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 _KV = re.compile(r"(?im)(key|token|secret|password|authorization)\s*[=:]\s*.+$")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S+")
 _LONG = re.compile(r"[A-Za-z0-9+/_-]{32,}")
-# A timed child leads its own process group (POSIX: its own session), so that on a timeout the
-# kill can reach everything it started.
-_OWN_GROUP: dict[str, Any] = (
-    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    if sys.platform == "win32"
-    else {"start_new_session": True}
-)
+# On a timeout the kill must reach everything a timed child started. On POSIX the child leads a
+# new session, which ``killpg`` ends. On Windows it stays in the caller's process group:
+# ``taskkill /T`` finds the tree by parent pid, and a child in a new group would ignore Ctrl+C --
+# while the caller's wait for it cannot be interrupted there.
+_NEW_SESSION: dict[str, Any] = {} if sys.platform == "win32" else {"start_new_session": True}
 
 
 def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -43,6 +41,8 @@ def _kill_tree(proc: subprocess.Popen[str]) -> None:
     else:
         with contextlib.suppress(ProcessLookupError):  # the group is gone already
             os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):  # should the tree kill have missed the child, end it
+        proc.kill()
 
 
 def timed_runner(seconds: float) -> Runner:
@@ -58,13 +58,13 @@ def timed_runner(seconds: float) -> Runner:
             text=True,
             encoding="utf-8",
             errors="replace",
-            **_OWN_GROUP,
+            **_NEW_SESSION,
         ) as proc:
             try:
                 stdout, stderr = proc.communicate(timeout=seconds)
             except BaseException:
-                # The time limit, or Ctrl+C -- which a child in its own group no longer receives:
-                # either way, as ``subprocess.run`` does, the child must not outlive the call.
+                # The time limit, Ctrl+C or any other exception: as ``subprocess.run`` does, the
+                # child -- and here everything it started -- must not outlive the call.
                 _kill_tree(proc)
                 proc.communicate()  # collect what is left once the pipes close
                 raise

@@ -270,6 +270,11 @@
    - `DATASET_EVOLUTION_PROVENANCE_HANDOFF.md`：貼上用的 prompt 說「尚未合併」，標成歷史。
 5. **對齊 CLAUDE.md 與 AGENTS.md**：目前有 6 處不同。
 6. **orientation 地圖**：版本歷史補到 0.13.0，更新 build string 的範例。
+7. **2026-10 的歷史改寫**（使用者 2026-10-04 決定加對照表）：
+   - GitHub 上的歷史在 0.12.0 之後改寫過：拿掉了 307 個 `Co-Authored-By` trailer，481 個 commit 的檔案樹、作者與時間都沒變，但 hash 全部改了。改寫前寫下的 build string（`<version>+g<舊 hash>`）因此在 GitHub 上找不到。
+   - 新增 `docs/reference/commit-map-2026-10.tsv`：每一列是舊 hash、新 hash、日期、標題。以（檔案樹、作者時間、作者 email、標題）一對一配對，481 對全部配上。
+   - CHANGELOG 的版本規則補一句：改寫前的 build string 用這份對照表解析；`vcp version` 與產物格式都不變。
+   - HANDOVER 的陷阱一節補一句：本機的 `refs/archive/pre-rewrite-2026-10/` 保留了舊歷史，釘在舊 commit 上的 worktree 照常能用。
 
 ## 11. 隨各缺陷更新的文件與 skill
 

@@ -63,6 +63,7 @@ from vcp.provenance.postgres_schema import (
     validate_schema,
     validate_schema_in_transaction,
 )
+from vcp.provenance.roots import ROOT_KEYS, IndexRoots, check_roots
 from vcp.provenance.schema import ProvenanceEdge, ProvenanceEntity, SampleChange, StatusRecord
 from vcp.provenance.strategy import (
     BENCHMARK_SCHEMA_VERSION,
@@ -1215,6 +1216,29 @@ def _active_generation(connection: Any) -> UUID | str:
     return generation_id
 
 
+_POSTGRES_REMEDY = (
+    "one database serves one checkout: give this checkout its own --pg-service, or run "
+    "`vcp provenance rebuild` to take this database over"
+)
+
+
+def _generation_roots(connection: Any, generation_id: UUID | str) -> dict[str, str]:
+    """The root keys a generation recorded; none before 0.13.0 (spec 2026-10-04 §3.3)."""
+    rows = connection.execute(
+        f"SELECT key, value FROM {SCHEMA_NAME}.metadata WHERE generation_id=%s ORDER BY key",
+        (generation_id,),
+    ).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows if row[0] in ROOT_KEYS}
+
+
+def _check_generation_roots(connection: Any, generation_id: UUID | str, roots: IndexRoots) -> None:
+    """``root_mismatch:`` unless the generation records these roots, before any replay or
+    prefix check. A generation 0.12 published records none and fails closed until a rebuild."""
+    recorded = _generation_roots(connection, generation_id)
+    remedy = _POSTGRES_REMEDY if recorded else "run `vcp provenance rebuild`"
+    check_roots(recorded, roots, remedy=remedy)
+
+
 @contextmanager
 def _read_transaction(config: BackendConfig, driver: Any) -> Iterator[tuple[Any, UUID | str]]:
     with _connection(config, driver) as connection:
@@ -1363,15 +1387,27 @@ class PostgresProvenanceBackend:
     name = BackendName.POSTGRESQL
     location_label = BackendName.POSTGRESQL.value
 
-    def __init__(self, config: BackendConfig) -> None:
+    def __init__(self, config: BackendConfig, *, roots: IndexRoots | None = None) -> None:
+        """``roots``: the checkout this database must serve; every read snapshot checks them
+        first (spec 2026-10-04 §3.4)."""
         self.config = BackendConfig(
             name=self.name, pg_service=validate_pg_service(config.pg_service)
         )
         self._psycopg = _load_psycopg()
+        self.roots = roots
 
     def rebuild(self, data_root: Path, configs_root: Path) -> RebuildResult:
+        """The full publication path. It is the documented recovery, so it may replace a
+        generation another checkout built, or one that records no root; ``replaced_roots``
+        then says whose (spec 2026-10-04 §3.3)."""
+        return self._publish_full(data_root, configs_root, takeover=True)
+
+    def _publish_full(
+        self, data_root: Path, configs_root: Path, *, takeover: bool
+    ) -> RebuildResult:
         data_root = Path(data_root).resolve()
         configs_root = Path(configs_root).resolve()
+        roots = IndexRoots.of(data_root, configs_root)
         before = _canonical_snapshot(data_root, configs_root)
         canonical = build_graph(data_root, configs_root)
         if _canonical_snapshot(data_root, configs_root) != before:
@@ -1382,6 +1418,7 @@ class PostgresProvenanceBackend:
         snapshot_hash = _snapshot_hash(before)
         checkpoint_rows = _checkpoint_rows(generation_id, data_root, configs_root, before)
         artifact_rows = _ingested_artifact_rows(generation_id, canonical, data_root)
+        replaced: dict[str, str] | None = None
         with _connection(self.config, self._psycopg) as connection:
             with connection.transaction():
                 connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
@@ -1392,6 +1429,11 @@ class PostgresProvenanceBackend:
                         "WHERE singleton=TRUE"
                     ).fetchone()
                 )
+                if previous is not None and not takeover:
+                    _check_generation_roots(connection, previous, roots)
+                elif previous is not None:
+                    recorded = _generation_roots(connection, previous)
+                    replaced = None if roots.matches(recorded) else recorded
                 self._publish_generation(
                     connection,
                     generation_id,
@@ -1413,6 +1455,7 @@ class PostgresProvenanceBackend:
             changes=len(canonical.changes),
             heads=len(dataset_heads(canonical)),
             graph_hash=digest,
+            replaced_roots=replaced,
         )
 
     def _publish_generation(
@@ -1456,6 +1499,10 @@ class PostgresProvenanceBackend:
                 (generation_id, "build_string", build_string()),
                 (generation_id, "graph_gaps", _json(tuple(sorted(canonical.gaps)))),
                 (generation_id, "canonical_snapshot", _json(before)),
+                *(
+                    (generation_id, key, value)
+                    for key, value in IndexRoots.of(data_root, configs_root).metadata().items()
+                ),
             ),
         )
         _write_graph(connection, canonical, generation_id)
@@ -1522,8 +1569,10 @@ class PostgresProvenanceBackend:
         _assert_status_rows_parity(connection, generation_id, canonical)
 
     def sync(self, data_root: Path, configs_root: Path) -> RebuildResult:
-        """PostgreSQL v1 sync deliberately uses the same atomic full publication path."""
-        return self.rebuild(data_root, configs_root)
+        """PostgreSQL v1 sync deliberately uses the same atomic full publication path -- but
+        never over a generation another checkout built, or one that records no root:
+        ``root_mismatch:``, and nothing is written (spec 2026-10-04 §3.3)."""
+        return self._publish_full(data_root, configs_root, takeover=False)
 
     def ingest_diff(
         self,
@@ -1564,6 +1613,8 @@ class PostgresProvenanceBackend:
 
                 policy = load_policy()
                 generation_id = _active_generation(connection)
+                roots = IndexRoots.of(data_root, configs_root)
+                _check_generation_roots(connection, generation_id, roots)
                 original_checkpoints = _verify_incremental_evidence(
                     connection, generation_id, data_root, configs_root
                 )
@@ -1923,8 +1974,11 @@ class PostgresProvenanceBackend:
 
     @contextmanager
     def read_snapshot(self) -> Iterator[ProvenanceReader]:
-        """Pin one generation and MVCC snapshot for all reads in this context."""
+        """Pin one generation and MVCC snapshot for all reads in this context; a backend made
+        for a checkout first checks that generation serves it (spec 2026-10-04 §3.4)."""
         with _read_transaction(self.config, self._psycopg) as (connection, generation_id):
+            if self.roots is not None:
+                _check_generation_roots(connection, generation_id, self.roots)
             yield _PostgresReader(connection, generation_id)
 
     def load_graph(self) -> ProvenanceGraph:
@@ -2029,6 +2083,8 @@ class _PostgresReader:
     def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult:
         data_root = Path(data_root).resolve()
         configs_root = Path(configs_root).resolve()
+        roots = IndexRoots.of(data_root, configs_root)
+        _check_generation_roots(self.connection, self.generation_id, roots)
         canonical_snapshot = _canonical_snapshot(data_root, configs_root)
         canonical = build_graph(data_root, configs_root)
         issues: list[str] = []

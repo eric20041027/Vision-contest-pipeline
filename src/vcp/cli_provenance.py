@@ -163,7 +163,19 @@ def rebuild_cmd(
             "hash": result.graph_hash[:12],
         }
         human = [f"rebuilt {index.location_label}", f"graph={result.graph_hash}"]
-        return "OK", fields, _payload(index, result.__dict__), human
+        status: Status = "OK"
+        replaced = result.replaced_roots
+        if replaced:  # spec 2026-10-04 §3.3: another checkout's generation is gone now
+            status = "WARN"
+            fields["replaced_root"] = replaced.get("configs_root_id", "none")
+            human.append(
+                f"replaced the index of configs root {replaced.get('configs_root')} and data root "
+                f"{replaced.get('data_root')}: one database serves one checkout, so that checkout "
+                "needs its own --pg-service now"
+            )
+        elif replaced is not None:
+            human.append("replaced a generation that records no root (built before vcp 0.13.0)")
+        return status, fields, _payload(index, result.__dict__), human
 
     run_command("provenance.rebuild", json_mode, data_root, fn, context=_root(configs_root))
 

@@ -231,7 +231,7 @@ def make_backend(config: BackendConfig, data_root: Path, configs_root: Path) -> 
         raise ValidationFailed(
             "missing_dependency: install with `uv sync --extra postgres`"
         ) from None
-    return module.PostgresProvenanceBackend(config)
+    return module.PostgresProvenanceBackend(config, roots=roots)
 
 
 __all__ = [

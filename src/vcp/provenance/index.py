@@ -49,6 +49,9 @@ class RebuildResult:
     changes: int
     heads: int
     graph_hash: str
+    # PostgreSQL only (spec 2026-10-04 §3.3): the roots of the generation a rebuild replaced when
+    # another checkout built it -- ``{}`` when that generation recorded none -- else None.
+    replaced_roots: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

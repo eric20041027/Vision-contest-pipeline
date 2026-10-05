@@ -41,9 +41,10 @@ graph entity attributes 中。無法證明時不猜成 VALID。
 - SQLite 索引的 `graph_gaps` metadata 保存 canonical replay 的缺口清單。舊索引若缺少此欄位會
   fail closed；用 `provenance rebuild` 重建衍生索引即可，不需要修改 card、artifact 或台帳。
 - ledger checkpoint 記 consumed bytes/prefix SHA；既有 prefix 被改會 `prefix_drift`。
-- 索引記著它服務的 configs root 與 data root（0.13.0 起）：從別的 checkout、或從換了路徑的 data root 打開 →
+- 索引記著它服務的 configs root 與 data root（0.13.0 起），檔名綁 configs root：`--configs-root` 指到沒建過
+  索引的 root、或搬移、改名 checkout 是 `not_found:`，`rebuild` 一次；data root 換了路徑、或檔案被手動複製 →
   `root_mismatch:`（VERDICT `index_root=`），在任何前綴檢查之前，不會報成台帳被截短或改寫。`impact`、
-  `stale`、`explain`、`graph` 也要能解析 configs root。搬移或改名 checkout 後 `rebuild` 一次；0.12 以前的
+  `stale`、`explain`、`graph` 也要能解析 configs root。0.12 以前的
   `indexes/provenance.sqlite3` 不再讀（`not_found:` 會指出它），沒有 0.12 使用者之後可刪。
 - rebuild 在 temporary SQLite 完成 graph/status parity 與 snapshot recheck 後才 atomic replace。
 - 任一 ingest transaction 中斷皆 rollback；刪除整個 SQLite 後執行 `rebuild` 可恢復。

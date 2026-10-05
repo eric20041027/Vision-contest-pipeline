@@ -13,7 +13,7 @@ description: Use when someone wants to see, draw, export or share the provenance
 ## 步驟
 1. **找 root**：比賽 repo 的 `ENVIRONMENT.md` / `AGENTS.md` 寫的 `VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`；沒寫才用 `<repo>/vcp-data`、`<repo>/configs`。每個命令都帶 `--data-root` / `--configs-root`。
 2. **索引能不動就不動**：
-   - 在，而且沒有比它新的紀錄 → 直接畫。換了 vcp 版本通常不是 rebuild 的理由，真不相容時 graph 會 FAIL 並叫你 rebuild；例外是升到 0.13.0：索引改成每個 checkout 一份，`not_found:` 時 `rebuild` 一次。`root_mismatch:` 代表這份索引屬於別的 checkout（`--configs-root` 指錯了，或 checkout 搬過）。
+   - 在，而且沒有比它新的紀錄 → 直接畫。換了 vcp 版本通常不是 rebuild 的理由，真不相容時 graph 會 FAIL 並叫你 rebuild；例外是升到 0.13.0：索引改成每個 checkout 一份、檔名綁 configs root，`--configs-root` 指到沒建過索引的 root 或 checkout 搬過都是 `not_found:`，`rebuild` 一次。`root_mismatch:` 在 SQLite 是 data root 換了路徑（或檔案被手動複製），在 PostgreSQL 是 `--pg-service` 的 database 放著別的 checkout 或 0.13.0 以前建的索引。
    - `runs/`、`measure/`、`artifacts/`、`submit/` 有檔案比索引新（[reference.md](reference.md) 有一行檢查）→ `vcp provenance sync`（只收新增；看到刪改會 fail closed，再改 `rebuild`）。
    - 不在 → `vcp provenance rebuild`。
    - `rebuild`、`sync`、`status`、`verify-index` 都重算每個 canonical 檔的 sha（RSNA 規模約 3 分鐘）：先講時間；訓練正在跑、或別的 session 正在用同一個 data root，先問。不必先跑 `stale`：狀態已經畫在圖上。

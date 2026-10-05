@@ -13,7 +13,7 @@ description: Use when a dataset gets a new version and existing runs must be re-
 - 選項以 `--help` 為準；status 語意、strategy reason、證據檔見 [reference.md](reference.md)。
 - 要把索引畫成圖（全比賽、單一 run、相對某個 head）→ `vcp-provenance-graph`。
 - 0.9.1 起 SQLite 索引另存 canonical graph 的 gaps；0.9.0 以前建的索引讀取時 FAIL `mismatch: graph_gaps metadata; rebuild required`——不是資料壞了，`rebuild` 一次（先講時間）。
-- 0.13.0 起索引記著它服務的 configs root 與 data root（VCP-044）：升級後每個 checkout `rebuild` 一次（0.12 的 `indexes/provenance.sqlite3` 不再讀，`not_found:` 會指出它）。從別的 checkout 打開 → `root_mismatch:`（`index_root=`），**不是**台帳被截短或改寫——別去查台帳：SQLite 在這個 checkout `rebuild`；PostgreSQL 給這個 checkout 自己的 `--pg-service`。同一個 root 內才會出現 `prefix_drift:`。`impact` / `stale` / `explain` / `graph` 也要解析得到 configs root（`--configs-root` 或 repo 的 `configs/`）。
+- 0.13.0 起索引記著它服務的 configs root 與 data root（VCP-044）：升級後每個 checkout `rebuild` 一次（0.12 的 `indexes/provenance.sqlite3` 不再讀，`not_found:` 會指出它）。SQLite 的檔名綁 configs root：`--configs-root` 指到沒建過索引的 root 或 checkout 搬過是 `not_found:`，在這個 checkout `rebuild`；`root_mismatch:`（`index_root=`）只在 data root 換了路徑或檔案被手動複製時出現。PostgreSQL 的 `root_mismatch:` 是這個 database 放著別的 checkout 或 0.13.0 以前建的索引：給這個 checkout 自己的 `--pg-service`（0.13.0 以前建的 `rebuild` 一次）。`root_mismatch:` **不是**台帳被截短或改寫——別去查台帳；同一個 root 內才會出現 `prefix_drift:`。`impact` / `stale` / `explain` / `graph` 也要解析得到 configs root（`--configs-root` 或 repo 的 `configs/`）。
 
 ## 資料改版的標準流程
 ```bash

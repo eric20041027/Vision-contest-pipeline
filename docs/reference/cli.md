@@ -34,9 +34,10 @@ policy 時會 WARN 並安全選 FULL（已驗證的零 semantic work 除外）�
 
 索引的 root（0.13.0，VCP-044）：索引記下它服務的 configs root 與 data root。每個 `vcp provenance` 命令都
 解析 configs root（`impact`、`stale`、`explain`、`graph` 也是；`--configs-root`，預設 repo 的 `configs/` 或
-`VCP_CONFIGS_ROOT`），VERDICT 帶 `root=<configs root id>`（失敗也帶）。打開別的 checkout 的索引、或 data root
-換了路徑 → 在任何前綴檢查之前 FAIL `root_mismatch:`（`index_root=<索引記的 id|none>`）；同一個 root 內台帳
-被截短或改寫才是 `prefix_drift:`。0.12 以前的 `indexes/provenance.sqlite3` 不再讀（`not_found:` 會指出它；每
+`VCP_CONFIGS_ROOT`），VERDICT 帶 `root=<configs root id>`（失敗也帶）。SQLite 的索引檔名綁 configs root：
+`--configs-root` 指到沒建過索引的 root、或 checkout 搬過 → `not_found:`；索引裡記的 root 跟命令的不同
+（data root 換了路徑，或檔案被手動複製）→ 在任何前綴檢查之前 FAIL `root_mismatch:`（`index_root=<索引記的 id|none>`）；
+同一個 root 內台帳被截短或改寫才是 `prefix_drift:`。0.12 以前的 `indexes/provenance.sqlite3` 不再讀（`not_found:` 會指出它；每
 個 checkout `rebuild` 一次，沒有 0.12 使用者之後可刪）。PostgreSQL 一個 database 只服務一個 checkout：
 `sync` 遇到別的 root 的 generation → `root_mismatch:`、不取代；`rebuild` 取代它並 WARN `replaced_root=`
 （被取代那一代的 configs root id，所以只有 data root 不同的接手會跟 `root=` 同一個 id；人類訊息兩個路徑都印）；

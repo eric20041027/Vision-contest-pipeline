@@ -16,7 +16,7 @@
 
 - **清單從結論反向生成。** 起點是 `submission:<id>`、`judgement:<prereg>`、`run:<id>` 或 `all`，走證據圖（§7）得到每個檔的角色、tier 與它服務的結論。目錄習慣不是依據。對應報告 §6「撤離清單偏誤」、§9 第 8 點。
 - **先小後大。** tier 1 決策層（台帳、卡、判決、預登記、配方、快照、候選檔）永遠先推；tier 2 重現層（預測檔、樣本、`train/`、logs）其次；tier 3 權重層最後且只在要求時。`push --tier N` 累積推到 N。
-- **副本要驗過才算。** rclone 目的地以 `hashsum sha256` 逐檔比對、本機目的地讀回比對；已經由 `train upload` 驗證過的權重副本記成 `remote_copy`，verify 到原地驗、不重推。對應報告 §7「rclone check 0 差異」。
+- **副本要驗過才算。** rclone 目的地以 `hashsum sha256` 逐檔比對、本機目的地讀回比對；已經由 `train upload` 驗證過的權重副本記成 `remote_copy`：在 rclone 遠端（或就在目的地裡）的就地驗、不重推；只在這台機器上的跟著 tier 3 推到目的地、在那裡驗（2026-10-04，VCP-046，見 §14）。對應報告 §7「rclone check 0 差異」。
 - **稽核三層。** 副本（遠端 ↔ 清單）、一致性（本機檔彼此的 sha 鏈）、時戳（每個 `ts` 是 UTC stamp、只增台帳單調）。對應報告 §9 第 8 點、§6 #1。
 - **清單與台帳進 git。** 清單只有路徑與 sha，賽後在新機器 `git pull` 就知道該有什麼、去哪裡拉。
 - **憑證零接觸、用後即焚。** vcp 不讀 rclone 設定檔內容；rclone 的輸出落地前 redact；`--forget-remote` 在全數驗證通過後才 `rclone config delete <remote>`。對應報告 §7。
@@ -35,7 +35,7 @@
 | 憑證 | 可選的 `--forget-remote`（全驗證通過後 `rclone config delete`）；`status` 只報設定檔存在與否 | 報告 §7 的協定程式化；vcp 仍不讀設定檔內容 |
 | 清單位置 | `configs/datasets/<name>/backup/<manifest_id>.json`（git）；台帳 `backup.log.jsonl`（git、只 append） | 決策紀錄跟預登記、提交台帳一樣要在 git |
 | 目的地佈局 | `<dest>/data/<相對路徑>`、`<dest>/configs/<相對路徑>`、`<dest>/external/<絕對路徑去磁碟與冒號>` | 同一檔在任何清單都落同一處 → 跨清單冪等 |
-| 權重副本 | `train.yaml.uploads` 有 `verified=true` 的 checkpoint 記 `remote_copy`，verify 到 `<其 dest>/<run_id>/<name>` 驗 | 不重推 GB 級檔；訓練層的佈局是既定介面 |
+| 權重副本 | `train.yaml.uploads` 有 `verified=true` 的 checkpoint 記 `remote_copy`（多筆時優先 rclone 的）；在 rclone 遠端或目的地裡的到 `<其 dest>/<run_id>/<name>` 驗，其他（只在這台機器上的）在目的地當 `file`（2026-10-04，VCP-046） | 已在別處的 GB 級檔不重推；只在這台機器上的不算備份 |
 | 錯誤類別 | rclone 非 0 → `PlatformError`（FAIL，訊息 redact）；rclone 不在 → `VcpError`（ABORT） | 與提交層的 kaggle 一致；訓練層現有行為不動 |
 
 ## 4. 資料模型（`src/vcp/backup/schema.py`，pydantic，`extra="forbid"`）
@@ -75,8 +75,8 @@
 | event | 欄位 |
 |---|---|
 | `manifest` | `conclusion`、`files`、`bytes_by_tier`（`{"1": …, "2": …, "3": …}`）、`missing`、`remote_copies` |
-| `push` | `dest`、`tier`、`pushed`、`skipped`、`verified`、`failed`（清單）、`bytes` |
-| `verify` | `dest`（可 null）、`copies`（`{"ok", "missing", "mismatch"}` 各為個數）、`drift`（個數）、`bad_stamps`（個數）、`first_bad`（`file:line` 或 null） |
+| `push` | `dest`、`tier`、`pushed`、`skipped`、`verified`、`failed`（清單）、`bytes`、`local_copies`（0.13.0，大於 0 才寫） |
+| `verify` | `dest`（可 null）、`copies`（`{"ok", "missing", "mismatch"}` 各為個數）、`drift`（個數）、`bad_stamps`（個數）、`first_bad`（`file:line` 或 null）、`incomplete`（0.13.0，缺口數，大於 0 才寫）、`local_copies`（0.13.0，大於 0 才寫） |
 | `pull` | `dest`、`tier`、`pulled`、`skipped`、`conflicts`（清單） |
 | `remote_forgotten` | `remote` |
 
@@ -90,7 +90,7 @@
 <dest>/data/<相對 data root 的路徑>          # 推送目的地（rclone 遠端或本機目錄）
 <dest>/configs/<相對 configs root 的路徑>
 <dest>/external/<絕對路徑去磁碟與冒號>
-<其他 dest>/<run_id>/<checkpoint 檔名>       # remote_copy：訓練層 train upload 的既有佈局
+<其他 dest>/<run_id>/<checkpoint 檔名>       # remote_copy：訓練層 train upload 的既有佈局；只在這台機器上的副本另推到上面三處（2026-10-04）
 ```
 
 `DatasetPaths` 新增 `backup_dir`、`backup_log`、`backup_manifest(manifest_id)`。
@@ -101,25 +101,25 @@
 
 | 命令 | 作用 | 狀態規則 |
 |---|---|---|
-| `manifest --dataset D --conclusion submission:<id>\|judgement:<prereg>\|run:<run>\|all [--id M]` | 走證據圖（§7）→ 寫 `backup/<M>.json` → `manifest` 列 | 結論不存在 → FAIL `reason=not_found`；id 已存在 → FAIL `reason=exists`；該有的檔本機缺 → WARN `missing=`（列仍寫、`present=false`）；缺檔且無 sha 紀錄 → WARN `unlisted=`；checkpoint 本機沒有也無副本紀錄 → 計入 `missing=` |
-| `push --dataset D --manifest M --dest DEST [--tier 1\|2\|3] [--forget-remote]` | §6.1 | 任一檔驗不過 → FAIL `mismatch=`（已推的照記）；rclone 不在 → ABORT `rclone_not_found`；rclone 非 0 → FAIL；`--forget-remote` 配本機 dest 或本次有任何失敗 → FAIL `reason=forget_refused`（不刪） |
-| `verify --dataset D --manifest M [--dest DEST]` | §6.2 三層 | 副本缺 / 不符 → FAIL `missing= mismatch=`；本機漂移 → FAIL `drift=`；壞時戳 → FAIL `bad_stamps= first_bad=`；沒給 `--dest` 只做一致性與時戳；`present=false` 的檔本機部分略過 |
-| `pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` | 從 dest 把清單裡本機缺的 `file` 條目拉回原相對路徑、讀回驗 sha；`remote_copy` 從它記錄的 dest 拉；`pull` 列 | 本機已有且 sha 不同 → FAIL `conflict=`（`--overwrite` 才蓋，舊檔留 `.bak-<時戳>`）；拉回驗不過 → FAIL；dest 缺 → FAIL `missing=` |
-| `status --dataset D` | 唯讀：每份清單最新的 push / verify 結果與時間、從未推過的 tier、`rclone_conf=present\|absent` | 無清單 → WARN；有清單從未 verify 通過 → WARN；`rclone_conf=present` → WARN |
+| `manifest --dataset D --conclusion submission:<id>\|judgement:<prereg>\|run:<run>\|all [--id M]` | 走證據圖（§7）→ 寫 `backup/<M>.json` → `manifest` 列 | 結論不存在 → FAIL `reason=not_found`；id 已存在 → FAIL `reason=exists`；該有的檔本機缺 → WARN `missing=`（列仍寫、`present=false`）；缺檔且無 sha 紀錄 → WARN `unlisted=`；checkpoint 本機沒有也無副本紀錄 → 計入 `missing=`；VERDICT `local_copies=`（只在這台機器上的副本數，只供參考，0.13.0）；建完自檢：清單漏了 run 紀錄登記的檔 → ABORT `manifest_incomplete:`（建清單程式的 bug，什麼都不寫，0.13.0） |
+| `push --dataset D --manifest M --dest DEST [--tier 1\|2\|3] [--forget-remote]` | §6.1 | 任一檔驗不過 → FAIL `mismatch=`（已推的照記）；rclone 不在 → ABORT `rclone_not_found`；rclone 非 0 → FAIL；`--forget-remote` 配本機 dest 或本次有任何失敗 → FAIL `reason=forget_refused`（不刪）；0.13.0：tier 3 先查完整性，缺 → FAIL `manifest_incomplete:`（`incomplete=`，不動任何檔、不寫列）；沒被目的地 cover 的 `remote_copy` 當 `file` 推，VERDICT `local_copies=`；`--forget-remote` 遇到清單缺檔或本機副本不在目的地也 `forget_refused` |
+| `verify --dataset D --manifest M [--dest DEST]` | §6.2 三層 | 副本缺 / 不符 → FAIL `missing= mismatch=`；本機漂移 → FAIL `drift=`；壞時戳 → FAIL `bad_stamps= first_bad=`；沒給 `--dest` 只做一致性與時戳；`present=false` 的檔本機部分略過；0.13.0：清單缺 run 紀錄登記的檔 → FAIL `reason=manifest_incomplete`（第一順位），VERDICT 一律帶 `incomplete=`；沒被 cover 的 `remote_copy` 在目的地驗，VERDICT `local_copies=` |
+| `pull --dataset D --manifest M --dest DEST [--tier N] [--overwrite]` | 從 dest 把清單裡本機缺的 `file` 條目拉回原相對路徑、讀回驗 sha；`remote_copy`：被目的地 cover 的從它記錄的 dest 拉，其他的先從目的地拉、沒有再退回本機副本（0.13.0）；`pull` 列 | 本機已有且 sha 不同 → FAIL `conflict=`（`--overwrite` 才蓋，舊檔留 `.bak-<時戳>`）；拉回驗不過 → FAIL；dest 缺 → FAIL `missing=` |
+| `status --dataset D` | 唯讀：每份清單最新的 push / verify 結果與時間、從未推過的 tier、`rclone_conf=present\|absent` | 無清單 → WARN；有清單從未 verify 通過 → WARN；`rclone_conf=present` → WARN；0.13.0：每份清單重算完整性，缺檔 → WARN `incomplete=`、不算 verified（本機沒有 run 紀錄時看 verify 列，再看清單版本：0.10.0 以前 → `unchecked`）；清單有沒被 cover 的本機副本時，只有 0.13.0 起帶 `local_copies` 的 verify 列與 tier 3 push 列算數 |
 
 ### 6.1 push 的順序
 
 1. 載入清單與台帳；`dest_kind(dest)`（沿用訓練層：`remote:path` 是 rclone，Windows 磁碟不是）。
 2. rclone 目的地：先各 root 一次 `rclone hashsum sha256 <dest>/<root>` 取現況；本機目的地：逐檔 `sha256_file`。
-3. 依 tier 升冪、清單順序，對每個 `kind=file` 且 `present=true` 且 tier ≤ `--tier` 的檔：目的地 sha 相同 → `skipped`；否則 rclone `copyto --checksum` / 本機複製，計 `pushed`。`remote_copy` 條目不推。
+3. 依 tier 升冪、清單順序，對每個 `kind=file` 且 `present=true` 且 tier ≤ `--tier` 的檔：目的地 sha 相同 → `skipped`；否則 rclone `copyto --checksum` / 本機複製，計 `pushed`。`remote_copy` 條目：在 rclone 遠端或就在目的地裡的不推；其他的（只在這台機器上的）照 `file` 推，來源先用原 checkpoint、sha 不符再用 `train upload` 的副本，都不符 → 動任何檔案之前 FAIL（2026-10-04，VCP-046）。tier 3 另在動任何檔案之前檢查清單完整性（2026-10-04，VCP-045）。
 4. 推完各 root 再一次 `hashsum` / 讀回，逐檔比對 → `verified`；不符者進 `failed`。
 5. 寫 `push` 列（不論成敗，已發生的都記）。
 6. `--forget-remote`：`failed` 為空且 dest 是 rclone → `rclone config delete <remote>` → `remote_forgotten` 列；否則 FAIL `forget_refused`。
 
 ### 6.2 verify 的三層
 
-1. **副本**：給了 `--dest` 才做。清單每個 `kind=file` 條目：目的地 sha（rclone 每 root 一次 `hashsum`；本機讀回）等於清單 sha → `ok`，不在 → `missing`，不同 → `mismatch`。`remote_copy` 條目：`rclone hashsum sha256 <其 dest>/<run_id>` 找 `name`。
-2. **一致性**（只對 `present=true` 且本機存在的檔）：`run.yaml` 的 `predictions[*].sha256` ↔ 預測檔；`train.yaml` 的 checkpoint sha ↔ 檔（每個路徑最新一筆，同 `train status`；2026-09-25 前為每個檔名，見 §14）；`fuse.json` 的 `output_sha256` ↔ 預測檔、`member_sha256` ↔ 成員預測檔；`stage.json` 的 `artifact.sha256` ↔ 候選檔；`dataset.yaml` 的 `samples_hash` ↔ `samples.jsonl`；`submissions.jsonl` 的 `staged.sha256` ↔ `stage.json`；清單 sha ↔ 現在的檔（清單之後被改）。每個不符計一個 `drift`，`--json` 列出 `(what, expected, actual)`。
+1. **副本**：給了 `--dest` 才做。清單每個 `kind=file` 條目：目的地 sha（rclone 每 root 一次 `hashsum`；本機讀回）等於清單 sha → `ok`，不在 → `missing`，不同 → `mismatch`。`remote_copy` 條目：被目的地 cover 的（rclone 遠端上、或就在目的地裡）到 `<其 dest>/<run_id>` 找 `name`；其他的在目的地當 `file` 查，不在就是 `missing`，不看 `present`（2026-10-04，VCP-046）。
+2. **一致性**（只對 `present=true` 且本機存在的檔）：`run.yaml` 的 `predictions[*].sha256` ↔ 預測檔；`train.yaml` 的 checkpoint sha ↔ 檔（每個路徑最新一筆，同 `train status`；2026-09-25 前為每個檔名，見 §14）；`fuse.json` 的 `output_sha256` ↔ 預測檔、`member_sha256` ↔ 成員預測檔；`stage.json` 的 `artifact.sha256` ↔ 候選檔；`dataset.yaml` 的 `samples_hash` ↔ `samples.jsonl`；`submissions.jsonl` 的 `staged.sha256` ↔ `stage.json`；清單 sha ↔ 現在的檔（清單之後被改）。每個不符計一個 `drift`，`--json` 列出 `(what, expected, actual)`。另查完整性（2026-10-04，VCP-045）：清單裡每份 `train.yaml` 在 `created_at` 以前登記的 checkpoint 路徑、每份 `run.yaml` / `train.yaml` 在那以前掛上的證據與標籤集，都必須在清單裡（任何角色）；缺一個計一個 `manifest_incomplete`。
 3. **時戳**：清單裡每個 role 為台帳的 jsonl（`submissions_log`、`readings`、`judgements`、`sigma`、`anchors_log`、`prereg_log`、`train_log`、`history`、`unseal_log`、`backup_log`、`logs`）逐列 `ts` 經 `parse_stamp`，且與前一列相比不減；每張卡（`dataset.yaml`、`run.yaml`、`train.yaml`、`stage.json`、`fuse.json`、預登記、配方、plan）的 `created_at` / `*_at` / `ts` 欄位可解析。壞的計 `bad_stamps`，第一個位置記 `first_bad`。
 
 寫 `verify` 列（三層結果）。三層任一有問題 → FAIL；`--dest` 缺席時 `copies` 記 null。
@@ -168,13 +168,14 @@
 | 該有的證據檔本機缺 | WARN `missing=`（`present=false`）；無 sha 可記 → WARN `unlisted=` | WARN |
 | 副本不符 / 缺 | `IntegrityError` `mismatch=` `missing=` | FAIL |
 | 本機漂移 / 壞時戳 | `IntegrityError` `drift=` / `ValidationFailed` `bad_stamps=` | FAIL |
+| 清單缺 run 紀錄登記的檔（0.13.0） | verify：`manifest_incomplete`（reason 第一順位）、`incomplete=`；push tier 3：`ValidationFailed` `manifest_incomplete:`；manifest 自檢：`InvariantError` `manifest_incomplete:` | FAIL／FAIL／ABORT |
 | pull 衝突 | `ValidationFailed` `conflict=` | FAIL |
 | `--forget-remote` 被拒 | `ValidationFailed` `forget_refused` | FAIL |
 | rclone 找不到 | `VcpError` `rclone_not_found` | ABORT |
 | rclone 非 0 | `PlatformError`（redact 後的最後一行） | FAIL |
 | 台帳列壞 / 清單壞 | `ValidationFailed` 帶 `file:line` | FAIL |
 
-共用欄位：`dataset=` `manifest=` `conclusion=` `files=` `tier=` `dest=` `pushed=` `skipped=` `verified=` `failed=` `ok=` `missing=` `mismatch=` `drift=` `bad_stamps=` `first_bad=` `pulled=` `conflicts=` `rclone_conf=`。
+共用欄位：`dataset=` `manifest=` `conclusion=` `files=` `tier=` `dest=` `pushed=` `skipped=` `verified=` `failed=` `ok=` `missing=` `mismatch=` `drift=` `bad_stamps=` `first_bad=` `pulled=` `conflicts=` `rclone_conf=` `incomplete=` `local_copies=`（後兩個 0.13.0）。
 
 ## 9. 隱私
 
@@ -222,9 +223,12 @@
 - **verify**：回傳結果不拋錯，CLI 依結果定 FAIL 並帶 `reason=`（`mismatch` > `missing` > `drift` > `bad_stamps`）；`--tier N` 只限定副本層（預設 3 = §6.2 的全查；§11 的「push --tier 2 → verify OK」要配 `--tier 2`），有 `--dest` 時 verify 列記 `tier`；一致性層對台帳角色用前綴 sha（只增長不算 drift，被改或截短才算）；順帶檢查 `backup.log.jsonl` 自己的時戳；時戳掃描跳過 `downloaded_at`；`present=false` 且目的地也沒有的條目進 `absent` 桶、不算失敗；副本層的 rclone 失敗是 `PlatformError`，仍先寫 verify 列（`copies` 空、`error` 記 redact 後的訊息、本機兩層照算）再拋。
 - **pull**：目的地 sha 先比對（不符 → `mismatch`、不拉）；拉回不符就刪；本機已有且相同（台帳角色：長大也算）→ `skipped`；不同 → `conflict`，`--overwrite` 才蓋且舊檔留 `.bak-<UTC 時戳含微秒>`，新檔驗不過就把 `.bak` 還原；只寫到 data / configs 根內（`unsafe_path:`）；external 只還原到既有目錄，否則 `external_skipped=`（WARN）；先記列再拋錯，優先序 `mismatch` > `missing` > `conflict`。
 - **status**：`verified` = 某個 verify 列有 `--dest`、tier 3、副本層與本機兩層皆無問題；另報 `local_ok`（一致性與時戳過）；「已推 tier」= `failed` 空的 push 的最大 `--tier` 以下全部；rclone 不在 → `rclone_conf=unknown`。
-- **本機副本的語意**（2026-09-07 實跑澄清，未改程式）：`remote_copy` 可來自 `train upload` 驗過的本機路徑，verify 成功只證明那些 bytes 在所記位置可讀，不證明異機容災。換遠端前先將權重 upload 到新目的地，再產新清單；project notebook bundle / Git source bundle 不自動納入證據圖，須另保存與驗 SHA。真實例見 Plan 7 後記 §9。
+- **本機副本的語意**（2026-09-07 實跑澄清，未改程式；已由本節最後「本機副本跟著目的地走」取代）：`remote_copy` 可來自 `train upload` 驗過的本機路徑，verify 成功只證明那些 bytes 在所記位置可讀，不證明異機容災。換遠端前先將權重 upload 到新目的地，再產新清單；project notebook bundle / Git source bundle 不自動納入證據圖，須另保存與驗 SHA。真實例見 Plan 7 後記 §9。
 - **checkpoint 以路徑為身分**（2026-09-25，VCP-035）：清單與一致性層原本以檔名取最新一筆，一個 run 登記多個同名不同路徑的 checkpoint（多折訓練的 `fold-k/model.pt`）時只留最後一個、其餘靜默消失且 VERDICT 仍 OK。改為以路徑取最新（同一路徑重新登記才是歷史）；`remote_copy` 要 sha256 相符、已驗證，且遠端名稱是這個路徑自己的（訓練層同日改為同名不同路徑帶上層資料夾，見訓練層 spec 第 16 條；0.10.0 以前的純檔名也算）——只比 sha 會把內容相同的另一折的副本配給它；一致性層的標籤改為 `<run>/train.yaml:checkpoints.<路徑>`。
 - **目的地**：rclone 命令前綴是 `vcp.backup.dest.RCLONE`（端到端測試指到假 rclone 腳本）；`hashsum` exit 3 / 4 才是空目錄，其餘非 0 是 `PlatformError`（redact 後的最後一行）；雜湊列不是 64 hex（後端不支援 sha256）也是 `PlatformError`；`hashsum` 解析 `<sha>  <相對路徑>` 沿用訓練層。
 - **Plan 7c（後記待辦處置，同日）**：`dest_kind` 搬到 `backup/dest.py`（訓練層只是再匯出），Windows 上單字母加冒號（`C:backup`）視為磁碟、即本機——rclone 自己在 Windows 也這樣讀；訓練層 `train upload` 的 rclone 路徑改走 `RcloneDest`：rclone 失敗是 `PlatformError`（FAIL），rclone 不在是 `rclone_not_found`（ABORT），`hashsum` exit 3 / 4 才是空；pull 本機複製的 `OSError` 也還原 `.bak`、寫列、拋 `copy_failed:`（ABORT）；時戳的 `first_bad` 標籤用 `root/path`；失敗的 VERDICT 保留 `dataset=` / `manifest=` / `dest=`（`run_command` 的 `context`，其他層可比照採用）。
 
 - **證據與標籤集**（2026-09-26，VCP-040 / 042）：新角色 `label_set`（tier 1）與 `evidence`（tier 2）。`run:` 走法收進 `run.yaml` 與 `train.yaml` 的 `evidence` 清單指到的每個產物（含歷史列）的 `manifest.json` 與檔案；一致性層比對每筆參照釘住的 `manifest_sha256`，標籤 `<run>/run.yaml:evidence.<kind>/<id>`。細節見 `2026-09-26-vcp-run-evidence-design.md`。
+
+- **清單的完整性**（2026-10-04，VCP-045，0.13.0）：0.10.0 只改了清單怎麼建，沒改舊清單怎麼判。`vcp.backup.completeness.manifest_gaps`：清單裡每份 `train.yaml` 在 `created_at` 以前登記的每個 checkpoint 路徑（每個路徑取最新一筆；`registered_at` 讀不了也算），與每份 `run.yaml` / `train.yaml` 在那以前掛上的證據與標籤集的 `manifest.json`，都必須以清單鍵（`vcp.backup.manifest.entry_key`，跟建清單同一個函式）列在清單裡——任何角色、任何種類都算（`runs/<id>/train/` 下的權重是 tier 2 的 `train_dir`）。之後才登記的不算缺（那是過期，drift 會報）。verify 的一致性層每個缺口一個 `manifest_incomplete:<run>/train.yaml:checkpoints.<path>`，reason 第一順位，VERDICT 一律帶 `incomplete=`，verify 列大於 0 才寫 `incomplete`；status 每份清單重算（舊的通過列不能背書；本機沒有 run 紀錄時看 verify 列的 `incomplete`，再看清單的 `vcp_version`：早於 0.10.0 → `unchecked`）；tier 3 push 在動任何檔之前 FAIL `manifest_incomplete:`、不寫列；`--forget-remote` → `forget_refused:` 帶 `incomplete=`；`backup manifest` 建完自檢，有缺口就 `InvariantError`（ABORT），清單的 `created_at` 改在走訪之前取。細節見 `2026-10-04-vcp-round3-fixes-design.md` §4。
+- **本機副本跟著目的地走**（2026-10-04，VCP-046，0.13.0；取代 2026-09-07 的本機副本註記）：`vcp.backup.dest.covers(dest, remote_copy)`——副本在 rclone 遠端上，或目的地是本機而副本就在目的地裡，才就地驗、不推；其他副本在這個目的地當 `file`：tier 3 推到 `<dest>/<root>/<path>`（來源先用原 checkpoint，sha 不符再用 `train upload` 那份；都不符 → 動任何檔之前 `drift:` / `not_found:`），verify 在目的地查（不在就是 `missing`，不看 `present`），pull 先從目的地拉、沒有再退回本機副本，`--forget-remote` 也要它在目的地。push 與 verify 的 VERDICT 帶 `local_copies=`，台帳列大於 0 才寫 `local_copies`；status 對有沒被 cover 副本的（清單, 目的地），只認帶 `local_copies` 的 verify 列與 tier 3 push 列（0.13.0 以前的 tier 3 push 列只當 tier 2）。建清單時同一路徑有多個驗過的上傳，優先選 rclone 的，同一種取最新；`backup manifest` 的 VERDICT `local_copies=` 只供參考。本機目的地（例如外接硬碟）同樣適用。細節見 `2026-10-04-vcp-round3-fixes-design.md` §5。

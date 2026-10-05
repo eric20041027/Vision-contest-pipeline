@@ -47,13 +47,13 @@ uv run vcp backup push … --tier 2 ; … --tier 3                              
 uv run vcp backup verify --dataset D-test --manifest sub34 --dest … --tier 2
 uv run vcp backup status --dataset D-test
 ```
-里程碑就備份：訓練完 `train upload` 或 `run:<id>` 清單；重要判決 `judgement:<prereg>`；真實提交 `submission:<id>`。`cache/`、`raw/` 永不進清單；C 槽副本不是異機備份；`--forget-remote` 要整份清單在目的地驗過。
+里程碑就備份：訓練完 `train upload` 或 `run:<id>` 清單；重要判決 `judgement:<prereg>`；真實提交 `submission:<id>`。`cache/`、`raw/` 永不進清單；C 槽副本不是異機備份——`train upload --dest <本機目錄>` 留下的副本會跟著 `--tier 3` 推到目的地、在那裡驗（0.13.0 起；rclone 遠端上的副本才就地驗）；`--forget-remote` 要整份清單（含這些本機副本）在目的地驗過。清單要完整：0.10.0 以前為多折 run 建的清單會報 `manifest_incomplete:`（verify FAIL、status `incomplete=`、tier 3 push 擋下），用新 id 重建清單再推、再驗。
 
 ## 停在決定點的事
 外部上傳、正式提交、sealed 解封、`unlock`、`--overwrite`、`--forget-remote`、超出算力／費用上限——只在既有授權涵蓋時做；否則先做完 stage / verify / dry-run，再提出一個具體決定點。已授權的事不反覆確認。
 
 ## 常見錯誤
-- 把 RUNBOOK 的命令當已完成；staged ≠ uploaded；local `remote_copy` ≠ 異機備份；`rclone_conf=unknown` ≠ absent。
-- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（`unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上）。vcp 自己擋同 id 重傳（FAIL `already_uploaded:`），確定要再傳才加 `--force "<理由>"`。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。
+- 把 RUNBOOK 的命令當已完成；staged ≠ uploaded；local `remote_copy` ≠ 異機備份（0.13.0 起 tier 3 會把它推到目的地；推完、驗完 `backup status` 才說 verified）；`rclone_conf=unknown` ≠ absent。
+- `submit upload` 的 WARN `confirmed=false`：列已經寫了，但不代表上了。重傳之前先到平台看這個 id 在 `at` 前後有沒有一發——有就是上了，重傳會再吃一發配額；`submit sync` 之後會配對（`unconfirmed=` 以 id 為單位，只對第一次上傳的 id 才代表沒上）。vcp 自己擋同 id 重傳（FAIL `already_uploaded:`），確定要再傳才加 `--force "<理由>"`。CLI 回 0 卻說 `Could not submit to competition` 會是 FAIL `upload_failed:`、不寫列，可以直接重傳。CLI 非 0（例如等回應時斷線）時 vcp 也回讀：平台列出了 → 照寫一列、WARN `exit_code=`，**不要再傳**；沒列出 → FAIL `upload_failed:`，可以重傳（之後才出現的會被下一次 upload 的同步擋成 `already_uploaded:`；用 `--no-sync` 之前先看平台）；判斷不了 → FAIL `upload_unconfirmed:`，先到平台找這個 id 在送出時間附近的提交，有就 `vcp submit sync` 記下。
 - 直接上傳既有 CSV 再補紀錄：先釐清來源，無法證明身分的檔只能如實標示。
 - 在 main checkout 的 venv 啟動訓練：用比賽釘版 worktree 的 `vcp.exe`（見 `vcp-release-and-environments`）。

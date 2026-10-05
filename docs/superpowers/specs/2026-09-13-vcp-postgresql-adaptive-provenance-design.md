@@ -175,9 +175,13 @@ research telemetry；正式可攜證據是已去除 credentials 的 benchmark JS
 ## 7. PostgreSQL normalized schema
 
 固定 schema 名稱：`vcp_provenance`。一個 PostgreSQL database只承載一個 active VCP provenance
-index；多個 VCP data roots 使用不同 database/service，v1 不新增 namespace option。
+index；多個 VCP data roots 使用不同 database/service，v1 不新增 namespace option。0.13.0 起（VCP-044）一個
+database 只服務一組（data root, configs root）：同一個 data root 的不同 checkout 也各用自己的
+database/service，每個 generation 的 `metadata` 記 `configs_root_id`、`configs_root`、`data_root_id`、
+`data_root`（見 §20 第 2 條）。
 
-PostgreSQL schema version為 `1`，與 SQLite `SCHEMA_VERSION = 2` 各自獨立。
+PostgreSQL schema version為 `1`，與 SQLite `SCHEMA_VERSION`（0.13.0 起為 3）各自獨立；root metadata 是
+key/value，不改 DDL，PostgreSQL 仍為 `1`。
 
 ### 7.1 Generation publication
 
@@ -519,6 +523,9 @@ Adaptive success不只看平均latency。Acceptance同時要求：
 - missing optional dependency：PostgreSQL command FAIL並提供安裝方式；SQLite繼續可用。
 - connection/schema error：固定redacted FAIL，僅附backend與SQLSTATE。
 - schema version mismatch：FAIL並要求使用已驗證rebuild流程；不silent migration。
+- root mismatch（0.13.0，VCP-044）：active generation 記的 root 跟命令的不同，或沒記 root（0.13.0 以前
+  建的）→ `root_mismatch:`（FAIL，`index_root=<id|none>`），在任何 replay 或前綴檢查之前；`sync` 不取代，
+  只有 `rebuild` 取代並 WARN `replaced_root=`。
 - lock/statement timeout：整個transaction rollback，沒有checkpoint/status/artifact partial rows。
 - duplicate identical artifact：selected NO_OP、`inserted=false`、graph hash不變。
 - duplicate id不同manifest/payload：IntegrityError。
@@ -586,3 +593,4 @@ generation pointer與scaled measurement處理。
 以程式碼為準；每條的完整依據與代價見 `../plans/2026-09-13-vcp-postgresql-adaptive-provenance-followups.md`。
 
 1. **正式矩陣不含 1M**（2026-09-15）：entity scales 為 1K / 10K / 100K，每 split 108 場景、612 次重複、92 個可 fit 觀測、16 個 NO_OP；§13 的「100K/1M 各 3 repetitions」對 1M 的部分不再適用，100K 仍是 3 次。理由是 1M 在 32 GiB 機器上會被 RAM 護欄中止，留著會讓 calibration / held-out 永遠產不出 policy。`production_benchmark.py` 的 1M 階梯（canonical/SQLite）不受影響，1M 也仍可用 `--entities 1000000` 臨時跑。
+2. **一個 database 只服務一個 checkout**（2026-10-04，VCP-044，0.13.0）：同一個 data root 的兩個 checkout 共用一個 database 時，另一個 root 的 `sync`（v1 是整份重建）會無聲取代前一份，`ingest` 則把對方的台帳報成 `prefix_drift:`。現在每個 generation 的 `metadata` 記 `configs_root_id`、`configs_root`、`data_root_id`、`data_root`（id 是 `vcp.core.paths.path_id`，路徑只供顯示；不改 DDL）。`verify-index`、`status`、`ingest`、`impact`、`stale`、`explain`、`graph` 在同一個交易或快照裡、任何 replay 與前綴檢查之前比對，不符 → `root_mismatch:`（`index_root=`）；`sync` 遇到別的 root 的 generation → `root_mismatch:`、整個交易 rollback；`rebuild` 是既有的修復路徑，照樣取代並 WARN `replaced_root=<id>`。0.13.0 以前建的 generation 沒記 root：除了 `rebuild`，每個命令都 `root_mismatch:`（`index_root=none`），`rebuild` 取代它並在人類訊息說明。操作規則：一個 database（service）只服務一組（data root, configs root）。細節見 `2026-10-04-vcp-round3-fixes-design.md` §3。

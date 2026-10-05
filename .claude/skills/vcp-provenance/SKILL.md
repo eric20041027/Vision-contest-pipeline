@@ -7,12 +7,13 @@ description: Use when a dataset gets a new version and existing runs must be re-
 
 ## 邊界（先記住這個）
 - **真相在檔案**：台帳、card、`dataset_diff` artifact（`changes.jsonl` + `summary.json`，write-once）。
-- **索引是衍生品**：SQLite（`indexes/provenance.sqlite3`，預設，可刪可重建，不進 git）與 PostgreSQL（optional，`uv sync --extra postgres`）都只是同一張圖的副本。未指定 `--backend` 永遠是 SQLite。
+- **索引是衍生品**：SQLite（`indexes/provenance-<configs root id>.sqlite3`，每個 checkout 一份；預設，可刪可重建，不進 git）與 PostgreSQL（optional，`uv sync --extra postgres`）都只是同一張圖的副本。未指定 `--backend` 永遠是 SQLite。
 - 既有 evidence 消失、改寫或 ledger prefix drift → 命令 **fail closed**，不做 silent repair；人工查明後 `rebuild`。
-- PostgreSQL 只透過 libpq **service** 連線（`--pg-service`，`PGSERVICEFILE` / `PGPASSFILE` 以路徑指），沒有 host / port / URI / 憑證 flag，vcp 不讀憑證檔；一個 database 一個 index；schema 不相容就換乾淨 database 重建。
+- PostgreSQL 只透過 libpq **service** 連線（`--pg-service`，`PGSERVICEFILE` / `PGPASSFILE` 以路徑指），沒有 host / port / URI / 憑證 flag，vcp 不讀憑證檔；一個 database 一個 index，只服務一個 checkout（data root + configs root）；schema 不相容就換乾淨 database 重建。
 - 選項以 `--help` 為準；status 語意、strategy reason、證據檔見 [reference.md](reference.md)。
 - 要把索引畫成圖（全比賽、單一 run、相對某個 head）→ `vcp-provenance-graph`。
 - 0.9.1 起 SQLite 索引另存 canonical graph 的 gaps；0.9.0 以前建的索引讀取時 FAIL `mismatch: graph_gaps metadata; rebuild required`——不是資料壞了，`rebuild` 一次（先講時間）。
+- 0.13.0 起索引記著它服務的 configs root 與 data root（VCP-044）：升級後每個 checkout `rebuild` 一次（0.12 的 `indexes/provenance.sqlite3` 不再讀，`not_found:` 會指出它）。從別的 checkout 打開 → `root_mismatch:`（`index_root=`），**不是**台帳被截短或改寫——別去查台帳：SQLite 在這個 checkout `rebuild`；PostgreSQL 給這個 checkout 自己的 `--pg-service`。同一個 root 內才會出現 `prefix_drift:`。`impact` / `stale` / `explain` / `graph` 也要解析得到 configs root（`--configs-root` 或 repo 的 `configs/`）。
 
 ## 資料改版的標準流程
 ```bash

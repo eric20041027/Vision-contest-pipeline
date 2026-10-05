@@ -3,7 +3,7 @@
 ## 兩個根目錄
 - `VCP_DATA_ROOT`（預設 Windows `C:/vcp-data`、Linux `~/vcp-data`；比賽工作區常自帶 `<repo>/vcp-data`）：
   `raw/<name>/`、`datasets/<name>/{samples.jsonl,raw_manifest.txt,cache/}`、`runs/<run>/`、`measure/<name>/`、
-  `submit/<test>/<id>/`、`submit/<test>/submissions.jsonl`（`ledger: shared` 的台帳正本）、`locks/`（台帳鎖，別刪）、`artifacts/<kind>/<id>/`、`indexes/provenance.sqlite3`、`logs/`。不進 git。
+  `submit/<test>/<id>/`、`submit/<test>/submissions.jsonl`（`ledger: shared` 的台帳正本）、`locks/`（台帳鎖，別刪）、`artifacts/<kind>/<id>/`、`indexes/provenance-<configs root id>.sqlite3`（provenance 索引，每個 checkout 一份）、`logs/`。不進 git。
 - `VCP_CONFIGS_ROOT`（預設 repo 的 `configs/`）：`datasets/<name>/{dataset.yaml,splits/*.json,prereg/*.yaml,prereg.log.jsonl,fuse/*.yaml,submit.yaml,submissions.jsonl,backup/*.json,backup.log.jsonl}`。進 git（`submissions.jsonl` 只在 `ledger: configs` 時用）。
 - 比賽膠水：`projects/<contest>/`（README / RUNBOOK / DESIGN、prepare.py、train.py、predict.py、metrics 模組、notebook 打包腳本、`requirements-*.txt`、專案 `.venv`）。
 

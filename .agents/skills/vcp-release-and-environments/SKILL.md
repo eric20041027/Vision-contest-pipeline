@@ -22,6 +22,7 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 - **比賽工作區的 venv**（核心 + 訓練，各自 Python 3.12.14）以 editable 指向那個 worktree：`uv pip install --python <venv>/Scripts/python.exe --no-deps -e "<worktree>[dicom]"`；`--no-deps` 只換 vcp 一個套件，torch 等不動。訓練與量測一律從該 worktree 或工作區的 `vcp.exe` 啟動。
 - 升版：新 worktree at 新 tag → `uv sync` → 重跑上面兩行 `uv pip install` → 改工作區 `ENVIRONMENT.md` / `AGENTS.md` 的 `$framework` 路徑並 commit。舊 worktree 留著，直到沒有 run 依賴它。
 - 量測 venv 凍結後禁 install；訓練 venv 只在建環境時裝套件，之後 `uv pip freeze` 進 `requirements-*.txt`。
+- **provenance 索引跟著 checkout 走**（0.13.0 起）：每個 worktree 有自己的 SQLite 索引 `<data_root>/indexes/provenance-<configs root id>.sqlite3`，在那個 worktree 跑過一次 `vcp provenance rebuild` 才有；搬移或改名 worktree 之後也要 rebuild 一次。用 PostgreSQL 時一個 worktree 一個 service／database：兩個 worktree 共用一個 database 會 `root_mismatch:`，`rebuild` 則取代別人的 generation 並 WARN `replaced_root=`。
 
 ## 訓練或量測進行中的禁區
 - 不在被 editable 指到的 checkout 上 `git pull / checkout / merge`，不 `uv sync --reinstall-package`（`vcp.exe` 被鎖會失敗，且磁碟上的程式碼會在執行中被換掉）。開發一律在另一個 worktree。

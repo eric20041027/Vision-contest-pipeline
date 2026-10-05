@@ -100,14 +100,14 @@
 - **鎖的實作**：新模組 `vcp.core.lock`，只用標準函式庫。Windows 用 `msvcrt.locking`，其他平台用 `fcntl.flock`。程序一結束，作業系統就會釋放鎖。
 - **等待**：最多 60 秒，每 0.5 秒重試一次。等不到 → ABORT `locked: <台帳> held by <command> (pid <n> on <host> since <stamp>)`。
 - **不可重入**：同一個程序再要一把它已經拿著的鎖，等下去也只是等自己，所以立即 ABORT `locked: <台帳> is already held by this process (<command>)`，不等。
-- **交易範圍**：寫入命令整段都在鎖內，拿到鎖之後先重讀台帳。這些命令是 `stage`、`upload`、`record`、`score`、`sync`、`final`、`lock` / `unlock`、`ledger adopt`。其中 `upload` 的交易包含上傳前同步、配額、重傳護欄、平台上傳，以及寫入 `uploaded` 列。
+- **交易範圍**：寫入命令整段都在鎖內，拿到鎖之後先重讀台帳。這些命令是 `stage`、`upload`、`record`、`score`、`sync`、`final`、`lock` / `unlock`、`ledger adopt`。其中 `upload` 的交易包含上傳前同步、配額、重傳護欄、平台上傳，以及寫入 `uploaded` 列；CLI 失敗後的回讀也在這個交易裡（2026-10-04，VCP-047），列表呼叫各有 120 秒逾時（結束整個程序樹，`uv tool` 之類的包裝程式也一併切斷），卡住的列表不會一直拿著鎖；回讀找不到新的一筆時，鎖至少被持有約 17 秒，其他寫入者等 60 秒後 ABORT `locked:`，重跑即可（見 `2026-10-04-vcp-round3-fixes-design.md` §6）。
 - **唯讀命令不上鎖**：`status`、`report`、備份、provenance。讀到最後一列沒有換行（代表正在寫），就當作那一列還沒寫入。
 - `configs` 與 `shared` 兩種位置都加鎖。
 
 ### 4.3 上傳前同步
 
 - `upload` 在交易內、檢查配額之前，先做一次跟 `vcp submit sync` 一樣的同步。寫入的列和規則都相同，包括 §4.4 與 §4.6。
-- 平台列表讀不到 → FAIL `sync_failed: <原因>`，不上傳。
+- 平台列表讀不到 → FAIL `sync_failed: <原因>`，不上傳。列表 120 秒沒回應也是 `sync_failed:`（2026-10-04，VCP-047）。
 - 加 `--no-sync` 就略過同步，改為 WARN（VERDICT `sync=skipped`）。
 - Manual 平台本來就不能用 `upload`。`record` 不做同步，因為 Manual 平台沒有列表可讀。
 - VERDICT：`sync=ok|skipped`，並帶這次同步寫入的 `bound=`（§4.4）。
@@ -214,7 +214,7 @@
   - 本 checkout 的台帳一定收；同一個檔只讀一次、不等鎖；`--from` 是正本本身 → `invalid:`；
   - 合併後 `ts` 單調，`backup verify` 通過。
 - **位置**：`shared` 路徑的解析；備份的走訪與驗證、provenance 都跟著解析結果；`stage` 不收台帳的名字當 id。
-- **升級**：索引在 `configs` 時建好，切到 `shared` 並 adopt 之後，`provenance sync` 加上正本的檢查點、不報漂移；備份的 `submission:` 結論在 adopt 之前 `not_adopted:`。
+- **升級**：索引在 `configs` 時建好，切到 `shared` 並 adopt 之後，`provenance sync` 加上正本的檢查點、不報漂移（0.13.0 起每個 configs root 各有一份索引、記著自己的 root；共用台帳在 data root、只在鎖下增長，每份索引各自記它的檢查點，見 `2026-10-04-vcp-round3-fixes-design.md` §3）；備份的 `submission:` 結論在 adopt 之前 `not_adopted:`。
 - **端到端**：兩個 configs 根共用一個 data root，設了 `ledger: shared`。adopt 之前另一邊的 `status` 是 `not_adopted:`；一邊 adopt、`stage` + `upload`，另一邊的 `status` 看得到；另一邊對同一個 id 再 `upload` → `already_uploaded:`。
 
 ## 9. 文件與 skill

@@ -28,6 +28,8 @@ policy v1 `postgres-adaptive-v1-9f4e58346529`：`incremental_ms ≈ 1.16·change
 | 症狀 | 處置 |
 |---|---|
 | `sync` 拒絕：既有 record 改寫 / 刪除 / prefix drift | 人工查明是誰動了台帳；確認後 `rebuild` |
+| `root_mismatch:`（`index_root=`） | 索引屬於別的 checkout（或 data root 換了路徑、或 PostgreSQL generation 是 0.13.0 以前建的）。SQLite：在這個 checkout `rebuild`；PostgreSQL：每個 checkout 用自己的 service，確定要接手才 `rebuild`（WARN `replaced_root=`） |
+| `not_found:` 並指出 `indexes/provenance.sqlite3` | 那是 0.12 以前整個 data root 共用的索引；在這個 checkout `rebuild` 一次，沒有 0.12 使用者之後可刪 |
 | diff manifest 或 payload 不符 | 該 artifact 不可信；重做 `data diff` 到新 id |
 | PostgreSQL schema marker 不相容 | 換乾淨 database / service，`rebuild`；不做 silent migration |
 | `verify-index` 不一致 | 刪索引重 `rebuild`；仍不一致就是 canonical 資料本身的問題 |

@@ -4,7 +4,10 @@ pushed, whether it is complete, and whether an rclone config file is still on th
 Completeness is recomputed from the manifest every time (spec 2026-10-04 §4.2): a verify row
 written before 0.13.0 never asked, so a passing one cannot vouch for a manifest that lists fewer
 files than its runs registered. Without the run records on this machine the rows' own
-``incomplete`` decides; with none, a manifest written before 0.10.0 stays ``unchecked``."""
+``incomplete`` decides; with none, a manifest written before 0.10.0 stays ``unchecked``.
+
+A push or verify row about a destination that does not cover the manifest's local copies
+vouches only if it handled them (``local_copies``, written since 0.13.0, spec §5.2)."""
 
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vcp.backup.completeness import checkable, manifest_gaps
-from vcp.backup.dest import rclone_conf_state
+from vcp.backup.dest import covers, rclone_conf_state
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
 from vcp.backup.push import TIERS
@@ -119,6 +122,21 @@ def gaps_of(
     return None if _older_than_complete(manifest.vcp_version) else 0
 
 
+def _vouches(row: BackupRow, manifest: Manifest | None) -> bool:
+    """Whether a push or verify row about destination D speaks for the manifest's remote_copies
+    there: D covers every one, or the row handled them (``local_copies``, written since 0.13.0).
+    An older row never looked for a local copy at D (spec 2026-10-04 §5.2)."""
+    if manifest is None or row.dest is None or row.local_copies is not None:
+        return True
+    return all(covers(row.dest, f.remote) for f in manifest.files if f.remote is not None)
+
+
+def _pushed_tier(row: BackupRow, manifest: Manifest | None) -> int:
+    """The tiers a push row covers: a tier-3 push that left the local copies out covers two."""
+    tier = int(row.tier or 0)
+    return 2 if tier == 3 and not _vouches(row, manifest) else tier
+
+
 def status(
     dataset: str,
     *,
@@ -133,9 +151,10 @@ def status(
         mid = str(row.manifest_id)
         pushes = ledger.of("push", mid)
         verifies = ledger.of("verify", mid)
-        gaps = gaps_of(_load(paths, mid), paths, verifies)
+        manifest = _load(paths, mid)
+        gaps = gaps_of(manifest, paths, verifies)
         complete = gaps == 0
-        covered = max((int(p.tier or 0) for p in pushes if p.failed == []), default=0)
+        covered = max((_pushed_tier(p, manifest) for p in pushes if p.failed == []), default=0)
         out.append(
             ManifestStatus(
                 manifest_id=mid,
@@ -145,7 +164,7 @@ def status(
                 last_push=pushes[-1] if pushes else None,
                 last_verify=verifies[-1] if verifies else None,
                 pushed_tiers=[t for t in TIERS if t <= covered],
-                verified=complete and any(passed(v) for v in verifies),
+                verified=complete and any(passed(v) and _vouches(v, manifest) for v in verifies),
                 local_ok=complete and any(local_ok(v) for v in verifies),
                 incomplete=gaps,
             )

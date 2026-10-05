@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 from vcp.artifact import store
 from vcp.backup.completeness import Gap, manifest_gaps
-from vcp.backup.dest import Destination, open_dest
+from vcp.backup.dest import Destination, open_dest, travels
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
 from vcp.backup.push import check_tier
@@ -62,6 +62,7 @@ class VerifyResult:
     bad_stamps: list[str]
     # spec 2026-10-04 §4.2: files the manifest's runs registered that it does not list
     incomplete: list[Gap] = field(default_factory=list)
+    local_copies: int = 0  # remote_copies checked at dest like files (spec 2026-10-04 §5.2)
 
     @property
     def first_bad(self) -> str | None:
@@ -97,21 +98,27 @@ def _load_json_model[T: BaseModel](path: Path, model_cls: type[T]) -> T:
 
 def _check_copies(
     manifest: Manifest, dest: str, tier: int, runner: Runner | None
-) -> tuple[dict[str, int], list[str]]:
+) -> tuple[dict[str, int], list[str], int]:
     """Only entries with ``tier <= tier``: a destination that holds tiers 1..N is complete for
     them even though the weights were never pushed. An entry the manifest already recorded as
     gone (``present=false``) is ``absent`` at a destination that never got it -- a fact, not a
-    failure; a copy of it that is there still has to match."""
+    failure; a copy of it that is there still has to match. A remote_copy is checked where it
+    lies only when ``dest`` covers it; any other is held at ``dest`` like a file, and has to be
+    (spec 2026-10-04 §5.2) -- the third value counts those."""
     counts = {"ok": 0, "missing": 0, "mismatch": 0, "absent": 0}
     problems: list[str] = []
+    local = 0
     dests: dict[str, Destination] = {dest: open_dest(dest, runner)}
     groups: dict[tuple[str, str], list[tuple[str, str, str, bool]]] = {}
     for e in manifest.files:
         if e.tier > tier:
             continue
-        if e.remote is None:
-            groups.setdefault((dest, e.root), []).append((e.path, e.sha256, e.key, e.present))
-        else:
+        if travels(e, dest):
+            if e.remote is not None:
+                local += 1
+            present = e.present or e.remote is not None  # the copy's bytes still exist
+            groups.setdefault((dest, e.root), []).append((e.path, e.sha256, e.key, present))
+        elif e.remote is not None:
             dests.setdefault(e.remote.dest, open_dest(e.remote.dest, runner))
             groups.setdefault((e.remote.dest, e.remote.run), []).append(
                 (e.remote.name, e.sha256, e.key, e.present)
@@ -130,7 +137,7 @@ def _check_copies(
                 problems.append(f"mismatch:{key}")
             else:
                 counts["ok"] += 1
-    return counts, problems
+    return counts, problems, local
 
 
 # --- layer 2: local consistency --------------------------------------------------------------
@@ -335,10 +342,11 @@ def verify(
     manifest = load_manifest(paths, manifest_id)
     copies: dict[str, int] | None = None
     problems: list[str] = []
+    local = 0
     copies_error: PlatformError | None = None
     if dest is not None:
         try:
-            copies, problems = _check_copies(manifest, dest, tier, runner)
+            copies, problems, local = _check_copies(manifest, dest, tier, runner)
         except PlatformError as exc:
             # the copies layer dying (rclone flaked) must not swallow what the other two layers
             # found: they still run, and the row still lands -- with `copies=None` and `error=`
@@ -347,7 +355,7 @@ def verify(
     drift = _check_consistency(manifest, paths)
     gaps = manifest_gaps(manifest, paths)  # the consistency layer's other half (§4.2)
     bad = _check_stamps(manifest, paths)
-    res = VerifyResult(manifest_id, dest, copies, problems, drift, bad, gaps)
+    res = VerifyResult(manifest_id, dest, copies, problems, drift, bad, gaps, local)
     BackupLedger(paths.backup_log).append(
         BackupRow(
             event="verify",
@@ -356,6 +364,7 @@ def verify(
             dest=dest,
             tier=tier if dest is not None else None,
             copies=copies,
+            local_copies=local or None,
             drift=len(drift),
             bad_stamps=len(bad),
             incomplete=len(gaps) or None,

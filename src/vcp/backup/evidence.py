@@ -238,11 +238,16 @@ class Collector:
             upload_names = {}
         for path, c in newest.items():
             own = {upload_names.get(path), Path(path).name}
+            matches = [
+                u for u in record.uploads if u.verified and u.sha256 == c.sha256 and u.name in own
+            ]
+            # spec 2026-10-04 §5.2: a copy on an rclone remote is off this machine already, so
+            # it wins over a local one; within one kind the newest wins
+            pick = next((u for u in reversed(matches) if u.kind == "rclone"), None)
+            pick = pick or (matches[-1] if matches else None)
             remote = None
-            for u in reversed(record.uploads):
-                if u.verified and u.sha256 == c.sha256 and u.name in own:
-                    remote = RemoteCopy(dest=u.dest, run=record.run_id, name=u.name)
-                    break
+            if pick is not None:
+                remote = RemoteCopy(dest=pick.dest, run=record.run_id, name=pick.name)
             self.add(
                 resolve_stored_path(c.path, self.data_root),
                 "checkpoint_final" if c.final else "checkpoint",

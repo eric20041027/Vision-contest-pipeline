@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 
+from vcp.backup.dest import dest_kind
 from vcp.backup.evidence import build_manifest
 from vcp.backup.pull import pull
 from vcp.backup.push import push
@@ -57,6 +58,10 @@ def manifest_cmd(
             "bytes2": by_tier["2"],
             "bytes3": by_tier["3"],
             "remote_copies": sum(1 for f in m.files if f.kind == "remote_copy"),
+            # spec 2026-10-04 §5.2: copies on this machine, informational; tier 3 sends them on
+            "local_copies": sum(
+                1 for f in m.files if f.remote is not None and dest_kind(f.remote.dest) == "local"
+            ),
             "missing": len(res.missing),
         }
         if res.unlisted:
@@ -127,8 +132,14 @@ def push_cmd(
             "verified": res.verified,
             "failed": len(res.failed),
             "bytes": res.bytes,
+            "local_copies": res.local_copies,
         }
         human = [f"pushed {res.pushed}, skipped {res.skipped}, verified {res.verified} -> {dest}"]
+        if res.local_copies:
+            human.append(
+                f"{res.local_copies} checkpoint(s) whose only copy was on this machine went to "
+                f"{dest} as well"
+            )
         if res.forgotten:
             fields["forgotten"] = res.forgotten
             human.append(f"rclone remote {res.forgotten!r} forgotten")
@@ -138,6 +149,7 @@ def push_cmd(
             "verified": res.verified,
             "failed": res.failed,
             "bytes": res.bytes,
+            "local_copies": res.local_copies,
             "forgotten": res.forgotten,
         }
         return "OK", fields, payload, human
@@ -193,6 +205,7 @@ def verify_cmd(
             )
             if res.copies["absent"]:  # listed as gone when the manifest was written
                 fields["absent"] = res.copies["absent"]
+            fields["local_copies"] = res.local_copies
         fields["incomplete"] = len(res.incomplete)  # always printed, like drift (§4.2)
         fields["drift"] = len(res.drift)
         fields["bad_stamps"] = len(res.bad_stamps)
@@ -216,6 +229,7 @@ def verify_cmd(
             "drift": [asdict(d) for d in res.drift],
             "bad_stamps": res.bad_stamps,
             "incomplete": [asdict(g) for g in res.incomplete],
+            "local_copies": res.local_copies,
         }
         return status, fields, payload, human
 

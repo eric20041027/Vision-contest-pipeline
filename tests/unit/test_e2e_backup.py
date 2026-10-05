@@ -247,7 +247,7 @@ def test_fake_rclone_story(world, tmp_path, monkeypatch):
     outputs.append(r.output)
     v = _verdict(r.output)
     manifest = load_manifest(_paths(world, "beach-test"), "r1")
-    rest = sum(1 for f in manifest.files if f.tier > 1 and f.kind == "file")
+    rest = sum(1 for f in manifest.files if f.tier > 1)  # the local remote_copy travels too
     assert r.exit_code == 1 and "forget_refused" in v and f"unverified={rest}" in v
     assert not (store / "deleted-fake").exists()  # tiers 2 and 3 are not at the destination yet
     assert (
@@ -267,9 +267,8 @@ def test_fake_rclone_story(world, tmp_path, monkeypatch):
     r = _backup("verify", *common)
     outputs.append(r.output)
     v = _verdict(r.output)
-    files = sum(1 for f in manifest.files if f.kind == "file")
-    assert r.exit_code == 0 and f"ok={files + 1}" in v and "missing=0" in v
-    # +1: the remote_copy, verified in place at the destination `train upload` used
+    assert r.exit_code == 0 and f"ok={len(manifest.files)}" in v and "missing=0" in v
+    assert "local_copies=1" in v  # the remote_copy's local copy, pushed and checked at fake:vault
     profile = _paths(world, "beach-test").submit_yaml
     original = profile.read_bytes()
     profile.unlink()

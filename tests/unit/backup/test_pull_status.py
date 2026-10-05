@@ -42,7 +42,7 @@ def test_pull_restores_missing_files_and_verifies(world):
     pred = _pred(world)
     original = pred.read_bytes()
     pred.unlink()
-    (world.weights / "best.pt").unlink()  # the remote_copy comes back from vault-train
+    (world.weights / "best.pt").unlink()  # pushed to the vault like a file: back from there
     res = pull(TEST, "m1", str(vault), **_kw(world))
     assert res.pulled == 2 and res.skipped == n - 2
     assert res.conflicts == [] and res.missing == [] and res.mismatch == []

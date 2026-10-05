@@ -10,9 +10,9 @@ import typer
 
 from vcp.cli_common import CmdResult, ConfigsRootOpt, DataRootOpt, JsonOpt, run_command
 from vcp.core.build import build_string
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.log import FieldValue, Status, format_value
-from vcp.core.paths import resolve_configs_root, resolve_data_root
+from vcp.core.paths import path_id, resolve_configs_root, resolve_data_root
 from vcp.core.time import stamp
 from vcp.provenance.backend import (
     BackendConfig,
@@ -68,14 +68,29 @@ def _backend_name(value: BackendName | str) -> BackendName:
 
 def _backend(
     data_root: Path | None,
+    configs_root: Path | None,
     backend: BackendName | str,
     pg_service: str | None,
-) -> tuple[Path, ProvenanceBackend]:
+) -> tuple[Path, Path, ProvenanceBackend]:
+    """The data root, the configs root and the backend of this checkout. Every command resolves
+    the configs root, the read-only ones too (spec 2026-10-04 §3.4): an index serves one."""
     root = resolve_data_root(data_root)
     name = _backend_name(backend)
     if pg_service is not None and name is not BackendName.POSTGRESQL:
         raise ValidationFailed("pg_service_requires_postgresql")
-    return root, make_backend(BackendConfig(name=name, pg_service=pg_service), root)
+    configs = resolve_configs_root(configs_root)
+    config = BackendConfig(name=name, pg_service=pg_service)
+    return root, configs, make_backend(config, root, configs)
+
+
+def _root(configs_root: Path | None) -> dict[str, FieldValue]:
+    """``root=<configs root id>`` on every provenance VERDICT, a failure's included (spec
+    2026-10-04 §7). A configs root that cannot be resolved has no id; the command then fails
+    saying so."""
+    try:
+        return {"root": path_id(resolve_configs_root(configs_root))}
+    except VcpError:
+        return {}
 
 
 def _strategy(value: str) -> RequestedStrategy:
@@ -137,8 +152,8 @@ def rebuild_cmd(
     """Atomically rebuild the disposable index from canonical VCP records."""
 
     def fn() -> CmdResult:
-        root, index = _backend(data_root, backend, pg_service)
-        result = index.rebuild(root, resolve_configs_root(configs_root))
+        root, configs, index = _backend(data_root, configs_root, backend, pg_service)
+        result = index.rebuild(root, configs)
         fields: dict[str, FieldValue] = {
             "backend": index.name.value,
             "entities": result.entities,
@@ -150,7 +165,7 @@ def rebuild_cmd(
         human = [f"rebuilt {index.location_label}", f"graph={result.graph_hash}"]
         return "OK", fields, _payload(index, result.__dict__), human
 
-    run_command("provenance.rebuild", json_mode, data_root, fn)
+    run_command("provenance.rebuild", json_mode, data_root, fn, context=_root(configs_root))
 
 
 @provenance_app.command("ingest")
@@ -173,11 +188,11 @@ def ingest_cmd(
             backend_name is not BackendName.POSTGRESQL or requested is not RequestedStrategy.AUTO
         ):
             raise ValidationFailed("policy_requires_postgresql_auto")
-        root, index = _backend(data_root, backend_name, pg_service)
+        root, configs, index = _backend(data_root, configs_root, backend_name, pg_service)
         result = index.ingest_diff(
             artifact_id,
             root,
-            resolve_configs_root(configs_root),
+            configs,
             requested_strategy=requested,
             policy_id=policy,
         )
@@ -199,7 +214,7 @@ def ingest_cmd(
         json_mode,
         data_root,
         fn,
-        context={"artifact": artifact_id},
+        context={"artifact": artifact_id, **_root(configs_root)},
     )
 
 
@@ -214,8 +229,8 @@ def sync_cmd(
     """Append new canonical records; reject mutation/deletion and suggest rebuild."""
 
     def fn() -> CmdResult:
-        root, index = _backend(data_root, backend, pg_service)
-        result = index.sync(root, resolve_configs_root(configs_root))
+        root, configs, index = _backend(data_root, configs_root, backend, pg_service)
+        result = index.sync(root, configs)
         fields: dict[str, FieldValue] = {
             "backend": index.name.value,
             "entities": result.entities,
@@ -225,7 +240,7 @@ def sync_cmd(
         }
         return "OK", fields, _payload(index, result.__dict__), ["canonical records synchronized"]
 
-    run_command("provenance.sync", json_mode, data_root, fn)
+    run_command("provenance.sync", json_mode, data_root, fn, context=_root(configs_root))
 
 
 @provenance_app.command("impact")
@@ -243,7 +258,7 @@ def impact_cmd(
     """List the downstream closure of a dataset version or one changed sample."""
 
     def fn() -> CmdResult:
-        _root, index = _backend(data_root, backend, pg_service)
+        _data, _configs, index = _backend(data_root, configs_root, backend, pg_service)
         graph = index.load_graph()
         source = _dataset_id(graph, dataset)
         head = _head_for(graph, source)
@@ -264,7 +279,7 @@ def impact_cmd(
             human.append(f"- {ident}{suffix}")
         return "OK", fields, _payload(index, result.model_dump(mode="json")), human
 
-    context: dict[str, FieldValue] = {"dataset": dataset}
+    context: dict[str, FieldValue] = {"dataset": dataset, **_root(configs_root)}
     if sample is not None:
         context["sample"] = sample
     run_command("provenance.impact", json_mode, data_root, fn, context=context)
@@ -282,7 +297,7 @@ def stale_cmd(
     """Show run validity relative to a dataset-version head."""
 
     def fn() -> CmdResult:
-        _root, index = _backend(data_root, backend, pg_service)
+        _data, _configs, index = _backend(data_root, configs_root, backend, pg_service)
         with index.read_snapshot() as reader:
             graph = reader.load_graph()
             head_id = _dataset_id(graph, head)
@@ -317,7 +332,8 @@ def stale_cmd(
         status: Status = "WARN" if counts["REVIEW"] or counts["BROKEN"] else "OK"
         return status, fields, payload, human
 
-    run_command("provenance.stale", json_mode, data_root, fn, context={"head": head})
+    context = {"head": head, **_root(configs_root)}
+    run_command("provenance.stale", json_mode, data_root, fn, context=context)
 
 
 @provenance_app.command("explain")
@@ -332,7 +348,7 @@ def explain_cmd(
     """Trace canonical predecessor evidence for one entity."""
 
     def fn() -> CmdResult:
-        _root, index = _backend(data_root, backend, pg_service)
+        _data, _configs, index = _backend(data_root, configs_root, backend, pg_service)
         result = explain(index.load_graph(), entity)
         fields: dict[str, FieldValue] = {
             "backend": index.name.value,
@@ -343,7 +359,8 @@ def explain_cmd(
         human = [entity, *(f"<- {item}" for item in result.ancestor_ids)]
         return "OK", fields, _payload(index, result.model_dump(mode="json")), human
 
-    run_command("provenance.explain", json_mode, data_root, fn, context={"entity": entity})
+    context = {"entity": entity, **_root(configs_root)}
+    run_command("provenance.explain", json_mode, data_root, fn, context=context)
 
 
 _GRAPH_ROWS = 10
@@ -422,7 +439,7 @@ def graph_cmd(
 
     def fn() -> CmdResult:
         validate_detail(detail)
-        root, index = _backend(data_root, backend, pg_service)
+        root, _configs, index = _backend(data_root, configs_root, backend, pg_service)
         target, fmt = prepare_output(out, root)
         with index.read_snapshot() as reader:
             graph = reader.load_graph()
@@ -471,7 +488,8 @@ def graph_cmd(
         human = [f"wrote {target}", *_graph_human(view, document.oversize)]
         return status, fields, payload, human
 
-    run_command("provenance.graph", json_mode, data_root, fn, context={"out": str(out)})
+    context = {"out": str(out), **_root(configs_root)}
+    run_command("provenance.graph", json_mode, data_root, fn, context=context)
 
 
 @provenance_app.command("status")
@@ -485,10 +503,10 @@ def status_cmd(
     """Summarize index size and synchronization with canonical records."""
 
     def fn() -> CmdResult:
-        root, index = _backend(data_root, backend, pg_service)
+        root, configs, index = _backend(data_root, configs_root, backend, pg_service)
         with index.read_snapshot() as reader:
             stats = reader.stats()
-            verified = reader.verify(root, resolve_configs_root(configs_root))
+            verified = reader.verify(root, configs)
         fields: dict[str, FieldValue] = {
             "backend": index.name.value,
             "entities": stats["entities"],
@@ -499,6 +517,7 @@ def status_cmd(
         }
         payload = {
             "backend": index.name.value,
+            "index": index.location_label,  # where this checkout's index is (spec 2026-10-04 §11)
             **stats,
             "synchronized": verified.ok,
             "issues": verified.issues,
@@ -512,7 +531,7 @@ def status_cmd(
         ]
         return status, fields, payload, human
 
-    run_command("provenance.status", json_mode, data_root, fn)
+    run_command("provenance.status", json_mode, data_root, fn, context=_root(configs_root))
 
 
 @provenance_app.command("verify-index")
@@ -526,8 +545,8 @@ def verify_index_cmd(
     """Recompute canonical graph and statuses and compare them exactly to the index."""
 
     def fn() -> CmdResult:
-        root, index = _backend(data_root, backend, pg_service)
-        result = index.verify(root, resolve_configs_root(configs_root))
+        root, configs, index = _backend(data_root, configs_root, backend, pg_service)
+        result = index.verify(root, configs)
         fields: dict[str, FieldValue] = {
             "backend": index.name.value,
             "ok": result.ok,
@@ -538,4 +557,4 @@ def verify_index_cmd(
         human = ["index matches canonical replay"] if result.ok else result.issues
         return status, fields, _payload(index, result.__dict__), human
 
-    run_command("provenance.verify-index", json_mode, data_root, fn)
+    run_command("provenance.verify-index", json_mode, data_root, fn, context=_root(configs_root))

@@ -13,6 +13,7 @@ from typing import Any, Literal
 from vcp.artifact import store
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
+from vcp.core.paths import LEGACY_PROVENANCE_INDEX
 from vcp.core.time import stamp
 from vcp.provenance.diff import KIND as DIFF_KIND
 from vcp.provenance.diff import load_dataset_diff
@@ -23,11 +24,13 @@ from vcp.provenance.graph import (
     build_graph,
     dataset_version_id,
 )
+from vcp.provenance.roots import ROOT_KEYS, IndexRoots, check_roots
 from vcp.provenance.schema import ProvenanceEdge, ProvenanceEntity, SampleChange, StatusRecord
 from vcp.provenance.views import compute_statuses, compute_statuses_for_entities
 from vcp.submit.location import shared_ledgers
 
-SCHEMA_VERSION = 2
+# 3 (0.13.0): an index serves one checkout and records its roots (spec 2026-10-04 §3.2).
+SCHEMA_VERSION = 3
 _FINGERPRINT_MODULUS = 1 << 256
 
 
@@ -531,21 +534,75 @@ def _record_diff_artifacts(
         )
 
 
+_SQLITE_REMEDY = "run `vcp provenance rebuild` from this checkout (every configs root has its own)"
+
+
+def _write_roots(connection: sqlite3.Connection, roots: IndexRoots) -> None:
+    for key, value in roots.metadata().items():
+        connection.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES(?,?)", (key, value))
+
+
+def _check_index_roots(connection: sqlite3.Connection, roots: IndexRoots) -> None:
+    placeholders = ",".join("?" for _ in ROOT_KEYS)
+    recorded = {
+        row["key"]: row["value"]
+        for row in connection.execute(
+            f"SELECT key,value FROM metadata WHERE key IN ({placeholders})", ROOT_KEYS
+        )
+    }
+    check_roots(recorded, roots, remedy=_SQLITE_REMEDY)
+
+
 class ProvenanceIndex:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, roots: IndexRoots | None = None) -> None:
+        """``roots``: the checkout this index must serve; every read checks them first (spec
+        2026-10-04 §3.4). ``sync``, ``ingest_diff`` and ``verify`` check the roots they are
+        given instead, and ``rebuild`` records them."""
         self.path = Path(path).resolve()
+        self.roots = roots
+
+    def _not_found(self) -> str:
+        message = f"not_found: provenance index {self.path}; run `vcp provenance rebuild`"
+        legacy = self.path.with_name(LEGACY_PROVENANCE_INDEX)
+        if legacy != self.path and legacy.is_file():
+            message += (
+                f". {legacy} is the index vcp 0.12 and earlier kept for the whole data root, "
+                "which 0.13 no longer reads: run `vcp provenance rebuild` once in each checkout, "
+                "and delete it once no 0.12 user remains"
+            )
+        return message
 
     def _open(self) -> sqlite3.Connection:
         if not self.path.is_file():
-            raise ValidationFailed(
-                f"not_found: provenance index {self.path}; run `vcp provenance rebuild`"
-            )
+            raise ValidationFailed(self._not_found())
         connection = _connection(self.path)
-        row = connection.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
-        if row is None or int(row["value"]) != SCHEMA_VERSION:
+        try:
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'"
+            ).fetchone()
+            if row is None or int(row["value"]) != SCHEMA_VERSION:
+                raise IntegrityError("mismatch: provenance index schema version")
+            if self.roots is not None:
+                _check_index_roots(connection, self.roots)
+        except BaseException:
             connection.close()
-            raise IntegrityError("mismatch: provenance index schema version")
+            raise
         return connection
+
+    def _open_for(self, data_root: Path, configs_root: Path) -> sqlite3.Connection:
+        """``_open`` for a command that names its roots: they are compared first, before any
+        replay or prefix check (spec 2026-10-04 §3.4)."""
+        connection = self._open()
+        try:
+            _check_index_roots(connection, IndexRoots.of(data_root, configs_root))
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
+    def check_roots(self, data_root: Path, configs_root: Path) -> None:
+        """``root_mismatch:`` unless this index serves these roots; nothing else is read."""
+        self._open_for(data_root, configs_root).close()
 
     def rebuild(self, data_root: Path, configs_root: Path) -> RebuildResult:
         data_root = Path(data_root).resolve()
@@ -562,6 +619,7 @@ class ProvenanceIndex:
             connection = _connection(temporary, wal=False)
             with connection:
                 _schema(connection)
+                _write_roots(connection, IndexRoots.of(data_root, configs_root))
                 _write_graph(connection, graph)
                 _write_statuses(connection, graph)
                 _write_checkpoints(connection, data_root, configs_root, snapshot=before)
@@ -682,11 +740,12 @@ class ProvenanceIndex:
         """Append newly arrived canonical records while rejecting deletion or mutation."""
         data_root = Path(data_root).resolve()
         configs_root = Path(configs_root).resolve()
+        self.check_roots(data_root, configs_root)  # before the replay (spec 2026-10-04 §3.4)
         before = _canonical_snapshot(data_root, configs_root)
         canonical = build_graph(data_root, configs_root)
         if _canonical_snapshot(data_root, configs_root) != before:
             raise IntegrityError("canonical_drift: inputs changed during provenance sync")
-        connection = self._open()
+        connection = self._open_for(data_root, configs_root)
         try:
             connection.execute("BEGIN IMMEDIATE")
             _verify_checkpoints(connection, data_root, configs_root)
@@ -723,7 +782,7 @@ class ProvenanceIndex:
         data_root = Path(data_root).resolve()
         configs_root = Path(configs_root).resolve()
         manifest_path = store.manifest_path(data_root, DIFF_KIND, artifact_id)
-        connection = self._open()
+        connection = self._open_for(data_root, configs_root)
         try:
             connection.execute("BEGIN IMMEDIATE")
             _verify_checkpoints(connection, data_root, configs_root)
@@ -977,7 +1036,7 @@ class ProvenanceIndex:
     def verify(self, data_root: Path, configs_root: Path) -> VerifyIndexResult:
         data_root = Path(data_root).resolve()
         configs_root = Path(configs_root).resolve()
-        connection = self._open()
+        connection = self._open_for(data_root, configs_root)
         try:
             _verify_checkpoints(connection, data_root, configs_root)
             indexed = _load_graph(connection)

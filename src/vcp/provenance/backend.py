@@ -21,6 +21,7 @@ from vcp.provenance.index import (
     RebuildResult,
     VerifyIndexResult,
 )
+from vcp.provenance.roots import IndexRoots
 from vcp.provenance.schema import StatusRecord
 
 
@@ -152,6 +153,7 @@ class SQLiteBackend:
         del policy_id
         if requested_strategy != "incremental":
             raise ValidationFailed(f"unsupported_strategy: {requested_strategy}")
+        self.index.check_roots(data_root, configs_root)  # before the diff's inputs are re-hashed
         verified = load_dataset_diff(Path(data_root), artifact_id, verify_inputs=True)
         changed_samples = len(verified.changes)
         result: IngestResult = self.index.ingest_diff(artifact_id, data_root, configs_root)
@@ -215,10 +217,14 @@ def parse_backend(value: BackendName | str) -> BackendName:
         raise ValidationFailed(f"unsupported_backend: {value}") from exc
 
 
-def make_backend(config: BackendConfig, data_root: Path) -> ProvenanceBackend:
+def make_backend(config: BackendConfig, data_root: Path, configs_root: Path) -> ProvenanceBackend:
+    """The backend of one checkout: its reads check the index serves these roots first (spec
+    2026-10-04 §3.4)."""
     name = parse_backend(config.name)
+    roots = IndexRoots.of(data_root, configs_root)
     if name is BackendName.SQLITE:
-        return SQLiteBackend(ProvenanceIndex(provenance_index_path(Path(data_root))))
+        path = provenance_index_path(roots.data_root, roots.configs_root)
+        return SQLiteBackend(ProvenanceIndex(path, roots=roots))
     try:
         module = import_module("vcp.provenance.postgres")
     except ImportError:

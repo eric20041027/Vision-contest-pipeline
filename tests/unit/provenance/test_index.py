@@ -52,7 +52,7 @@ def _diff(roots, artifact_id="idx-diff"):
 
 def test_incremental_ingest_matches_full_graph_and_is_idempotent(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
 
@@ -69,7 +69,7 @@ def test_incremental_ingest_matches_full_graph_and_is_idempotent(roots):
 
 def test_interrupted_ingest_rolls_back_to_previous_usable_state(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     before = index.load_graph().normalized()
     _diff(roots)
@@ -84,7 +84,7 @@ def test_interrupted_ingest_rolls_back_to_previous_usable_state(roots):
 def test_delete_and_rebuild_restores_identical_normalized_results(roots):
     _versions(roots)
     _diff(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     first = index.rebuild(roots.data, roots.configs)
     expected = index.normalized()
     index.path.unlink()
@@ -99,7 +99,7 @@ def test_verify_fails_closed_when_consumed_ledger_prefix_changes(roots):
     _versions(roots)
     ledger = roots.configs / "datasets" / "idx-old" / "events.jsonl"
     ledger.write_text(json.dumps({"event": "x"}) + "\n", encoding="utf-8", newline="\n")
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     raw = ledger.read_bytes()
     ledger.write_bytes(b"X" + raw[1:])
@@ -110,7 +110,7 @@ def test_verify_fails_closed_when_consumed_ledger_prefix_changes(roots):
 
 def test_ingest_rejects_missing_previously_indexed_diff(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
     index.ingest_diff("idx-diff", roots.data, roots.configs)
@@ -126,7 +126,7 @@ def test_ingest_rejects_missing_previously_indexed_diff(roots):
 
 def test_ingest_rehashes_current_diff_endpoint_inputs(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
     samples = roots.data / "datasets" / "idx-old" / "samples.jsonl"
@@ -138,7 +138,7 @@ def test_ingest_rehashes_current_diff_endpoint_inputs(roots):
 
 def test_ingest_rechecks_inputs_at_commit_boundary_and_rolls_back(roots, monkeypatch):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
     before = index.normalized()
@@ -166,7 +166,7 @@ def test_ingest_rechecks_inputs_at_commit_boundary_and_rolls_back(roots, monkeyp
 
 def test_ingest_rehashes_current_diff_source_audit_pin(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     diff = _diff(roots)
     from vcp.artifact import store
@@ -182,7 +182,7 @@ def test_ingest_rehashes_current_diff_source_audit_pin(roots):
 
 def test_ingest_rejects_dataset_evolution_cycle(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
     index.ingest_diff("idx-diff", roots.data, roots.configs)
@@ -203,7 +203,7 @@ def test_ingest_rejects_dataset_evolution_cycle(roots):
 def test_sync_appends_new_canonical_dataset_and_matches_replay(roots):
     old_samples = det_samples(3, seed=4)
     _dataset(roots, "idx-old", old_samples)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _dataset(roots, "idx-new", det_samples(2, seed=5))
 
@@ -217,7 +217,7 @@ def test_rebuild_rejects_append_during_full_replay(roots, monkeypatch):
     _versions(roots)
     ledger = roots.configs / "datasets" / "idx-old" / "events.jsonl"
     ledger.write_text('{"event":"before"}\n', encoding="utf-8", newline="\n")
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     original = build_graph
 
     def appending_build(data_root, configs_root):
@@ -240,7 +240,7 @@ def test_multihop_incremental_statuses_match_full_replay(roots, tmp_path):
     v3_samples = [sample.model_copy(deep=True) for sample in v2.samples]
     v3_samples[1] = v3_samples[1].model_copy(update={"meta": {"opaque": 1}})
     _dataset(roots, "idx-v3", v3_samples)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     for artifact_id, before, after in (
         ("hop-1", "tiny", "idx-v2"),
@@ -285,7 +285,7 @@ def test_fixed_seed_mixed_history_matches_after_every_event(roots, tmp_path):
         name = f"history-{step}"
         _dataset(roots, name, samples)
         versions.append((name, samples))
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     for step, ((before, _), (after, _)) in enumerate(
         zip(versions[:-1], versions[1:], strict=True), start=1
@@ -307,7 +307,7 @@ def test_fixed_seed_mixed_history_matches_after_every_event(roots, tmp_path):
 
 def test_wal_allows_reader_snapshot_during_single_writer_ingest(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
     reader = sqlite3.connect(index.path)
@@ -327,7 +327,7 @@ def test_wal_allows_reader_snapshot_during_single_writer_ingest(roots):
 
 def test_incremental_ingest_never_loads_or_hashes_historical_changes(roots, monkeypatch):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _diff(roots)
     from vcp.provenance import index as index_module
@@ -354,7 +354,7 @@ def test_incremental_ingest_never_loads_or_hashes_historical_changes(roots, monk
 
 def test_verify_checks_fingerprint_accumulator_metadata(roots):
     _versions(roots)
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     connection = sqlite3.connect(index.path)
     with connection:
@@ -378,7 +378,7 @@ def test_rebuild_preserves_canonical_gaps_and_verifies(roots):
     _invalid_artifact(roots, "broken-a")
     canonical = build_graph(roots.data, roots.configs)
     assert canonical.gaps == ["test/broken-a: invalid manifest"]
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
 
     index.rebuild(roots.data, roots.configs)
 
@@ -388,7 +388,7 @@ def test_rebuild_preserves_canonical_gaps_and_verifies(roots):
 
 def test_sync_persists_new_canonical_gap(roots):
     _dataset(roots, "idx-old", det_samples(2, seed=7))
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     _invalid_artifact(roots, "broken-b")
 
@@ -401,7 +401,7 @@ def test_sync_persists_new_canonical_gap(roots):
 def test_verify_rejects_tampered_gap_metadata(roots):
     _dataset(roots, "idx-old", det_samples(2, seed=7))
     _invalid_artifact(roots, "broken-c")
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     connection = sqlite3.connect(index.path)
     with connection:
@@ -417,7 +417,7 @@ def test_verify_rejects_tampered_gap_metadata(roots):
 
 def test_legacy_index_missing_gap_metadata_requires_rebuild(roots):
     _dataset(roots, "idx-old", det_samples(2, seed=7))
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     connection = sqlite3.connect(index.path)
     with connection:
@@ -440,7 +440,7 @@ def test_a_shared_submissions_ledger_is_a_checkpointed_ledger_as_well(roots):
     ledger.parent.mkdir(parents=True)
     row = {"event": "note", "ts": "2026-09-28T00:00:00.000Z", "text": "x"}
     ledger.write_bytes(json.dumps(row).encode("utf-8") + b"\n")
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     connection = sqlite3.connect(index.path)
     try:
@@ -484,7 +484,7 @@ def test_sync_after_a_contest_adopts_the_shared_ledger_adds_its_checkpoint(roots
     history = SubmissionLedger(paths.submissions_log)
     for text in ("staged by the only writer", "uploaded by the only writer"):
         history.append(LedgerRow(event="note", ts="2026-09-28T01:00:00.000Z", text=text))
-    index = ProvenanceIndex(provenance_index_path(roots.data))
+    index = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     index.rebuild(roots.data, roots.configs)
     assert "configs/datasets/idx-new/submissions.jsonl" in _checkpoint_keys(index)
     dump_yaml_model(profile.model_copy(update={"ledger": "shared"}), paths.submit_yaml)

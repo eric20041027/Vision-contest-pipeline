@@ -67,7 +67,7 @@ def test_postgres_ingest_reports_complete_decision(monkeypatch, roots):
     backend = _IngestBackend()
     configs = []
 
-    def factory(config, data_root):
+    def factory(config, data_root, configs_root):
         configs.append((config, data_root))
         return backend
 
@@ -109,7 +109,7 @@ def test_postgres_ingest_reports_complete_decision(monkeypatch, roots):
 
 def test_postgres_auto_without_policy_is_warn(monkeypatch, roots):
     backend = _IngestBackend()
-    monkeypatch.setattr("vcp.cli_provenance.make_backend", lambda config, data_root: backend)
+    monkeypatch.setattr("vcp.cli_provenance.make_backend", lambda config, data, configs: backend)
 
     result = runner.invoke(
         app,

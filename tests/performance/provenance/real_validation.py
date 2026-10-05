@@ -148,7 +148,7 @@ def validate(
         data = root / "data"
         configs = root / "configs"
         selected_runs = _copy_snapshot(source_data, source_configs, data, configs)
-        index = ProvenanceIndex(provenance_index_path(data))
+        index = ProvenanceIndex(provenance_index_path(data, configs))
         index.rebuild(data, configs)
         summaries = []
         for position, (before, after) in enumerate(TRANSITIONS, start=1):

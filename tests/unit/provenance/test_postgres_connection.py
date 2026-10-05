@@ -18,7 +18,7 @@ def test_postgres_import_is_lazy_and_missing_extra_is_actionable(monkeypatch, ro
 
     monkeypatch.setattr("vcp.provenance.backend.import_module", missing_driver)
     with pytest.raises(ValidationFailed, match="uv sync --extra postgres"):
-        make_backend(BackendConfig(BackendName.POSTGRESQL), roots.data)
+        make_backend(BackendConfig(BackendName.POSTGRESQL), roots.data, roots.configs)
 
 
 @pytest.mark.parametrize(

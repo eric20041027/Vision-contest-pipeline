@@ -18,6 +18,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helpers import det_samples, make_card
+from vcp import cli_provenance
 from vcp.backup.manifest import write_manifest
 from vcp.backup.schema import Manifest
 from vcp.cli import app
@@ -200,6 +201,28 @@ def test_another_roots_index_fails_root_mismatch_not_prefix_drift(two, tmp_path,
     assert "root_mismatch:" in verdict and "prefix_drift" not in verdict
     assert f"root={path_id(two.b)}" in verdict and f"index_root={path_id(two.a)}" in verdict
     assert "became shorter" not in result.output and "consumed prefix" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("command", "args"), [("rebuild", []), *COMMANDS], ids=["rebuild", *(c for c, _ in COMMANDS)]
+)
+def test_a_configs_root_that_cannot_be_resolved_still_ends_with_a_verdict(
+    roots, tmp_path, monkeypatch, command, args
+):
+    """``root=`` is looked up before ``run_command`` starts. Whatever resolving the configs root
+    raises there, the command goes on without ``root=``, and the same error ends it inside
+    ``run_command``, with its VERDICT (iron rule 2)."""
+
+    def unresolvable(override=None):
+        raise RuntimeError("the configs root cannot be resolved")
+
+    monkeypatch.setattr(cli_provenance, "resolve_configs_root", unresolvable)
+    args = [str(tmp_path / "graph.md") if arg == "<out>" else arg for arg in args]
+    result = runner.invoke(app, ["provenance", command, *args, "--data-root", str(roots.data)])
+    last = (result.output.splitlines() or [""])[-1]
+    assert last.startswith(f"VERDICT cmd=provenance.{command} status=ABORT"), result.output
+    assert "RuntimeError: the configs root cannot be resolved" in last and " root=" not in last
+    assert result.exit_code == 2
 
 
 @pytest.mark.parametrize("damage", ["truncate", "rewrite"])

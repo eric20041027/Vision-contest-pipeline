@@ -10,7 +10,7 @@ import typer
 
 from vcp.cli_common import CmdResult, ConfigsRootOpt, DataRootOpt, JsonOpt, run_command
 from vcp.core.build import build_string
-from vcp.core.errors import ValidationFailed, VcpError
+from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status, format_value
 from vcp.core.paths import path_id, resolve_configs_root, resolve_data_root
 from vcp.core.time import stamp
@@ -86,10 +86,11 @@ def _backend(
 def _root(configs_root: Path | None) -> dict[str, FieldValue]:
     """``root=<configs root id>`` on every provenance VERDICT, a failure's included (spec
     2026-10-04 §7). A configs root that cannot be resolved has no id; the command then fails
-    saying so."""
+    saying so. This runs before ``run_command``, so whatever the resolution raises is left for
+    the command itself to meet again -- inside ``run_command``, which ends it with a VERDICT."""
     try:
         return {"root": path_id(resolve_configs_root(configs_root))}
-    except VcpError:
+    except Exception:
         return {}
 
 

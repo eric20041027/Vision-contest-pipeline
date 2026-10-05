@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -305,10 +306,23 @@ class Collector:
 
     def _try(self, label: str, walk: Callable[..., None], *args: Any) -> None:
         """``all`` means "everything this dataset still has": one conclusion whose evidence has
-        gone missing is recorded and stepped over, never a reason to lose all the others."""
+        gone missing is recorded and stepped over, never a reason to lose all the others.
+
+        A walk that fails leaves nothing behind. What it listed is taken back, so the manifest
+        never holds half a run -- a run.yaml without the evidence it names, which the self-check
+        would take for a vcp bug. The runs it visited are unmarked too: a later conclusion that
+        names one walks it again, so a run that cannot be read is stepped over by every
+        conclusion that names it, like a run that is gone, and a run that was read is listed."""
+        n_entries, n_missing, n_unlisted = len(self.entries), len(self.missing), len(self.unlisted)
+        seen = set(self._seen)
         try:
             walk(*args)
         except ValidationFailed as e:
+            # a walk only adds: new keys go to the end of the dict, new names to the lists
+            self.entries = dict(islice(self.entries.items(), n_entries))
+            self.missing = self.missing[:n_missing]
+            self.unlisted = self.unlisted[:n_unlisted]
+            self._seen = seen
             self.skipped.append(f"{label}: {e}")
 
     def walk_all(self, dpaths: DatasetPaths) -> None:

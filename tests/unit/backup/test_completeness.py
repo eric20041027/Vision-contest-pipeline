@@ -4,6 +4,7 @@ written. verify, status, a tier-3 push, --forget-remote and the manifest's own s
 judge any manifest by that one rule, whatever its conclusion."""
 
 import json
+import shutil
 import time
 
 import pytest
@@ -17,7 +18,7 @@ from vcp.backup import evidence
 from vcp.backup.completeness import checkable, manifest_gaps
 from vcp.backup.evidence import build_manifest
 from vcp.backup.ledger import BackupLedger
-from vcp.backup.manifest import entry_key
+from vcp.backup.manifest import entry_key, load_manifest
 from vcp.backup.push import push
 from vcp.backup.schema import BackupRow
 from vcp.backup.status import local_ok, status
@@ -28,11 +29,12 @@ from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.evidence import RunScope, label_ref
 from vcp.data.split import load_plan
-from vcp.measure.runs import load_run, save_run
+from vcp.measure.runs import load_run, run_dir, save_run
 from vcp.train.checkpoints import register
 from vcp.train.records import load_record, save_record, train_dir, train_yaml
 
 runner = CliRunner()
+UNPARSEABLE = b"run_id: [unclosed\n"  # a run record that does not load: invalid YAML
 
 
 def _kw(world):
@@ -138,7 +140,7 @@ def test_evidence_attached_before_the_manifest_must_be_listed(world, tmp_path):
 
 def test_an_unreadable_train_yaml_fails_as_in_the_consistency_layer(world):
     res = build_manifest(EVAL, "run:good", manifest_id="m", **_kw(world))
-    train_yaml(world.roots.data, "good").write_bytes(b"run_id: [unclosed\n")
+    train_yaml(world.roots.data, "good").write_bytes(UNPARSEABLE)
     with pytest.raises(ValidationFailed, match="invalid YAML"):
         manifest_gaps(res.manifest, _paths(world))
 
@@ -221,6 +223,28 @@ def test_status_without_the_run_records_cannot_check_a_manifest_older_than_010(w
     assert view.unchecked == ["old"]
 
 
+def test_status_reports_a_run_record_that_does_not_load_and_goes_on(world, monkeypatch):
+    """One run record that does not load leaves the manifests that list it unchecked, with a
+    note naming the file and why; the other manifests are reported as usual, and `backup
+    verify` still fails on it."""
+    monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)  # no real rclone
+    build_manifest(EVAL, "run:good", manifest_id="mg", **_kw(world))
+    build_manifest(EVAL, "run:bad", manifest_id="mb", **_kw(world))
+    train_yaml(world.roots.data, "good").write_bytes(UNPARSEABLE)
+    result = runner.invoke(app, ["backup", "status", "--dataset", EVAL])
+    verdict = _verdict(result.output)
+    assert result.exit_code == 0 and "status=WARN" in verdict, result.output
+    assert "manifests=2" in verdict and "incomplete=0" in verdict
+    lines = result.output.splitlines()
+    assert "completeness=unchecked" in next(line for line in lines if line.startswith("mg "))
+    assert "completeness=complete" in next(line for line in lines if line.startswith("mb "))
+    assert "completeness unchecked: mg (a run record does not load)" in lines
+    note = next(line for line in lines if line.startswith("mg: "))
+    assert "train.yaml does not load: invalid YAML" in note
+    verified = runner.invoke(app, ["backup", "verify", "--dataset", EVAL, "--manifest", "mg"])
+    assert verified.exit_code == 1 and "invalid YAML" in _verdict(verified.output)
+
+
 # --- push -------------------------------------------------------------------------------------
 
 
@@ -257,7 +281,53 @@ def test_the_manifest_self_check_aborts_on_a_walk_that_drops_a_checkpoint(world,
     assert BackupLedger(_paths(world).backup_log).of("manifest") == []
 
 
-# --- pins beyond the brief (droppable): spec rules its tests leave unpinned ---------------------
+def _unreadable_copy_of_good(world, tmp_path, run_id):
+    """Run ``good`` copied as ``run_id``, a run no judgement names: a label set is attached to
+    its run.yaml, and its train.yaml does not parse."""
+    shutil.copytree(run_dir(world.roots.data, "good"), run_dir(world.roots.data, run_id))
+    make_label_set(world.roots, tmp_path, load_plan(_paths(world), "fixed-v1"), dataset=EVAL)
+    card = load_run(world.roots.data, "good").model_copy(update={"run_id": run_id})
+    scope = RunScope(run_id, EVAL, card.samples_hash, "fixed-v1", tuple(card.trained_on))
+    ref = label_ref(world.roots.data, scope, "pseudo-v1", attempt=None, binding="manual")
+    save_run(world.roots.data, card.model_copy(update={"evidence": [ref]}))
+    train_yaml(world.roots.data, run_id).write_bytes(UNPARSEABLE)
+
+
+def test_all_steps_over_a_run_it_cannot_read_and_lists_none_of_it(world, tmp_path):
+    """The walk of ``solo`` fails on its train.yaml after listing its run.yaml, which names a
+    label set the walk never reached. What that walk listed is taken back, so the manifest is
+    written with a WARN, as in 0.12, and the self-check never meets half a run."""
+    _unreadable_copy_of_good(world, tmp_path, "solo")
+    args = ["backup", "manifest", "--dataset", EVAL, "--conclusion", "all", "--id", "evac"]
+    result = runner.invoke(app, args)
+    verdict = _verdict(result.output)
+    assert result.exit_code == 0 and "status=WARN" in verdict, result.output
+    assert "skipped=1" in verdict
+    assert "skipped (its evidence is incomplete): run:solo: invalid YAML" in result.output
+    listed = {f.key for f in load_manifest(_paths(world), "evac").files}
+    assert [key for key in listed if key.startswith("data/runs/solo/")] == []
+    assert "data/artifacts/label_set/pseudo-v1/manifest.json" not in listed
+    for run in ("good", "bad"):  # the other runs are listed whole
+        own = build_manifest(EVAL, f"run:{run}", manifest_id=f"only-{run}", **_kw(world))
+        assert {f.key for f in own.manifest.files} <= listed
+
+
+def test_all_steps_over_every_conclusion_that_names_a_run_it_cannot_read(world):
+    """As with a run that is gone (``test_walk_all_steps_over_a_dangling_reference``): each
+    judgement that names the run walks it again, fails the same way and is stepped over too,
+    rather than listed without it."""
+    train_yaml(world.roots.data, "good").write_bytes(UNPARSEABLE)
+    res = build_manifest(EVAL, "all", manifest_id="evac", **_kw(world))
+    labels = sorted(s.split(": ", 1)[0] for s in res.skipped)
+    assert labels == ["judgement:p-bad", "judgement:p-good", "run:good"]
+    listed = {f.key for f in res.manifest.files}
+    assert [key for key in listed if key.startswith("data/runs/good/")] == []
+    assert f"configs/datasets/{EVAL}/prereg/p-good.yaml" not in listed
+    assert "data/runs/bad/run.yaml" in listed
+
+
+# --- spec §4 in detail: stamps that do not parse, evidence attached after the manifest, a run
+# record not on this machine, what verify and status report, and a registration mid-walk -------
 
 
 def test_a_registration_stamp_that_does_not_parse_counts_as_registered_in_time(world):
@@ -309,8 +379,11 @@ def test_status_cannot_check_a_manifest_it_cannot_read_or_date(world):
     _paths(world).backup_manifest("gone").unlink()
     train_yaml(world.roots.data, "good").unlink()
     view = status(EVAL, runner=FakeRemote(conf=world.tmp / "rclone.conf"), **_kw(world))
-    by_id = {m.manifest_id: m.completeness for m in view.manifests}
-    assert by_id == {"gone": "unchecked", "odd": "unchecked"}
+    by_id = {m.manifest_id: (m.completeness, m.why_unchecked) for m in view.manifests}
+    assert by_id == {
+        "gone": ("unchecked", "manifest unreadable"),
+        "odd": ("unchecked", "vcp_version does not parse"),
+    }
 
 
 def test_status_says_so_when_it_cannot_check_a_manifest(world, monkeypatch):
@@ -321,7 +394,8 @@ def test_status_says_so_when_it_cannot_check_a_manifest(world, monkeypatch):
     verdict = _verdict(result.output)
     assert result.exit_code == 0 and "status=WARN" in verdict and "incomplete=0" in verdict
     assert "completeness=unchecked" in result.output
-    assert "completeness unchecked (written before vcp 0.10.0" in result.output
+    note = "completeness unchecked: old (written before vcp 0.10.0, no run records here)"
+    assert note in result.output.splitlines()
 
 
 def _json(result) -> dict:

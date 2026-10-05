@@ -328,10 +328,12 @@ def status_cmd(
                 "and verify it"
             )
         if view.unchecked:
+            unchecked = [m for m in view.manifests if m.incomplete is None]
             notes.append(
-                "completeness unchecked (written before vcp 0.10.0, and this machine lacks their "
-                f"run records): {', '.join(view.unchecked)}"
+                "completeness unchecked: "
+                + "; ".join(f"{m.manifest_id} ({m.why_unchecked})" for m in unchecked)
             )
+            notes += [f"{m.manifest_id}: {m.record_error}" for m in unchecked if m.record_error]
         if view.unverified:
             notes.append(
                 "no verify covered every tier's copies at a destination: "

@@ -3,7 +3,11 @@ a backup somewhere else. A remote_copy is checked in place only when it is on an
 inside the destination itself; any other is pushed to the destination like a file, verified
 there, pulled from there (its local copy is the fallback), and counted by --forget-remote."""
 
+import json
+import sys
+
 import pytest
+from typer.testing import CliRunner
 
 from backup_fixtures import FakeRemote
 from submit_fixtures import EVAL, TEST
@@ -15,6 +19,7 @@ from vcp.backup.push import push
 from vcp.backup.schema import BackupRow, RemoteCopy
 from vcp.backup.status import status
 from vcp.backup.verify import verify
+from vcp.cli import app
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -43,8 +48,8 @@ def _manifest(world):
     return res.manifest
 
 
-def _status(world):
-    [m] = status(TEST, runner=FakeRemote(conf=world.tmp / "rclone.conf"), **_kw(world)).manifests
+def _status(world, dataset=TEST):
+    [m] = status(dataset, runner=FakeRemote(conf=world.tmp / "rclone.conf"), **_kw(world)).manifests
     return m
 
 
@@ -191,6 +196,44 @@ def test_rows_written_before_013_do_not_vouch_for_a_local_copy(world):
     assert m.verified and m.pushed_tiers == [1, 2, 3]
 
 
+def _passing_rows_012(world, dataset, manifest):
+    """A passing tier-3 push and verify at fake:vault, the way vcp 0.12 wrote them: neither
+    carries ``local_copies``."""
+    n = len(manifest.files)
+    ledger = _ledger(world, dataset)
+    common = {"ts": stamp(), "manifest_id": manifest.manifest_id, "dest": "fake:vault", "tier": 3}
+    ledger.append(
+        BackupRow(event="push", pushed=n, skipped=0, verified=n, failed=[], bytes=0, **common)
+    )
+    ledger.append(
+        BackupRow(
+            event="verify",
+            copies={"ok": n, "missing": 0, "mismatch": 0, "absent": 0},
+            drift=0,
+            bad_stamps=0,
+            **common,
+        )
+    )
+
+
+def test_rows_written_before_013_vouch_when_every_copy_is_on_an_rclone_remote(world):
+    """spec 2026-10-04 §5.2: only a copy the destination does not cover asks for a 0.13 row."""
+    _uploads(world, _upload(world, "fake:w", "rclone", "2026-10-04T00:00:00.000Z"))
+    manifest = build_manifest(EVAL, "run:good", manifest_id="mg", **_kw(world)).manifest
+    assert [f.remote.dest for f in manifest.files if f.remote is not None] == ["fake:w"]
+    _passing_rows_012(world, EVAL, manifest)
+    m = _status(world, EVAL)
+    assert m.verified and m.pushed_tiers == [1, 2, 3]
+
+
+def test_rows_written_before_013_vouch_for_a_manifest_without_copies(world):
+    manifest = build_manifest(EVAL, "run:bad", manifest_id="mb", **_kw(world)).manifest
+    assert [f for f in manifest.files if f.remote is not None] == []
+    _passing_rows_012(world, EVAL, manifest)
+    m = _status(world, EVAL)
+    assert m.verified and m.pushed_tiers == [1, 2, 3]
+
+
 def test_forget_remote_refuses_until_the_local_copy_is_at_the_destination(world):
     _manifest(world)
     remote = FakeRemote()
@@ -239,7 +282,8 @@ def test_a_local_destination_without_the_copy_receives_it(world):
     assert (usb / "data" / "work" / "good" / "weights" / "best.pt").read_bytes() == b"best weights"
 
 
-# --- pins beyond the brief (droppable): each kills a mutant the tests above let survive ---
+# --- spec §5 in detail: a copy listed as gone, one covered copy among others, pull's fallback
+# and its failure, the newest of two rclone uploads, Windows path case, the VERDICT fields ------
 
 
 def _rclone_copy_of_last(world) -> None:
@@ -335,8 +379,6 @@ def test_the_manifest_takes_the_newest_of_two_rclone_uploads(world):
 
 
 def test_covers_ignores_case_in_a_windows_path(tmp_path):
-    import sys
-
     if sys.platform != "win32":
         pytest.skip("only Windows paths ignore case")
     local = RemoteCopy(dest=str(tmp_path / "usb" / "weights"), run="good", name="best.pt")
@@ -344,12 +386,6 @@ def test_covers_ignores_case_in_a_windows_path(tmp_path):
 
 
 def test_the_commands_report_local_copies(world):
-    import json
-
-    from typer.testing import CliRunner
-
-    from vcp.cli import app
-
     def run(*args: str) -> dict:
         r = CliRunner().invoke(app, ["backup", *args, "--json"])
         assert r.exit_code == 0, r.output

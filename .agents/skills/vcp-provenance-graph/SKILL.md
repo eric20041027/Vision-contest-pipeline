@@ -6,14 +6,14 @@ description: Use when someone wants to see, draw, export or share the provenance
 # 畫比賽的 provenance 圖
 
 ## 先記住
-- 圖畫的是**索引**：`vcp provenance graph` 只讀 `<data_root>/indexes/provenance.sqlite3`（或 `--backend postgresql --pg-service S`），只寫 `--out` 一個檔。檔頭與 VERDICT 的 `hash=` 對得回 `rebuild` / `sync` 印的 `hash=`。
+- 圖畫的是**索引**：`vcp provenance graph` 只讀這個 checkout 的索引 `<data_root>/indexes/provenance-<configs root id>.sqlite3`（0.13.0 起每個 checkout 一份；或 `--backend postgresql --pg-service S`），只寫 `--out` 一個檔。檔頭與 VERDICT 的 `hash=` 對得回 `rebuild` / `sync` 印的 `hash=`。
 - 要 vcp ≥ 0.9.0（`uv run vcp provenance graph --help` 有這個命令）。比賽的 venv 釘在舊 tag 時，從 vcp 的 checkout 執行並用 `--data-root` / `--configs-root` 指過去；不要為了畫圖改比賽的 venv。
 - 不自己寫腳本讀 SQLite 畫圖；圖不寫進 data root（FAIL `out_in_data_root:`）。
 
 ## 步驟
 1. **找 root**：比賽 repo 的 `ENVIRONMENT.md` / `AGENTS.md` 寫的 `VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`；沒寫才用 `<repo>/vcp-data`、`<repo>/configs`。每個命令都帶 `--data-root` / `--configs-root`。
 2. **索引能不動就不動**：
-   - 在，而且沒有比它新的紀錄 → 直接畫。換了 vcp 版本不是 rebuild 的理由：索引 schema 沒變，真不相容時 graph 會 FAIL 並叫你 rebuild。
+   - 在，而且沒有比它新的紀錄 → 直接畫。換了 vcp 版本通常不是 rebuild 的理由，真不相容時 graph 會 FAIL 並叫你 rebuild；例外是升到 0.13.0：索引改成每個 checkout 一份、檔名綁 configs root，`--configs-root` 指到沒建過索引的 root 或 checkout 搬過都是 `not_found:`，`rebuild` 一次。`root_mismatch:` 在 SQLite 是 data root 換了路徑（或檔案被手動複製），在 PostgreSQL 是 `--pg-service` 的 database 放著別的 checkout 或 0.13.0 以前建的索引。
    - `runs/`、`measure/`、`artifacts/`、`submit/` 有檔案比索引新（[reference.md](reference.md) 有一行檢查）→ `vcp provenance sync`（只收新增；看到刪改會 fail closed，再改 `rebuild`）。
    - 不在 → `vcp provenance rebuild`。
    - `rebuild`、`sync`、`status`、`verify-index` 都重算每個 canonical 檔的 sha（RSNA 規模約 3 分鐘）：先講時間；訓練正在跑、或別的 session 正在用同一個 data root，先問。不必先跑 `stale`：狀態已經畫在圖上。

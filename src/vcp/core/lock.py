@@ -17,7 +17,6 @@ wait out the minute against itself, so it is refused at once (``_HELD``)."""
 from __future__ import annotations
 
 import errno
-import hashlib
 import json
 import math
 import os
@@ -30,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vcp.core.errors import VcpError
+from vcp.core.paths import path_id
 from vcp.core.time import stamp
 
 WAIT_SECONDS = 60.0
@@ -58,10 +58,9 @@ def lock_path(data_root: Path, prefix: str, target: Path) -> Path:
     """``<data_root>/locks/<prefix>-<first 16 hex of sha256(target's absolute path)>.lock``: one
     lock file per locked file, in the data root and never beside the file (spec §3.3). The path
     is resolved and case-folded the platform's way (``os.path.normcase``) before hashing, so two
-    spellings of one Windows path share a lock."""
-    key = os.path.normcase(str(Path(target).resolve()))
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-    return Path(data_root) / LOCKS_DIR / f"{prefix}-{digest}.lock"
+    spellings of one Windows path share a lock. The hash is ``vcp.core.paths.path_id``, the rule
+    a provenance index uses for its roots (spec 2026-10-04 §3.1)."""
+    return Path(data_root) / LOCKS_DIR / f"{prefix}-{path_id(target)}.lock"
 
 
 def read_holder(path: Path) -> Holder:

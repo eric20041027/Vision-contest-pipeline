@@ -316,11 +316,19 @@ def upload_cmd(
             fields["platform_ref"] = out.row.platform_ref
         if out.result.readback:
             fields["readback"] = out.result.readback
+        if out.result.exit_code:  # spec 2026-10-04 §6.2: the CLI failed, the list showed it
+            fields["exit_code"] = out.result.exit_code
         if out.quota is not None:
             fields.update(out.quota.fields())
         if out.result.detail:  # the platform's redacted reply; the VERDICT is what the log keeps
             fields["detail"] = _clip(out.result.detail)
         human = [out.result.detail] if out.result.detail else []
+        if out.result.exit_code:
+            human.append(
+                f"warning: the upload CLI failed (exit {out.result.exit_code}), but the platform "
+                f"lists this upload as {out.row.platform_ref}: it is recorded; do not send it "
+                "again"
+            )
         if out.sync == "skipped":
             human.append(
                 "warning: sync=skipped (--no-sync): the quota was counted from the ledger alone"
@@ -332,7 +340,8 @@ def upload_cmd(
                 f"entry near {out.row.at}: if there is one, another upload spends a submission. "
                 f"`vcp submit sync --dataset {dataset}` matches it later"
             )
-        status: Status = "OK" if out.row.confirmed and out.sync == "ok" else "WARN"
+        ok = out.row.confirmed and out.sync == "ok" and not out.result.exit_code
+        status: Status = "OK" if ok else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 
     run_command(

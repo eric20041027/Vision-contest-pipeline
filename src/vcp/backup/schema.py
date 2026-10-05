@@ -200,8 +200,10 @@ class BackupRow(_Strict):
     failed: list[str] | None = None
     bytes: int | None = None
     copies: dict[str, int] | None = None
+    local_copies: int | None = None  # spec 2026-10-04 §5.2: push / verify rows, only when > 0
     drift: int | None = None
     bad_stamps: int | None = None
+    incomplete: int | None = None  # spec 2026-10-04 §4.3: verify rows, written only when > 0
     first_bad: str | None = None
     error: str | None = None
     pulled: int | None = None

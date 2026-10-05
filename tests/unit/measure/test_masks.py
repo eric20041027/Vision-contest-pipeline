@@ -11,7 +11,7 @@ def test_rasterize_polygon_axis_aligned():
     # Ruling 1 (superseded): rasterised via pycocotools (frPyObjects + decode), not Pillow's
     # boundary-inclusive fill -- 6 px, matching the shoelace area (vcp.data.exporters.coco.
     # polygon_area) and pycocotools.mask.frPyObjects+decode run directly on this fixture, not
-    # the brief's original 12px Pillow estimate.
+    # the 12 px of Pillow's fill.
     m = rasterize_polygon([[1, 1, 4, 1, 4, 3, 1, 3]], 6, 5)
     assert m.shape == (5, 6) and m.dtype == bool
     assert m.sum() == 6 and m[1, 1] and m[2, 3] and not m[0, 0] and not m[4, 5]

@@ -49,3 +49,28 @@ def local_path(entry: FileEntry, data_root: Path, configs_root: Path) -> Path:
     if entry.root == "configs":
         return configs_root / entry.path
     return Path(str(entry.source))
+
+
+def external_path(path: Path) -> str:
+    """``C:/x/y`` -> ``C/x/y``, ``/mnt/x`` -> ``mnt/x``: a relative posix path that keeps the
+    origin."""
+    return path.resolve().as_posix().replace(":", "").lstrip("/")
+
+
+def locate_file(path: Path, data_root: Path, configs_root: Path) -> tuple[str, str, str | None]:
+    """(root, relative posix path, source) a manifest lists ``path`` under: ``data`` / ``configs``
+    by containment, else ``external`` with its absolute source. The inverse of ``local_path``."""
+    resolved = path.resolve()
+    for root, base in (("data", data_root), ("configs", configs_root)):
+        try:
+            return root, resolved.relative_to(base.resolve()).as_posix(), None
+        except ValueError:
+            continue
+    return "external", external_path(resolved), resolved.as_posix()
+
+
+def entry_key(path: Path, data_root: Path, configs_root: Path) -> str:
+    """The manifest key ``<root>/<path>`` of a file: what the walk lists it under, and what the
+    completeness rule looks for (spec 2026-10-04 §4.1)."""
+    root, rel, _ = locate_file(path, data_root, configs_root)
+    return f"{root}/{rel}"

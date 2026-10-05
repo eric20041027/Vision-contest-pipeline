@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from typer.testing import CliRunner
 
 from helpers import dataset_with_perfect_run, det_samples, det_with_runs, make_card
-from vcp.core.errors import IntegrityError
-from vcp.core.paths import DatasetPaths
+from vcp.cli import app
+from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.paths import DatasetPaths, path_id
 from vcp.data.dataset import Dataset
 from vcp.data.source_audit import write_source_audit
 from vcp.provenance import postgres
@@ -17,6 +20,7 @@ from vcp.provenance.backend import BackendConfig, BackendName
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import ProvenanceIndex, graph_hash
+from vcp.provenance.roots import IndexRoots
 from vcp.provenance.views import compute_statuses
 
 
@@ -889,3 +893,174 @@ def test_original_log_checkpoint_cannot_be_replaced_by_rewritten_prefix(
         fake_postgres.backend.ingest_diff("idx-diff", roots.data, roots.configs)
     assert fake_postgres.snapshot() == before
     assert fake_postgres.events[-1] == "rollback"
+
+
+# --- VCP-044: one database serves one checkout (spec 2026-10-04 §3.3, §9) --------------------
+
+
+def _second_checkout(roots, tmp_path):
+    """Another configs root on the same data root: a second checkout of the same git content."""
+    other = tmp_path / "configs-b"
+    shutil.copytree(roots.configs, other)
+    return other
+
+
+def _verdict(output: str) -> str:
+    return [line for line in output.splitlines() if line.startswith("VERDICT ")][-1]
+
+
+def test_postgres_generation_records_its_roots(fake_postgres, roots):
+    _versions(roots)
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    stats = fake_postgres.backend.stats()
+    assert stats["configs_root_id"] == path_id(roots.configs)
+    assert stats["data_root_id"] == path_id(roots.data)
+    assert stats["configs_root"] == roots.configs.resolve().as_posix()
+    assert stats["data_root"] == roots.data.resolve().as_posix()
+
+
+def test_postgres_verify_and_ingest_from_another_root_fail_before_the_prefix_check(
+    fake_postgres, roots, tmp_path
+):
+    _versions(roots)
+    ledger = roots.configs / "datasets" / "idx-old" / "events.jsonl"
+    ledger.write_text('{"event":"both checkouts"}\n', encoding="utf-8", newline="\n")
+    other = _second_checkout(roots, tmp_path)
+    with ledger.open("a", encoding="utf-8", newline="\n") as f:
+        f.write('{"event":"only checkout A"}\n')
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    _diff(roots)
+    before = fake_postgres.snapshot()
+    with pytest.raises(ValidationFailed, match="root_mismatch:") as ei:
+        fake_postgres.backend.verify(roots.data, other)
+    assert ei.value.fields == {"index_root": path_id(roots.configs)}
+    with pytest.raises(ValidationFailed, match="root_mismatch:") as ei:
+        fake_postgres.backend.ingest_diff("idx-diff", roots.data, other)
+    assert "prefix" not in str(ei.value) and fake_postgres.snapshot() == before
+    rooted = postgres.PostgresProvenanceBackend(
+        BackendConfig(BackendName.POSTGRESQL), roots=IndexRoots.of(roots.data, other)
+    )
+    with pytest.raises(ValidationFailed, match="root_mismatch:"):
+        rooted.load_graph()  # impact, stale, explain and graph read through read_snapshot
+
+
+def test_postgres_sync_never_replaces_another_roots_generation(fake_postgres, roots, tmp_path):
+    _versions(roots)
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    other = _second_checkout(roots, tmp_path)
+    before = fake_postgres.snapshot()
+    with pytest.raises(ValidationFailed, match="root_mismatch:") as ei:
+        fake_postgres.backend.sync(roots.data, other)
+    assert ei.value.fields == {"index_root": path_id(roots.configs)}
+    assert fake_postgres.snapshot() == before
+    assert fake_postgres.backend.sync(roots.data, roots.configs).replaced_roots is None
+
+
+def test_postgres_rebuild_over_another_root_replaces_it_and_warns(fake_postgres, roots, tmp_path):
+    _versions(roots)
+    other = _second_checkout(roots, tmp_path)
+    runner = CliRunner()
+    base = ["provenance", "rebuild", "--backend", "postgresql", "--data-root", str(roots.data)]
+    first = runner.invoke(app, [*base, "--configs-root", str(roots.configs)])
+    assert first.exit_code == 0 and "status=OK" in _verdict(first.output), first.output
+    second = runner.invoke(app, [*base, "--configs-root", str(other)])
+    verdict = _verdict(second.output)
+    assert second.exit_code == 0 and "status=WARN" in verdict, second.output
+    assert f"replaced_root={path_id(roots.configs)}" in verdict
+    assert f"root={path_id(other)}" in verdict
+    assert "one database serves one checkout" in second.output
+    status = runner.invoke(
+        app,
+        ["provenance", "status", "--backend", "postgresql", "--data-root", str(roots.data)]
+        + ["--configs-root", str(roots.configs)],
+    )
+    verdict = _verdict(status.output)
+    assert status.exit_code == 1 and "root_mismatch:" in verdict, status.output
+    assert f"index_root={path_id(other)}" in verdict
+
+
+def test_postgres_generation_without_roots_fails_closed_until_rebuilt(fake_postgres, roots):
+    _versions(roots)
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    fake_postgres.db.execute(
+        "DELETE FROM vcp_provenance.metadata WHERE key IN "
+        "('configs_root_id', 'configs_root', 'data_root_id', 'data_root')"
+    )  # what vcp 0.12 published
+    _diff(roots)
+    rooted = postgres.PostgresProvenanceBackend(
+        BackendConfig(BackendName.POSTGRESQL), roots=IndexRoots.of(roots.data, roots.configs)
+    )
+    for attempt in (
+        lambda: fake_postgres.backend.verify(roots.data, roots.configs),
+        lambda: fake_postgres.backend.ingest_diff("idx-diff", roots.data, roots.configs),
+        lambda: fake_postgres.backend.sync(roots.data, roots.configs),
+        rooted.load_graph,
+    ):
+        with pytest.raises(ValidationFailed, match="records no root") as ei:
+            attempt()
+        assert ei.value.fields == {"index_root": "none"}
+    assert fake_postgres.backend.rebuild(roots.data, roots.configs).replaced_roots == {}
+    assert fake_postgres.backend.verify(roots.data, roots.configs).ok
+    assert rooted.load_graph().entities
+
+
+def test_postgres_another_data_root_fails_root_mismatch(fake_postgres, roots, tmp_path):
+    _versions(roots)
+    fake_postgres.backend.rebuild(roots.data, roots.configs)
+    with pytest.raises(ValidationFailed, match="root_mismatch:") as ei:
+        fake_postgres.backend.verify(tmp_path / "another-data", roots.configs)
+    assert ei.value.fields == {"index_root": path_id(roots.configs)}
+
+
+# The CLI end of the same promises: ``make_backend`` hands the roots to the backend, and the
+# ``rebuild`` messages tell a plain re-run, a rootless generation and another checkout apart.
+
+
+@pytest.mark.parametrize("command", ["impact", "stale", "explain", "graph"])
+def test_postgres_read_commands_from_another_root_fail_root_mismatch(
+    fake_postgres, roots, tmp_path, command
+):
+    _versions(roots)
+    other = _second_checkout(roots, tmp_path)
+    runner = CliRunner()
+    where = ["--backend", "postgresql", "--data-root", str(roots.data)]
+    built = runner.invoke(
+        app, ["provenance", "rebuild", *where, "--configs-root", str(roots.configs)]
+    )
+    assert built.exit_code == 0, built.output
+    graph_out = tmp_path / "graph.mmd"
+    options = {
+        "impact": ["--dataset", "idx-old"],
+        "stale": ["--head", "idx-new"],
+        "explain": ["--entity", "dataset:idx-old"],
+        "graph": ["--out", str(graph_out)],
+    }[command]
+    result = runner.invoke(
+        app, ["provenance", command, *options, *where, "--configs-root", str(other)]
+    )
+    verdict = _verdict(result.output)
+    assert result.exit_code == 1 and "root_mismatch:" in verdict, result.output
+    assert f"index_root={path_id(roots.configs)}" in verdict
+    assert f"root={path_id(other)}" in verdict
+    assert not graph_out.exists()
+
+
+def test_postgres_cli_rebuild_is_silent_over_its_own_root_and_explains_a_rootless_one(
+    fake_postgres, roots
+):
+    _versions(roots)
+    runner = CliRunner()
+    base = ["provenance", "rebuild", "--backend", "postgresql", "--data-root", str(roots.data)]
+    rebuild = [*base, "--configs-root", str(roots.configs)]
+    assert runner.invoke(app, rebuild).exit_code == 0
+    again = runner.invoke(app, rebuild)  # the documented recovery, re-run: nothing to warn about
+    assert again.exit_code == 0 and "status=OK" in _verdict(again.output), again.output
+    assert "replaced" not in again.output
+    fake_postgres.db.execute(
+        "DELETE FROM vcp_provenance.metadata WHERE key IN "
+        "('configs_root_id', 'configs_root', 'data_root_id', 'data_root')"
+    )  # what vcp 0.12 published
+    over_old = runner.invoke(app, rebuild)
+    verdict = _verdict(over_old.output)
+    assert over_old.exit_code == 0 and "status=OK" in verdict, over_old.output
+    assert "replaced_root" not in verdict and "records no root" in over_old.output

@@ -65,6 +65,15 @@ versions 物化 status；ingest 從 source version status 出發，只載 graph 
 `sample_changes`。graph 同步 fingerprint 使用 record hash 的 order-independent accumulator，權威驗證仍是
 canonical replay 的逐 record exact comparison，不以 accumulator 取代資料完整性。
 
+**補充決定（2026-10-04，VCP-044，0.13.0）**：索引改成每個 configs root 一份：
+`<data_root>/indexes/provenance-<configs root id>.sqlite3`，id 是 `vcp.core.paths.path_id`（解析後路徑經
+`os.path.normcase` 的 sha256 前 16 碼，跟台帳鎖檔同一個規則）。metadata 多記 `configs_root_id`、
+`configs_root`、`data_root_id`、`data_root`（路徑只供顯示），`SCHEMA_VERSION` 從 2 變 3。每個會打開索引的
+命令（`verify-index`、`status`、`sync`、`ingest`、`impact`、`stale`、`explain`、`graph`）第一件事是比對兩個
+id，不符 → `root_mismatch:`（VERDICT `index_root=`），在任何 replay 或前綴檢查之前；同一個 root 內台帳真的
+被截短或改寫才是 `prefix_drift:`。舊檔 `indexes/provenance.sqlite3` 不再讀（`not_found:` 會指出它），搬移或
+改名 checkout 後 rebuild 一次。細節見 `2026-10-04-vcp-round3-fixes-design.md` §3。
+
 每次 ingest：verify manifest 與 inputs，在一個 transaction 內 insert unseen rows、找 downstream dirty closure、只重算 dirty status、寫 checkpoint，最後 commit。例外 rollback。rebuild 以 temporary DB 完整重建、verify parity 後原子 replace。immutable artifact checkpoint pin manifest hash；append-only ledger checkpoint pin path、bytes、prefix hash。prefix drift fail closed。
 
 ## 7. CLI

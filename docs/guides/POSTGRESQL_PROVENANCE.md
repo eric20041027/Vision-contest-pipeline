@@ -14,7 +14,8 @@ uv run vcp provenance rebuild
 uv run vcp provenance ingest --artifact DIFF_ID
 ```
 
-SQLite index 仍在 `<data_root>/indexes/provenance.sqlite3`。base install 不需要 PostgreSQL driver；只有
+SQLite index 在 `<data_root>/indexes/provenance-<configs root id>.sqlite3`，每個 checkout 一份（0.13.0 起；
+0.12 以前的 `provenance.sqlite3` 不再讀）。base install 不需要 PostgreSQL driver；只有
 明確選 `--backend postgresql` 才 lazy 載入 optional dependency。
 
 ## 安裝與 libpq service
@@ -46,7 +47,14 @@ uv run vcp provenance status --backend postgresql --pg-service <SERVICE>
 ```
 
 省略 `--pg-service` 時，Psycopg 交由 libpq standard defaults 解決連線。一個 database 在 v1 只承載
-一個 active VCP provenance index；不同 data roots 應使用不同 database/service。正式 role 只需要自己
+一個 active VCP provenance index，而且只服務一組（data root, configs root）：不同 data roots、同一個 data root
+的不同 checkout（worktree）都各用自己的 database/service（0.13.0 起，VCP-044）。每個 generation 記下兩個
+root；從別的 checkout 打開 → `root_mismatch:`（`index_root=`），`sync` 不會取代它，只有 `rebuild` 會取代並
+WARN `replaced_root=`；0.13.0 以前建的 generation 沒記 root，`rebuild` 一次之前每個命令都 `root_mismatch:`。
+`replaced_root=` 是被取代那一代的 configs root id，所以只有 data root 不同的接手會跟 `root=` 同一個 id（人類
+訊息兩個路徑都印）；`rebuild --json` 與 `sync --json` 的 `result.replaced_roots` 在接手時是那一代的四個 root 鍵
+（`configs_root_id`、`configs_root`、`data_root_id`、`data_root`；沒記 root 的舊 generation 是 `{}`），其他情況
+是 null；`status --json` 也帶 active generation 的這四個鍵。正式 role 只需要自己
 的 `vcp_provenance` schema/tables 權限；benchmark/integration harness 另需建立 disposable database 的
 權限。
 
@@ -116,6 +124,8 @@ policy version。它們不報 service、host、port、database、role、conninfo
 - schema marker/version 不相容時 VCP 會 fail closed，不做 silent migration。保留必要調查資料後，
   由 operator 配一個乾淨 database，再執行 `rebuild`；VCP 沒有 destructive drop/migrate command。
 - 連線或 transaction 失敗不會留下 partial active generation、checkpoint、status 或 artifact rows。
+- `root_mismatch:`：這個 database 屬於另一個 checkout（或還沒記 root）。給這個 checkout 自己的
+  `--pg-service`；確定要接手時才 `rebuild`（WARN `replaced_root=`，原來的 checkout 之後要換 database）。
 
 ## Failure 與 redaction 語意
 

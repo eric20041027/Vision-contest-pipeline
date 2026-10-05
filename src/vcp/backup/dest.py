@@ -5,6 +5,7 @@ an injectable runner and every byte it prints is redacted before it can reach a 
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sys
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from vcp.backup.schema import FileEntry, RemoteCopy
 from vcp.core.errors import PlatformError, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.proc import Runner, default_runner, last_line, redact
@@ -38,6 +40,32 @@ def dest_kind(dest: str) -> Literal["rclone", "local"]:
     if sys.platform == "win32" and _DRIVE_LETTER.match(dest):
         return "local"
     return "rclone" if _REMOTE.match(dest) else "local"
+
+
+def _inside(path: str, base: str) -> bool:
+    child = os.path.normcase(str(Path(path).resolve()))
+    parent = os.path.normcase(str(Path(base).resolve()))
+    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def covers(dest: str, copy: RemoteCopy) -> bool:
+    """spec 2026-10-04 §5.1: a remote_copy is checked where it lies, and never pushed, only when
+    it is off this machine already (on an rclone remote) or lies inside this very local
+    destination. Any other copy is handled at ``dest`` exactly like a file."""
+    if dest_kind(copy.dest) == "rclone":
+        return True
+    return dest_kind(dest) == "local" and _inside(copy.dest, dest)
+
+
+def travels(entry: FileEntry, dest: str) -> bool:
+    """Whether ``entry`` belongs at ``dest`` under the layout ``<dest>/<root>/<path>``: every
+    file, and every remote_copy ``dest`` does not cover."""
+    return entry.remote is None or not covers(dest, entry.remote)
+
+
+def copy_path(copy: RemoteCopy) -> Path:
+    """Where ``train upload`` put a local copy: ``<dest>/<run>/<name>``."""
+    return Path(copy.dest) / copy.run / copy.name
 
 
 def _failed(what: str, proc: Any) -> PlatformError:

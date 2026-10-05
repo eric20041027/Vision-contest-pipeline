@@ -67,7 +67,7 @@ def _evolved(roots) -> None:
 
 def test_graph_writes_html_and_leaves_the_index_untouched(roots, tmp_path):
     rebuild_hash = _measured_contest(roots, tmp_path)
-    index = provenance_index_path(roots.data)
+    index = provenance_index_path(roots.data, roots.configs)
     before = hashlib.sha256(index.read_bytes()).hexdigest()
     out = tmp_path / "views" / "graph.html"
 

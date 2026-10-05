@@ -2,12 +2,14 @@
 
 ## 索引比紀錄舊嗎（只看檔案時間，不重算 sha）
 ```powershell
-$data = '<data_root>'
-$built = (Get-Item "$data/indexes/provenance.sqlite3").LastWriteTime
+$data = '<data_root>'; $configs = '<configs_root>'
+# 索引位置每個 checkout 固定（indexes/provenance-<configs root id>.sqlite3）：讀一次就記下來
+$index = (uv run vcp provenance status --json --data-root $data --configs-root $configs | ConvertFrom-Json).result.index
+$built = (Get-Item $index).LastWriteTime
 Get-ChildItem "$data/runs", "$data/measure", "$data/artifacts", "$data/submit" -Recurse -File -ErrorAction SilentlyContinue |
   Where-Object LastWriteTime -gt $built | Select-Object -First 5 FullName
 ```
-有輸出 → `sync`；沒輸出 → 直接畫。這只是便宜的預判。要保證最新（例如要交出去的版本）就直接 `sync`：它收進所有新增並印出新的 `hash`；不必先跑 `status`——一樣全掃，但只看不修。
+有輸出 → `sync`；沒輸出 → 直接畫。這只是便宜的預判：`status` 本身要全掃一次，但同一個 checkout 的索引路徑不會變，記下來之後只看檔案時間；`status` FAIL `not_found:` → 先 `rebuild`。要保證最新（例如要交出去的版本）就直接 `sync`：它收進所有新增並印出新的 `hash`；不必先跑 `status`——一樣全掃，但只看不修。
 
 ## 形狀
 | 形狀 | 是什麼 |

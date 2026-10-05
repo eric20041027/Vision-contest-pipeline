@@ -285,8 +285,8 @@ def test_prediction_box_on_a_view_other_than_zero_is_validation_failed():
         _run(samples, card, preds)
 
 
-# --- failure modes beyond the brief's own tests: an empty subset, an undefined per-class
-# category, an all-empty prediction set, and a stray category id must never surface -1/nan.
+# --- failure modes: an empty subset, an undefined per-class category, an all-empty prediction
+# set and a stray category id must never surface -1/nan.
 
 
 def test_empty_subset_raises_validation_failed_not_a_crash():

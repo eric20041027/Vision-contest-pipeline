@@ -9,16 +9,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from vcp.artifact import store
+from vcp.backup.completeness import manifest_gaps
 from vcp.backup.ledger import BackupLedger
-from vcp.backup.manifest import default_manifest_id, write_manifest
+from vcp.backup.manifest import default_manifest_id, locate_file, write_manifest
+from vcp.backup.manifest import external_path as external_path
 from vcp.backup.schema import ROLES, TIER_OF, BackupRow, FileEntry, Manifest, RemoteCopy
 from vcp.core.build import build_string
 from vcp.core.config import load_yaml_model
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, InvariantError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import (
     DatasetPaths,
@@ -39,9 +42,10 @@ from vcp.submit.ledger import complete_length
 from vcp.submit.location import locate, read_only
 from vcp.submit.profile import load_profile
 from vcp.submit.stage import load_staged, stage_json
+from vcp.train.checkpoints import newest_per_path
 from vcp.train.records import events_path, has_record, train_dir, train_yaml
 from vcp.train.records import load_record as load_train_record
-from vcp.train.schema import CheckpointRecord, TrainRecord
+from vcp.train.schema import TrainRecord
 from vcp.train.upload import remote_names
 
 CONCLUSIONS = ("submission", "judgement", "run", "all")
@@ -71,12 +75,6 @@ def parse_conclusion(text: str) -> tuple[str, str]:
     return kind, ident
 
 
-def external_path(path: Path) -> str:
-    """``C:/x/y`` -> ``C/x/y``, ``/mnt/x`` -> ``mnt/x``: a relative posix path that keeps the
-    origin."""
-    return path.resolve().as_posix().replace(":", "").lstrip("/")
-
-
 @dataclass
 class Collector:
     data_root: Path
@@ -88,14 +86,9 @@ class Collector:
     _seen: set[tuple[str, str]] = field(default_factory=set)
 
     def locate(self, path: Path) -> tuple[str, str, str | None]:
-        """(root, relative posix path, source): data / configs by containment, else external."""
-        resolved = path.resolve()
-        for root, base in (("data", self.data_root), ("configs", self.configs_root)):
-            try:
-                return root, resolved.relative_to(base.resolve()).as_posix(), None
-            except ValueError:
-                continue
-        return "external", external_path(resolved), resolved.as_posix()
+        """(root, relative posix path, source): ``vcp.backup.manifest.locate_file``, the one rule
+        the completeness check keys files by as well."""
+        return locate_file(path, self.data_root, self.configs_root)
 
     def add(
         self,
@@ -239,20 +232,23 @@ class Collector:
         -- but only under a name that is this path's own: the name the upload gives it now, or
         the plain file name every upload used before 0.10.0. Matching bytes alone would hand a
         fold the copy of an identical sibling."""
-        newest: dict[str, CheckpointRecord] = {}
-        for c in record.checkpoints:
-            newest[c.path] = c
+        newest = newest_per_path(record.checkpoints)
         try:
             upload_names = remote_names(newest)
         except ValidationFailed:  # paths no folder tells apart: only plain names can match
             upload_names = {}
         for path, c in newest.items():
             own = {upload_names.get(path), Path(path).name}
+            matches = [
+                u for u in record.uploads if u.verified and u.sha256 == c.sha256 and u.name in own
+            ]
+            # spec 2026-10-04 §5.2: a copy on an rclone remote is off this machine already, so
+            # it wins over a local one; within one kind the newest wins
+            pick = next((u for u in reversed(matches) if u.kind == "rclone"), None)
+            pick = pick or (matches[-1] if matches else None)
             remote = None
-            for u in reversed(record.uploads):
-                if u.verified and u.sha256 == c.sha256 and u.name in own:
-                    remote = RemoteCopy(dest=u.dest, run=record.run_id, name=u.name)
-                    break
+            if pick is not None:
+                remote = RemoteCopy(dest=pick.dest, run=record.run_id, name=pick.name)
             self.add(
                 resolve_stored_path(c.path, self.data_root),
                 "checkpoint_final" if c.final else "checkpoint",
@@ -310,10 +306,23 @@ class Collector:
 
     def _try(self, label: str, walk: Callable[..., None], *args: Any) -> None:
         """``all`` means "everything this dataset still has": one conclusion whose evidence has
-        gone missing is recorded and stepped over, never a reason to lose all the others."""
+        gone missing is recorded and stepped over, never a reason to lose all the others.
+
+        A walk that fails leaves nothing behind. What it listed is taken back, so the manifest
+        never holds half a run -- a run.yaml without the evidence it names, which the self-check
+        would take for a vcp bug. The runs it visited are unmarked too: a later conclusion that
+        names one walks it again, so a run that cannot be read is stepped over by every
+        conclusion that names it, like a run that is gone, and a run that was read is listed."""
+        n_entries, n_missing, n_unlisted = len(self.entries), len(self.missing), len(self.unlisted)
+        seen = set(self._seen)
         try:
             walk(*args)
         except ValidationFailed as e:
+            # a walk only adds: new keys go to the end of the dict, new names to the lists
+            self.entries = dict(islice(self.entries.items(), n_entries))
+            self.missing = self.missing[:n_missing]
+            self.unlisted = self.unlisted[:n_unlisted]
+            self._seen = seen
             self.skipped.append(f"{label}: {e}")
 
     def walk_all(self, dpaths: DatasetPaths) -> None:
@@ -380,6 +389,9 @@ def build_manifest(
     validate_name(mid)
     if paths.backup_manifest(mid).exists():
         raise ValidationFailed(f"exists: manifest {mid!r}", fields={"manifest": mid})
+    # spec 2026-10-04 §4.1: stamped before the walk, so a checkpoint registered while it runs is
+    # not this manifest's to list -- it makes the next one differ instead
+    created = stamp()
     col = Collector(paths.data_root, paths.configs_root)
     if kind == "run":
         if not (run_dir(paths.data_root, ident) / "run.yaml").is_file():
@@ -401,11 +413,18 @@ def build_manifest(
         manifest_id=mid,
         dataset=dataset,
         conclusion=conclusion,
-        created_at=stamp(),
+        created_at=created,
         vcp_version=build_string(),
         data_root=paths.data_root.as_posix(),
         files=col.files_of(),
     )
+    gaps = manifest_gaps(manifest, paths)
+    if gaps:  # the walk left out a file its runs registered: a vcp bug, so nothing is written
+        raise InvariantError(
+            f"manifest_incomplete: the walk left out {len(gaps)} file(s) its runs registered, "
+            f"first {gaps[0].what}; nothing was written",
+            fields={"incomplete": len(gaps)},
+        )
     path = write_manifest(paths, manifest)
     BackupLedger(paths.backup_log).append(
         BackupRow(

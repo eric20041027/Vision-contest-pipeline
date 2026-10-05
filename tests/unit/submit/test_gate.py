@@ -55,11 +55,11 @@ def test_replaced_predictions_make_the_judgement_stale(pair):
     seed_judgements(pair)
     ds, plan = pair.eval_ds, pair.eval_plan
     samples = ds.subset("valA", plan, paths=pair.eval_paths)
-    # Deviation from the brief (see task-7-report.md): cls predictions are re-sorted by
-    # sample_id before hashing, so merely reordering a full sample list reproduces the same
-    # sha256, and cls requires every sample present so dropping one is rejected by
-    # check_predictions before admit() is ever reached. noisy_predictions keeps full coverage
-    # while guaranteeing different content, which is what "stale judgement" needs.
+    # Neither a reordering nor a dropped sample: cls predictions are re-sorted by sample_id
+    # before hashing, so merely reordering a full sample list reproduces the same sha256, and
+    # cls requires every sample present, so dropping one is rejected by check_predictions before
+    # admit() is ever reached. noisy_predictions keeps full coverage while guaranteeing
+    # different content, which is what a stale judgement needs.
     shuffled = noisy_predictions(samples, ds.card, seed=42, flip=1.0)
     ingest_run(
         pair,

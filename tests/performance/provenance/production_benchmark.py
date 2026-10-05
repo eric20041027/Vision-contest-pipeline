@@ -37,8 +37,10 @@ from vcp.provenance.index import (
     _json,
     _load_graph,
     _schema,
+    _write_roots,
     graph_hash,
 )
+from vcp.provenance.roots import IndexRoots
 from vcp.provenance.schema import (
     ChangeDomain,
     ChangeType,
@@ -61,7 +63,9 @@ def _record_value(record: dict[str, object]) -> int:
     return int(sha256_text(_json(record)), 16)
 
 
-def _seed_index(path: Path, count: int, source_hash: str, target_hash: str) -> None:
+def _seed_index(
+    path: Path, count: int, source_hash: str, target_hash: str, roots: IndexRoots
+) -> None:
     connection = _connection(path)
     ancestor = dataset_version_id("synthetic-ancestor", "c" * 64)
     source = dataset_version_id("synthetic-source", source_hash)
@@ -166,6 +170,7 @@ def _seed_index(path: Path, count: int, source_hash: str, target_hash: str) -> N
     history_ids: list[str] = []
     with connection:
         _schema(connection)
+        _write_roots(connection, roots)
         for entity in graph.entities.values():
             _insert_entity(connection, entity)
         for edge in graph.edges.values():
@@ -303,7 +308,8 @@ def run_scale(root: Path, count: int) -> dict[str, object]:
     artifact_id = _publish_delta(data_root, source, target)
     baseline = scale / "baseline.sqlite3"
     started = perf_counter_ns()
-    _seed_index(baseline, count, sha256_file(source), sha256_file(target))
+    roots = IndexRoots.of(data_root, configs_root)
+    _seed_index(baseline, count, sha256_file(source), sha256_file(target), roots)
     generation_ms = (perf_counter_ns() - started) / 1_000_000
     sizing = sqlite3.connect(baseline)
     canonical_metadata_bytes = sum(

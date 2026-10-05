@@ -1,4 +1,4 @@
-<!-- 副本：來源是比賽工作區 RSNA_Knee_Abnormality_Detection/projects/rsna-knee/VCP_IMPROVEMENT_AUDIT_20260911.md（2026-09-11，由 Codex 在跑完 RSNA Knee 後寫成）。第 15 節的相對連結指向該工作區，不在本 repo。本 repo 的 Wave 0 已於 v0.3.0 完成（見 CHANGELOG）；Wave 1 拆成 1a 不可變產物（spec：docs/superpowers/specs/2026-09-11-vcp-immutable-artifacts-design.md）、1b 角色範圍存取與收據、1c 程式碼快照與授權。第 16 節是 2026-09-25 第二輪回報（VCP-035 – 043）的補遺，只收通用的缺陷與處置。 -->
+<!-- 副本：來源是比賽工作區 RSNA_Knee_Abnormality_Detection/projects/rsna-knee/VCP_IMPROVEMENT_AUDIT_20260911.md（2026-09-11，由 Codex 在跑完 RSNA Knee 後寫成）。第 15 節的相對連結指向該工作區，不在本 repo。本 repo 的 Wave 0 已於 v0.3.0 完成（見 CHANGELOG）；Wave 1 拆成 1a 不可變產物（v0.4.0，spec：docs/superpowers/specs/2026-09-11-vcp-immutable-artifacts-design.md）、1b 角色範圍存取與收據（1b-1，v0.5.0）與來源稽核（1b-2，v0.6.0，只涵蓋 samples.jsonl）、1c 程式碼快照與產物授權（尚未做）。各項的「狀態」行與第 1 節表格的「目前狀態」欄隨 0.13.0 依 CHANGELOG 更新過，其餘段落保留 2026-09-11 的原文。第 16 節是 2026-09-25 第二輪回報（VCP-035 – 043）的補遺，第 17 節是 2026-09-26 第三輪回報（VCP-044 – 047）的補遺，只收通用的缺陷與處置。 -->
 
 # VCP 使用後改進稽核
 
@@ -22,19 +22,19 @@ VCP 現有的 append-only 台帳、預登記、sealed holdout、submission quota
 
 | 優先級 | 主題 | 目前狀態 | 建議處置 |
 |---|---|---|---|
-| P0 | Role-scoped dataset/card/row access | 開放問題；RSNA 有專案 workaround | 新增核心存取 API 與 OS-level/reader-level access receipt |
-| P0 | 大型 array 的 selected-row integrity | 開放問題；RSNA 已做局部原型 | source audit 與 downstream audit inheritance 分層 |
-| P0 | 產物不可覆寫與 supersession | 開放問題；曾發生 evidence overwrite | 提供 `ImmutableArtifactWriter` 與 append-only supersession |
-| P0 | prereg file/log SHA 綁定 | `d193113` 已修、已上遠端分支、未進 main | rebase、重跑全套測試、合併 |
-| P0 | foreign PENDING → COMPLETE 分數刷新 | `d881a1d` 已修、本機分支、未進 main | rebase、推送、review、合併 |
-| P0 | 自動 code/environment inventory | 開放問題 | bundle/manifest 自動收集 transitive code 與 runtime identity |
+| P0 | Role-scoped dataset/card/row access | v0.5.0 已修（Wave 1b-1；收據只證明經存取器的讀取） | 新增核心存取 API 與 OS-level/reader-level access receipt |
+| P0 | 大型 array 的 selected-row integrity | 部分：v0.6.0（Wave 1b-2）只涵蓋 `samples.jsonl`；大陣列的選取列存取器排在 1.0 之後 | source audit 與 downstream audit inheritance 分層 |
+| P0 | 產物不可覆寫與 supersession | v0.4.0 已修（Wave 1a） | 提供 `ImmutableArtifactWriter` 與 append-only supersession |
+| P0 | prereg file/log SHA 綁定 | v0.3.0 已修（Wave 0） | rebase、重跑全套測試、合併 |
+| P0 | foreign PENDING → COMPLETE 分數刷新 | v0.3.0 已修（Wave 0） | rebase、推送、review、合併 |
+| P0 | 自動 code/environment inventory | 開放問題（Wave 1c）；v0.11.0 起 `train run` 記下工作樹狀態與追蹤檔的 patch（VCP-041） | bundle/manifest 自動收集 transitive code 與 runtime identity |
 | P1 | Data reference deep validation | 開放問題 | 外部 image root 與所有 view 預設 deep validate |
-| P1 | Submission watch/reconcile/idempotency | 開放問題 | 新增 `submit watch` 與 `submit reconcile` |
+| P1 | Submission watch/reconcile/idempotency | 部分：同 id 重傳護欄隨 0.12.0（VCP-014）、CLI 失敗時回讀隨 0.13.0（VCP-047）；`watch` / `reconcile` 未做 | 新增 `submit watch` 與 `submit reconcile` |
 | P1 | Backup health/status/evidence addendum | 部分完成 | 分離健康度與 credential 提示；擴充 evidence graph |
 | P1 | Windows environment doctor | 開放問題 | 絕對 Python、CUDA/DICOM smoke test、lock receipt |
 | P2 | Contest scaffold、lint/test wrapper | 開放問題 | 產生 `pyproject.toml` 與安全排除規則 |
 | P2 | Content-addressed cache 與安全 GC | 開放問題 | 只清不可達暫存；歷史 receipt 永不刪除 |
-| P2 | Visual guide/onboarding | 外部工作分支進行中 | 完成、驗證連結與 render 後另行整合 |
+| P2 | Visual guide/onboarding | 已進 main（PR #6，隨 v0.8.1） | 完成、驗證連結與 render 後另行整合 |
 
 ## 2. 稽核邊界與判定方式
 
@@ -59,7 +59,7 @@ VCP core 應提供這些專案程式共用的**治理原語**：存取範圍、�
 
 ### VCP-001：`Dataset.load()` 無法證明 train-only 存取
 
-**狀態：設計缺口；RSNA 已有 selected-only workaround。**
+**狀態：v0.5.0 已修（Wave 1b-1）：`DatasetAccess` 只解析授權子集的列，關閉時由框架寫存取收據；見 CHANGELOG [0.5.0]。收據只證明經存取器的讀取，自己開檔的程序不在證明範圍內。**
 
 #### 實際觸發
 
@@ -116,7 +116,7 @@ receipt = access.finalize_receipt()
 
 ### VCP-002：大型 memmap 每次全檔 SHA 與 train-only row access 衝突
 
-**狀態：設計缺口；RSNA six-slot v2 已實作局部原型。**
+**狀態：部分修正。v0.6.0（Wave 1b-2）只涵蓋 `samples.jsonl`：`source_audit` 逐列 sha 索引，存取器只驗讀到的列，不再每個 job 整檔 hash。單一大陣列的選取列存取器與 `array_audit`（§11 Wave 1 清單的第 4 項）排在 1.0 之後。**
 
 #### 實際觸發
 
@@ -152,7 +152,7 @@ receipt = access.finalize_receipt()
 
 ### VCP-003：access flags 是自我宣告，無法代表真實 I/O
 
-**狀態：設計缺口。**
+**狀態：v0.5.0 已修（Wave 1b-1）：存取器關閉時由框架寫 `AccessReceipt`，呼叫端只能加 `notes`；provenance 等級在讀取時由收據算出（`receipt > export > declared`），不再採信自我宣告的 flags。見 CHANGELOG [0.5.0]。**
 
 #### 實際觸發
 
@@ -225,7 +225,7 @@ receipt 應由 `DatasetAccess`/`ArrayAccessor` 在 context manager 結束時生�
 
 ### VCP-005：artifact 路徑可被覆寫，破壞不可變證據
 
-**狀態：設計缺口；RSNA 已改用 exclusive-create workaround。**
+**狀態：v0.4.0 已修（Wave 1a）：`ArtifactWriter` 以獨佔 mkdir 搶 id，`manifest.json` 是 commit 點，修正走新 id 加 `supersedes`；見 CHANGELOG [0.4.0]。**
 
 #### 實際事故
 
@@ -282,7 +282,7 @@ expires_on_change: true
 
 ### VCP-007：ID、seed、output root 與 audit pin 缺少共同 contract
 
-**狀態：設計缺口；由 review 發現並修正專案設定。**
+**狀態：v0.4.0 已修（Wave 1a）：`ArtifactSpec.id_pattern` 的具名群組必須等於同名欄位，`inputs` 在 open 時雜湊、commit 時重驗；見 CHANGELOG [0.4.0]。commit 時比對程式碼快照的部分等 Wave 1c。**
 
 six-slot v2 曾出現輸出 ID 表示 seed 42，但 CLI 仍可接受 seed 43；audit path/SHA 也曾 pin 到不一致版本。這類錯誤不一定造成例外，卻會讓 artifact 名稱、內容與 lineage 分離。
 
@@ -297,7 +297,7 @@ six-slot v2 曾出現輸出 ID 表示 seed 42，但 CLI 仍可接受 seed 43；a
 
 ### VCP-008：prereg YAML 未與第一筆 append-only log SHA 綁定
 
-**狀態：已在 `codex/prereg-sha-integrity` 修正；commit `d193113`；遠端分支存在；未進 main。**
+**狀態：v0.3.0 已修（Wave 0，原 commit `d193113`）；見 CHANGELOG [0.3.0]。**
 
 #### 原問題
 
@@ -319,7 +319,7 @@ six-slot v2 曾出現輸出 ID 表示 seed 42，但 CLI 仍可接受 seed 43；a
 
 ### VCP-009：foreign submission 已知 ref 的新分數不會刷新
 
-**狀態：已在 `codex/submit-foreign-score-refresh` 修正；commit `d881a1d`；本機分支；未進 main。**
+**狀態：v0.3.0 已修（Wave 0，原 commit `d881a1d`）；見 CHANGELOG [0.3.0]。**
 
 #### 原問題
 
@@ -421,7 +421,7 @@ vcp submit watch --dataset ... --ref 56131417 --interval 60
 
 ### VCP-014：upload 回覆不確定時，缺少內建 reconciliation 與 retry safety
 
-**狀態：重傳護欄已實作，隨 0.12.0 發出（spec `2026-09-28-vcp-shared-ledger-design.md` §4.5）：`upload` 先把平台列表同步進台帳，遇到已有 `uploaded` 列的 id FAIL `already_uploaded:`，`--force "<理由>"` 才照傳。下面的 `reconcile` 與配額保留仍是建議。**
+**狀態：重傳護欄已實作，隨 0.12.0 發出（spec `2026-09-28-vcp-shared-ledger-design.md` §4.5）：`upload` 先把平台列表同步進台帳，遇到已有 `uploaded` 列的 id FAIL `already_uploaded:`，`--force "<理由>"` 才照傳。下面的 `reconcile` 與配額保留仍是建議。kaggle CLI 非 0 退出時在同一個交易裡回讀（VCP-047）隨 0.13.0 發出，見第 17 節。**
 
 正式 self submission 曾得到 `status=WARN confirmed=false`，但 Kaggle 其實已受理並產生 ref。若使用者直接 retry，可能浪費 quota 或形成重複 submission。
 
@@ -754,7 +754,7 @@ identity 不應只由 host absolute path 決定。
 
 ### VCP-034：操作與視覺 onboarding 尚未完成整合
 
-**狀態：外部 `codex/vcp-visual-guide` 工作中；不是 main 已完成能力。**
+**狀態：已進 main（PR #6，2026-09-15，隨 v0.8.1 發出）：`docs/guides/VCP_VISUAL_GUIDE.md`，README 與 HANDOVER 都有連結。**
 
 目前外部工作樹有 README、handover 與 `docs/guides/` 未提交變更。完成前應：
 
@@ -910,3 +910,30 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 ### VCP-043：子程序拿不到 attempt 編號
 
 **狀態：v0.10.0 已修（#26）。** 子程序環境多了 `VCP_ATTEMPT`，`Session.attempt` 公開唯讀；checkpoint、note 與收據 id 讀同一個數字。
+
+## 17. 補遺：第三輪回報（VCP-044 – VCP-047，2026-09-26）
+
+來源：比賽工作區在 2026-09-26 升到 0.10.0 時交給 VCP 的第三輪回報（不在本 repo）。以下只留通用的缺陷與修法，比賽的資料、路徑與 id 都不收。四件都在 0.12.0 上重現過；使用者 2026-10-04 裁決一起修，隨 0.13.0 發出（spec `2026-10-04-vcp-round3-fixes-design.md`）。
+
+| ID | 類型 | 嚴重度 | 問題 | 處置 |
+|---|---|---|---|---|
+| VCP-044 | DEFECT（含 FEATURE_GAP） | 低中 | provenance 索引不認 configs root：兩個 checkout 共用一個 data root 時，分岔的台帳被報成 `prefix_drift:`；PostgreSQL 的 `sync` 無聲取代另一個 root 的索引 | 隨 0.13.0 |
+| VCP-045 | DEFECT | 中 | 0.10.0 以前建的多折備份清單缺權重，verify、tier 3 push 與 status 都看不出來 | 隨 0.13.0 |
+| VCP-046 | DEFECT | 中 | `train upload` 到本機目錄的副本被 tier 3 push、verify、status 與 `--forget-remote` 當成異機備份 | 隨 0.13.0 |
+| VCP-047 | DEFECT | 中 | Kaggle CLI 非 0 退出時不回讀，平台其實已收下；列表呼叫沒有逾時 | 隨 0.13.0 |
+
+### VCP-044：provenance 索引不認 configs root
+
+**狀態：已實作，隨 0.13.0 發出。** SQLite 索引一個 data root 只有一份，台帳檢查點只記 `configs/<相對路徑>`、驗證時用當下的 configs root 解析；兩個 checkout 共用 data root 時，從沒建索引的那邊驗證，分岔的台帳看起來像被截短或竄改，任一邊 rebuild 之後失敗就換到另一邊。現在每個 configs root 一份索引（`indexes/provenance-<configs root id>.sqlite3`；root id 跟鎖檔同一個規則，是解析後路徑的 sha256 前 16 碼），兩種後端都記下索引服務的 configs root 與 data root，root 不符時在任何前綴檢查之前 FAIL `root_mismatch:`（`index_root=`）。PostgreSQL 一個 database 只服務一個 checkout：`sync` 不取代別的 root 的 generation，`rebuild` 取代時 WARN `replaced_root=`；沒記 root 的舊 generation 在 rebuild 之前一律 FAIL。0.12 的 `provenance.sqlite3` 不再讀，每個 checkout rebuild 一次。
+
+### VCP-045：舊備份清單缺檔看不出來
+
+**狀態：已實作，隨 0.13.0 發出。** VCP-035 只改了新清單的建法；0.10.0 以前為「同檔名、不同路徑」的多折 run 建的清單只列最後一折，照樣通過 verify、tier 3 的 push 與 verify，status 也說 verified。現在清單要完整：run 紀錄在清單建立前登記的每個 checkpoint 路徑與每個證據，都要在清單裡（任何角色都算）。缺了 → verify FAIL `manifest_incomplete`（`incomplete=`）；status WARN 且不算 verified（每次從檔案重算，舊的通過列不能背書）；tier 3 push 在動任何檔案之前 FAIL；`--forget-remote` 拒絕；`backup manifest` 寫出前自檢，有缺口 ABORT。補救是用新 id 重建清單，重推、重驗。
+
+### VCP-046：本機的 `remote_copy` 被當成異機備份
+
+**狀態：已實作，隨 0.13.0 發出。** `train upload --dest <本機目錄>` 驗過的權重在清單裡記成 `remote_copy`；tier 3 push 不送它、verify 到它自己的本機目錄就地驗、status 說 verified、`--forget-remote` 照刪憑證，權重其實沒離開過這台機器。現在只有在 rclone 遠端、或就在目的地裡的副本才就地驗；其餘的本機副本跟著 `--tier 3` 推到目的地（從原檔送，原檔不在或 sha 不符就從本機副本送），在目的地驗，VERDICT 帶 `local_copies=`。0.13 以前的推送與驗證列不替本機副本背書，用 0.13 推、驗一次之後 status 才說 verified；`--forget-remote` 在權重到目的地之前拒絕；`backup pull` 先從目的地拉，沒有再退回本機副本。
+
+### VCP-047：Kaggle CLI 失敗時不回讀
+
+**狀態：已實作，隨 0.13.0 發出。** CLI 送出後在等回應時斷線（非 0 退出），vcp 直接 FAIL、不寫列，但平台其實已收下；0.12 的上傳前同步要到下一次 upload 才補登，這之前台帳、`status` 與配額都少算，`--no-sync`、`--force` 或平台晚一點才列出時還會多扣一格。現在 CLI 非 0 也在同一個交易裡回讀（沿用 VCP-037 的時間窗與比對，排除台帳已知的 ref）：對上 → 照寫一列，WARN 帶 `exit_code=`；平台沒列出 → FAIL `upload_failed:`，不寫列，可以重傳；判斷不了（ambiguous、列表失敗、中斷、只看到已知的 ref）→ FAIL `upload_unconfirmed:`，不寫列，先到平台確認再決定。Kaggle 的列表呼叫各加 120 秒逾時，上傳前同步與 `sync` 逾時是 `sync_failed:`。

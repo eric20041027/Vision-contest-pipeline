@@ -1,13 +1,14 @@
 # Changelog
 
-vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號依 [SemVer](https://semver.org/lang/zh-TW/)，停在 `0.x` 直到稽核的 P0 provenance substrate 落地（見「版本規則」）。
+vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號依 [SemVer](https://semver.org/lang/zh-TW/)，停在 `0.x` 直到稽核的 Wave 1 全部落地（見「版本規則」）。
 
 ## 版本規則
 
 - **MINOR（`0.N.0`）**：任何會改變**寫進產物或台帳的內容**（run.yaml、train.yaml、fuse.json、stage.json、各 `*.jsonl` 台帳、backup manifest 的欄位或語意），或改變 **CLI 契約**（命令與選項、VERDICT 欄位、exit code、`reason=` 字彙、登記表項目）的變更。讀舊產物的人靠這個數字判斷「欄位的意思有沒有變」。
 - **PATCH（`0.N.P`）**：不改寫入位元組、不改契約的修正——bug、訊息措辭、效能、測試、文件、內部重構。
-- **`1.0.0`**：留給 2026-09-11 稽核的 Wave 1（role-scoped access、immutable artifact writer、access receipt、code snapshot）落地之後——屆時產物契約才是可以對外承諾的契約。
+- **`1.0.0`**：留給 2026-09-11 稽核的 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）——屆時產物契約才是可以對外承諾的契約。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
 - **產物記的 `vcp_version` 是 build string**，不只是版本號：`<version>`（已發版的 wheel，或 git 未追蹤的副本）、`<version>+g<40 hex commit>`（從 checkout 執行）、`<version>+g<commit>.dirty`（該 checkout 的 repo 有未提交變更——刻意過度回報，因為 commit 已不能完整描述跑過的程式碼）。`vcp version` 印同一字串；`vcp.core.build.parse_build_string` 解析它。
+- **2026-10 的歷史改寫**：GitHub 上的歷史在 0.12.0 之後改寫過一次，拿掉了 307 個 `Co-Authored-By` trailer；481 個 commit 的檔案樹、作者與時間都沒變，但 hash 全部改了。改寫前寫下的 build string（`<version>+g<舊 hash>`），以及本檔與其他文件引用的舊 hash，用 `docs/reference/commit-map-2026-10.tsv`（舊 hash、新 hash、日期、標題）對到新 hash；表只含 main 的歷史，從沒進 main 的分支 commit 不在裡面。`vcp version` 與產物格式都不變。
 - **發版步驟**（一個 commit 一個 tag）：
   1. 改 `src/vcp/__init__.py` 的 `__version__`——它是唯一來源，`pyproject.toml` 以 `[tool.hatch.version]` 動態讀它，`uv.lock` 不記版本字面值。同一個 commit 把 Claude Code plugin 的 `.claude/.claude-plugin/plugin.json` 的 `version` 改成同一個號碼（`tests/unit/test_skills_plugin.py` 會擋住不一致），別的專案才會收到新版 skill。
   2. 在本檔最上方加一條 `## [x.y.z] - YYYY-MM-DD`，列 Added / Changed / Fixed / Removed 與影響的層。

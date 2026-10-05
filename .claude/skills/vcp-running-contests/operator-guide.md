@@ -32,7 +32,7 @@ vcp 是影像比賽的流程與證據管理框架：它不取代 PyTorch、Ultra
 - 人負責比賽規則、資料權利、評分目標、GPU/費用預算、sealed 最終窗口、平台提交與備份目的地。
 - 把每個新 id、實際命令、VERDICT、讀數、判決及平台結果寫回 RUNBOOK；失敗也保留。
 - 平台憑證只交給官方 CLI 的安全設定。不要貼進聊天、repo 或 vcp 選項。
-- Windows 的訓練/推論用專案 venv 的絕對 interpreter；`train.yaml` 的最新執行看 `attempts[-1]`。`rclone_conf=unknown` 不是 absent，本機 `remote_copy` 也不是異機備份。
+- Windows 的訓練/推論用專案 venv 的絕對 interpreter；`train.yaml` 的最新執行看 `attempts[-1]`。`rclone_conf=unknown` 不是 absent，本機 `remote_copy` 也不是異機備份（0.13.0 起 `backup push --tier 3` 會把它送到目的地；推完、驗完 `backup status` 才說 verified）。
 
 ## 使用 agent 幫忙
 

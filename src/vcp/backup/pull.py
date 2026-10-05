@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from vcp.backup.dest import Destination, open_dest
+from vcp.backup.dest import Destination, copy_path, covers, open_dest
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
 from vcp.backup.push import check_tier
@@ -109,7 +109,9 @@ def pull(
     dests: dict[str, Destination] = {dest: open_dest(dest, runner)}
     sources: dict[str, tuple[str, str, str]] = {}  # key -> (dest, sub, rel)
     for e in chosen:
-        if e.remote is None:
+        if e.remote is None or not covers(dest, e.remote):
+            # a remote_copy this destination does not cover was pushed here like a file (spec
+            # 2026-10-04 §5.2); its own local copy is only the fallback, in the loop below
             sources[e.key] = (dest, e.root, e.path)
         else:
             dests.setdefault(e.remote.dest, open_dest(e.remote.dest, runner))
@@ -136,6 +138,13 @@ def pull(
                 external_skipped.append(e.key)  # vcp creates no directory outside its roots
                 continue
             got = have[(d, sub)].get(rel)
+            if got != e.sha256 and e.remote is not None and not covers(dest, e.remote):
+                # not at the destination, or other bytes there: the copy `train upload` left on
+                # this machine still restores it, as it did before 0.13.0
+                kept = copy_path(e.remote)
+                if kept.is_file() and sha256_file(kept) == e.sha256:
+                    d, sub, rel, got = e.remote.dest, e.remote.run, e.remote.name, e.sha256
+                    dests.setdefault(d, open_dest(d, runner))
             if got is None:
                 missing.append(e.key)
                 continue

@@ -270,6 +270,7 @@ class UploadResult:
     platform_ref: str | None
     detail: str  # 已 redact 的一行摘要
     readback: str | None = None  # CLI 的回覆確認不了時，回讀平台列表的結果（§17 第 28 條）
+    exit_code: int = 0  # CLI 非 0 而回讀仍對上時，記那個退出碼（§17 第 31 條）
 
 
 @dataclass(frozen=True)
@@ -288,7 +289,8 @@ class Platform(Protocol):
     name: str
 
     def upload(
-        self, staged: Staged, message: str, profile: PlatformProfile, runner: Runner
+        self, staged: Staged, message: str, profile: PlatformProfile, runner: Runner,
+        *, known_refs: frozenset[str] = frozenset(),  # 台帳已有的 ref，回讀時排除（§17 第 31 條）
     ) -> UploadResult: ...
     def list_submissions(
         self, profile: PlatformProfile, runner: Runner
@@ -300,8 +302,8 @@ class Platform(Protocol):
 ### 10.2 `kaggle`
 
 - 執行檔：`profile.kaggle_command` 的第一個元素經 `shutil.which` 找不到 → `VcpError` ABORT `reason=kaggle_not_found`。
-- `upload`：file 類 `… competitions submit -f <輸出檔絕對路徑> -m "<message>" -q <competition>`；kernel 類 `… competitions submit -k <kernel> -v <version> -f <output> -m "<message>" -q <competition>`。stdout 含 `Could not submit to competition`（2.2.4 的檔案上傳沒送出時仍回 0）→ `PlatformError` FAIL `upload_failed:`、不寫列；有 `Submission ref: <n>` 行（2.2.4 之後的 CLI）→ `confirmed=True`、`platform_ref=<n>`；否則含 `Successfully submitted` → `confirmed=True`；都沒有 → 回讀列表（§17 第 28 條），結果記在 `readback`。
-- `list_submissions`：`… competitions submissions --format json --page-size 200 <competition>`，回應含下一頁 token 就帶 `--page-token` 續讀到底；2.2.4 對沒有任何 submission 的比賽不管 `--format` 都印純文字 `No submissions found`，視為空列表。讀 `fileName`、`date`、`description`、`status`、`publicScore`、`privateScore`，`ref` 有就用、沒有以 `sha256_text(fileName|date)` 當 `platform_ref`；缺必要鍵 → FAIL `reason=platform_response key=`；`date` 依 ISO 8601 解析，無時區即視為 UTC；分數字串空白或 `null` → `None`。
+- `upload`：file 類 `… competitions submit -f <輸出檔絕對路徑> -m "<message>" -q <competition>`；kernel 類 `… competitions submit -k <kernel> -v <version> -f <output> -m "<message>" -q <competition>`。stdout 含 `Could not submit to competition`（2.2.4 的檔案上傳沒送出時仍回 0）→ `PlatformError` FAIL `upload_failed:`、不寫列；有 `Submission ref: <n>` 行（2.2.4 之後的 CLI）→ `confirmed=True`、`platform_ref=<n>`；否則含 `Successfully submitted` → `confirmed=True`；都沒有 → 回讀列表（§17 第 28 條），結果記在 `readback`。CLI 非 0 時也回讀，對上才寫列（§17 第 31 條）；回讀一律排除台帳已有的 ref。
+- `list_submissions`：`… competitions submissions --format json --page-size 200 <competition>`，回應含下一頁 token 就帶 `--page-token` 續讀到底，每次 CLI 呼叫 120 秒逾時（`LIST_TIMEOUT`，§17 第 31 條）；2.2.4 對沒有任何 submission 的比賽不管 `--format` 都印純文字 `No submissions found`，視為空列表。讀 `fileName`、`date`、`description`、`status`、`publicScore`、`privateScore`，`ref` 有就用、沒有以 `sha256_text(fileName|date)` 當 `platform_ref`；缺必要鍵 → FAIL `reason=platform_response key=`；`date` 依 ISO 8601 解析，無時區即視為 UTC；分數字串空白或 `null` → `None`。
 - 平台回應的原文只在記憶體裡解析；任何要進 VERDICT、`logs/`、`--json`、台帳的字串都先過 §11 的 redact。
 
 ## 11. API 隱私硬規則
@@ -324,13 +326,15 @@ class Platform(Protocol):
 | id 已存在；writer 選項未知；對映 id 重複；缺樣本 | `exists` / `option=` / `duplicate_id` / `missing=` | FAIL |
 | 輸出檔 sha 不符（upload / record / verify）；融合 output sha 不符 | `IntegrityError` | FAIL |
 | kaggle 找不到 | `VcpError` `kaggle_not_found` | ABORT |
-| kaggle CLI 非 0 | `VcpError`（redact 後的最後一行） | FAIL |
+| kaggle CLI 非 0，回讀沒對上（§17 第 31 條） | `PlatformError` `upload_failed:`（平台沒列出）／`upload_unconfirmed:`（判斷不了），訊息保留 `kaggle CLI failed (exit N)` 與 redact 後的最後一行，帶 `exit_code=`、`readback=`，不寫列 | FAIL |
+| kaggle CLI 非 0，回讀對上（§17 第 31 條） | 寫 `uploaded` 列，VERDICT `exit_code=`、`readback=matched`、`detail=` | WARN |
+| 平台列表 120 秒沒回應 | 上傳前同步與 `sync`：`ValidationFailed` `sync_failed:`；回讀：結果 `failed` | FAIL |
 | kaggle CLI 回 0 但說 `Could not submit to competition` | `PlatformError` `upload_failed:`（不寫列） | FAIL |
 | 平台回應缺鍵 | `ValidationFailed` `platform_response key=` | FAIL |
 | 台帳列壞 | `ValidationFailed` 帶 `file:line` | FAIL |
 | 未知 writer / platform | `RegistryError` | ABORT |
 
-共用欄位：`dataset=` `id=` `sha256=<前 12>` `quota=used/per_day` `resets_at=` `local=` `locked=` `deadline_in=` `foreign=` `unconfirmed=` `unranked=` `final=` `confirmed=` `platform_ref=` `readback=` `detail=` `missing=`。
+共用欄位：`dataset=` `id=` `sha256=<前 12>` `quota=used/per_day` `resets_at=` `local=` `locked=` `deadline_in=` `foreign=` `unconfirmed=` `unranked=` `final=` `confirmed=` `platform_ref=` `readback=` `detail=` `exit_code=` `missing=`。
 
 ## 13. 與其他子專案的介面
 
@@ -403,3 +407,5 @@ class Platform(Protocol):
 29. **自己的上傳不再被當成 foreign 多算一次（VCP-038 第 1 段，2026-09-25）**：台帳還不認得某一發時（另一個 worktree 的台帳、事後才 `record` 的上傳），`sync` 會把平台上的那一發記成 `foreign`；之後 id 認領了同一個 ref，`arrivals()` 以前仍把 `uploaded` 與那筆 `foreign` 各算一次，配額 used 多一（比賽以真實列重現：used=2/3）。現在 `arrivals()` 把「其實是自己上傳的」foreign ref 排除：`uploaded` 列自己帶著這個 ref（`record --platform-ref`、§17 第 28 條的回讀）就是那一發；否則 `scored` 列把 ref 綁到某個 id 時，由該 id 沒帶 ref 的上傳吸收——全部 (上傳, ref) 配對依時間差由小到大先配、一發上傳只吸收一個 ref、時間差（`uploaded` 的 `at` 是 vcp 記的時刻，`foreign` 的是平台時間）超過 `TWIN_WINDOW`（10 分，與 sync 的 `MATCH_WINDOW` 相同，測試釘住兩者相等）就不吸收；一個 ref 被幾個 id 的 `scored` 列綁住時，每個 id 的上傳都可以是它的另一半。剩下的 ref 是這個 id 在平台上的另一發（例如網頁上傳沒 `record`），照樣算到達：寧可多算、不漏算。配額、`status` 的 `foreign=`（改成數到達裡的 foreign）、榜面現任與 `last_uploaded`（`final` 的 `needs_reupload`）與 `report` 都讀 `arrivals()`，一起修正；`sync` 自己的 `foreign=` / `refreshed=` 計數不變。`sync` 另補一條：配到的平台發若這個 id 還沒有帶它 ref 的 `scored` 列，即使分數沒變也寫一列（§6.3）——`board_rule=last` 要求重傳同一個檔時分數必然相同，以前那一發的 ref 永遠綁不上。仍有的限制：平台還在 PENDING（沒有分數）的一發寫不出 `scored` 列，綁上之前照樣多算一次。第 2–4 段（上傳前先讀平台、台帳位置可設定、多寫入者拓樸與 `merge=union`）待另寫 spec。
 
 30. **共用台帳正本、加鎖與上傳前同步（VCP-038 第 2–4 段 + VCP-014，2026-09-28）**：`submit.yaml` 多一個 `ledger: configs | shared`（預設 `configs`，不寫出）；`shared` 把台帳放到 `<data_root>/submit/<test>/submissions.jsonl`；正本只由 `vcp submit ledger adopt` 建立，一次合併本 checkout 的台帳與每個 `--from`，沒有舊台帳就建空的（沒 adopt 之前，不管有沒有舊列，每個 submit 命令都 `not_adopted:`）。每個寫入命令整段持有台帳的作業系統檔案鎖，拿到鎖才重讀台帳（等 60 秒 → ABORT `locked:`）；唯讀命令不上鎖、略過還沒寫完的最後一列。`upload` 在交易內先做一次 `sync`（讀不到 → `sync_failed:`；`--no-sync` 略過、WARN），再算配額；同一個 id 已有 `uploaded` 列 → `already_uploaded:`，`--force "<理由>"` 才照傳（取代第 28 條末句的待辦）；`record` 只 WARN。`sync` 把對上 id 卻沒有對應上傳的平台發補成 `uploaded`（`source=platform`，PENDING 也補，取代第 29 條「PENDING 綁不上」的限制）；第 10 條的規則 1 先找以 id 開頭的描述，沒有才找提到 id 的（`S2 same as S1` 是 S2 的）；規則 2（檔名＋時間）只看 vcp 與手動的 `uploaded` 列；`scored` 依 ref 冪等；`latest_score` 依平台時間。細節見 `2026-09-28-vcp-shared-ledger-design.md`。
+
+31. **CLI 失敗時回讀（VCP-047，2026-10-04；補充第 28、30 條）**：Kaggle CLI 送出後在等回應時斷線會非 0 退出，但平台其實已經收下；以前直接 FAIL、不寫列，下一次同步前台帳、`status` 與配額都少算，`--no-sync`、`--force` 或平台晚列出時還會多扣一格。現在 CLI 非 0 時在同一個上傳交易裡（持有台帳鎖）做第 28 條的回讀，時間窗與比對規則相同：對上、而且台帳還沒有這個 ref → 寫 `uploaded`（`source=vcp`、`confirmed=true`、`platform_ref`，跟第 28 條對上時同一個樣子），WARN，VERDICT 帶 `exit_code=`、`readback=matched`、`detail=<redact 後的 CLI 錯誤>`；平台約 17 秒內沒有列出以這個 id 開頭的提交 → FAIL `upload_failed:`、不寫列，可以重傳（之後才出現的，下一次 upload 的同步會擋成 `already_uploaded:`；用 `--no-sync` 前先看平台）；`ambiguous`、`failed`、`interrupted`，或只對上台帳已有的 ref → FAIL `upload_unconfirmed:`、不寫列，重傳前先到平台找這個 id、時間在送出時間附近的提交，有就 `vcp submit sync`。訊息保留 `kaggle CLI failed (exit N)` 與 redact 後的最後一行。回讀一律排除台帳已有的 ref（exit 0 也是）：`--force` 重傳時舊的那一發還在列表上，排除之後才對得到新的那一發；整個時間窗只看到已知的 ref → 結果 `known_ref`；CLI 回 0 而只看到已知 ref 時，也要等滿整個回讀（約 17 秒）才寫那一列未確認的 `uploaded`。`UploadResult` 新增 `exit_code`（預設 0），`Platform.upload` 多一個 `known_refs`。列表呼叫（上傳前同步、`sync`、回讀）每次 CLI 呼叫 120 秒逾時（`vcp.submit.platforms.kaggle.LIST_TIMEOUT`）：逾時時上傳前同步與 `sync` → `sync_failed:`，回讀 → `failed`；上傳本身不加逾時；逾時結束的是整個程序樹（Windows：用 `taskkill /T /F` 結束；POSIX：子程序在新的 session 裡跑，用 `killpg` 結束），所以 `uv tool` 之類的包裝程式也一併切斷。回讀找不到新的一筆（`not_listed`、`known_ref`）時，這個交易要等滿約 17 秒才放開台帳鎖，每次列表的 CLI 呼叫最多 120 秒；其他寫入者等 60 秒後 ABORT `locked:`，重跑即可。台帳格式不變。細節見 `2026-10-04-vcp-round3-fixes-design.md` §6。

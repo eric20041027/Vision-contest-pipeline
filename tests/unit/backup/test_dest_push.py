@@ -124,7 +124,8 @@ def test_push_local_copies_verifies_and_is_idempotent(world):
     assert [r.tier for r in rows] == [1, 2, 2] and rows[-1].pushed == 0 and rows[-1].bytes == 0
     _push(world, str(vault), tier=3)
     assert (vault / "data" / "work" / "good" / "weights" / "last.pt").is_file()
-    assert not (vault / "data" / "work" / "good" / "weights" / "best.pt").exists()  # remote_copy
+    best = vault / "data" / "work" / "good" / "weights" / "best.pt"
+    assert best.read_bytes() == b"best weights"  # its copy is outside this vault: it travels too
 
 
 def test_push_refuses_a_stale_manifest_before_moving_anything(world):
@@ -246,7 +247,7 @@ def test_forget_remote_only_after_everything_verified(world):
     good = FakeRemote()
     with pytest.raises(ValidationFailed, match="forget_refused") as ei:
         _push(world, "fake:vault", tier=1, forget_remote=True, runner=good)
-    above = sum(1 for f in res.manifest.files if f.kind == "file" and f.tier > 1)
+    above = sum(1 for f in res.manifest.files if f.tier > 1)  # the local remote_copy as well
     assert ei.value.fields["unverified"] == above and good.deleted == []
     assert _ledger(world).latest("push", "m1").tier == 1  # the push itself is recorded
     assert _ledger(world).of("remote_forgotten") == []

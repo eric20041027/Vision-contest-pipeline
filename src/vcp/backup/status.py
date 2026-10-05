@@ -1,17 +1,47 @@
 """``vcp backup status`` (read-only): each manifest's last push and verify, the tiers never
-pushed, and whether an rclone config file is still on this machine."""
+pushed, whether it is complete, and whether an rclone config file is still on this machine.
+
+Completeness is recomputed from the manifest every time (spec 2026-10-04 §4.2): a verify row
+written before 0.13.0 never asked, so a passing one cannot vouch for a manifest that lists fewer
+files than its runs registered. Without the run records on this machine the rows' own
+``incomplete`` decides; with none, a manifest written before 0.10.0 stays ``unchecked``. A run
+record that does not load leaves the manifests that list it ``unchecked`` too, and the overview
+goes on (``backup verify`` FAILs on that record).
+
+A push or verify row about a destination that does not cover the manifest's local copies
+vouches only if it handled them (``local_copies``, written since 0.13.0, spec §5.2)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
-from vcp.backup.dest import rclone_conf_state
+from vcp.backup.completeness import checkable, manifest_gaps
+from vcp.backup.dest import covers, rclone_conf_state
 from vcp.backup.ledger import BackupLedger
+from vcp.backup.manifest import load_manifest
 from vcp.backup.push import TIERS
-from vcp.backup.schema import BackupRow
+from vcp.backup.schema import BackupRow, Manifest
+from vcp.core.build import parse_build_string
+from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.proc import Runner
+
+# The first release whose manifests list every checkpoint path (VCP-035).
+COMPLETE_SINCE = (0, 10, 0)
+
+# Why this machine cannot tell whether a manifest is complete, in the words of the status note.
+BEFORE_COMPLETE = "written before vcp 0.10.0, no run records here"
+NO_MANIFEST = "manifest unreadable"
+NO_VERSION = "vcp_version does not parse"
+NO_RECORD = "a run record does not load"
+
+
+class Completeness(NamedTuple):
+    incomplete: int | None  # files its runs registered that it does not list; None: unknown
+    why_unchecked: str = ""  # one of the four reasons above when ``incomplete`` is None
+    record_error: str = ""  # with NO_RECORD: which record, and the first line of why
 
 
 @dataclass(frozen=True)
@@ -25,10 +55,19 @@ class ManifestStatus:
     pushed_tiers: list[int]
     verified: bool
     local_ok: bool
+    incomplete: int | None = 0  # files its runs registered that it does not list; None: unknown
+    why_unchecked: str = ""  # as in ``Completeness``
+    record_error: str = ""  # as in ``Completeness``
 
     @property
     def unpushed_tiers(self) -> list[int]:
         return [t for t in TIERS if t not in self.pushed_tiers]
+
+    @property
+    def completeness(self) -> str:
+        if self.incomplete is None:
+            return "unchecked"
+        return "incomplete" if self.incomplete else "complete"
 
 
 @dataclass(frozen=True)
@@ -41,10 +80,19 @@ class StatusView:
     def unverified(self) -> list[str]:
         return [m.manifest_id for m in self.manifests if not m.verified]
 
+    @property
+    def incomplete(self) -> list[str]:
+        return [m.manifest_id for m in self.manifests if m.incomplete]
+
+    @property
+    def unchecked(self) -> list[str]:
+        return [m.manifest_id for m in self.manifests if m.incomplete is None]
+
 
 def local_ok(row: BackupRow) -> bool:
-    """The two layers that need no destination: local consistency and timestamps."""
-    return not row.drift and not row.bad_stamps
+    """The two layers that need no destination: local consistency -- completeness included
+    (spec 2026-10-04 §4.3) -- and timestamps."""
+    return not row.drift and not row.bad_stamps and not row.incomplete
 
 
 def passed(row: BackupRow) -> bool:
@@ -61,6 +109,65 @@ def passed(row: BackupRow) -> bool:
     )
 
 
+def _load(paths: DatasetPaths, manifest_id: str) -> Manifest | None:
+    try:
+        return load_manifest(paths, manifest_id)
+    except ValidationFailed:
+        return None  # gone or unreadable: nothing about it can be verified
+
+
+def _release(build: str) -> tuple[int, ...] | None:
+    """The release a manifest's ``vcp_version`` names; None when it does not parse."""
+    try:
+        version = parse_build_string(build).version
+    except ValueError:
+        return None
+    return tuple(int(part) for part in version.split("."))
+
+
+def _record_error(e: ValidationFailed) -> str:
+    """One line for the note: the record that does not load, and the first line of why."""
+    lines = str(e.args[0]).splitlines() if e.args else []
+    why = lines[0] if lines else type(e).__name__
+    return f"{e.location} does not load: {why}" if e.location else why
+
+
+def gaps_of(
+    manifest: Manifest | None, paths: DatasetPaths, verifies: list[BackupRow]
+) -> Completeness:
+    """How many files the manifest's runs registered that it does not list -- or None, and why,
+    when this machine cannot tell (spec 2026-10-04 §4.2)."""
+    if manifest is None:
+        return Completeness(None, NO_MANIFEST)
+    if checkable(manifest, paths):
+        try:
+            return Completeness(len(manifest_gaps(manifest, paths)))
+        except ValidationFailed as e:  # `backup verify` FAILs on it; the overview goes on
+            return Completeness(None, NO_RECORD, _record_error(e))
+    recorded = max((v.incomplete or 0 for v in verifies), default=0)
+    if recorded:
+        return Completeness(recorded)
+    release = _release(manifest.vcp_version)
+    if release is None:
+        return Completeness(None, NO_VERSION)
+    return Completeness(None, BEFORE_COMPLETE) if release < COMPLETE_SINCE else Completeness(0)
+
+
+def _vouches(row: BackupRow, manifest: Manifest | None) -> bool:
+    """Whether a push or verify row about destination D speaks for the manifest's remote_copies
+    there: D covers every one, or the row handled them (``local_copies``, written since 0.13.0).
+    An older row never looked for a local copy at D (spec 2026-10-04 §5.2)."""
+    if manifest is None or row.dest is None or row.local_copies is not None:
+        return True
+    return all(covers(row.dest, f.remote) for f in manifest.files if f.remote is not None)
+
+
+def _pushed_tier(row: BackupRow, manifest: Manifest | None) -> int:
+    """The tiers a push row covers: a tier-3 push that left the local copies out covers two."""
+    tier = int(row.tier or 0)
+    return 2 if tier == 3 and not _vouches(row, manifest) else tier
+
+
 def status(
     dataset: str,
     *,
@@ -75,7 +182,10 @@ def status(
         mid = str(row.manifest_id)
         pushes = ledger.of("push", mid)
         verifies = ledger.of("verify", mid)
-        covered = max((int(p.tier or 0) for p in pushes if p.failed == []), default=0)
+        manifest = _load(paths, mid)
+        found = gaps_of(manifest, paths, verifies)
+        complete = found.incomplete == 0
+        covered = max((_pushed_tier(p, manifest) for p in pushes if p.failed == []), default=0)
         out.append(
             ManifestStatus(
                 manifest_id=mid,
@@ -85,8 +195,11 @@ def status(
                 last_push=pushes[-1] if pushes else None,
                 last_verify=verifies[-1] if verifies else None,
                 pushed_tiers=[t for t in TIERS if t <= covered],
-                verified=any(passed(v) for v in verifies),
-                local_ok=any(local_ok(v) for v in verifies),
+                verified=complete and any(passed(v) and _vouches(v, manifest) for v in verifies),
+                local_ok=complete and any(local_ok(v) for v in verifies),
+                incomplete=found.incomplete,
+                why_unchecked=found.why_unchecked,
+                record_error=found.record_error,
             )
         )
     return StatusView(dataset, out, rclone_conf_state(runner))

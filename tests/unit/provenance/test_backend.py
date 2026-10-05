@@ -13,14 +13,14 @@ from vcp.provenance.index import ProvenanceIndex
 def test_default_factory_wraps_existing_sqlite_without_importing_psycopg(roots, monkeypatch):
     imported = []
     monkeypatch.setattr("vcp.provenance.backend.import_module", lambda name: imported.append(name))
-    backend = make_backend(BackendConfig(), roots.data)
+    backend = make_backend(BackendConfig(), roots.data, roots.configs)
     assert backend.name is BackendName.SQLITE
-    assert backend.location_label == str(provenance_index_path(roots.data))
+    assert backend.location_label == str(provenance_index_path(roots.data, roots.configs))
     assert imported == []
 
 
 def test_sqlite_adapter_preserves_normalized_results(roots):
-    direct = ProvenanceIndex(provenance_index_path(roots.data))
+    direct = ProvenanceIndex(provenance_index_path(roots.data, roots.configs))
     adapter = SQLiteBackend(direct)
     direct.rebuild(roots.data, roots.configs)
     assert adapter.normalized() == direct.normalized()
@@ -33,7 +33,7 @@ def test_sqlite_adapter_preserves_normalized_results(roots):
 
 @pytest.mark.parametrize("strategy", ["full", "auto"])
 def test_sqlite_adapter_rejects_unsupported_strategies(roots, strategy):
-    adapter = SQLiteBackend(ProvenanceIndex(provenance_index_path(roots.data)))
+    adapter = SQLiteBackend(ProvenanceIndex(provenance_index_path(roots.data, roots.configs)))
     with pytest.raises(ValidationFailed, match="unsupported_strategy"):
         adapter.ingest_diff("missing", roots.data, roots.configs, requested_strategy=strategy)
 
@@ -63,7 +63,7 @@ def test_sqlite_adapter_classifies_duplicate_and_incremental_results(roots):
     new_samples[0] = new_samples[0].model_copy(update={"group": "changed"})
     _save_dataset(roots, "class-old", old_samples)
     _save_dataset(roots, "class-new", new_samples)
-    adapter = make_backend(BackendConfig(), roots.data)
+    adapter = make_backend(BackendConfig(), roots.data, roots.configs)
     adapter.rebuild(roots.data, roots.configs)
     _create_diff(roots, "class-old", "class-new", "class-diff")
 
@@ -81,7 +81,7 @@ def test_sqlite_adapter_classifies_verified_zero_change_diff(roots):
     samples = det_samples(3, seed=32)
     _save_dataset(roots, "noop-old", samples)
     _save_dataset(roots, "noop-new", [sample.model_copy(deep=True) for sample in samples])
-    adapter = make_backend(BackendConfig(), roots.data)
+    adapter = make_backend(BackendConfig(), roots.data, roots.configs)
     adapter.rebuild(roots.data, roots.configs)
     _create_diff(roots, "noop-old", "noop-new", "noop-diff")
 
@@ -104,7 +104,7 @@ def test_sqlite_adapter_ingest_does_not_load_historical_payloads(roots, monkeypa
         newest[1] = newest[1].model_copy(update={"group": "newest"})
     for name, rows in (("history-old", samples), ("history-new", changed), ("latest", newest)):
         _save_dataset(roots, name, rows)
-    adapter = make_backend(BackendConfig(), roots.data)
+    adapter = make_backend(BackendConfig(), roots.data, roots.configs)
     adapter.rebuild(roots.data, roots.configs)
     _create_diff(roots, "history-old", "history-new", "history-diff")
     adapter.ingest_diff("history-diff", roots.data, roots.configs)
@@ -165,7 +165,7 @@ def test_sqlite_adapter_elapsed_includes_verification_ingest_and_counts(roots, m
     samples = det_samples(3, seed=34)
     _save_dataset(roots, "timed-old", samples)
     _save_dataset(roots, "timed-new", [sample.model_copy(deep=True) for sample in samples])
-    adapter = make_backend(BackendConfig(), roots.data)
+    adapter = make_backend(BackendConfig(), roots.data, roots.configs)
     adapter.rebuild(roots.data, roots.configs)
     _create_diff(roots, "timed-old", "timed-new", "timed-diff")
     clock_ns = 0

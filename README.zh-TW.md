@@ -120,11 +120,11 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 
 ## 狀態與路線
 
-`0.12.0`，尚未到 1.0：產物與台帳格式已經穩定到可以在上面蓋東西；CLI 契約在 minor 版本仍可能改變（每次 bump 的意義見 [CHANGELOG.md](CHANGELOG.md)）。
+`0.12.0`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
 
 - **端到端驗證**：本機 RSNA 膝關節子集——資料、訓練、判決、stage、備份——目前正用於該比賽。
 - **PostgreSQL provenance 後端**：五份 live 證據（整合測試 51/51；1,224 次量測的 calibration；1K–100K 的 3,672 次六方法基準；aggregate gate 以 1.018 / 1.017 通過的 held-out；真實資料軌），全程對 canonical replay 完全一致。兩個發現如實列為限制而不是藏起來：incremental 在量到的每個變更比例都贏 full rebuild，以及 v1 adaptive policy 在小圖與接近全量變更時會選錯 FULL。細節：[docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md)。
-- **下一步**：稽核 Wave 1c（程式碼快照與授權收據）是 `1.0.0` 前最後一項；之後是 adaptive policy v2。
+- **下一步**：稽核 Wave 1c（程式碼快照與產物授權，VCP-004／006）。`1.0.0` 留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後，adaptive policy v2 也是。
 
 ## 文件
 

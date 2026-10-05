@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from datetime import timedelta
 
 import pytest
@@ -8,7 +9,7 @@ from typer.testing import CliRunner
 from submit_fixtures import EVAL, STAMP, TEST, seed_eval_runs, seed_judgements, seed_test_runs
 from vcp.cli import app
 from vcp.core.config import dump_yaml_model
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.submit.actions import record, score, upload
@@ -19,6 +20,7 @@ from vcp.submit.platforms import kaggle
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile, Quota
 from vcp.submit.stage import StageSpec, stage
+from vcp.submit.sync import sync
 
 SECRET = "fakesecretfakesecretfakesecret1234"
 EMPTY = (0, "No submissions found", "")  # the list upload reads first, when it is empty
@@ -159,11 +161,12 @@ def test_upload_kaggle_with_quota(pair):
 
 def test_upload_failures_write_no_row(pair, no_wait):
     _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
-    runner = FakeRunner([EMPTY, (1, "", f"denied key={SECRET}")])
-    with pytest.raises(Exception, match="exit 1") as ei:
+    looks = [EMPTY] * len(kaggle.READBACK_DELAYS)  # a failed CLI is read back (VCP-047)
+    runner = FakeRunner([EMPTY, (1, "", f"denied key={SECRET}"), *looks])
+    with pytest.raises(Exception, match=r"upload_failed: kaggle CLI failed \(exit 1\)") as ei:
         upload(TEST, "S1", runner=runner, **_kw(pair))
     assert SECRET not in str(ei.value)
-    assert ei.value.fields == {"exit_code": 1, "sync": "ok", "bound": 0}
+    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed", "sync": "ok", "bound": 0}
     runner = FakeRunner([EMPTY, (0, "Could not submit to competition", "")])  # 2.2.4, exit 0
     with pytest.raises(Exception, match="upload_failed"):
         upload(TEST, "S1", runner=runner, **_kw(pair))
@@ -194,7 +197,9 @@ def test_a_read_back_that_meets_a_ref_the_ledger_holds_confirms_nothing(pair, no
     assert first.row.platform_ref == "777"
     # S1 once more (a re-upload needs --force), while the list still shows only the first
     # one: 777 is not this upload
-    runner = FakeRunner([_listing(listed), *answers])
+    # spec 2026-10-04 §6.1: the read-back looks past 777 at every look, then says so
+    looks = [_listing(listed)] * len(kaggle.READBACK_DELAYS)
+    runner = FakeRunner([_listing(listed), (0, "queued", ""), *looks])
     again = upload(TEST, "S1", force="the first looked lost", runner=runner, **_kw(pair))
     assert (again.row.confirmed, again.row.platform_ref) == (False, None)
     assert again.result.readback == "known_ref" and again.row.reason == "the first looked lost"
@@ -348,3 +353,116 @@ def test_record_and_score_write_the_shared_ledger(pair):
     rows = SubmissionLedger(shared_ledger(pair.test_paths)).rows
     assert [r.event for r in rows] == ["staged", "staged", "uploaded", "scored"]
     assert not pair.test_paths.submissions_log.exists()
+
+
+# --- VCP-047: the kaggle CLI failed, so the list is read back in the same transaction ---------
+
+CLI_DOWN = (1, "", f"('Connection aborted.', RemoteDisconnected('closed')) key={SECRET}")
+
+
+def _first_row(ref: int, description: str = "S1") -> dict:
+    return {"ref": ref, "fileName": "submission.csv", "date": stamp(), "description": description}
+
+
+def test_a_failed_cli_whose_upload_the_list_shows_is_recorded_once(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    listed = _first_row(31)
+    out = upload(TEST, "S1", runner=FakeRunner([EMPTY, CLI_DOWN, _listing(listed)]), **_kw(pair))
+    assert (out.row.confirmed, out.row.platform_ref, out.row.source) == (True, "31", "vcp")
+    assert (out.result.exit_code, out.result.readback, out.quota.used) == (1, "matched", 1)
+    again = sync(TEST, runner=FakeRunner([_listing(listed)]), **_kw(pair))
+    assert (again.foreign, again.bound) == (0, 0)  # its ref ties the entry to this very row
+    with pytest.raises(ValidationFailed, match="quota_exhausted") as ei:
+        upload(TEST, "S2", runner=FakeRunner([_listing(listed)]), **_kw(pair))
+    assert ei.value.fields["quota"] == "1/1"  # one upload, counted once
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    assert len(led.uploads("S1")) == 1
+
+
+def test_a_failed_cli_the_list_does_not_show_fails_and_writes_nothing(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    before = pair.test_paths.submissions_log.read_bytes()
+    looks = [EMPTY] * len(kaggle.READBACK_DELAYS)
+    with pytest.raises(PlatformError, match="upload_failed:") as ei:
+        upload(TEST, "S1", runner=FakeRunner([EMPTY, CLI_DOWN, *looks]), **_kw(pair))
+    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed", "sync": "ok", "bound": 0}
+    assert pair.test_paths.submissions_log.read_bytes() == before
+
+
+def test_a_failed_cli_vcp_cannot_settle_fails_unconfirmed_and_writes_nothing(pair, no_wait):
+    quota = Quota(per_day=5, day_tz="UTC")
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best", quota=quota))
+    first = _first_row(777)
+    upload(TEST, "S1", runner=FakeRunner([EMPTY, (0, "queued", ""), _listing(first)]), **_kw(pair))
+    before = pair.test_paths.submissions_log.read_bytes()
+    looks = len(kaggle.READBACK_DELAYS)
+    twins = _listing(first, _first_row(778), _first_row(779))
+    for answers, outcome in (
+        ([_listing(first)] * looks, "known_ref"),  # only the earlier upload is listed
+        ([twins], "ambiguous"),
+        ([(2, "", "503 Service Unavailable")], "failed"),
+    ):
+        runner = FakeRunner([_listing(first), CLI_DOWN, *answers])
+        with pytest.raises(PlatformError, match="upload_unconfirmed:") as ei:
+            upload(TEST, "S1", force="the first looked lost", runner=runner, **_kw(pair))
+        assert ei.value.fields["readback"] == outcome and ei.value.fields["exit_code"] == 1
+        assert pair.test_paths.submissions_log.read_bytes() == before
+
+
+def test_no_sync_still_reads_back_a_failed_cli(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    runner = FakeRunner([CLI_DOWN, _listing(_first_row(31))])
+    out = upload(TEST, "S1", no_sync=True, runner=runner, **_kw(pair))
+    assert (out.sync, out.result.exit_code, out.row.platform_ref) == ("skipped", 1, "31")
+
+
+def test_force_after_a_failed_cli_matches_the_new_upload_past_the_known_one(pair, no_wait):
+    quota = Quota(per_day=5, day_tz="UTC")
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best", quota=quota))
+    first = _first_row(777)
+    upload(TEST, "S1", runner=FakeRunner([EMPTY, (0, "queued", ""), _listing(first)]), **_kw(pair))
+    both = _listing(first, _first_row(778, "S1 again"))
+    runner = FakeRunner([_listing(first), CLI_DOWN, both])
+    out = upload(TEST, "S1", force="scorer was down", runner=runner, **_kw(pair))
+    assert (out.row.platform_ref, out.result.readback) == ("778", "matched")
+    assert out.result.exit_code == 1 and out.row.reason == "scorer was down"
+
+
+def test_a_list_that_times_out_stops_the_upload_and_sync(pair):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+
+    def hangs(args):
+        raise subprocess.TimeoutExpired(args, 120)
+
+    before = pair.test_paths.submissions_log.read_bytes()
+    with pytest.raises(ValidationFailed, match="sync_failed: kaggle CLI timed out"):
+        upload(TEST, "S1", runner=hangs, **_kw(pair))
+    with pytest.raises(ValidationFailed, match="sync_failed: kaggle CLI timed out"):
+        sync(TEST, runner=hangs, **_kw(pair))
+    assert pair.test_paths.submissions_log.read_bytes() == before
+
+
+def test_a_failed_cli_reads_redacted_in_the_ledger_the_log_and_the_verdict(
+    pair, monkeypatch, no_wait
+):
+    profile = _profile(
+        platform="kaggle", competition="c1", board_rule="best", kaggle_command=[sys.executable]
+    )
+    _staged(pair, profile)
+    answers = iter([EMPTY, CLI_DOWN, _listing(_first_row(31))])
+
+    def fake(args):
+        code, out, err = next(answers)
+        return subprocess.CompletedProcess(args, code, out, err)
+
+    monkeypatch.setattr(kaggle, "default_runner", fake)
+    monkeypatch.setattr(kaggle, "timed_runner", lambda seconds: fake)
+    r = CliRunner().invoke(app, ["submit", "upload", "--dataset", TEST, "--id", "S1"])
+    verdict = [line for line in r.output.splitlines() if line.startswith("VERDICT ")][-1]
+    assert r.exit_code == 0 and "status=WARN" in verdict and "exit_code=1" in verdict, r.output
+    assert "platform_ref=31" in verdict and "readback=matched" in verdict
+    assert "Connection aborted" in verdict and "do not send it again" in r.output
+    logs = "".join(p.read_text(encoding="utf-8") for p in (pair.roots.data / "logs").iterdir())
+    ledger = pair.test_paths.submissions_log.read_text(encoding="utf-8")
+    for text in (r.output, logs, ledger):
+        assert SECRET not in text

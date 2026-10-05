@@ -10,7 +10,7 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from backup_fixtures import SECRET, make_world
+from backup_fixtures import FOLDS, SECRET, make_world, register_folds, write_old_manifest
 from vcp.backup import dest as destmod
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest
@@ -247,7 +247,7 @@ def test_fake_rclone_story(world, tmp_path, monkeypatch):
     outputs.append(r.output)
     v = _verdict(r.output)
     manifest = load_manifest(_paths(world, "beach-test"), "r1")
-    rest = sum(1 for f in manifest.files if f.tier > 1 and f.kind == "file")
+    rest = sum(1 for f in manifest.files if f.tier > 1)  # the local remote_copy travels too
     assert r.exit_code == 1 and "forget_refused" in v and f"unverified={rest}" in v
     assert not (store / "deleted-fake").exists()  # tiers 2 and 3 are not at the destination yet
     assert (
@@ -267,9 +267,8 @@ def test_fake_rclone_story(world, tmp_path, monkeypatch):
     r = _backup("verify", *common)
     outputs.append(r.output)
     v = _verdict(r.output)
-    files = sum(1 for f in manifest.files if f.kind == "file")
-    assert r.exit_code == 0 and f"ok={files + 1}" in v and "missing=0" in v
-    # +1: the remote_copy, verified in place at the destination `train upload` used
+    assert r.exit_code == 0 and f"ok={len(manifest.files)}" in v and "missing=0" in v
+    assert "local_copies=1" in v  # the remote_copy's local copy, pushed and checked at fake:vault
     profile = _paths(world, "beach-test").submit_yaml
     original = profile.read_bytes()
     profile.unlink()
@@ -278,3 +277,81 @@ def test_fake_rclone_story(world, tmp_path, monkeypatch):
     v = _verdict(r.output)
     assert r.exit_code == 0 and "pulled=1" in v and profile.read_bytes() == original
     _scan(world, outputs)
+
+
+# --- 0.13.0: VCP-045 and VCP-046 end to end (spec 2026-10-04 §9) -----------------------------
+
+
+def _fake_rclone(tmp_path, monkeypatch):
+    script = tmp_path / "fake_rclone.py"
+    script.write_text(FAKE_RCLONE, encoding="utf-8")
+    store = tmp_path / "remote-store"
+    conf = tmp_path / "rclone.conf"
+    conf.write_text("[fake]\ntype = local\n", encoding="utf-8")
+    monkeypatch.setattr(destmod, "RCLONE", [sys.executable, str(script)])
+    monkeypatch.setenv("FAKE_RCLONE_STORE", str(store))
+    monkeypatch.setenv("FAKE_RCLONE_CONF", str(conf))
+    return store
+
+
+def test_an_old_incomplete_manifest_is_caught_and_replaced(world, monkeypatch):
+    """VCP-045: the five-fold manifest vcp 0.9.1 wrote lists one fold. verify, status and a
+    tier-3 push all say so; a manifest written now, under a new id, pushes and verifies."""
+    monkeypatch.setattr(destmod.shutil, "which", lambda name, *a, **k: None)  # never a real rclone
+    register_folds(world)
+    write_old_manifest(world, "beach", "run:good", "old-091", drop=set(FOLDS[:4]))
+    r = _backup("verify", "--dataset", "beach", "--manifest", "old-091")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "reason=manifest_incomplete" in v and "incomplete=4" in v
+    r = _backup("status", "--dataset", "beach")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "incomplete=1" in v
+    vault = world.tmp / "vault"
+    common = ["--dataset", "beach", "--dest", str(vault), "--tier", "3"]
+    r = _backup("push", "--manifest", "old-091", *common)
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "manifest_incomplete:" in v and "incomplete=4" in v
+    assert not vault.exists()
+    r = _backup("manifest", "--dataset", "beach", "--conclusion", "run:good", "--id", "new")
+    assert r.exit_code == 0 and "status=OK" in _verdict(r.output), r.output
+    r = _backup("push", "--manifest", "new", *common)
+    assert r.exit_code == 0 and "failed=0" in _verdict(r.output), r.output
+    folds = sorted(path.parent.name for path in vault.rglob("model.pt"))
+    assert folds == [f"fold-{k}" for k in range(5)]
+    r = _backup("verify", "--dataset", "beach", "--manifest", "new", "--dest", str(vault))
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "incomplete=0" in v, r.output
+    r = _backup("status", "--dataset", "beach", "--json")
+    by_id = {m["manifest_id"]: m for m in json.loads(r.stdout)["result"]["manifests"]}
+    assert by_id["new"]["verified"] and by_id["old-091"]["completeness"] == "incomplete"
+
+
+def test_a_local_copy_reaches_the_rclone_destination_before_the_credential_goes(
+    world, tmp_path, monkeypatch
+):
+    """VCP-046: `train upload` to a local folder, a manifest, then a tier-3 push to an rclone
+    remote: the weights are sent there and checked there, status says verified, and only then
+    may the credential go."""
+    store = _fake_rclone(tmp_path, monkeypatch)
+    r = runner.invoke(app, ["train", "upload", "--run", "good", "--dest", str(world.tmp / "usb")])
+    assert r.exit_code == 0, r.output
+    r = _backup("manifest", "--dataset", "beach", "--conclusion", "run:good", "--id", "r1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "local_copies=2" in v, r.output
+    common = ["--dataset", "beach", "--manifest", "r1", "--dest", "fake:vault"]
+    r = _backup("push", *common, "--tier", "3")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "local_copies=2" in v and "failed=0" in v, r.output
+    weights = store / "fake" / "vault" / "data" / "work" / "good" / "weights"
+    assert (weights / "best.pt").read_bytes() == b"best weights"
+    assert (weights / "last.pt").read_bytes() == b"last weights"
+    r = _backup("verify", *common)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "local_copies=2" in v, r.output
+    r = _backup("status", "--dataset", "beach", "--json")
+    [m] = json.loads(r.stdout)["result"]["manifests"]
+    assert m["verified"] and m["pushed_tiers"] == [1, 2, 3]
+    r = _backup("push", *common, "--tier", "3", "--forget-remote")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "forgotten=fake" in v, r.output
+    assert (store / "deleted-fake").is_file()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -81,8 +82,24 @@ def indexes_root(data_root: Path) -> Path:
     return data_root / "indexes"
 
 
-def provenance_index_path(data_root: Path) -> Path:
-    return indexes_root(data_root) / "provenance.sqlite3"
+# vcp 0.12 and earlier kept one index per data root under this name; 0.13 never reads it.
+LEGACY_PROVENANCE_INDEX = "provenance.sqlite3"
+
+
+def path_id(path: Path) -> str:
+    """The first 16 hex of sha256 over the resolved, platform-case-folded path (spec 2026-10-04
+    §3.1): the identity of a configs root or a data root, and the name of a lock file. Spellings
+    of one directory -- drive-letter case, an 8.3 short name, a junction or a symlink -- share an
+    id; moving or renaming the directory gives it a new one."""
+    key = os.path.normcase(str(Path(path).resolve()))
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def provenance_index_path(data_root: Path, configs_root: Path) -> Path:
+    """``<data_root>/indexes/provenance-<configs root id>.sqlite3``: one SQLite index per
+    checkout (spec 2026-10-04 §3.2), so two checkouts that share a data root never take turns
+    with one file."""
+    return indexes_root(data_root) / f"provenance-{path_id(configs_root)}.sqlite3"
 
 
 def artifact_dir(data_root: Path, kind: str, artifact_id: str) -> Path:

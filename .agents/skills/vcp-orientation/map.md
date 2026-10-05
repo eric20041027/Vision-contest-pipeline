@@ -3,7 +3,7 @@
 ## 兩個根目錄
 - `VCP_DATA_ROOT`（預設 Windows `C:/vcp-data`、Linux `~/vcp-data`；比賽工作區常自帶 `<repo>/vcp-data`）：
   `raw/<name>/`、`datasets/<name>/{samples.jsonl,raw_manifest.txt,cache/}`、`runs/<run>/`、`measure/<name>/`、
-  `submit/<test>/<id>/`、`submit/<test>/submissions.jsonl`（`ledger: shared` 的台帳正本）、`locks/`（台帳鎖，別刪）、`artifacts/<kind>/<id>/`、`indexes/provenance.sqlite3`、`logs/`。不進 git。
+  `submit/<test>/<id>/`、`submit/<test>/submissions.jsonl`（`ledger: shared` 的台帳正本）、`locks/`（台帳鎖，別刪）、`artifacts/<kind>/<id>/`、`indexes/provenance-<configs root id>.sqlite3`（provenance 索引，每個 checkout 一份）、`logs/`。不進 git。
 - `VCP_CONFIGS_ROOT`（預設 repo 的 `configs/`）：`datasets/<name>/{dataset.yaml,splits/*.json,prereg/*.yaml,prereg.log.jsonl,fuse/*.yaml,submit.yaml,submissions.jsonl,backup/*.json,backup.log.jsonl}`。進 git（`submissions.jsonl` 只在 `ledger: configs` 時用）。
 - 比賽膠水：`projects/<contest>/`（README / RUNBOOK / DESIGN、prepare.py、train.py、predict.py、metrics 模組、notebook 打包腳本、`requirements-*.txt`、專案 `.venv`）。
 
@@ -35,7 +35,7 @@
 | 版本規則與發版四步 | `CHANGELOG.md` 表頭 |
 
 ## 版本與 build string
-`src/vcp/__init__.py` 的 `__version__` 是唯一來源。產物寫 `vcp.core.build.build_string()`：`0.8.1`（發版 wheel）、`0.8.1+g<commit>`（checkout）、`…dirty`（有未提交變更）。`vcp version` 印同一字串。MINOR = 產物／台帳內容或 CLI 契約改變；PATCH = 其餘。
+`src/vcp/__init__.py` 的 `__version__` 是唯一來源。產物寫 `vcp.core.build.build_string()`：`0.13.0`（發版 wheel）、`0.13.0+g<commit>`（checkout）、`…dirty`（有未提交變更）。`vcp version` 印同一字串。GitHub 上的歷史在 2026-10 改寫過一次：改寫前寫下的 `+g<舊 hash>` 用 `docs/reference/commit-map-2026-10.tsv` 對到新 hash。MINOR = 產物／台帳內容或 CLI 契約改變；PATCH = 其餘。
 
 ## 歷史（看 CHANGELOG 才是權威）
-0.2 資料層 → 0.3 量測 → 0.4 不可變產物（Wave 1a）→ 0.5 access receipt（1b-1）→ 0.6 source audit（1b-2）→ 0.7 dataset evolution provenance → 0.8 PostgreSQL adaptive provenance → 0.8.1 串流 replay、`python -m vcp`、receipt nonce、開源門面 → 0.9.0 `vcp provenance graph` 與 graph skill → 0.9.1 skill 打包成 Claude Code plugin `vcp`（別的專案用 `/vcp:<skill>`）、SQLite 索引保存 graph gaps（舊索引 rebuild 一次）。Wave 1c（程式碼快照與授權）尚未做。
+0.2 資料層 → 0.3 量測 → 0.4 不可變產物（Wave 1a）→ 0.5 access receipt（1b-1）→ 0.6 source audit（1b-2）→ 0.7 dataset evolution provenance → 0.8 PostgreSQL adaptive provenance → 0.8.1 串流 replay、`python -m vcp`、receipt nonce、開源門面 → 0.9.0 `vcp provenance graph` 與 graph skill → 0.9.1 skill 打包成 Claude Code plugin `vcp`（別的專案用 `/vcp:<skill>`）、SQLite 索引保存 graph gaps（舊索引 rebuild 一次）→ 0.10.0 第二輪回報的五件（kernel 權重受檢、Kaggle 上傳回讀、配額不重算、多折同名 checkpoint、`VCP_ATTEMPT`）→ 0.11.0 run 的證據檔與標籤集（`--evidence` / `--labels`）、dirty 工作樹（`--require-clean`）→ 0.12.0 共用台帳（`ledger: shared`、`submit ledger adopt`、檔案鎖、上傳前同步）→ 0.13.0 provenance 索引每個 checkout 一份、備份清單的完整性與本機副本、Kaggle CLI 失敗時回讀（第三輪回報 VCP-044～047）。Wave 1c（程式碼快照與產物授權，VCP-004／006）尚未做；`1.0.0` 在 Wave 1（1a、1b、1c）全部落地之後。

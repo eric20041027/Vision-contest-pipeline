@@ -1,11 +1,15 @@
 import json
 import logging
+import os
 import subprocess
+import sys
+import time
 from datetime import timedelta
 
 import pytest
 
-from vcp.core.errors import PlatformError, ValidationFailed, VcpError
+from vcp.core.errors import PlatformError, PlatformTimeout, ValidationFailed, VcpError
+from vcp.core.proc import default_runner, timed_runner
 from vcp.core.time import parse_stamp, stamp
 from vcp.submit.platforms import get_platform, kaggle
 from vcp.submit.platforms.base import redact
@@ -136,7 +140,7 @@ def test_manual_platform_refuses(tmp_path):
         p.list_submissions(_profile(platform="manual"), None)
 
 
-def test_kaggle_upload_commands_and_outcomes(tmp_path):
+def test_kaggle_upload_commands_and_outcomes(tmp_path, no_wait):
     p = get_platform("kaggle")
     art = tmp_path / "submission.csv"
     art.write_text("id\n", encoding="utf-8")
@@ -146,11 +150,14 @@ def test_kaggle_upload_commands_and_outcomes(tmp_path):
     assert runner.calls == [  # the success phrase confirms it: no read-back
         ["fake-kaggle", "competitions", "submit", "-f", str(art), "-m", "S1 note", "-q", "c1"]
     ]
-    runner = FakeRunner([(1, "", f"401 Unauthorized key={SECRET}")])
-    with pytest.raises(PlatformError, match="exit 1") as ei:
+    # a failed CLI is read back (VCP-047): nothing listed, so nothing was submitted
+    looks = [_listing()] * len(kaggle.READBACK_DELAYS)
+    runner = FakeRunner([(1, "", f"401 Unauthorized key={SECRET}"), *looks])
+    with pytest.raises(PlatformError, match=r"upload_failed: kaggle CLI failed \(exit 1\)") as ei:
         p.upload(_staged(), art, "S1", _profile(), runner)
-    assert SECRET not in str(ei.value) and ei.value.fields == {"exit_code": 1}
-    assert ei.value.status == "FAIL"
+    assert SECRET not in str(ei.value)
+    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed"}
+    assert ei.value.status == "FAIL" and runner.calls[1:] == [LIST] * len(looks)
 
 
 def _kernel_upload(runner):
@@ -266,6 +273,7 @@ def test_a_failing_read_back_leaves_the_upload_unconfirmed_instead_of_failing(
     [
         (OSError("kaggle vanished"), "failed"),
         (RuntimeError("anything at all"), "failed"),
+        (subprocess.TimeoutExpired(["kaggle"], 120), "failed"),  # a list that hung (VCP-047)
         (KeyboardInterrupt(), "interrupted"),
     ],
 )
@@ -412,3 +420,153 @@ def test_failure_message_falls_back_to_stdout(tmp_path):
     with pytest.raises(PlatformError, match="denied on stdout") as ei:
         p.upload(_staged(), art, "S1", _profile(), runner)
     assert SECRET not in str(ei.value)
+
+
+# --- VCP-047: a failed CLI is read back; known refs are looked past; lists time out -----------
+
+CLI_DOWN = (1, "", f"('Connection aborted.', RemoteDisconnected('closed')) key={SECRET}")
+LOOKS = len(kaggle.READBACK_DELAYS)
+TWO_IN_THE_WINDOW = _listing((51234, "S1", 0), (51230, "S1 b", 1))
+ONLY_THE_KNOWN_ONE = _listing((51234, "S1", 0))
+
+
+def _upload(runner, *, known=frozenset()):
+    return get_platform("kaggle").upload(
+        _staged("kernel"), None, "S1", _profile(submission_kind="kernel"), runner, known_refs=known
+    )
+
+
+def test_a_failed_cli_is_read_back_and_an_upload_the_list_shows_is_returned(no_wait):
+    runner = FakeRunner([CLI_DOWN, _listing((51234, "S1", 0))])
+    res = _upload(runner)
+    assert (res.confirmed, res.platform_ref, res.readback) == (True, "51234", "matched")
+    assert res.exit_code == 1 and runner.calls[1:] == [LIST]
+    assert "Connection aborted" in res.detail and SECRET not in res.detail
+
+
+@pytest.mark.parametrize(
+    ("answers", "known", "word", "outcome"),
+    [
+        ([_listing()] * LOOKS, frozenset(), "upload_failed", "not_listed"),
+        ([TWO_IN_THE_WINDOW], frozenset(), "upload_unconfirmed", "ambiguous"),
+        ([(2, "", f"503 key={SECRET}")], frozenset(), "upload_unconfirmed", "failed"),
+        ([ONLY_THE_KNOWN_ONE] * LOOKS, frozenset({"51234"}), "upload_unconfirmed", "known_ref"),
+    ],
+    ids=["not-listed", "ambiguous", "list-failed", "only-a-known-ref"],
+)
+def test_a_failed_cli_the_list_does_not_settle_fails(no_wait, answers, known, word, outcome):
+    runner = FakeRunner([CLI_DOWN, *answers])
+    with pytest.raises(PlatformError, match=rf"{word}: kaggle CLI failed \(exit 1\)") as ei:
+        _upload(runner, known=known)
+    assert ei.value.fields == {"exit_code": 1, "readback": outcome}
+    assert ei.value.status == "FAIL" and SECRET not in str(ei.value)
+
+
+def test_a_failed_cli_whose_read_back_is_interrupted_fails_unconfirmed(no_wait):
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(args, 1, "", "connection reset")
+        raise KeyboardInterrupt
+
+    with pytest.raises(PlatformError, match="upload_unconfirmed:") as ei:
+        _upload(runner)
+    assert ei.value.fields == {"exit_code": 1, "readback": "interrupted"}
+
+
+def test_a_read_back_looks_past_the_refs_the_ledger_holds(no_wait):
+    """spec 2026-10-04 §6.1: a --force re-send while the earlier upload is still listed."""
+    earlier = _listing((51230, "S1", 1))
+    both = _listing((51230, "S1", 1), (51234, "S1 again", 0))
+    res = _upload(FakeRunner([(0, KERNEL_REPLY, ""), earlier, both]), known=frozenset({"51230"}))
+    assert res.confirmed and res.exit_code == 0
+    assert (res.platform_ref, res.readback) == ("51234", "matched")
+
+
+def test_a_list_that_hangs_is_cut_off_after_the_timeout(monkeypatch):
+    """spec 2026-10-04 §6.3: every list call gets LIST_TIMEOUT seconds, and a real child that
+    overruns it is killed."""
+    assert kaggle.LIST_TIMEOUT == 120.0
+    monkeypatch.setattr(kaggle, "LIST_TIMEOUT", 0.5)
+    profile = _profile(kaggle_command=[sys.executable, "-c", "import time; time.sleep(5)"])
+    with pytest.raises(
+        PlatformTimeout, match="no answer to `competitions submissions` within 0.5 s"
+    ):
+        get_platform("kaggle").list_submissions(profile, None)
+
+
+# A wrapper (a `uv tool` shim, say) runs the real program as a child that keeps the pipes open.
+# The child beats into a file for at most 30 s, so a survivor would end by itself.
+BEAT = (
+    "import sys, time\n"
+    "for _ in range(600):\n"
+    "    open(sys.argv[1], 'a').write('.')\n"
+    "    time.sleep(0.05)\n"
+)
+WRAPPER = f"import subprocess, sys\nsubprocess.run([sys.executable, '-c', {BEAT!r}, sys.argv[1]])\n"
+
+
+def test_a_timeout_ends_the_whole_process_tree(tmp_path):
+    """spec 2026-10-04 §6.3: a wrapper whose child outlives the limit is cut off at the limit,
+    and the child does not keep running. The limit leaves a slow runner time for two
+    interpreter start-ups before the first beat."""
+    beat = tmp_path / "beat"
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        timed_runner(3.0)([sys.executable, "-c", WRAPPER, str(beat)])
+    assert time.monotonic() - started < 10  # waiting for the child would have taken 30 s
+    assert beat.exists(), "the child never started within the limit"
+    time.sleep(0.3)  # a moment for the kill to land, then see whether the child still beats
+    beats = beat.stat().st_size
+    time.sleep(0.5)
+    assert beat.stat().st_size == beats
+
+
+def test_a_timed_child_is_in_no_new_group_on_windows_and_in_a_new_session_on_posix(monkeypatch):
+    """A child in a new Windows process group ignores Ctrl+C, and the wait for it cannot be
+    interrupted, so Ctrl+C would do nothing until the call ended. ``taskkill /T`` finds the tree
+    by parent pid and needs no group. On POSIX the child leads a new session: ``killpg`` ends
+    it, and the caller's wait is interrupted by Ctrl+C either way."""
+    spawned = []
+    real = subprocess.Popen
+
+    def spy(*args, **kwargs):
+        spawned.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    timed_runner(30)([sys.executable, "-c", "pass"])
+    [kwargs] = spawned
+    if sys.platform == "win32":
+        assert not kwargs.get("creationflags", 0) & subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert kwargs["start_new_session"] is True
+
+
+def test_a_root_the_tree_kill_missed_is_still_ended(monkeypatch):
+    """Should ``taskkill`` or ``killpg`` leave the child running, ``proc.kill()`` ends it, so the
+    call still returns at the limit rather than when the child is done."""
+    if sys.platform == "win32":
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1))
+    else:
+        monkeypatch.setattr(os, "killpg", lambda pid, sig: None)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        timed_runner(0.5)([sys.executable, "-c", "import time; time.sleep(20)"])
+    assert time.monotonic() - started < 10  # waiting for the child would have taken 20 s
+
+
+def test_a_call_that_finishes_in_time_returns_what_default_runner_returns():
+    """The tree-kill rewrite leaves alone what a call that ends before the limit returns."""
+    code = "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"
+    args = [sys.executable, "-c", code]
+    timed, plain = timed_runner(30)(args), default_runner(args)
+    assert timed.returncode == 3 and timed.stdout.strip() == "out" and timed.stderr.strip() == "err"
+    assert (timed.args, timed.returncode, timed.stdout, timed.stderr) == (
+        plain.args,
+        plain.returncode,
+        plain.stdout,
+        plain.stderr,
+    )

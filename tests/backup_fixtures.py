@@ -18,7 +18,13 @@ from submit_fixtures import (
     seed_judgements,
     seed_test_runs,
 )
+from vcp.backup.evidence import Collector, parse_conclusion
+from vcp.backup.ledger import BackupLedger
+from vcp.backup.manifest import write_manifest
+from vcp.backup.schema import BackupRow, Manifest
 from vcp.core.hashing import sha256_file
+from vcp.core.paths import DatasetPaths
+from vcp.core.time import stamp
 from vcp.fuse.build import write_record
 from vcp.fuse.recipes import save_recipe
 from vcp.fuse.schema import FuseRecord, Member, MemberRecord, Recipe, SubsetBuild
@@ -28,7 +34,7 @@ from vcp.submit.profile import init_profile
 from vcp.submit.schema import PlatformProfile
 from vcp.submit.stage import StageSpec, stage
 from vcp.train.checkpoints import mark_final, register
-from vcp.train.records import append_event, save_record, train_dir
+from vcp.train.records import append_event, load_record, save_record, train_dir
 from vcp.train.schema import TrainRecord
 from vcp.train.upload import merge_uploads, upload
 
@@ -232,3 +238,67 @@ def make_fusion(world, run_id: str = "fx") -> str:
         ),
     )
     return run_id
+
+
+FOLDS = [f"data/work/good/fold-{k}/model.pt" for k in range(5)]
+
+
+def register_folds(world, count: int = 5) -> list[Path]:
+    """Folds that each write ``model.pt`` (VCP-035, VCP-045), registered on run ``good``."""
+    folds = []
+    for k in range(count):
+        fold = world.roots.data / "work" / "good" / f"fold-{k}" / "model.pt"
+        fold.parent.mkdir(parents=True, exist_ok=True)
+        fold.write_bytes(f"fold {k} weights".encode())
+        folds.append(fold)
+    record, _ = register(
+        load_record(world.roots.data, "good"), folds, data_root=world.roots.data, attempt=2
+    )
+    save_record(world.roots.data, record)
+    return folds
+
+
+def write_old_manifest(
+    world, dataset: str, conclusion: str, manifest_id: str, *, drop: set[str], version="0.9.1"
+) -> Manifest:
+    """A manifest the way an older vcp wrote it, with its ledger row: today's walk less the
+    entries in ``drop`` (manifest keys), and no self-check. Before 0.10.0 the five folds of
+    ``register_folds`` were listed as the last one alone (VCP-045)."""
+    paths = DatasetPaths.resolve(
+        dataset, data_root=world.roots.data, configs_root=world.roots.configs
+    )
+    created = stamp()
+    col = Collector(paths.data_root, paths.configs_root)
+    kind, ident = parse_conclusion(conclusion)
+    if kind == "run":
+        col.walk_run(ident, conclusion)
+    elif kind == "judgement":
+        col.walk_judgement(paths, ident, conclusion)
+    elif kind == "submission":
+        col.walk_submission(paths, ident, conclusion)
+    else:
+        col.walk_all(paths)
+    files = [f for f in col.files_of() if f.key not in drop]
+    manifest = Manifest(
+        manifest_id=manifest_id,
+        dataset=dataset,
+        conclusion=conclusion,
+        created_at=created,
+        vcp_version=version,
+        data_root=paths.data_root.as_posix(),
+        files=files,
+    )
+    write_manifest(paths, manifest)
+    BackupLedger(paths.backup_log).append(
+        BackupRow(
+            event="manifest",
+            ts=stamp(),
+            manifest_id=manifest_id,
+            conclusion=conclusion,
+            files=len(files),
+            bytes_by_tier=manifest.bytes_by_tier(),
+            missing=0,
+            remote_copies=sum(1 for f in files if f.kind == "remote_copy"),
+        )
+    )
+    return manifest

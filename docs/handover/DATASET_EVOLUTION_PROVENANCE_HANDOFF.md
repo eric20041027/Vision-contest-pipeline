@@ -230,7 +230,9 @@ Final whole-branch re-review 結果：APPROVE，所有已知 HIGH/MEDIUM 均關�
 - 沒有讓 SQLite 成為 source of truth；它必須保持可刪除與可重建。
 - 沒有改動原 `codex/vcp-visual-guide` checkout 的使用者文件。
 
-## 8. 下一個 agent 的接手清單
+## 8. 下一個 agent 的接手清單（歷史：2026-09-15 合併前）
+
+> 本節與 §9 是合併前寫的。功能已於 2026-09-15 以 PR 合併、tag `v0.7.0`（§1、§7）；之後的接手入口是 `docs/handover/HANDOVER.md` 與 `docs/handover/CODEX_PROMPT.md`，不要照本節與 §9 再整合一次。
 
 1. 先讀根目錄 `AGENTS.md`、本文件、設計 spec、Plan 11 與操作指南。
 2. 確認自己位於 `codex/dataset-evolution-provenance`，HEAD 至少包含 `6ba42b8`；不要在原本 dirty
@@ -249,7 +251,7 @@ Final whole-branch re-review 結果：APPROVE，所有已知 HIGH/MEDIUM 均關�
    本機狀態，不證明未來 main 或其他環境。
 6. 只有在 remote push/PR/tag/merge 有直接回讀證據時，才把相應狀態改為已完成。
 
-## 9. 可直接貼給下一個 agent 的提示
+## 9. 可直接貼給下一個 agent 的提示（歷史：2026-09-15 合併前，不再適用）
 
 ```text
 請接手 VCP Dataset Evolution and Incremental Provenance。先讀 AGENTS.md、

@@ -65,7 +65,7 @@
 | `$VCP_DATA_ROOT/measure/<name>/` | readings、judgements、sigma、anchors | 台帳只增；anchor 換寫前先留 log |
 | `$VCP_DATA_ROOT/submit/<test>/<id>/` | submission、stage card | 寫一次不改 |
 | `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、label_set、evidence、provenance_policy、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
-| `$VCP_DATA_ROOT/indexes/` | provenance 的 SQLite 索引 | 衍生品，可刪可 rebuild，不進 git |
+| `$VCP_DATA_ROOT/indexes/` | provenance 的 SQLite 索引，每個 checkout 一份（`provenance-<configs root id>.sqlite3`） | 衍生品，可刪可 rebuild，不進 git；新 checkout 或搬過的 checkout 先 rebuild |
 | `configs/datasets/<name>/` | dataset card、splits、prereg、fuse、submit、backup | 進 git；不可變物換 id |
 | `projects/<contest>/` | 模型、轉換器、metric、writer、notebook、RUNBOOK | 比賽專屬且可重跑 |
 
@@ -75,13 +75,13 @@
 - 重要判決完成：以 `judgement:<prereg>` 建新 manifest，保存決策與重現層。
 - 真實提交完成：以 `submission:<id>` 建新 manifest，依 tier 1 → 2 → 3 推送並 verify。
 
-manifest 是當下快照，之後的台帳成長不會自動進舊清單。`raw/`、`cache/` 永不進清單；另保存原始資料重新取得方法、Git commit/source bundle、專案程式、環境鎖定檔、必要 notebook bundle。`remote_copy` 只證明那個目的地的副本，C 槽副本不是異機備份。恢復演練要包含 Git/config 取回、`backup pull/verify`，以及 `submit verify` 重產提交物。
+manifest 是當下快照，之後的台帳成長不會自動進舊清單。`raw/`、`cache/` 永不進清單；另保存原始資料重新取得方法、Git commit/source bundle、專案程式、環境鎖定檔、必要 notebook bundle。`remote_copy` 只證明那個目的地的副本，C 槽副本不是異機備份：0.13.0 起本機副本跟著 `--tier 3` 推到備份目的地、在那裡驗。0.10.0 以前為多折 run 建的清單會報 `manifest_incomplete:`，換新 id 重建再推、再驗。恢復演練要包含 Git/config 取回、`backup pull/verify`，以及 `submit verify` 重產提交物。
 
 ## 重新接手時的判定法
 
 1. 從 Git commit 與 RUNBOOK 找宣稱的最後階段。
 2. 用 `eval/status/report`、`train status`、`submit status/report`、`backup status` 找實際最後證據。
-3. 對照必要產物；例如有 staged 不代表 uploaded，有 RUNBOOK 命令不代表執行，有 local backup 不代表異機備份。
+3. 對照必要產物；例如有 staged 不代表 uploaded，有 RUNBOOK 命令不代表執行，有 local backup 不代表異機備份（`backup status` 說 `verified=True` 才算，且清單要完整）。
 4. 將未完成項縮成下一個可驗證動作。若只有外部目的地或授權缺失，完成本地可審查準備後等待該項，不要重做前段。
 
 只讀介紹或審查時不跑上述 status：直接讀現有卡與台帳，分開標示文件歷史、這次檔案核對與尚未現場驗證的 CLI/平台狀態。

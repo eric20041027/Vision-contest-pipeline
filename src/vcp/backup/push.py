@@ -14,10 +14,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from vcp.backup.dest import Destination, RcloneDest, open_dest
+from vcp.backup.completeness import manifest_gaps
+from vcp.backup.dest import Destination, RcloneDest, copy_path, open_dest, travels
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
-from vcp.backup.schema import LEDGER_ROLES, BackupRow, FileEntry, Manifest
+from vcp.backup.schema import LEDGER_ROLES, BackupRow, FileEntry, Manifest, RemoteCopy
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_prefix
 from vcp.core.paths import DatasetPaths
@@ -39,6 +40,7 @@ class PushResult:
     failed: list[str]
     bytes: int
     forgotten: str | None = None
+    local_copies: int = 0  # remote_copies this push sent like files (spec 2026-10-04 §5.2)
 
 
 def check_tier(tier: int) -> None:
@@ -65,10 +67,14 @@ def _snapshot(src: Path, entry: FileEntry, tmpdir: Path, index: int) -> Path:
 
 def _sources(entries: list[FileEntry], paths: DatasetPaths, tmpdir: Path) -> dict[str, Path]:
     """Every file about to be pushed, holding exactly the bytes the manifest recorded -- an
-    append-only ledger that only grew contributes a snapshot of its first ``bytes`` bytes. All
-    checks happen before any byte moves: an evacuation must not half-run on a stale manifest."""
+    append-only ledger that only grew contributes a snapshot of its first ``bytes`` bytes, and a
+    local remote_copy its checkpoint or that copy. All checks happen before any byte moves: an
+    evacuation must not half-run on a stale manifest."""
     out: dict[str, Path] = {}
     for index, e in enumerate(entries):
+        if e.remote is not None:
+            out[e.key] = _copy_source(e, e.remote, paths)
+            continue
         src = local_path(e, paths.data_root, paths.configs_root)
         if not src.is_file():
             raise ValidationFailed(
@@ -87,6 +93,26 @@ def _sources(entries: list[FileEntry], paths: DatasetPaths, tmpdir: Path) -> dic
                 fields={"file": e.key},
             )
     return out
+
+
+def _copy_source(e: FileEntry, copy: RemoteCopy, paths: DatasetPaths) -> Path:
+    """A local remote_copy's bytes (spec 2026-10-04 §5.2): the checkpoint itself while it holds
+    what the manifest recorded, else the copy ``train upload`` verified. Neither: nothing moves."""
+    original = local_path(e, paths.data_root, paths.configs_root)
+    kept = copy_path(copy)
+    for candidate in (original, kept):
+        if candidate.is_file() and sha256_file(candidate) == e.sha256:
+            return candidate
+    if original.is_file() or kept.is_file():
+        raise IntegrityError(
+            f"drift: neither {e.key} nor its copy {kept.as_posix()} holds the bytes the manifest "
+            "recorded; write a new manifest",
+            fields={"file": e.key},
+        )
+    raise ValidationFailed(
+        f"not_found: {e.key} and its copy {kept.as_posix()} are both gone; write a new manifest",
+        fields={"file": e.key},
+    )
 
 
 @dataclass(frozen=True)
@@ -127,11 +153,12 @@ def _send(target: Destination, chosen: list[FileEntry], sources: dict[str, Path]
 
 
 def _unverified(manifest: Manifest, chosen: list[FileEntry], target: Destination) -> list[str]:
-    """Every ``kind=file`` entry this push did not send -- a higher tier, or one the manifest
-    already recorded as gone -- whose copy at the destination is absent or different. Forgetting
-    the credential is the last act before the machine goes: the whole manifest must be there."""
+    """Every entry that belongs at the destination -- every file, and every remote_copy it does
+    not cover (spec 2026-10-04 §5.2) -- this push did not send (a higher tier, or one the
+    manifest recorded as gone) and whose copy there is absent or different. Forgetting the
+    credential is the last act before the machine goes: the whole manifest must be there."""
     sent = {e.key for e in chosen}
-    rest = [f for f in manifest.files if f.kind == "file" and f.key not in sent]
+    rest = [f for f in manifest.files if travels(f, target.dest) and f.key not in sent]
     roots = sorted({e.root for e in rest})
     have = {root: target.hashes(root, [e.path for e in rest if e.root == root]) for root in roots}
     return [e.key for e in rest if have[e.root].get(e.path) != e.sha256]
@@ -159,7 +186,22 @@ def push(
             "holds no credential",
             fields={"dest": dest},
         )
-    chosen = [f for f in manifest.files if f.kind == "file" and f.present and f.tier <= tier]
+    gaps = manifest_gaps(manifest, paths) if tier == 3 or forget_remote else []
+    if tier == 3 and gaps:  # spec 2026-10-04 §4.2: before any byte moves, and no push row
+        raise ValidationFailed(
+            f"manifest_incomplete: {len(gaps)} file(s) its runs registered are not in manifest "
+            f"{manifest_id!r} (first {gaps[0].what}); write a new manifest under a new id, then "
+            "push and verify that one",
+            fields={"incomplete": len(gaps)},
+        )
+    # spec 2026-10-04 §5.2: the present files of tiers 1..N, and every remote_copy this
+    # destination does not cover -- present or not: the copy `train upload` made holds the bytes
+    chosen = [
+        f
+        for f in manifest.files
+        if f.tier <= tier and travels(f, dest) and (f.present or f.remote is not None)
+    ]
+    local = sum(1 for f in chosen if f.remote is not None)
     with tempfile.TemporaryDirectory(prefix="vcp-push-") as tmp:
         sent = _send(target, chosen, _sources(chosen, paths, Path(tmp)))
     ledger.append(
@@ -174,6 +216,7 @@ def push(
             verified=sent.verified,
             failed=sent.failed,
             bytes=sent.bytes,
+            local_copies=local or None,
         )
     )
     counts = {
@@ -194,7 +237,13 @@ def push(
     forgotten: str | None = None
     if forget_remote and isinstance(target, RcloneDest):
         left = _unverified(manifest, chosen, target)
-        listed = sum(1 for f in manifest.files if f.kind == "file")
+        listed = sum(1 for f in manifest.files if travels(f, dest))
+        if gaps:  # spec 2026-10-04 §4.2: what was never listed was never pushed either
+            raise ValidationFailed(
+                f"forget_refused: manifest {manifest_id!r} lacks {len(gaps)} file(s) its runs "
+                "registered; write a new manifest under a new id and push every tier of it",
+                fields={**counts, "unverified": len(left), "incomplete": len(gaps)},
+            )
         if left or sent.verified == 0 or listed == 0:
             raise ValidationFailed(
                 f"forget_refused: {len(left)} file(s) of the manifest are not verified at "
@@ -217,4 +266,5 @@ def push(
         sent.failed,
         sent.bytes,
         forgotten,
+        local,
     )

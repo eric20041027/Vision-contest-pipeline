@@ -56,8 +56,9 @@ def test_verify_clean_world(world, pushed):
     assert res.ok and res.drift == [] and res.bad_stamps == [] and res.first_bad is None
     assert res.reason is None and res.problems == []
     n = len(load_manifest(_paths(world), "m1").files)
-    # the remote_copy verified in place
+    # the remote_copy's own copy lies outside the vault: pushed there, and checked there
     assert res.copies == {"ok": n, "missing": 0, "mismatch": 0, "absent": 0}
+    assert res.local_copies == 1
     row = BackupLedger(_paths(world).backup_log).latest("verify", "m1")
     assert row.copies == res.copies and row.drift == 0 and row.bad_stamps == 0
     assert row.dest == str(pushed) and row.first_bad is None
@@ -91,8 +92,11 @@ def test_verify_tier_bounds_the_copies_layer(world):
     assert res.ok and res.copies == {"ok": within, "missing": 0, "mismatch": 0, "absent": 0}
     assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 2
     res = verify(TEST, "m1", dest=str(vault), **_kw(world))  # default tier 3: everything
-    assert res.copies["missing"] == 1 and res.reason == "missing"
-    assert res.copy_problems == ["missing:data/work/good/weights/last.pt"]
+    assert res.copies["missing"] == 2 and res.reason == "missing"
+    assert res.copy_problems == [
+        "missing:data/work/good/weights/best.pt",  # a local copy belongs at the vault too
+        "missing:data/work/good/weights/last.pt",
+    ]
     assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier == 3
     assert verify(TEST, "m1", **_kw(world)).copies is None
     assert BackupLedger(_paths(world).backup_log).latest("verify", "m1").tier is None
@@ -105,7 +109,7 @@ def test_verify_copies_missing_and_mismatch(world, pushed):
     (pushed / "configs" / "datasets" / TEST / "submit.yaml").write_text(
         "dataset: x\n", encoding="utf-8"
     )
-    (world.vault / "good" / "best.pt").write_bytes(b"corrupt")
+    (pushed / "data" / "work" / "good" / "weights" / "best.pt").write_bytes(b"corrupt")
     res = verify(TEST, "m1", dest=str(pushed), **_kw(world))
     assert res.copies["missing"] == 1 and res.copies["mismatch"] == 2 and not res.ok
     assert sorted(res.copy_problems) == [

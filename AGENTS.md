@@ -40,7 +40,7 @@
 - `uv run vcp data diff --from A --to B [--id I] [--plugin M --policy P]` / `uv run vcp provenance rebuild|sync|status|verify-index [--backend sqlite|postgresql] [--pg-service S]` / `uv run vcp provenance ingest --artifact I [--backend postgresql --pg-service S --strategy incremental|full|auto --policy ID]` / `uv run vcp provenance impact --dataset D [--sample S] [--backend ...]` / `uv run vcp provenance stale --head D [--backend ...]` / `uv run vcp provenance explain --entity type:id [--backend ...]` / `uv run vcp provenance graph --out FILE.html|.md|.mmd [--dataset D | --entity type:id] [--head D] [--detail overview|full]`（唯讀：只讀索引、只寫 `--out`，`--out` 不能落在 data root）
 
 ## 版本
-- SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1 全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006），稽核 §11 Wave 1 的第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。
+- SemVer，停在 `0.x`。MINOR = 寫進產物 / 台帳的內容或 CLI 契約（命令、VERDICT 欄位、exit code、`reason=` 字彙、登記項）改變；PATCH = 其餘修正；`1.0.0` 留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。規則、build string 格式與發版四步在 `CHANGELOG.md` 表頭。
 - `src/vcp/__init__.py` 的 `__version__` 是唯一來源（`pyproject.toml` 動態讀它）。產物的 `vcp_version` 是 `vcp.core.build.build_string()`——版本 + commit + dirty（`0.2.0+g<sha>.dirty`），`vcp version` 印同一字串；每個 release 一個 `vX.Y.Z` annotated tag。`0.1.0` 是未發版的開發期，該時期的產物回推不到單一 commit（CHANGELOG 有說明）。
 
 ## 文件

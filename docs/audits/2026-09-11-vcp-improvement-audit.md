@@ -116,7 +116,7 @@ receipt = access.finalize_receipt()
 
 ### VCP-002：大型 memmap 每次全檔 SHA 與 train-only row access 衝突
 
-**狀態：部分修正。v0.6.0（Wave 1b-2）只涵蓋 `samples.jsonl`：`source_audit` 逐列 sha 索引，存取器只驗讀到的列，不再每個 job 整檔 hash。單一大陣列的選取列存取器與 `array_audit`（§11 Wave 1 第 4 項）排在 1.0 之後。**
+**狀態：部分修正。v0.6.0（Wave 1b-2）只涵蓋 `samples.jsonl`：`source_audit` 逐列 sha 索引，存取器只驗讀到的列，不再每個 job 整檔 hash。單一大陣列的選取列存取器與 `array_audit`（§11 Wave 1 清單的第 4 項）排在 1.0 之後。**
 
 #### 實際觸發
 

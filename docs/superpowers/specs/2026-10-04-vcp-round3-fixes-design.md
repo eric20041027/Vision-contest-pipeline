@@ -262,7 +262,7 @@
 1. **稽核文件**：
    - 新增第三輪回報一節（VCP-044～047），沿用 §16 的格式、泛化描述，標記隨 0.13.0 處理。
    - 更新過時的狀態：VCP-001、002（只限 `samples.jsonl`）、003、005、007、008、009 的 `狀態:` 行；§1 表的「目前狀態」欄；VCP-034（視覺指南已在 main）；檔頭說明（Wave 0、1a、1b 已完成）。
-2. **1.0 門檻統一成一種說法**（CHANGELOG 第 3、9 行、兩份 README、CLAUDE.md／AGENTS.md、`vcp-release-and-environments` skill、CODEX_PROMPT）：「`1.0.0` 留給稽核 Wave 1 全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 Wave 1 的第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。」
+2. **1.0 門檻統一成一種說法**（CHANGELOG 第 3、9 行、兩份 README、CLAUDE.md／AGENTS.md、`vcp-release-and-environments` skill、CODEX_PROMPT）：「`1.0.0` 留給稽核 Wave 1 全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 Wave 1 的第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。」（2026-10-05 起措辭見 §12）
 3. **兩份 README**：拿掉「格式已穩定到可以在上面蓋東西」，改成：1.0 之前，MINOR 版可能改寫入格式或 CLI 契約，每次改了什麼寫在 CHANGELOG；用到新功能之後，舊版 vcp 可能讀不動新紀錄。
 4. **交接文件**：
    - HANDOVER：標題日期；§6 拿掉已完成的項目；§6-5、§6-7 寫明說的是哪個工作區；`vcp submit` 的命令數；程式碼地圖；真實資料測試的數字。
@@ -297,3 +297,12 @@
   - 備份那一行：本機副本跟著 tier 3 走、清單的完整性；
   - provenance 與 PostgreSQL 那幾行：每個 root 一份索引、一個 database 只服務一個 checkout；
   - 提交治理那一行：CLI 失敗時回讀。
+
+## 12. 執行期補充決定（2026-10-05）
+
+- PostgreSQL 的 `sync` 先建好 canonical 圖，才在寫入交易裡比對 root（§3.4 的例外）。寫入鎖持有的時間不比 0.12 長；PostgreSQL 也沒有前綴檢查，所以不會出現誤導的訊息。
+- PostgreSQL 的 `ingest` 在 `load_policy()` 之後才比對 root：壞的或不屬於這個環境的 `--policy` 先報出來。root 的比對仍在每一次 replay 之前。
+- Windows 上 `timed_runner` 不開新的程序群組，Ctrl+C 才傳得到子程序；`taskkill /T` 結束整個程序樹。POSIX 上子程序在新的 session 裡跑，由 `killpg` 結束。
+- `all` 的走訪跳過的 run，在清單裡不留任何東西。點名它的判決、提交與融合 run 也一起跳過，跟 run 被刪掉時一樣。
+- `backup status` 讀不了清單列出的某份 run 紀錄時，那份清單是 `unchecked`，備註寫出那個檔與原因；其他清單照常列出，`backup verify` 照樣 FAIL。
+- 1.0 門檻（§10.2）的措辭改成：「`1.0.0` 留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。」意思不變：門檻說的 Wave 1 是稽核的 1a、1b、1c 三段；第 4、5 項是 §11 Wave 1 清單裡的條目。

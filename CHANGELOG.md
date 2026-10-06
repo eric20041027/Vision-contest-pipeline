@@ -13,8 +13,93 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   1. 改 `src/vcp/__init__.py` 的 `__version__`——它是唯一來源，`pyproject.toml` 以 `[tool.hatch.version]` 動態讀它，`uv.lock` 不記版本字面值。同一個 commit 把 Claude Code plugin 的 `.claude/.claude-plugin/plugin.json` 的 `version` 改成同一個號碼（`tests/unit/test_skills_plugin.py` 會擋住不一致），別的專案才會收到新版 skill。
   2. 在本檔最上方加一條 `## [x.y.z] - YYYY-MM-DD`，列 Added / Changed / Fixed / Removed 與影響的層。
   3. `uv sync --reinstall-package vcp`（editable 安裝的 metadata 不會因 `__init__.py` 改動自動重建），再 `uv run pytest --cov=vcp`（`tests/unit/test_package.py` 會擋住 `__version__`、安裝 metadata 與本檔最新條目三者不一致）與 `uv run ruff check . && uv run ruff format --check .`。
-  4. commit（`chore(release): vx.y.z`）、fast-forward 到 `main`、`git tag -a vx.y.z -m "vcp x.y.z"`、`git push origin main vx.y.z`。
+  4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
+
+## [0.13.0] - 2026-10-05
+
+第三輪回報的 VCP-044～047 與文件同步（#35）；tag `v0.13.0` 打在發版 PR 的合併 commit 上。
+MINOR 的理由：
+- `reason=` 新字：`root_mismatch:`、`manifest_incomplete:`、`upload_unconfirmed:`。既有字用在新情境：
+  `not_found:`（0.12 的 SQLite 索引）、`mismatch:`（schema 2 的索引）、`upload_failed:`（CLI 失敗，
+  而且平台沒有列出）、`forget_refused:`（清單缺檔、本機副本不在目的地）、`sync_failed:`（列表逾時）。
+- VERDICT 新欄位：
+  - 每個 `vcp provenance` 命令的 `root=`（失敗時也帶）；root 不符時的 `index_root=`；PostgreSQL
+    `rebuild` 取代別的 root 時的 `replaced_root=`。
+  - `backup verify` 的 `incomplete=`（一律印）與 `local_copies=`（給了 `--dest` 時）；
+    `backup status` 的 `incomplete=`；`backup push` 與 `backup manifest` 的 `local_copies=`。
+  - `submit upload` 的 `exit_code=`（FAIL 時加 `readback=`）。
+- `--json` 的新內容：
+  - `provenance rebuild` 與 `sync` 的 `result.replaced_roots`：只有 PostgreSQL `rebuild` 取代了別的
+    checkout 的 generation 時有值（那個 generation 記的 root；它沒記 root 時是 `{}`），其他情況是 `null`。
+  - `provenance status` 的 `result.index`（這個 checkout 的索引在哪裡），以及索引記的四個 root 鍵
+    `configs_root_id`、`configs_root`、`data_root_id`、`data_root`。
+- 寫入內容：
+  - SQLite 索引每個 configs root 一份：`indexes/provenance-<configs root id>.sqlite3`，schema 3，
+    記著它服務的 configs root 與 data root。
+  - PostgreSQL generation 的 metadata 多四個 root 鍵（DDL 不變，`POSTGRES_SCHEMA_VERSION` 仍是 1）。
+  - `backup.log.jsonl` 的 `incomplete` / `local_copies`（大於 0 才寫）。
+  - 同一個路徑有多個驗過的上傳時，清單優先記 rclone 的那份。
+- 行為：tier 3 push 會送本機副本、會拒絕缺檔的清單；`--forget-remote` 多拒絕兩種情況；
+  `submit upload` 在 kaggle CLI 失敗時回讀。
+
+### Fixed
+- **VCP-044：provenance 索引的 root 身分。** 每個 configs root 一份 SQLite 索引；兩種後端都記下索引的
+  configs root 與 data root，root 不符時在任何 replay 或前綴檢查之前 FAIL `root_mismatch:`
+  （`index_root=`），不再把另一個 checkout 分岔的台帳報成 `prefix_drift:`。root id 跟鎖檔同一個規則
+  （`vcp.core.paths.path_id`）。PostgreSQL 一個 database 只服務一個 checkout：`sync` 不取代別的
+  root 的 generation，`rebuild` 取代時 WARN `replaced_root=`；沒記 root 的舊 generation 在 rebuild
+  之前一律 FAIL。`impact`、`stale`、`explain`、`graph` 也解析 configs root；解析不了時，每個
+  `vcp provenance` 命令照樣以 VERDICT 收尾。
+- **VCP-045：備份清單的完整性。** run 紀錄在清單建立前登記的 checkpoint 與證據都要在清單裡（任何角色
+  都算）。缺了 → `backup verify` FAIL `manifest_incomplete`（`incomplete=`）；`backup status` 每份
+  清單都重算，WARN 且不算 verified；tier 3 push 在動任何檔案之前 FAIL；`--forget-remote` 拒絕；
+  `backup manifest` 寫出前自檢，有缺口 ABORT。
+  - `backup status` 因此會讀清單點名的 run 紀錄。讀不了的那一份只讓它所在的清單變 `unchecked`
+    （備註寫出那個檔與原因），其他清單照常列出，`backup verify` 照樣 FAIL。
+  - `backup manifest --conclusion all` 跳過的 run 不留半份：走訪失敗時，那次走訪加進清單的項目全部
+    收回；點名它的判決、提交與融合 run 也一起跳過（跟 run 被刪掉時一樣），都列在 `skipped=`。
+- **VCP-046：本機的 `remote_copy` 跟著目的地走。** 不在 rclone、也不在目的地裡的副本，跟著
+  `--tier 3` 推到目的地（從原檔送，原檔不在或不符就從本機副本送）、在目的地驗；0.13 以前的推送與
+  驗證列不替它背書；`--forget-remote` 在它到目的地之前拒絕；`backup pull` 先從目的地拉，沒有再退回
+  本機副本。
+- **VCP-047：Kaggle CLI 失敗時回讀。** CLI 非 0 退出時在同一個上傳交易裡回讀（排除台帳已知的 ref，
+  exit 0 的回讀也排除）：平台列出了 → 照寫一列、WARN `exit_code=`；沒列出 → FAIL `upload_failed:`；
+  判斷不了 → FAIL `upload_unconfirmed:`。兩種 FAIL 都不寫列。Kaggle 的列表呼叫（上傳前同步、`sync`、
+  回讀）各加 120 秒逾時；上傳本身不加。
+  - exit 0、CLI 沒印出 ref 時，回讀若只看到台帳已知的 ref，會等滿整個回讀窗（約 17 秒），照舊記成
+    未確認（`confirmed: false`）的上傳。
+  - 逾時結束整棵程序樹（`uv tool` 裝的 kaggle 是啟動器加一個 python 孫程序）：Windows 用
+    `taskkill /T /F`，不開新的程序群組，Ctrl+C 照樣傳得到 CLI；POSIX 讓 CLI 在新的 session 裡跑、
+    用 `killpg` 結束；結束樹之後 CLI 還在就 `proc.kill()`。
+
+### Changed
+- 文件同步：稽核文件的狀態與第 17 節；1.0 門檻統一成一種說法；README 的穩定度說法；交接文件；
+  `CLAUDE.md` 與 `AGENTS.md` 逐位元相同；orientation 地圖的版本歷史。新增
+  `docs/reference/commit-map-2026-10.tsv`（2026-10 歷史改寫前後的 commit 對照，見「版本規則」）。
+- 「版本規則」的發版步驟第 4 步照實際做法改寫：`main` 受保護，發版 commit 走 PR，tag 打在合併
+  commit 上。
+- Python API（自己登記平台、或在程式裡呼叫這些函式的人要跟著改）：
+  - `vcp.provenance.backend.make_backend(config, data_root, configs_root)` 與
+    `vcp.core.paths.provenance_index_path(data_root, configs_root)` 多了 `configs_root`；
+    新增 `vcp.core.paths.path_id`。
+  - `Platform.upload(...)` 多了關鍵字參數 `known_refs=`（台帳已有的 ref，回讀時略過）；用
+    `register_platform` 登記的平台要接受它。
+
+### 相容性與升級
+- 升級步驟：
+  1. 每個 checkout 跑一次 `vcp provenance rebuild`，SQLite 會建新檔。用 PostgreSQL 的，先讓每個
+     checkout 各用自己的 service／database，再 rebuild。
+  2. 不再有 0.12 的使用者之後，刪掉 `indexes/provenance.sqlite3`。
+  3. 0.10.0 以前、為「同檔名不同路徑」的多折 run 建的清單，現在會報 `manifest_incomplete:`。用新 id
+     重建清單，重推、重驗。
+  4. 清單裡有本機副本，又要推到別的目的地時：用 0.13.0 跑一次 `backup push --tier 3` 與
+     `backup verify`。在那之前，`status` 不會說 verified。
+- 0.12 讀不動帶 `incomplete` / `local_copies` 的 `backup.log.jsonl` 列（`extra_forbidden`），同一個
+  configs root 的寫入者要一起升級。
+- 索引跟著 checkout 走：搬移或改名 checkout 之後要再 rebuild 一次。刪掉 worktree 不會刪它在
+  `indexes/` 的 `provenance-<configs root id>.sqlite3`；索引是衍生品，不用的可以直接刪。
+- 提交台帳（`submissions.jsonl`）的格式不變。
 
 ## [0.12.0] - 2026-09-29
 

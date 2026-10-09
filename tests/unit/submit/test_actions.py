@@ -282,6 +282,31 @@ def test_an_upload_found_on_the_platform_is_bound_and_blocks_a_second_upload(pai
     assert (bound.source, bound.platform_ref) == ("platform", "9")
 
 
+def test_the_pre_upload_sync_writes_an_errored_row_too(pair):
+    """spec 2026-10-09 §4.1: upload's pre-sync is the same reconcile, so an entry the platform
+    finished without a score becomes an errored row there as well; upload's VERDICT gains no
+    field for it."""
+    quota = Quota(per_day=5, day_tz="UTC")
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best", quota=quota))
+    ok = (0, "Successfully submitted to c1", "")
+    upload(TEST, "S1", runner=FakeRunner([EMPTY, ok]), **_kw(pair))
+    failed = {
+        "ref": 41,
+        "fileName": "submission.csv",
+        "date": stamp(),
+        "description": "S1",
+        "status": "SubmissionStatus.COMPLETE",
+        "publicScore": "",
+        "privateScore": "",
+    }
+    out = upload(TEST, "S2", runner=FakeRunner([_listing(failed), ok]), **_kw(pair))
+    assert (out.sync, out.bound, out.row.submission_id) == ("ok", 0, "S2")
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    [row] = led.of("errored")
+    assert (row.submission_id, row.platform_ref, row.source) == ("S1", "41", "platform")
+    assert led.of("scored") == []
+
+
 def test_force_uploads_again_and_keeps_the_reason(pair):
     quota = Quota(per_day=5, day_tz="UTC")
     _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best", quota=quota))

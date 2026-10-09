@@ -254,6 +254,7 @@ def test_final_status_report_cli(pair):
         and "current=S2" in _verdict(r.output)
         and "unscored=2" in _verdict(r.output)
     )
+    assert " errored=0" in _verdict(r.output)  # spec 2026-10-09 §4.3: printed even when 0
     r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
     assert r.exit_code == 1 and "no_sealed_readings" in _verdict(r.output)
     for run in ("good", "bad"):
@@ -291,6 +292,61 @@ def test_final_status_report_cli(pair):
     assert r.exit_code == 1 and "locked" in _verdict(r.output)
     r = runner.invoke(app, ["submit", "unlock", "--dataset", "beach-test", "--reason", "extended"])
     assert r.exit_code == 0 and "locked=false" in _verdict(r.output)
+
+
+def test_status_and_report_cli_show_an_errored_upload_without_warning(pair):
+    """spec 2026-10-09 §4.3, §4.4, §5: an upload the platform finished without a score is a
+    finished state -- status prints errored= and an errored: line but does not WARN for it, and
+    report ends that upload's line with " errored"."""
+    from datetime import timedelta
+
+    from vcp.core.time import parse_stamp, stamp, utc_now
+    from vcp.submit.ledger import SubmissionLedger
+    from vcp.submit.schema import LedgerRow
+
+    _ready(pair)
+    assert _stage("S1", "good", "good.test").exit_code == 0
+    assert (
+        _stage("S2", "bad", "bad.test", "--kind", "baseline", "--reason", "anchor").exit_code == 0
+    )
+    at = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+    for sid in ("S1", "S2"):
+        r = runner.invoke(
+            app,
+            ["submit", "record", "--dataset", "beach-test", "--id", sid, "--tz", "utc", "--at", at],
+        )
+        assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        app, ["submit", "score", "--dataset", "beach-test", "--id", "S1", "--public", "0.8"]
+    )
+    assert r.exit_code == 0, r.output
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    s2_at = parse_stamp(str(led.uploads("S2")[0].at))
+    led.append(
+        LedgerRow(
+            event="errored",
+            ts=stamp(),
+            submission_id="S2",
+            source="platform",
+            at=stamp(s2_at + timedelta(seconds=3)),
+            platform_ref="56979225",
+            platform_status="SubmissionStatus.COMPLETE",
+        )
+    )
+    r = runner.invoke(app, ["submit", "status", "--dataset", "beach-test"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "unscored=0" in v and "errored=1" in v
+    assert "errored: S2" in r.output
+    r = runner.invoke(app, ["submit", "status", "--dataset", "beach-test", "--json"])
+    assert _json(r)["result"]["errored"] == ["S2"] and _json(r)["result"]["unscored"] == []
+    r = runner.invoke(app, ["submit", "report", "--dataset", "beach-test"])
+    assert r.exit_code == 0, r.output
+    lines = {sid: next(x for x in r.output.splitlines() if f" {sid} " in x) for sid in ("S1", "S2")}
+    assert lines["S2"].endswith(" errored") and not lines["S1"].endswith(" errored")
+    r = runner.invoke(app, ["submit", "report", "--dataset", "beach-test", "--json"])
+    rows = {row["submission_id"]: row for row in _json(r)["result"]["rows"]}
+    assert (rows["S1"]["errored"], rows["S2"]["errored"]) == (False, True)
+    assert rows["S2"]["public"] is None
 
 
 def test_final_slots_below_one_is_a_verdict_fail(pair):

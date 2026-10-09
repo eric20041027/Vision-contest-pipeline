@@ -18,10 +18,50 @@ from vcp.submit.schema import LedgerRow
 TWIN_WINDOW = timedelta(minutes=10)
 
 _BEFORE_ANY = datetime.min.replace(tzinfo=UTC)  # where a score without a platform time sorts
+# The rows that say what became of an upload on the platform (spec 2026-10-09 §4.2).
+OUTCOMES = ("scored", "errored")
 
 
 def _when(row: LedgerRow) -> datetime:
     return parse_stamp(row.at) if row.at else _BEFORE_ANY
+
+
+def assign_scores(uploads: list[LedgerRow], scores: list[LedgerRow]) -> list[LedgerRow | None]:
+    """The score that applies to each upload of one submission id (same order as ``uploads``,
+    which may be in any order -- ``record --at`` can append an upload whose platform time
+    precedes an earlier row's). A platform-timed score (``at`` present) belongs to the upload
+    whose ``at`` is nearest in time to the score's ``at`` (smallest absolute difference; a tie
+    goes to the upload with the later ``at``). A manual score (no ``at``) belongs to the newest
+    upload (by ``ts``) with ``upload.ts <= score.ts`` (none -> the score is dropped). Per
+    upload, the newest assigned score (by ``ts``) wins; an upload nothing was assigned to gets
+    None. ``scores`` may hold ``errored`` rows too, placed by the same rule: the result is then
+    each upload's outcome (spec 2026-10-09 §4.2).
+
+    Each score is placed independently -- scores never compete to "claim" an upload the way an
+    earlier version of this function had them do. Claiming let a corrected score (a later ``ts``
+    for the same moment) bump the score it corrects onto a different, wrong upload; placing each
+    score on its own nearest/eligible upload and then letting the newest ``ts`` win per upload
+    does not have that failure mode.
+    """
+    assigned: list[LedgerRow | None] = [None] * len(uploads)
+    if not uploads:
+        return assigned
+    ats = [parse_stamp(str(u.at)) for u in uploads]
+    for s in scores:
+        if s.at is not None:
+            score_at = parse_stamp(s.at)
+            winner = min(
+                range(len(uploads)),
+                key=lambda idx: (abs(ats[idx] - score_at), -ats[idx].timestamp()),
+            )
+        else:
+            eligible = [idx for idx, u in enumerate(uploads) if u.ts <= s.ts]
+            if not eligible:
+                continue
+            winner = max(eligible, key=lambda idx: (uploads[idx].ts, idx))
+        if assigned[winner] is None or s.ts > assigned[winner].ts:
+            assigned[winner] = s
+    return assigned
 
 
 def append_ledger_row(path: Path, row: LedgerRow) -> None:
@@ -60,17 +100,18 @@ def _complete_rows(path: Path) -> list[LedgerRow]:
 
 
 def _ours(
-    uploads: list[LedgerRow], foreign: dict[str, LedgerRow], scored: list[LedgerRow]
+    uploads: list[LedgerRow], foreign: dict[str, LedgerRow], outcomes: list[LedgerRow]
 ) -> set[str]:
     """Foreign refs that are one of our own uploads, written by a ledger that did not know it
     yet -- another worktree's, or one where the upload was recorded later (VCP-038). An upload
-    carrying the ref is that submission. Otherwise a ``scored`` row that ties the ref to an id
-    lets a ref-less upload of that id absorb it: closest pairs first, one ref per upload, and
-    only within ``TWIN_WINDOW``. A ref left over (say, a web upload never recorded) stays an
-    arrival -- the count errs toward too many, never too few."""
+    carrying the ref is that submission. Otherwise a ``scored`` or ``errored`` row (spec
+    2026-10-09 §4.6) that ties the ref to an id lets a ref-less upload of that id absorb it:
+    closest pairs first, one ref per upload, and only within ``TWIN_WINDOW``. A ref left over
+    (say, a web upload never recorded) stays an arrival -- the count errs toward too many,
+    never too few."""
     ours = {u.platform_ref for u in uploads if u.platform_ref} & foreign.keys()
     ties: dict[str, set[str]] = {}
-    for s in scored:
+    for s in outcomes:
         if s.platform_ref and s.submission_id:
             ties.setdefault(s.platform_ref, set()).add(s.submission_id)
     free: dict[str, list[tuple[datetime, int]]] = {}
@@ -136,9 +177,35 @@ class SubmissionLedger:
             return None
         return rows[max(range(len(rows)), key=lambda i: (_when(rows[i]), i))]
 
+    def outcomes(self, submission_id: str) -> list[LedgerRow]:
+        """The id's ``scored`` and ``errored`` rows, in ledger order (spec 2026-10-09 §4.2)."""
+        return [r for r in self.rows if r.event in OUTCOMES and r.submission_id == submission_id]
+
+    def assigned_outcomes(self, submission_id: str) -> list[LedgerRow | None]:
+        """What became of each upload of the id, in ``uploads`` order: ``assign_scores`` over
+        the id's ``scored`` and ``errored`` rows together. A ``scored`` row: scored; an
+        ``errored`` row: the platform finished it without a score; None: no result yet."""
+        return assign_scores(self.uploads(submission_id), self.outcomes(submission_id))
+
+    def latest_outcome(self, submission_id: str) -> LedgerRow | None:
+        """The outcome of the id's newest upload -- by platform time, then ``ts`` -- or None
+        when that upload has no result yet or the id has no upload."""
+        uploads = self.uploads(submission_id)
+        if not uploads:
+            return None
+        newest = max(range(len(uploads)), key=lambda i: (uploads[i].at or "", uploads[i].ts))
+        return self.assigned_outcomes(submission_id)[newest]
+
     def score_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
         """The newest ``scored`` row of one platform entry of this id, in ledger order."""
         rows = [r for r in self.of("scored", submission_id) if r.platform_ref == platform_ref]
+        return rows[-1] if rows else None
+
+    def outcome_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
+        """The newest ``scored`` or ``errored`` row of one platform entry of this id, in ledger
+        order: what ``sync`` compares the entry with (spec 2026-10-09 §4.1, amended the same
+        day). A ledger without ``errored`` rows gives what ``score_for_ref`` gives."""
+        rows = [r for r in self.outcomes(submission_id) if r.platform_ref == platform_ref]
         return rows[-1] if rows else None
 
     def arrivals(self) -> list[LedgerRow]:
@@ -162,7 +229,7 @@ class SubmissionLedger:
                 uploads.append(row)
             elif row.event == "foreign" and row.platform_ref:
                 latest_foreign[row.platform_ref] = row
-        ours = _ours(uploads, latest_foreign, self.of("scored"))
+        ours = _ours(uploads, latest_foreign, [r for r in self.rows if r.event in OUTCOMES])
         others = [row for ref, row in latest_foreign.items() if ref not in ours]
         return sorted([*uploads, *others], key=lambda r: r.at or "")
 

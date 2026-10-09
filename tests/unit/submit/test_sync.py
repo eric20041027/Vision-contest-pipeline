@@ -187,7 +187,7 @@ def test_foreign_pending_to_error_is_a_snapshot_without_a_score(staged):
     res = sync(
         TEST, runner=FakeRunner([_foreign("f-err", at, "SubmissionStatus.ERROR")]), **_kw(staged)
     )
-    assert (res.foreign, res.refreshed, res.scored) == (0, 1, 0)
+    assert (res.foreign, res.refreshed, res.scored, res.errored) == (0, 1, 0, 0)  # foreign: as was
     snaps = _snapshots(staged, "f-err")
     assert [s.platform_status for s in snaps] == [
         "SubmissionStatus.PENDING",
@@ -620,6 +620,182 @@ def test_a_status_change_of_a_scored_entry_is_a_new_scored_row(staged):
     done = {**entry, "status": "complete"}
     assert sync(TEST, runner=FakeRunner([done]), **_kw(staged)).scored == 1
     assert sync(TEST, runner=FakeRunner([done]), **_kw(staged)).scored == 0
+
+
+# --- VCP-048: an entry the platform finished without a score ---------------------------------
+
+
+def _hidden_rerun(ref, at, status_="SubmissionStatus.COMPLETE", description="S1 rerun", **more):
+    """A code submission whose hidden rerun failed, as CLI 2.2.4 lists it: COMPLETE, both scores
+    empty strings, no error field (observed 2026-10-09)."""
+    row = {
+        "ref": ref,
+        "fileName": "submission.csv",
+        "date": at,
+        "description": description,
+        "status": status_,
+        "publicScore": "",
+        "privateScore": "",
+    }
+    return {**row, **more}
+
+
+def _ledger(pair):
+    return SubmissionLedger(pair.test_paths.submissions_log)
+
+
+def test_an_errored_entry_is_written_once_as_errored_and_never_as_a_score(pair):
+    """spec 2026-10-09 §4.1: pending writes nothing; the finished entry without a score is one
+    errored row (not a scored row); a rerun of sync writes nothing more."""
+    _only_s1(pair)
+    now = utc_now()
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    at = stamp(now + timedelta(seconds=3))
+    pending = _hidden_rerun(61, at, "SubmissionStatus.PENDING")
+    before = len(_ledger(pair).rows)
+    first = sync(TEST, runner=FakeRunner([pending]), **_kw(pair))
+    assert (first.scored, first.errored, first.bound, first.errored_ids) == (0, 0, 0, [])
+    assert len(_ledger(pair).rows) == before
+    res = sync(TEST, runner=FakeRunner([_hidden_rerun(61, at)]), **_kw(pair))
+    assert (res.scored, res.errored, res.bound, res.foreign) == (0, 1, 0, 0)
+    assert res.errored_ids == ["S1"] and res.matched == {"61": "S1"} and res.unconfirmed == []
+    led = _ledger(pair)
+    assert led.of("scored") == []
+    [row] = led.of("errored", "S1")
+    assert (row.source, row.at, row.platform_ref, row.platform_status) == (
+        "platform",
+        at,
+        "61",
+        "SubmissionStatus.COMPLETE",
+    )
+    assert row.public is None and row.private is None
+    again = sync(TEST, runner=FakeRunner([_hidden_rerun(61, at)]), **_kw(pair))
+    assert (again.errored, again.errored_ids) == (0, []) and len(_ledger(pair).rows) == len(
+        led.rows
+    )
+
+
+def test_an_errored_entry_whose_status_changes_is_written_again_and_a_later_score_wins(pair):
+    """spec 2026-10-09 §4.1: a new status is a new errored row; a score the platform gives the
+    same entry later is a scored row as before, and being newer it is the outcome (§4.2): the
+    id is neither errored nor unscored any more."""
+    _only_s1(pair)
+    now = utc_now()
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    at = stamp(now + timedelta(seconds=3))
+    assert sync(TEST, runner=FakeRunner([_hidden_rerun(62, at)]), **_kw(pair)).errored == 1
+    error = _hidden_rerun(62, at, "SubmissionStatus.ERROR")
+    res = sync(TEST, runner=FakeRunner([error]), **_kw(pair))
+    assert (res.errored, res.scored) == (1, 0)
+    assert [r.platform_status for r in _ledger(pair).of("errored", "S1")] == [
+        "SubmissionStatus.COMPLETE",
+        "SubmissionStatus.ERROR",
+    ]
+    assert sync(TEST, runner=FakeRunner([error]), **_kw(pair)).errored == 0
+    rescored = _hidden_rerun(62, at, publicScore="0.81")
+    res = sync(TEST, runner=FakeRunner([rescored]), **_kw(pair))
+    assert (res.errored, res.scored) == (0, 1)
+    assert _ledger(pair).latest_score("S1").public == 0.81
+    outcome = _ledger(pair).latest_outcome("S1")
+    assert (outcome.event, outcome.platform_ref, outcome.public) == ("scored", "62", 0.81)
+    st = status(TEST, **_kw(pair))
+    assert (st.errored, st.unscored) == ([], [])
+
+
+def _flip(pair, ref, states):
+    """Sync S1's entry ``ref`` once per state ("0.8": scored, "": finished without a score) and
+    return the (scored, errored) rows each sync wrote."""
+    _only_s1(pair)
+    now = utc_now()
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    at = stamp(now + timedelta(seconds=3))
+    written = []
+    for public in states:
+        res = sync(
+            TEST, runner=FakeRunner([_hidden_rerun(ref, at, publicScore=public)]), **_kw(pair)
+        )
+        written.append((res.scored, res.errored))
+    return written
+
+
+def _outcome_events(pair, ref):
+    return [r.event for r in _ledger(pair).outcomes("S1") if r.platform_ref == ref]
+
+
+def test_a_score_withdrawn_and_given_back_ends_scored(pair):
+    """spec 2026-10-09 §4.1 (amended 2026-10-09): each sync compares the entry with the newest
+    outcome row of its ref, scored or errored -- not with the newest row of its own event, which
+    left the restored 0.8 unwritten and the id errored. A stable state writes nothing."""
+    assert _flip(pair, 66, ["0.8", "", "0.8", "0.8"]) == [(1, 0), (0, 1), (1, 0), (0, 0)]
+    assert _outcome_events(pair, "66") == ["scored", "errored", "scored"]
+    assert _ledger(pair).latest_outcome("S1").event == "scored"
+    st = status(TEST, **_kw(pair))
+    assert (st.errored, st.unscored) == ([], [])
+
+
+def test_an_error_scored_and_then_withdrawn_again_ends_errored(pair):
+    """The other direction: the platform's last word is "no score", so the ledger's must be too
+    -- otherwise final could pick an id that has no result on the platform (spec §1)."""
+    assert _flip(pair, 67, ["", "0.8", "", ""]) == [(0, 1), (1, 0), (0, 1), (0, 0)]
+    assert _outcome_events(pair, "67") == ["errored", "scored", "errored"]
+    assert _ledger(pair).latest_outcome("S1").event == "errored"
+    assert status(TEST, **_kw(pair)).errored == ["S1"]
+
+
+def test_an_errored_entry_the_ledger_never_recorded_is_bound_then_errored(pair):
+    """spec 2026-10-09 §4.1: the binding (spec 2026-09-28 §4.4) comes first, as for a score."""
+    _only_s1(pair)
+    at = stamp(utc_now())
+    res = sync(TEST, runner=FakeRunner([_hidden_rerun(63, at, description="S1")]), **_kw(pair))
+    assert (res.bound, res.errored, res.scored) == (1, 1, 0)
+    rows = _ledger(pair).rows[1:]  # after S1's staged row
+    assert [(r.event, r.source, r.platform_ref) for r in rows] == [
+        ("uploaded", "platform", "63"),
+        ("errored", "platform", "63"),
+    ]
+
+
+def test_sync_verdict_carries_errored_and_warns_only_when_it_wrote_one(pair, monkeypatch):
+    """spec 2026-10-09 §4.1, §5: ``errored=`` always; WARN only on the sync that wrote the rows;
+    ``--json`` lists their ids."""
+    import sys
+
+    from typer.testing import CliRunner
+
+    from vcp.cli import app
+    from vcp.submit.platforms import kaggle
+
+    _only_s1(pair, kaggle_command=[sys.executable])
+    now = utc_now()
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    listed = [_hidden_rerun(64, stamp(now + timedelta(seconds=3)))]
+    monkeypatch.setattr(kaggle, "timed_runner", lambda seconds: FakeRunner(listed))
+    cli = CliRunner()
+    r = cli.invoke(app, ["submit", "sync", "--dataset", TEST])
+    verdict = [line for line in r.output.splitlines() if line.startswith("VERDICT ")][-1]
+    assert r.exit_code == 0 and "status=WARN" in verdict, r.output
+    assert "errored=1" in verdict and "scored=0" in verdict and "unconfirmed=0" in verdict
+    assert "errored: S1" in r.output
+    r = cli.invoke(app, ["submit", "sync", "--dataset", TEST, "--json"])
+    verdict = r.stderr.strip().splitlines()[-1]
+    assert r.exit_code == 0 and "status=OK" in verdict and "errored=0" in verdict, r.output
+    assert json.loads(r.stdout)["result"]["errored"] == []
+    _ledger(pair).append(
+        LedgerRow(
+            event="uploaded",
+            ts=stamp(),
+            submission_id="S1",
+            at=stamp(now + timedelta(hours=1)),
+            source="manual",
+            confirmed=True,
+            profile_sha256="p" * 64,
+        )
+    )
+    listed.append(_hidden_rerun(65, stamp(now + timedelta(hours=1)), description="S1 again"))
+    r = cli.invoke(app, ["submit", "sync", "--dataset", TEST, "--json"])
+    verdict = r.stderr.strip().splitlines()[-1]
+    assert "status=WARN" in verdict and "errored=1" in verdict, r.output
+    assert json.loads(r.stdout)["result"]["errored"] == ["S1"]
 
 
 def test_sync_writes_the_shared_ledger_when_submit_yaml_says_so(pair):

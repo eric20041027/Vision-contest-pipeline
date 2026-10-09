@@ -2,7 +2,8 @@
 reconciled with the ledger. Uploads the ledger never saw become ``foreign`` rows -- they spent
 quota too. An entry matched to an id whose upload the ledger lacks becomes an ``uploaded`` row of
 ``source=platform`` (a binding), scored or not, so the quota counts it and the re-upload guard
-sees it. ``upload`` runs ``reconcile`` inside its own transaction before it counts the quota
+sees it. An entry the platform finished without a score is an ``errored`` row (spec 2026-10-09
+§4.1). ``upload`` runs ``reconcile`` inside its own transaction before it counts the quota
 (§4.3)."""
 
 from __future__ import annotations
@@ -56,6 +57,13 @@ class SyncResult:
     matched: dict[str, str] = field(default_factory=dict)
     refreshed: int = 0  # already-known foreign refs whose status or score changed (new snapshot)
     bound: int = 0  # uploaded rows of source=platform written (spec 2026-09-28 §4.4)
+    # the id of each errored row written, in the order written (spec 2026-10-09 §4.1)
+    errored_ids: list[str] = field(default_factory=list)
+
+    @property
+    def errored(self) -> int:
+        """Errored rows written by this sync: a new error is reported on this sync only."""
+        return len(self.errored_ids)
 
 
 def match_submission(
@@ -144,12 +152,39 @@ def _scored_row(sid: str, p: PlatformSubmission) -> LedgerRow:
     )
 
 
-def _score_changed(ledger: SubmissionLedger, sid: str, row: LedgerRow) -> bool:
-    """spec 2026-09-28 §4.6: a ``scored`` row only for a ref that has none yet (VCP-038: that row
-    ties the ref to the id), or whose score or status differs from that ref's newest row -- so an
-    id scored differently on two uploads is not rewritten by every sync."""
-    previous = ledger.score_for_ref(sid, str(row.platform_ref))
-    return previous is None or any(getattr(previous, f) != getattr(row, f) for f in SCORE_FIELDS)
+def _errored_row(sid: str, p: PlatformSubmission) -> LedgerRow:
+    """spec 2026-10-09 §3.2: the platform entry that finished without a score."""
+    return _row(
+        event="errored",
+        ts=stamp(),
+        submission_id=sid,
+        source=PLATFORM,
+        at=p.at,
+        platform_ref=p.platform_ref,
+        platform_status=p.status or None,
+    )
+
+
+def _check(p: PlatformSubmission) -> None:
+    """Every row sync could write from ``p``, built and dropped: a value the ledger cannot store
+    fails here, before ``reconcile`` writes its first row. The id is not known yet; any will do."""
+    _foreign_row(p)
+    if p.errored:
+        _errored_row("-", p)
+
+
+def _outcome_changed(ledger: SubmissionLedger, sid: str, row: LedgerRow) -> bool:
+    """spec 2026-09-28 §4.6 as amended by 2026-10-09 §4.1: a ``scored`` or ``errored`` row only
+    when the ref's newest outcome row -- ``scored`` or ``errored`` -- is missing (VCP-038: the
+    row ties the ref to the id), is the other event, or differs in score or status. A stable
+    entry is not rewritten by every sync, an id scored differently on two uploads neither, and
+    an entry that goes from a score to none and back ends on the platform's last word. Without
+    ``errored`` rows this is the 0.13.0 rule: the newest outcome row is the newest scored row.
+    An ``errored`` row has no score, so comparing ``SCORE_FIELDS`` compares its status."""
+    previous = ledger.outcome_for_ref(sid, str(row.platform_ref))
+    if previous is None or previous.event != row.event:
+        return True
+    return any(getattr(previous, f) != getattr(row, f) for f in SCORE_FIELDS)
 
 
 def _file_names(paths: DatasetPaths, ledger: SubmissionLedger) -> dict[str, str]:
@@ -170,14 +205,16 @@ def reconcile(
     ledger: SubmissionLedger,
     subs: list[PlatformSubmission],
 ) -> SyncResult:
-    """spec 6.3 with 2026-09-28 §4.4 and §4.6, on a ledger whose lock the caller holds. Every
-    platform value is checked before the first row is written: one the ledger cannot store
-    (``platform_response:``) leaves the ledger as it was."""
+    """spec 6.3 with 2026-09-28 §4.4 and §4.6, and 2026-10-09 §4.1, on a ledger whose lock the
+    caller holds. Every platform value is checked before the first row is written: one the
+    ledger cannot store (``platform_response:``) leaves the ledger as it was. A matched entry
+    the platform finished without a score is an ``errored`` row, never a ``scored`` one."""
     for p in subs:
-        _foreign_row(p)
+        _check(p)
     file_names = _file_names(paths, ledger)
     known_foreign = ledger.foreign_refs()
     matched: dict[str, str] = {}
+    errored: list[str] = []
     scored = foreign = refreshed = bound = 0
     # Oldest first (stamps sort as strings), so an id's rows land in platform-time order.
     for p in sorted(subs, key=lambda s: s.at):
@@ -200,16 +237,29 @@ def reconcile(
         if _needs_binding(ledger, sid, p):
             ledger.append(_binding_row(sid, p, profile_sha))
             bound += 1
-        if p.public is None and p.private is None:
+        if p.errored:
+            row = _errored_row(sid, p)
+            if _outcome_changed(ledger, sid, row):
+                ledger.append(row)
+                errored.append(sid)
             continue
+        if p.public is None and p.private is None:
+            continue  # still pending: nothing to write yet
         row = _scored_row(sid, p)
-        if _score_changed(ledger, sid, row):
+        if _outcome_changed(ledger, sid, row):
             ledger.append(row)
             scored += 1
     confirmed = set(matched.values())
     unconfirmed = [sid for sid in ledger.ids() if ledger.uploads(sid) and sid not in confirmed]
     return SyncResult(
-        len(subs), scored, foreign, unconfirmed, matched, refreshed=refreshed, bound=bound
+        len(subs),
+        scored,
+        foreign,
+        unconfirmed,
+        matched,
+        refreshed=refreshed,
+        bound=bound,
+        errored_ids=errored,
     )
 
 

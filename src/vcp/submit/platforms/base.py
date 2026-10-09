@@ -51,6 +51,9 @@ class PlatformSubmission:
     private: float | None
     status: str
     submitted_by: str | None
+    # The platform finished this entry without a score (spec 2026-10-09 §3.1): never True for an
+    # entry that carries one. Each platform decides from its own status words.
+    errored: bool = False
 
 
 class Platform(Protocol):

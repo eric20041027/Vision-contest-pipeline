@@ -447,6 +447,7 @@ def sync_cmd(
             "dataset": dataset,
             "platform_rows": res.platform_rows,
             "scored": res.scored,
+            "errored": res.errored,
             "foreign": res.foreign,
             "refreshed": res.refreshed,
             "unconfirmed": len(res.unconfirmed),
@@ -454,12 +455,17 @@ def sync_cmd(
             "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
-        status: Status = "WARN" if res.foreign or res.unconfirmed else "OK"
+        # spec 2026-10-09 §4.1: a new error WARNs once, on the sync that wrote its row
+        human += [
+            f"errored: {sid} (the platform finished it without a score)" for sid in res.errored_ids
+        ]
+        status: Status = "WARN" if res.foreign or res.unconfirmed or res.errored else "OK"
         payload = {
             "matched": res.matched,
             "unconfirmed": res.unconfirmed,
             "refreshed": res.refreshed,
             "bound": res.bound,
+            "errored": res.errored_ids,
         }
         return status, fields, payload, human
 
@@ -587,13 +593,17 @@ def status_cmd(
         fields["locked"] = st.locked is not None
         fields["current"] = st.current or "none"
         fields["unscored"] = len(st.unscored)
+        fields["errored"] = len(st.errored)
+        # spec 2026-10-09 §4.3: errored is a finished state, so it never WARNs here
         warn = warn or st.locked is not None or bool(st.unscored)
         human = [f"unscored: {sid}" for sid in st.unscored]
+        human += [f"errored: {sid}" for sid in st.errored]
         human += [f"provenance: {sid}={g}" for sid, g in st.provenance.items()]
         payload = {
             "quota": None if st.quota is None else st.quota.fields(),
             "current": st.current,
             "unscored": st.unscored,
+            "errored": st.errored,
             "provenance": st.provenance,
             "locked": None
             if st.locked is None
@@ -618,6 +628,7 @@ def report_cmd(
         human = [
             f"{r.at}  {r.submission_id:>16}  {r.kind:>9}  public={r.public!r} delta={r.delta!r} "
             f"sealed={r.sealed_value!r} private={r.private!r} shift={r.shift!r}"
+            + (" errored" if r.errored else "")  # spec 2026-10-09 §4.4
             for r in rows
         ]
         payload = {"rows": [r.__dict__ for r in rows]}

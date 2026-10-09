@@ -241,6 +241,85 @@ def test_status_and_report_do_not_count_our_own_upload_as_foreign(pair):
     assert [r.submission_id for r in report(TEST, **_kw(pair))] == ["S1", "S2"]
 
 
+# --- VCP-048: what became of each upload: scored, errored, or nothing yet --------------------
+
+
+def _errored_row(sid, at, *, ref="e1", status_="SubmissionStatus.COMPLETE") -> LedgerRow:
+    """What sync writes for an entry the platform finished without a score."""
+    return LedgerRow(
+        event="errored",
+        ts=stamp(),
+        submission_id=sid,
+        source="platform",
+        at=at,
+        platform_ref=ref,
+        platform_status=status_,
+    )
+
+
+def _upload_row(sid, at) -> LedgerRow:
+    return LedgerRow(
+        event="uploaded",
+        ts=stamp(),
+        submission_id=sid,
+        at=at,
+        source="manual",
+        confirmed=True,
+        profile_sha256="p" * 64,
+    )
+
+
+def _later(at, minutes) -> str:
+    return stamp(parse_stamp(str(at)) + timedelta(minutes=minutes))
+
+
+def test_status_counts_an_errored_newest_upload_as_errored_not_unscored(pair):
+    """spec 2026-10-09 §4.3: S2's only upload errored -> errored, not unscored; sent again and
+    not scored yet -> unscored; scored after that -> neither."""
+    _seed(pair, _profile())
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    first = led.uploads("S2")[0].at
+    led.append(_errored_row("S2", _later(first, 0.05)))
+    st = status(TEST, **_kw(pair))
+    assert (st.unscored, st.errored) == ([], ["S2"])
+    led.append(_upload_row("S2", _later(first, 30)))
+    st = status(TEST, **_kw(pair))
+    assert (st.unscored, st.errored) == (["S2"], [])
+    score(TEST, "S2", public=0.7, **_kw(pair))
+    st = status(TEST, **_kw(pair))
+    assert (st.unscored, st.errored) == ([], [])
+
+
+def test_report_marks_the_upload_whose_outcome_is_errored(pair):
+    """spec 2026-10-09 §4.4: the errored upload has no public or private, and the next upload
+    gets no delta, as after an upload not scored yet; every other row says errored=False."""
+    _seed(pair, _profile())
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    s2_at = led.uploads("S2")[0].at
+    led.append(_errored_row("S2", _later(s2_at, 0.05)))
+    led.append(_upload_row("S1", _later(s2_at, 30)))
+    score(TEST, "S1", public=0.9, **_kw(pair))
+    rows = report(TEST, **_kw(pair))
+    assert [(r.submission_id, r.errored, r.public, r.private, r.delta) for r in rows] == [
+        ("S1", False, 0.8, None, None),
+        ("S2", True, None, None, None),
+        ("S1", False, 0.9, None, None),
+    ]
+
+
+def test_an_errored_row_newer_than_the_score_of_the_same_upload_wins(pair):
+    """Ruling 9 (followups §2.1): the outcome is the newest of the upload's scored and errored rows,
+    so a score the platform later withdrew is not shown, and the best board passes it over."""
+    _seed(pair, _profile(board_rule="best"))
+    assert status(TEST, **_kw(pair)).current == "S1"
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    led.append(_errored_row("S1", _later(led.uploads("S1")[0].at, 0.05)))
+    row = next(r for r in report(TEST, **_kw(pair)) if r.submission_id == "S1")
+    assert (row.errored, row.public) == (True, None)
+    st = status(TEST, **_kw(pair))
+    assert st.current is None and st.errored == ["S1"]
+
+
 def test_status_lists_each_staged_provenance(pair):
     _seed(pair, _profile())
     st = status(TEST, **_kw(pair))

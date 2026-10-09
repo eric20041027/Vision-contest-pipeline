@@ -370,6 +370,35 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "VCP-048 (0.14.0)",
+        "submit: an entry the platform finished without a score (Kaggle ERROR, or COMPLETE with "
+        "no public or private score) is an errored row, never a score; sync writes it once per "
+        "ref and records a flip against the ref's newest outcome; status counts it as errored, "
+        "not unscored, and final never ranks an id whose newest upload errored",
+        {
+            "tests/unit/submit/test_platforms.py": [
+                "test_errored_is_set_only_for_error_or_complete_without_a_score",
+                "test_an_errored_code_submission_as_cli_2_2_4_lists_it",
+            ],
+            "tests/unit/submit/test_schema.py": ["test_an_errored_row_with_a_score_fails"],
+            "tests/unit/submit/test_sync.py": [
+                "test_an_errored_entry_is_written_once_as_errored_and_never_as_a_score",
+                "test_an_errored_entry_whose_status_changes_is_written_again_and_a_later_score_wins",
+                "test_a_score_withdrawn_and_given_back_ends_scored",
+                "test_an_error_scored_and_then_withdrawn_again_ends_errored",
+            ],
+            "tests/unit/submit/test_ledger.py": [
+                "test_an_errored_row_ties_a_foreign_ref_to_our_upload_like_a_scored_row",
+            ],
+            "tests/unit/submit/test_report.py": [
+                "test_status_counts_an_errored_newest_upload_as_errored_not_unscored",
+            ],
+            "tests/unit/submit/test_final.py": [
+                "test_final_does_not_rank_an_id_whose_newest_upload_errored",
+            ],
+        },
+    ),
 ]
 
 

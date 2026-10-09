@@ -127,6 +127,27 @@ def test_a_foreign_row_for_our_own_upload_is_one_arrival(tmp_path):
     assert _arrivals(tmp_path / "b.jsonl", by_ref) == [("uploaded", "S1")]
 
 
+def test_an_errored_row_ties_a_foreign_ref_to_our_upload_like_a_scored_row(tmp_path):
+    """spec 2026-10-09 §4.6: the platform finished S1 without a score, so no scored row will
+    ever tie its ref to S1; the errored row does, and the foreign row another ledger wrote for
+    it is absorbed by S1's ref-less upload -- one arrival, not two."""
+    rows = [
+        _staged("S1"),
+        _uploaded("S1", T1),
+        _foreign("k7", T1),
+        LedgerRow(
+            event="errored",
+            ts=T2,
+            submission_id="S1",
+            source="platform",
+            at=T1,
+            platform_ref="k7",
+            platform_status="SubmissionStatus.COMPLETE",
+        ),
+    ]
+    assert _arrivals(tmp_path / "s.jsonl", rows) == [("uploaded", "S1")]
+
+
 def test_a_claimed_ref_with_no_upload_row_to_absorb_it_still_counts(tmp_path):
     # S1 went up by hand on the web and was never recorded: the foreign row is its only arrival
     rows = [_staged("S1"), _foreign("k7", T1), _scored("S1", "k7", T1)]
@@ -280,6 +301,34 @@ def test_latest_score_is_by_platform_time_and_a_manual_score_counts_as_oldest(tm
             LedgerRow(event="scored", ts=ts, submission_id="S2", source="manual", public=public)
         )
     assert only_manual.latest_score("S2").public == 0.2
+
+
+def _errored(sid, ref, at, status="SubmissionStatus.COMPLETE"):
+    return LedgerRow(
+        event="errored",
+        ts=T2,
+        submission_id=sid,
+        source="platform",
+        at=at,
+        platform_ref=ref,
+        platform_status=status,
+    )
+
+
+def test_outcome_for_ref_is_the_newest_scored_or_errored_row_of_that_entry(tmp_path):
+    """spec 2026-10-09 §4.1 (amended): what sync compares a platform entry with."""
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(_errored("S1", "k1", T1))
+    led.append(_scored("S1", "k2", T1))
+    assert led.outcome_for_ref("S1", "k1").event == "errored"
+    led.append(_scored("S1", "k1", T1))
+    assert led.outcome_for_ref("S1", "k1").event == "scored"
+    led.append(_errored("S1", "k1", T1, "SubmissionStatus.ERROR"))
+    assert led.outcome_for_ref("S1", "k1").platform_status == "SubmissionStatus.ERROR"
+    led.append(LedgerRow(event="note", ts=T2, text="not an outcome"))
+    assert led.outcome_for_ref("S1", "k1").event == "errored"
+    assert led.outcome_for_ref("S1", "k3") is None and led.outcome_for_ref("S2", "k1") is None
+    assert led.score_for_ref("S1", "k1").public == 0.5  # score_for_ref still reads scored only
 
 
 def test_score_for_ref_is_the_newest_row_of_that_entry(tmp_path):

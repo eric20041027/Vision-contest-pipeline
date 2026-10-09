@@ -29,13 +29,17 @@ CandidateKind = Literal["candidate", "baseline", "probe"]
 Admission = Literal["PASS", "waived"]
 PairingMode = Literal["single", "fusion", "kernel"]
 LedgerMode = Literal["configs", "shared"]  # where submissions.jsonl lives (spec 2026-09-28 §3.1)
-Event = Literal["staged", "uploaded", "scored", "foreign", "final", "lock", "unlock", "note"]
+Event = Literal[
+    "staged", "uploaded", "scored", "errored", "foreign", "final", "lock", "unlock", "note"
+]
 EVENTS = get_args(Event)
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _REQUIRED: dict[str, tuple[str, ...]] = {
     "staged": ("submission_id", "kind", "eval_run", "gate", "profile_sha256"),
     "uploaded": ("submission_id", "at", "source", "confirmed", "profile_sha256"),
     "scored": ("submission_id", "source"),
+    # a platform entry finished without a score (spec 2026-10-09 §3.2)
+    "errored": ("submission_id", "source", "at", "platform_ref", "platform_status"),
     "foreign": ("platform_ref", "file_name", "at"),
     "final": (
         "rule",
@@ -311,6 +315,8 @@ class LedgerRow(_Strict):
             raise ValueError(f"{self.event} needs {missing}")
         if self.event == "scored" and self.public is None and self.private is None:
             raise ValueError("scored needs a public or private score")
+        if self.event == "errored" and (self.public is not None or self.private is not None):
+            raise ValueError("errored needs no score")
         _finite("public", self.public)
         _finite("private", self.private)
         return self

@@ -1,4 +1,4 @@
-<!-- 副本：來源是比賽工作區 RSNA_Knee_Abnormality_Detection/projects/rsna-knee/VCP_IMPROVEMENT_AUDIT_20260911.md（2026-09-11，由 Codex 在跑完 RSNA Knee 後寫成）。第 15 節的相對連結指向該工作區，不在本 repo。本 repo 的 Wave 0 已於 v0.3.0 完成（見 CHANGELOG）；Wave 1 拆成 1a 不可變產物（v0.4.0，spec：docs/superpowers/specs/2026-09-11-vcp-immutable-artifacts-design.md）、1b 角色範圍存取與收據（1b-1，v0.5.0）與來源稽核（1b-2，v0.6.0，只涵蓋 samples.jsonl）、1c 程式碼快照與產物授權（尚未做）。各項的「狀態」行與第 1 節表格的「目前狀態」欄隨 0.13.0 依 CHANGELOG 更新過，其餘段落保留 2026-09-11 的原文。第 16 節是 2026-09-25 第二輪回報（VCP-035 – 043）的補遺，第 17 節是 2026-09-26 第三輪回報（VCP-044 – 047）的補遺，只收通用的缺陷與處置。 -->
+<!-- 副本：來源是比賽工作區 RSNA_Knee_Abnormality_Detection/projects/rsna-knee/VCP_IMPROVEMENT_AUDIT_20260911.md（2026-09-11，由 Codex 在跑完 RSNA Knee 後寫成）。第 15 節的相對連結指向該工作區，不在本 repo。本 repo 的 Wave 0 已於 v0.3.0 完成（見 CHANGELOG）；Wave 1 拆成 1a 不可變產物（v0.4.0，spec：docs/superpowers/specs/2026-09-11-vcp-immutable-artifacts-design.md）、1b 角色範圍存取與收據（1b-1，v0.5.0）與來源稽核（1b-2，v0.6.0，只涵蓋 samples.jsonl）、1c 程式碼快照與產物授權（尚未做）。各項的「狀態」行與第 1 節表格的「目前狀態」欄隨 0.13.0 依 CHANGELOG 更新過，其餘段落保留 2026-09-11 的原文。第 16 節是 2026-09-25 第二輪回報（VCP-035 – 043）的補遺，第 17 節是 2026-09-26 第三輪回報（VCP-044 – 047）的補遺，第 18 節是 2026-10-09 的 VCP-048 補遺，只收通用的缺陷與處置。 -->
 
 # VCP 使用後改進稽核
 
@@ -937,3 +937,15 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 ### VCP-047：Kaggle CLI 失敗時不回讀
 
 **狀態：已實作，隨 0.13.0 發出。** CLI 送出後在等回應時斷線（非 0 退出），vcp 直接 FAIL、不寫列，但平台其實已收下；0.12 的上傳前同步要到下一次 upload 才補登，這之前台帳、`status` 與配額都少算，`--no-sync`、`--force` 或平台晚一點才列出時還會多扣一格。現在 CLI 非 0 也在同一個交易裡回讀（沿用 VCP-037 的時間窗與比對，排除台帳已知的 ref）：對上 → 照寫一列，WARN 帶 `exit_code=`；平台沒列出 → FAIL `upload_failed:`，不寫列，可以重傳；判斷不了（ambiguous、列表失敗、中斷、只看到已知的 ref）→ FAIL `upload_unconfirmed:`，不寫列，先到平台確認再決定。Kaggle 的列表呼叫各加 120 秒逾時，上傳前同步與 `sync` 逾時是 `sync_failed:`。
+
+## 18. 補遺：VCP-048（2026-10-09）
+
+來源：比賽工作區 2026-10-09 的回報（不在本 repo）。以下只留通用的缺陷與修法，比賽的資料、路徑與 id 都不收。使用者 2026-10-09 要求處理（spec `2026-10-09-vcp-errored-submissions-design.md`）。
+
+| ID | 類型 | 嚴重度 | 問題 | 處置 |
+|---|---|---|---|---|
+| VCP-048 | DEFECT | 中 | 平台做完卻沒有分數的提交（Kaggle code submission 隱藏重跑出錯）在台帳裡跟「還在跑」一樣：`status` 永遠 WARN，`final` 看不出那個 id 在平台上沒有結果 | 隨 0.14.0 |
+
+### VCP-048：平台出錯、沒有分數的提交
+
+**狀態：已實作，隨 0.14.0 發出。** Kaggle CLI 2.2.4 把隱藏重跑出錯的 code submission 列成 `SubmissionStatus.COMPLETE`、兩個分數都是空字串，JSON 沒有錯誤訊息；`sync` 只看分數，出錯的兩發都沒寫列，`status` 一直算 `unscored=2` 而 WARN，`final` 可能選中一個在平台上根本沒有結果的 id。現在平台契約多一個 `errored`（狀態最後一段是 `error`，或 `complete` 而兩個分數都空；帶分數的不算），台帳多一個事件 `errored`，由 `sync`（含上傳前同步）在綁定之後寫入；這個 ref 最新的結果列（`scored` 或 `errored`）跟這次一樣就不再寫，寫入的那一次 WARN（`errored=`）。每一發的結果由 `scored` 與 `errored` 列一起歸屬：`status` 把最新一發出錯的 id 列成 `errored=`、不算 unscored、不 WARN；`report` 每列帶 `errored`；`final` 不排名它（`why=errored`）；`errored` 列也能把 foreign ref 綁回自己的上傳。錯誤訊息的文字不做（CLI 的 JSON 沒有，vcp 不碰憑證）。舊 vcp 讀到 `errored` 列會 FAIL，讀寫同一份台帳的都要先升級。

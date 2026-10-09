@@ -370,6 +370,62 @@ def test_parse_submissions_redacts_platform_strings():
     assert SECRET not in sub.submitted_by and "<redacted>" in sub.submitted_by
 
 
+def test_an_errored_code_submission_as_cli_2_2_4_lists_it():
+    """VCP-048: the shape observed on 2026-10-09 -- COMPLETE, both scores empty strings, and no
+    error field in the JSON at all."""
+    row = {
+        "ref": 56979225,
+        "fileName": "submission.csv",
+        "date": "2026-10-09T00:01:21.410000",
+        "description": "S1 hidden rerun",
+        "status": "SubmissionStatus.COMPLETE",
+        "publicScore": "",
+        "privateScore": "",
+    }
+    [sub], _ = parse_submissions(json.dumps([row]))
+    assert (sub.platform_ref, sub.at) == ("56979225", "2026-10-09T00:01:21.410Z")
+    assert (sub.public, sub.private, sub.status) == (None, None, "SubmissionStatus.COMPLETE")
+    assert sub.errored is True
+
+
+@pytest.mark.parametrize(
+    ("status", "public", "private", "errored"),
+    [
+        ("SubmissionStatus.COMPLETE", "0.8", "", False),
+        ("SubmissionStatus.COMPLETE", "", "", True),
+        ("SubmissionStatus.COMPLETE", "", "0.7", False),  # a private score alone is a score
+        ("SubmissionStatus.ERROR", "", "", True),
+        ("SubmissionStatus.ERROR", "0.8", None, False),  # a score wins: it is a scored entry
+        ("SubmissionStatus.PENDING", "", "", False),
+        ("complete", "", None, True),  # the older lower-case form
+        ("complete", "0.79", None, False),
+        ("error", None, None, True),
+        ("pending", None, None, False),
+        ("", "", "", False),
+        (None, "", "", False),  # no status key at all
+        ("SubmissionStatus.CANCELLED", "", "", False),  # a status vcp does not know
+    ],
+)
+def test_errored_is_set_only_for_error_or_complete_without_a_score(
+    status, public, private, errored
+):
+    row = {"ref": 1, "fileName": "submission.csv", "date": "2026-10-09T00:00:00Z"}
+    for key, value in (("status", status), ("publicScore", public), ("privateScore", private)):
+        if value is not None:
+            row[key] = value
+    [sub], _ = parse_submissions(json.dumps([row]))
+    assert sub.errored is errored
+    if errored:
+        assert sub.public is None and sub.private is None
+
+
+def test_a_platform_submission_is_not_errored_unless_a_platform_says_so():
+    from vcp.submit.platforms.base import PlatformSubmission
+
+    sub = PlatformSubmission("1", "s.csv", STAMP, "S1", None, None, "complete", None)
+    assert sub.errored is False
+
+
 def test_parse_submissions_ref_zero_is_not_the_sha_fallback():
     rows = [{"ref": 0, "fileName": "x.csv", "date": "2026-08-31T21:28:00Z"}]
     subs, _ = parse_submissions(json.dumps(rows))

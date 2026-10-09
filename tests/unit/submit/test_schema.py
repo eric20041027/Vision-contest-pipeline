@@ -160,7 +160,7 @@ ERRORED = dict(
     submission_id="S1",
     source="platform",
     at=STAMP,
-    platform_ref="56979225",
+    platform_ref="90000001",
     platform_status="SubmissionStatus.COMPLETE",
 )
 

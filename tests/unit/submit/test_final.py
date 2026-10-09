@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from helpers import noisy_predictions
@@ -12,7 +14,7 @@ from submit_fixtures import (
 )
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
-from vcp.core.time import utc_now
+from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.data.access.access import DatasetAccess
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.provenance import attach_receipts
@@ -21,7 +23,7 @@ from vcp.submit.actions import record, score
 from vcp.submit.final import count_unseals, final, lock, rank_key, unlock
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile
-from vcp.submit.schema import FinalEntry, PlatformProfile
+from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
 from vcp.submit.stage import StageSpec, load_staged, stage
 
 
@@ -271,6 +273,63 @@ def test_final_drops_a_candidate_whose_receipt_read_the_sealed_subset(uploaded):
     table = {e.submission_id: e for e in res.row.table}
     assert table["S1"].why == "observed_sealed" and not table["S1"].eligible
     assert table["S2"].eligible
+
+
+def _errored(sid, at) -> LedgerRow:
+    """What sync writes for an entry the platform finished without a score (VCP-048)."""
+    return LedgerRow(
+        event="errored",
+        ts=stamp(),
+        submission_id=sid,
+        source="platform",
+        at=at,
+        platform_ref=f"e-{sid}",
+        platform_status="SubmissionStatus.COMPLETE",
+    )
+
+
+@pytest.mark.parametrize(("failed", "chosen"), [("S1", "S2"), ("S2", "S1")])
+def test_final_does_not_rank_an_id_whose_newest_upload_errored(uploaded, failed, chosen):
+    """spec 2026-10-09 §4.5: a candidate or baseline whose newest upload has no result on the
+    platform is not ranked, why=errored, and is listed among the unranked; a probe stays a
+    probe (probe, not_uploaded, errored, in that order)."""
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+    led = SubmissionLedger(uploaded.test_paths.submissions_log)
+    for sid in (failed, "S3"):
+        led.append(_errored(sid, led.uploads(sid)[0].at))
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    table = {e.submission_id: e for e in res.row.table}
+    assert (table[failed].eligible, table[failed].why) == (False, "errored")
+    assert table[failed].sealed_value is None and table[failed].provenance is None
+    assert table["S3"].why == "probe"
+    assert res.chosen == [chosen] and res.unranked == [failed]
+
+
+def test_final_ranks_an_id_sent_again_and_scored_after_it_errored(uploaded):
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+    led = SubmissionLedger(uploaded.test_paths.submissions_log)
+    first = led.uploads("S1")[0].at
+    led.append(_errored("S1", first))
+    assert final(TEST, dry_run=True, **_kw(uploaded)).chosen == ["S2"]
+    again = stamp(parse_stamp(str(first)) + timedelta(minutes=30))
+    led.append(
+        LedgerRow(
+            event="uploaded",
+            ts=stamp(),
+            submission_id="S1",
+            at=again,
+            source="manual",
+            confirmed=True,
+            profile_sha256="p" * 64,
+        )
+    )
+    score(TEST, "S1", public=0.85, **_kw(uploaded))
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    table = {e.submission_id: e for e in res.row.table}
+    assert table["S1"].eligible and table["S1"].why == "" and res.chosen == ["S1"]
+    assert res.unranked == []
 
 
 def test_final_reads_a_kernel_submission_the_way_stage_recorded_it(pair):

@@ -117,6 +117,13 @@ def _open(
         yield paths, profile, sha, ledger
 
 
+def _errored(ledger: SubmissionLedger, submission_id: str) -> bool:
+    """The id's newest upload has no result on the platform: the platform finished it without
+    a score (spec 2026-10-09 §4.5). A later upload that scored, or is still pending, clears it."""
+    outcome = ledger.latest_outcome(submission_id)
+    return outcome is not None and outcome.event == "errored"
+
+
 def rank_key(sign: float) -> Callable[[FinalEntry], tuple[float, float, str]]:
     """Spec 6.4: rank by the sealed reading, public breaks ties, ``staged_at`` breaks the rest.
     Both value keys follow ``higher_is_better`` (``sign`` is +1 or -1) because the board reports
@@ -184,6 +191,8 @@ def _final_locked(
             why = "probe"
         elif not ledger.uploads(sid):
             why = "not_uploaded"
+        elif _errored(ledger, sid):
+            why = "errored"  # not in NOT_RANKED: listed among the unranked (spec 2026-10-09 §4.5)
         else:
             card = load_run(paths.data_root, str(st.eval_run))
             info = provenance(card, data_root=paths.data_root, configs_root=configs_root)

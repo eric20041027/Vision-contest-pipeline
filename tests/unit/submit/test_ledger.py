@@ -127,6 +127,27 @@ def test_a_foreign_row_for_our_own_upload_is_one_arrival(tmp_path):
     assert _arrivals(tmp_path / "b.jsonl", by_ref) == [("uploaded", "S1")]
 
 
+def test_an_errored_row_ties_a_foreign_ref_to_our_upload_like_a_scored_row(tmp_path):
+    """spec 2026-10-09 §4.6: the platform finished S1 without a score, so no scored row will
+    ever tie its ref to S1; the errored row does, and the foreign row another ledger wrote for
+    it is absorbed by S1's ref-less upload -- one arrival, not two."""
+    rows = [
+        _staged("S1"),
+        _uploaded("S1", T1),
+        _foreign("k7", T1),
+        LedgerRow(
+            event="errored",
+            ts=T2,
+            submission_id="S1",
+            source="platform",
+            at=T1,
+            platform_ref="k7",
+            platform_status="SubmissionStatus.COMPLETE",
+        ),
+    ]
+    assert _arrivals(tmp_path / "s.jsonl", rows) == [("uploaded", "S1")]
+
+
 def test_a_claimed_ref_with_no_upload_row_to_absorb_it_still_counts(tmp_path):
     # S1 went up by hand on the web and was never recorded: the foreign row is its only arrival
     rows = [_staged("S1"), _foreign("k7", T1), _scored("S1", "k7", T1)]

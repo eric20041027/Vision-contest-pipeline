@@ -1,5 +1,7 @@
 """``vcp submit status`` / ``report``: read-only views over the ledger. ``report`` is
-last-vs-last (spec 2): every upload against the one before it, never against the best."""
+last-vs-last (spec 2): every upload against the one before it, never against the best. What
+became of each upload -- scored, errored, or nothing yet -- is the newest of the ``scored`` and
+``errored`` rows ``assign_scores`` places on it (spec 2026-10-09 §4.2)."""
 
 from __future__ import annotations
 
@@ -15,11 +17,14 @@ from vcp.measure.metrics import effective_params, get_metric, params_key
 from vcp.measure.runs import load_run
 from vcp.submit.final import sealed_reading
 from vcp.submit.guards import QuotaState, quota_state
-from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.ledger import SubmissionLedger, assign_scores
 from vcp.submit.location import read_only
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
 from vcp.submit.stage import load_staged
+
+# assign_scores moved to vcp.submit.ledger (final needs it too); still importable from here
+__all__ = ["ReportRow", "StatusView", "assign_scores", "report", "status"]
 
 
 @dataclass(frozen=True)
@@ -33,62 +38,32 @@ class StatusView:
     current: str | None
     unscored: list[str]
     provenance: dict[str, str]
+    errored: list[str]  # ids whose newest upload ended without a score (spec 2026-10-09 §4.3)
 
 
 def _label(r: LedgerRow) -> str:
     return r.submission_id if r.submission_id else f"foreign:{r.platform_ref}"
 
 
-def assign_scores(uploads: list[LedgerRow], scores: list[LedgerRow]) -> list[LedgerRow | None]:
-    """The score that applies to each upload of one submission id (same order as ``uploads``,
-    which may be in any order -- ``record --at`` can append an upload whose platform time
-    precedes an earlier row's). A platform-timed score (``at`` present) belongs to the upload
-    whose ``at`` is nearest in time to the score's ``at`` (smallest absolute difference; a tie
-    goes to the upload with the later ``at``). A manual score (no ``at``) belongs to the newest
-    upload (by ``ts``) with ``upload.ts <= score.ts`` (none -> the score is dropped). Per
-    upload, the newest assigned score (by ``ts``) wins; an upload nothing was assigned to gets
-    None.
-
-    Each score is placed independently -- scores never compete to "claim" an upload the way an
-    earlier version of this function had them do. Claiming let a corrected score (a later ``ts``
-    for the same moment) bump the score it corrects onto a different, wrong upload; placing each
-    score on its own nearest/eligible upload and then letting the newest ``ts`` win per upload
-    does not have that failure mode.
-    """
-    assigned: list[LedgerRow | None] = [None] * len(uploads)
-    if not uploads:
-        return assigned
-    ats = [parse_stamp(str(u.at)) for u in uploads]
-    for s in scores:
-        if s.at is not None:
-            score_at = parse_stamp(s.at)
-            winner = min(
-                range(len(uploads)),
-                key=lambda idx: (abs(ats[idx] - score_at), -ats[idx].timestamp()),
-            )
-        else:
-            eligible = [idx for idx, u in enumerate(uploads) if u.ts <= s.ts]
-            if not eligible:
-                continue
-            winner = max(eligible, key=lambda idx: (uploads[idx].ts, idx))
-        if assigned[winner] is None or s.ts > assigned[winner].ts:
-            assigned[winner] = s
-    return assigned
-
-
-def _assigned_score(ledger: SubmissionLedger, r: LedgerRow) -> LedgerRow | None:
-    """The score ``assign_scores`` gives this particular ``uploaded`` row of its submission id."""
+def _outcome(ledger: SubmissionLedger, r: LedgerRow) -> LedgerRow | None:
+    """What became of this particular ``uploaded`` row: the ``scored`` or ``errored`` row that
+    ``assign_scores`` gives it among its submission id's, or None (no result yet)."""
     sid = str(r.submission_id)
     uploads = ledger.uploads(sid)
-    assigned = assign_scores(uploads, ledger.of("scored", sid))
+    assigned = ledger.assigned_outcomes(sid)
     return next((a for u, a in zip(uploads, assigned, strict=True) if u is r), None)
+
+
+def _score(outcome: LedgerRow | None) -> LedgerRow | None:
+    """The outcome when it is a score; an errored upload has none (spec 2026-10-09 §4.4)."""
+    return outcome if outcome is not None and outcome.event == "scored" else None
 
 
 def _public(ledger: SubmissionLedger, r: LedgerRow) -> float | None:
     if r.event == "foreign":
         return r.public
-    assigned = _assigned_score(ledger, r)
-    return assigned.public if assigned is not None else None
+    scored = _score(_outcome(ledger, r))
+    return scored.public if scored is not None else None
 
 
 def _grade(paths: DatasetPaths, sid: str) -> str:
@@ -121,14 +96,15 @@ def status(
             if public is not None and (best is None or public > best):
                 best, current = public, _label(r)
     unscored: list[str] = []
+    errored: list[str] = []  # a finished state: listed, never a WARN (spec 2026-10-09 §4.3)
     for sid in ledger.ids():
-        uploads = ledger.uploads(sid)
-        if not uploads:
+        if not ledger.uploads(sid):
             continue
-        assigned = assign_scores(uploads, ledger.of("scored", sid))
-        newest = max(range(len(uploads)), key=lambda i: (uploads[i].at or "", uploads[i].ts))
-        if assigned[newest] is None:
+        outcome = ledger.latest_outcome(sid)
+        if outcome is None:
             unscored.append(sid)
+        elif outcome.event == "errored":
+            errored.append(sid)
     grades = {sid: _grade(paths, sid) for sid in ledger.ids()}
     return StatusView(
         staged=len(ledger.ids()),
@@ -140,6 +116,7 @@ def status(
         current=current,
         unscored=unscored,
         provenance=grades,
+        errored=errored,
     )
 
 
@@ -153,6 +130,8 @@ class ReportRow:
     sealed_value: float | None
     private: float | None
     shift: float | None
+    # our upload whose outcome is an errored row; a foreign row never is (spec 2026-10-09 §4.4)
+    errored: bool = False
 
 
 def report(
@@ -170,14 +149,17 @@ def report(
     rows: list[ReportRow] = []
     prev_public: float | None = None
     for r in ledger.arrivals():
+        errored = False
         if r.event == "foreign":
             kind, public, private, sealed = "foreign", r.public, r.private, None
         else:
             st = ledger.staged(str(r.submission_id))
             kind = str(st.kind) if st is not None else "?"
-            assigned = _assigned_score(ledger, r)
-            public = assigned.public if assigned is not None else None
-            private = assigned.private if assigned is not None else None
+            outcome = _outcome(ledger, r)
+            errored = outcome is not None and outcome.event == "errored"
+            scored = _score(outcome)
+            public = scored.public if scored is not None else None
+            private = scored.private if scored is not None else None
             sealed = None
             if st is not None:
                 card = load_run(paths.data_root, str(st.eval_run))
@@ -185,6 +167,8 @@ def report(
                 sealed = reading.value if reading is not None and why == "" else None
         delta = None if public is None or prev_public is None else public - prev_public
         shift = None if public is None or private is None else private - public
-        rows.append(ReportRow(_label(r), str(r.at), kind, public, delta, sealed, private, shift))
+        rows.append(
+            ReportRow(_label(r), str(r.at), kind, public, delta, sealed, private, shift, errored)
+        )
         prev_public = public
     return rows

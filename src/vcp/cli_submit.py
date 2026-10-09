@@ -593,13 +593,17 @@ def status_cmd(
         fields["locked"] = st.locked is not None
         fields["current"] = st.current or "none"
         fields["unscored"] = len(st.unscored)
+        fields["errored"] = len(st.errored)
+        # spec 2026-10-09 §4.3: errored is a finished state, so it never WARNs here
         warn = warn or st.locked is not None or bool(st.unscored)
         human = [f"unscored: {sid}" for sid in st.unscored]
+        human += [f"errored: {sid}" for sid in st.errored]
         human += [f"provenance: {sid}={g}" for sid, g in st.provenance.items()]
         payload = {
             "quota": None if st.quota is None else st.quota.fields(),
             "current": st.current,
             "unscored": st.unscored,
+            "errored": st.errored,
             "provenance": st.provenance,
             "locked": None
             if st.locked is None
@@ -624,6 +628,7 @@ def report_cmd(
         human = [
             f"{r.at}  {r.submission_id:>16}  {r.kind:>9}  public={r.public!r} delta={r.delta!r} "
             f"sealed={r.sealed_value!r} private={r.private!r} shift={r.shift!r}"
+            + (" errored" if r.errored else "")  # spec 2026-10-09 §4.4
             for r in rows
         ]
         payload = {"rows": [r.__dict__ for r in rows]}

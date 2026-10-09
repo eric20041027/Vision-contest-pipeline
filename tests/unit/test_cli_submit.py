@@ -254,6 +254,7 @@ def test_final_status_report_cli(pair):
         and "current=S2" in _verdict(r.output)
         and "unscored=2" in _verdict(r.output)
     )
+    assert " errored=0" in _verdict(r.output)  # spec 2026-10-09 §4.3: printed even when 0
     r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
     assert r.exit_code == 1 and "no_sealed_readings" in _verdict(r.output)
     for run in ("good", "bad"):

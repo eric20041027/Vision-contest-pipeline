@@ -17,7 +17,7 @@
 | `submit verify` | `--dataset --id` | |
 | `submit upload` | `--dataset --id` | `--message`、`--force "<理由>"`（同 id 再傳才需要，否則 `already_uploaded:`；`final` 之後的重傳也要）、`--no-sync`（略過上傳前同步，WARN）；VERDICT `ledger=` `sync=` `bound=` `forced=` `confirmed=` `platform_ref=` `detail=`（CLI 沒確認、或 CLI 非 0 時都回讀列表：描述以 id 開頭 + 上傳前後 2 分鐘，台帳已有的 ref 不算；`readback=` 記結果。CLI 非 0 而回讀對上 → 寫列、WARN `exit_code=`；沒列出 → FAIL `upload_failed:`；判斷不了 → FAIL `upload_unconfirmed:`；列表呼叫各 120 秒逾時，逾時結束整個程序樹，`uv tool` 之類的包裝程式也一併切斷）；同步之後才 FAIL 也帶 `sync=` `bound=` |
 | `submit record` | `--dataset --id --at "YYYY-MM-DD HH:MM"` | `--tz platform|utc`、`--platform-ref`（已經在某個 `uploaded` 列 → `exists:`） |
-| `submit score` / `sync` | `--dataset` (+ `--id --public/--private`) | sync 把別人的發記成 `foreign`，照數配額；對上 id、平台做完卻沒有分數的一發（狀態最後一段 `error`，或 `complete` 而兩個分數都空）記成 `errored`：先綁定，同一個 ref 的狀態沒變就不再寫；VERDICT 一律帶 `errored=`（這次寫入的列數），大於 0 時 WARN，`--json` 的 `errored` 是 id 清單 |
+| `submit score` / `sync` | `--dataset` (+ `--id --public/--private`) | sync 把別人的發記成 `foreign`，照數配額；對上 id、平台做完卻沒有分數的一發（狀態最後一段 `error`，或 `complete` 而兩個分數都空）記成 `errored`：先綁定；同一個 ref 最新的結果列（`scored` 或 `errored`）跟這次一樣就不再寫，分數與沒分數之間來回時每一步都寫；VERDICT 一律帶 `errored=`（這次寫入的列數），大於 0 時 WARN，`--json` 的 `errored` 是 id 清單 |
 | `submit final` | `--dataset` | `--slots`、`--dry-run`；最新一發出錯的候選與基準不排名（`why=errored`，列在沒排名的清單裡） |
 | `submit lock` / `unlock` | `--dataset --reason` | |
 | `submit status` / `report` | `--dataset` | 唯讀（不上鎖）；`status` 看每個 id 最新一發的結果：還沒出分 → `unscored=`，出錯 → `errored=`（人看的行 `errored: <id>`，不 WARN）；`report` 每列帶 `errored`，出錯那一發沒有 public／private，人看的行尾加 ` errored` |

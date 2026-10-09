@@ -10,6 +10,7 @@
   - `vcp submit final` 也看不出那兩個 id 在平台上沒有結果。
 - 決定：使用者 2026-10-09 要求處理這個缺口。本 spec 沒寫到的設計選擇是實作者的裁決，記在後記 `docs/superpowers/plans/2026-10-09-vcp-048-errored-submissions-followups.md`。
 - 版本：下一個 MINOR（0.14.0），理由見 §6。
+- 執行期修訂（審查第 1 輪，2026-10-09，spec 作者裁決）：§4.1。冪等改成跟「同一個 ref 最新的一列結果」比，結果列是 `scored` 或 `errored`；原本各自只跟同一種事件最新的那列比，同一個 ref 在有分數與沒分數之間來回時，最後的狀態會漏記。沒有 `errored` 列的台帳行為跟 0.13.0 相同。
 
 ## 1. 問題
 
@@ -66,14 +67,12 @@
 ### 4.1 sync
 
 - 對上 id 之後，綁定（2026-09-28 §4.4）照舊先做。
-- 接著：
-  - 這一發 `errored` → 走 errored 的路徑，不走 `scored` 的路徑：
-    - 只在兩種情況寫一列 `errored`：
-      - 這個 `platform_ref` 還沒有 `errored` 列；
-      - 同一個 ref 最新的那列 `errored` 的 `platform_status` 跟這次不同。
-    - 規則同 2026-09-28 §4.6，所以重跑 sync 不會重寫。
-  - 有分數 → 照舊寫 `scored`。
+- 「結果列」是 `scored` 或 `errored` 列。冪等一律跟這個 id、這個 `platform_ref` 最新的那列結果列比（台帳順序）：
+  - 這一發 `errored` → 走 errored 的路徑，不走 `scored` 的路徑：寫一列 `errored`，除非最新的結果列是 `errored`、而且 `platform_status` 跟這次相同。
+  - 有分數 → 寫一列 `scored`，除非最新的結果列是 `scored`、而且 `public`、`private`、`platform_status` 都跟這次相同。
   - 都不是（pending）→ 什麼都不寫，照舊。
+- 所以狀態沒變時重跑 sync 不會重寫；同一個 ref 在有分數與沒分數之間來回（分數 → 空 → 同一個分數，或空 → 分數 → 空），最後一次也會寫，結果跟平台最後的狀態一致。
+- 台帳沒有 `errored` 列時，最新的結果列就是最新的 `scored` 列，跟 2026-09-28 §4.6 的規則相同。（2026-10-09 審查第 1 輪修訂：原本 `errored` 只跟最新的 `errored` 列比、`scored` 只跟最新的 `scored` 列比。）
 - 同一個 ref 後來被平台重新計分時，照舊寫 `scored`。這列比較新，結果以它為準（§4.2）。
 - `SyncResult` 加 `errored: int`，是這次寫入的 `errored` 列數。
 - VERDICT：
@@ -145,7 +144,8 @@
   - 出錯的一發寫一列 `errored`、不寫 `scored`，VERDICT `errored=1` 並 WARN；
   - 第二次 sync 不寫任何列，`errored=0` 且 OK；
   - 狀態改變（COMPLETE → ERROR）再寫一列；
-  - 之後被重新計分 → 寫 `scored`；
+  - 之後被重新計分 → 寫 `scored`，結果是已出分；
+  - 分數 → 空 → 同一個分數，以及空 → 分數 → 空：每一步都寫，結果跟最後一步一致；再 sync 一次什麼都不寫（2026-10-09 修訂）；
   - 台帳沒有上傳的出錯一發 → 先綁定，再寫 `errored`；
   - pending 照舊什麼都不寫；
   - `upload` 的上傳前同步也會寫。

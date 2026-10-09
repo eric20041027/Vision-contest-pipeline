@@ -8,7 +8,7 @@
   - `c21a5d9` feat(submit): sync writes errored rows
   - `b91cb8a` feat(submit): status, report and final read errored outcomes
   - 文件一個 commit（本檔、`cli.md`、CLAUDE.md / AGENTS.md、skill 與鏡射、治理 spec 第 32 條、稽核 §18）。
-- 每個行為變更都先寫測試、看它失敗再實作。例外：`errored_for_ref` 的單元測試是在 sync 的測試（先紅）帶出這個函式之後才補的。
+- 每個行為變更都先寫測試、看它失敗再實作。例外：第一版 `errored_for_ref` 的單元測試是在 sync 的測試（先紅）帶出這個函式之後才補的；審查第 1 輪換成 `outcome_for_ref`，它的測試先紅。
 - 版本、`CHANGELOG.md` 都沒動，發版時再做（§2 待辦第 1 條）。
 
 ## 1. 已知限制
@@ -30,7 +30,12 @@
 1. **本檔的結構。** CLAUDE.md 要裁決寫在後記的最後一節，也說開放待辦在最後一節；這份把兩者放進同一個最後一節（2.1、2.2），已知限制放前面。
 2. **Kaggle 的判斷用 redact 之後的狀態字。** 也就是寫進台帳的那個字；不另外 `strip()`，照 spec 以 `.` 分割取最後一段再轉小寫。`PlatformSubmission.errored` 由各平台自己決定，Kaggle 的規則寫成 `kaggle.is_errored`。
 3. **`SyncResult` 存 id 清單，`errored` 是它的長度。** spec 要 `errored: int` 給 VERDICT、id 清單給 `--json`；兩個欄位可能對不上，所以只存 `errored_ids`（每寫一列記一個 id，照寫入順序；同一次 sync 裡同一個 id 有兩發出錯就出現兩次），`errored` 是唯讀的 property。
-4. **冪等以 (id, ref) 為鍵。** 跟 `scored` 的 `score_for_ref(id, ref)` 同一個做法：新增 `errored_for_ref(id, ref)`，兩者共用 `_newest_for_ref`。
+4. **冪等跟同一個 ref 最新的結果列比（spec 作者 2026-10-09 裁決，修訂 spec §4.1）。**
+   - 第一版照 spec 原文：`errored` 只跟同一個 ref 最新的 `errored` 列比，`scored` 只跟最新的 `scored` 列比。
+   - 審查（Minor 1）指出，同一個 ref 在有分數與沒分數之間來回時，最後的狀態會漏記：0.8 → 空 → 0.8 停在出錯；空 → 0.8 → 空 停在已出分，`final` 可能選中平台上沒有結果的 id。
+   - 裁決：兩種列一起看，跟這個 (id, ref) 最新的結果列（`scored` 或 `errored`，台帳順序）比；是同一種、而且分數與狀態都相同才不寫。狀態沒變時重跑 sync 照樣不寫。
+   - 沒有 `errored` 列的台帳，最新的結果列就是最新的 `scored` 列，行為跟 0.13.0 相同。
+   - 鍵仍是 (id, ref)，跟 `score_for_ref` 一樣。`SubmissionLedger.outcome_for_ref` 取代第一版的 `errored_for_ref`（沒發出過）；`score_for_ref` 是 0.12.0 起的公開方法，保留，但 src 已經不用它。sync 的兩個比較函式合成一個 `_outcome_changed`。
 5. **寫第一列之前先建好每一列。** sync 原本在寫入前把每一發的 foreign 列建一次，值有問題就 `platform_response:`、台帳不動。現在出錯的一發也先建一次 `errored` 列（id 還不知道，用 `-` 代替），別的平台若把沒有狀態字的一發標成出錯，也在寫入前就停。
 6. **人看的行。** spec 只規定 `status` 的 `errored: <id>`。`sync` 也每寫一列印一行 `errored: <id> (the platform finished it without a score)`，跟它的 `unconfirmed: <id>` 並排。
 7. **VERDICT 欄位的位置。** `sync` 的 `errored=` 放在 `scored=` 後面，`status` 的 `errored=` 放在 `unscored=` 後面。
@@ -49,7 +54,8 @@
    - 台帳新事件 `errored` 與升級順序（spec §6）；
    - VERDICT 新欄位：`sync` 的 `errored=`（大於 0 時 WARN）、`status` 的 `errored=`；`final` 表的 `why=errored`；
    - `--json`：`sync` 與 `status` 的 `errored` 清單、`report` 每列的 `errored`；
-   - Python API：`PlatformSubmission.errored`、`SyncResult.errored_ids` / `errored`、`StatusView.errored`、`ReportRow.errored`、`SubmissionLedger.outcomes` / `assigned_outcomes` / `latest_outcome` / `errored_for_ref`，以及 `assign_scores` 改放在 `vcp.submit.ledger`。
+   - Python API：`PlatformSubmission.errored`、`SyncResult.errored_ids` / `errored`、`StatusView.errored`、`ReportRow.errored`、`SubmissionLedger.outcomes` / `assigned_outcomes` / `latest_outcome` / `outcome_for_ref`，以及 `assign_scores` 改放在 `vcp.submit.ledger`；
+   - `sync` 的冪等改跟同一個 ref 最新的結果列比（沒有 `errored` 列時行為不變）。
 2. **比賽工作區升級。** 讀寫同一份台帳的每個 checkout 一起升到 0.14.0；升級後第一次 `sync` 會替已經出錯的那兩發補寫 `errored` 列（WARN 一次），之後 `status` 不再因為它們 WARN。
 3. **交接文件。** `HANDOVER.md` 與 `CODEX_PROMPT.md` 在發版時提到新事件與升級順序。
 4. **端到端測試。** `test_e2e_submit.py` 的假 Kaggle CLI 可以加一發「COMPLETE、分數空字串」，走完 sync → status → final；目前這條鏈由單元測試分段覆蓋。

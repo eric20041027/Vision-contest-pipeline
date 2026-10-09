@@ -677,7 +677,8 @@ def test_an_errored_entry_is_written_once_as_errored_and_never_as_a_score(pair):
 
 def test_an_errored_entry_whose_status_changes_is_written_again_and_a_later_score_wins(pair):
     """spec 2026-10-09 §4.1: a new status is a new errored row; a score the platform gives the
-    same entry later is a scored row as before."""
+    same entry later is a scored row as before, and being newer it is the outcome (§4.2): the
+    id is neither errored nor unscored any more."""
     _only_s1(pair)
     now = utc_now()
     record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
@@ -695,6 +696,10 @@ def test_an_errored_entry_whose_status_changes_is_written_again_and_a_later_scor
     res = sync(TEST, runner=FakeRunner([rescored]), **_kw(pair))
     assert (res.errored, res.scored) == (0, 1)
     assert _ledger(pair).latest_score("S1").public == 0.81
+    outcome = _ledger(pair).latest_outcome("S1")
+    assert (outcome.event, outcome.platform_ref, outcome.public) == ("scored", "62", 0.81)
+    st = status(TEST, **_kw(pair))
+    assert (st.errored, st.unscored) == ([], [])
 
 
 def test_an_errored_entry_the_ledger_never_recorded_is_bound_then_errored(pair):

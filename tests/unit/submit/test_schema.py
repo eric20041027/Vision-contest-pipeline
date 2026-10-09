@@ -108,7 +108,17 @@ def test_artifact_shapes():
 
 
 def test_ledger_rows_require_their_event_fields():
-    assert EVENTS == ("staged", "uploaded", "scored", "foreign", "final", "lock", "unlock", "note")
+    assert EVENTS == (
+        "staged",
+        "uploaded",
+        "scored",
+        "errored",
+        "foreign",
+        "final",
+        "lock",
+        "unlock",
+        "note",
+    )
     gate = Gate(admission="PASS", judgements=["p1"])
     LedgerRow(
         event="staged",
@@ -142,6 +152,38 @@ def test_ledger_rows_require_their_event_fields():
     LedgerRow(event="foreign", ts=STAMP, platform_ref="x", file_name="f.csv", at=STAMP)
     with pytest.raises(ValidationError):
         LedgerRow(event="party", ts=STAMP)
+
+
+ERRORED = dict(
+    event="errored",
+    ts=STAMP,
+    submission_id="S1",
+    source="platform",
+    at=STAMP,
+    platform_ref="56979225",
+    platform_status="SubmissionStatus.COMPLETE",
+)
+
+
+def test_an_errored_row_carries_the_platform_entry_and_no_score():
+    """spec 2026-10-09 §3.2: the id, where it came from, the platform's time, ref and status."""
+    row = LedgerRow(**ERRORED)
+    assert row.event == "errored" and "errored" in EVENTS
+    assert LedgerRow.model_validate_json(row.model_dump_json(exclude_none=True)) == row
+
+
+@pytest.mark.parametrize(
+    "field", ["submission_id", "source", "at", "platform_ref", "platform_status"]
+)
+def test_an_errored_row_without_a_required_field_fails(field):
+    with pytest.raises(ValidationError, match=rf"errored needs \['{field}'\]"):
+        LedgerRow(**{**ERRORED, field: None})
+
+
+@pytest.mark.parametrize("score", ["public", "private"])
+def test_an_errored_row_with_a_score_fails(score):
+    with pytest.raises(ValidationError, match="errored needs no score"):
+        LedgerRow(**{**ERRORED, score: 0.8})
 
 
 def test_ledger_row_ts_and_at_must_be_stamps():

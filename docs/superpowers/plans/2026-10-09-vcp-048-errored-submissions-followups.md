@@ -72,3 +72,4 @@
 4. **`board_rule=last` 的榜面現任可能是出錯的那一發（審查 Minor 6）。** `status` 的 `current` 取最後一個到達、不看結果；`final` 的 `needs_reupload` 也看 `last_uploaded()`。平台的最後一發出錯時，榜面算哪一發因平台而異，spec 沒有規定。要先查清楚 Kaggle 在這種情況下計哪一發，再決定 `current` 與 `needs_reupload` 要不要跳過出錯的那一發。
 5. **端到端測試。** `test_e2e_submit.py` 的假 Kaggle CLI 可以加一發「COMPLETE、分數空字串」，走完 sync → status → final；目前這條鏈由單元測試分段覆蓋。
 6. **錯誤訊息。** Kaggle CLI 若在之後的版本把錯誤說明（Python API 的 `error_description`）放進 JSON，可以存進 `errored` 列（要經過 redact），再決定要不要加欄位。
+7. **同一毫秒的結果列（再審查 N1）。** 同一發的 `scored` 與 `errored` 列 `ts` 相同時，`assign_scores` 保留先遇到的那列；`outcomes` 把兩種列接在一起傳入，所以平手時 `scored` 先到，不是依台帳順序。兩次 sync 落在同一毫秒才會發生，實際上碰不到；但翻轉與 I1 的測試靠兩次 sync 之間約 10 ms 的間隔，極快的 CI 理論上可能不穩。要修的話，把兩種列依台帳順序合併，平手時取台帳較後的一列，而且不改只有 `scored` 列時的行為。

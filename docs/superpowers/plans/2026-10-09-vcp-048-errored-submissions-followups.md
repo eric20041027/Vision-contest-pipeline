@@ -22,7 +22,7 @@
 ## 1. 已知限制
 
 - **沒有錯誤訊息的文字。** CLI 2.2.4 的 `--format json` 沒有 `error_description`；vcp 不碰憑證，也不改用 Python API。錯在哪要到平台的提交頁看。
-- **沒有公開排行榜的比賽。** 這種比賽的 COMPLETE 本來就沒有 public 分數；比賽期間 private 也不公開，所以每一發都會被判成出錯。目前沒有這種比賽；遇到時要讓平台契約知道「這場沒有公開分數」。
+- **沒有公開排行榜的比賽。** 這種比賽的 COMPLETE 本來就沒有 public 分數；比賽期間 private 也不公開，所以每一發都會被判成出錯，`final` 因此一發都排不了，只會 FAIL `no_sealed_readings:`（0.13.0 照 sealed 讀數排名）。目前沒有這種比賽；遇到時要讓平台契約知道「這場沒有公開分數」（§2.2 第 8 項）。
 - **foreign 列不變。** 它本來就存 `platform_status`；出錯的 foreign 一發只是多一筆快照，不寫 `errored` 列。
 - **Manual 平台沒有列表。** 出錯的一發在 `status` 裡一直是 `unscored`；需要時用 `note` 事件手記。
 - **出錯之後又回到 PENDING。** 平台若把出錯的一發重新排進佇列，pending 什麼都不寫，結果仍是出錯，直到它出分或再出錯。Kaggle 目前不會這樣。
@@ -72,4 +72,6 @@
 4. **`board_rule=last` 的榜面現任可能是出錯的那一發（審查 Minor 6）。** `status` 的 `current` 取最後一個到達、不看結果；`final` 的 `needs_reupload` 也看 `last_uploaded()`。平台的最後一發出錯時，榜面算哪一發因平台而異，spec 沒有規定。要先查清楚 Kaggle 在這種情況下計哪一發，再決定 `current` 與 `needs_reupload` 要不要跳過出錯的那一發。
 5. **端到端測試。** `test_e2e_submit.py` 的假 Kaggle CLI 可以加一發「COMPLETE、分數空字串」，走完 sync → status → final；目前這條鏈由單元測試分段覆蓋。
 6. **錯誤訊息。** Kaggle CLI 若在之後的版本把錯誤說明（Python API 的 `error_description`）放進 JSON，可以存進 `errored` 列（要經過 redact），再決定要不要加欄位。
-7. **同一毫秒的結果列（再審查 N1）。** 同一發的 `scored` 與 `errored` 列 `ts` 相同時，`assign_scores` 保留先遇到的那列；`outcomes` 把兩種列接在一起傳入，所以平手時 `scored` 先到，不是依台帳順序。兩次 sync 落在同一毫秒才會發生，實際上碰不到；但翻轉與 I1 的測試靠兩次 sync 之間約 10 ms 的間隔，極快的 CI 理論上可能不穩。要修的話，把兩種列依台帳順序合併，平手時取台帳較後的一列，而且不改只有 `scored` 列時的行為。
+7. **同一毫秒的結果列（再審查 N1；發版前審查更正）。** `outcomes` 依台帳順序把兩種列傳給 `assign_scores`，它用嚴格的 `>` 比 `ts`，所以同一發的兩列結果 `ts` 相同時，台帳順序**較早**的那列勝，不是 `scored` 勝（這裡先前的說法錯了）。`outcome_for_ref` 取同一個 ref 台帳順序的**最後**一列，所以平手時 sync 與讀取端看法不同，sync 也不會補寫。兩次 sync 落在同一毫秒才會發生，實際上碰不到；但翻轉與 I1 的測試靠兩次 sync 之間約 10 ms 的間隔，極快的 CI 理論上可能不穩。修法見第 9 項。
+8. **`is_errored` 看比賽有沒有公開排行榜。** 「complete 而且沒有分數」改依 `submit.yaml` 的公開排行榜設定判斷（新欄位，MINOR）：沒有公開排行榜的比賽，不再把每一發都判成出錯（§1）。
+9. **`outcome_for_ref` 跟讀取端用同一個選法。** 改成 `ts` 最大、平手取台帳較早的那一列，跟 `assign_scores` 一致，sync 的冪等比較與 `status` / `report` / `final` 的結果才不會在平手時分歧（第 7 項）。

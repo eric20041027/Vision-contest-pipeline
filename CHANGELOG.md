@@ -16,6 +16,99 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.14.0] - 2026-10-09
+
+VCP-048：平台做完卻沒有分數的提交（#37）；tag `v0.14.0` 打在發版 PR 的合併 commit 上。
+MINOR 的理由：
+- 台帳新事件 `errored`：必填 `submission_id`、`source`、`at`、`platform_ref`、`platform_status`，
+  帶 `public` 或 `private` 是 schema 錯誤（`errored needs no score`）。由 `sync` 與 `upload` 的上傳前
+  同步寫入，一律 `source=platform`。0.13.0 以前的 vcp 讀不動它（見「相容性與升級」）。
+- VERDICT 新欄位：
+  - `submit sync` 的 `errored=`（一律印）：這次寫入的 `errored` 列數；大於 0 時 WARN，所以新的出錯
+    只在寫入的那一次提醒。
+  - `submit status` 的 `errored=`（一律印）：最新一發出錯的 id 數。出錯是已結束的狀態，從不因此 WARN。
+- `submit final` 的決選表（`final` 列的 `table`）多一個 `why` 值 `errored`。它不在 `NOT_RANKED`，
+  所以算進 `unranked=`、列在沒排名的清單裡（WARN）。
+- `--json` 的新內容：`sync` 的 `result.errored`（這次寫入的列的 id，照寫入順序）、`status` 的
+  `result.errored`（id 清單）、`report` 每列的 `errored`（foreign 一律 `false`）。
+- 人看的行：`sync` 每寫一列印 `errored: <id> (the platform finished it without a score)`；
+  `status` 印 `errored: <id>`；`report` 出錯那一發的行尾加 ` errored`。
+- 行為：`sync` 的冪等改跟同一個 ref 最新的結果列比（見 Changed）。
+
+### Fixed
+- **VCP-048：平台做完卻沒有分數的提交。** Kaggle code submission 的隱藏重跑出錯時，CLI 2.2.4 把它
+  列成 `SubmissionStatus.COMPLETE`、兩個分數都是空字串，JSON 沒有錯誤訊息。`sync` 只看分數，那一發
+  在台帳裡跟「還在跑」一樣：`status` 永遠算它 unscored 而 WARN，`report` 分不出出錯與還沒出分，
+  `final` 可能選中一個在平台上沒有結果的 id。現在：
+  - 平台契約多一個判斷 `PlatformSubmission.errored`。Kaggle 的規則
+    （`vcp.submit.platforms.kaggle.is_errored`）：狀態以 `.` 分割的最後一段轉小寫是 `error`，或是
+    `complete` 而 public 與 private 都空；帶分數的一律不算。
+  - `sync`（含上傳前同步）對上 id 之後照舊先綁定，出錯的一發寫一列 `errored`、不寫 `scored`。之後
+    平台替同一發補上分數，照樣寫 `scored`，以較新的那列為準。
+  - 每一發的結果由這個 id 的 `scored` 與 `errored` 列一起、照 `assign_scores` 的規則歸屬：`scored`
+    是已出分，`errored` 是出錯，沒有是還沒出分。
+  - `status` 把最新一發出錯的 id 列在 `errored=`，不算 unscored。
+  - `report` 出錯那一發沒有 public／private，下一發的 delta 跟接在還沒出分的一發後面一樣是空的。
+  - `final` 依序判斷 `probe`、`not_uploaded`、`errored`，然後才是 sealed 讀數與來源檢查；出錯的
+    不讀 provenance 與 sealed 讀數。重傳之後出分就照常排名。
+  - `arrivals()` 判斷 foreign ref 是不是自己的上傳時，`errored` 列跟 `scored` 列一樣能把 ref 綁到
+    id。
+- Release 回歸門檻多一列 `VCP-048 (0.14.0)`（Kaggle 的判斷、schema、sync 的寫入與來回、arrivals、
+  status、final），刪掉或改名任一個測試即紅。
+
+### Changed
+- `submit sync` 的冪等改跟同一個 (id, ref) 最新的結果列（`scored` 或 `errored`，台帳順序）比：是
+  同一種、分數與狀態也相同才不寫。狀態沒變時重跑照樣不寫；在有分數與沒分數之間來回時（分數 → 空 →
+  同一個分數，或空 → 分數 → 空）每一步都寫，結果跟平台最後的狀態一致。沒有 `errored` 列的台帳，
+  最新的結果列就是最新的 `scored` 列，行為跟 0.13.0 相同。
+- `final` 什麼都排不了時，`no_sealed_readings:` 的訊息在有出錯的候選時說出幾發出錯（列出 id）：
+  最新一發沒有分數，到平台看、再傳一次；還有其他沒排上的條目時才接著保留解封 sealed 的提示。字彙
+  照舊，VERDICT 不加欄位。
+- 文件：`docs/reference/cli.md` 的 `submit upload`、`sync`、`final`、`status` / `report` 與台帳
+  位置一段；`CLAUDE.md` / `AGENTS.md` 的事件清單；skill `vcp-train-submit-backup` 與鏡射；提交治理
+  spec 第 32 條；稽核文件第 18 節；spec `2026-10-09-vcp-errored-submissions-design.md` 與後記
+  `2026-10-09-vcp-048-errored-submissions-followups.md`。
+- Python API（自己登記平台、或在程式裡呼叫這些函式的人要看）：
+  - `PlatformSubmission` 多一個欄位 `errored: bool = False`（放在最後、有預設值，既有的建構呼叫
+    不必改）。用 `register_platform` 登記的平台要自己判斷哪一發算出錯，不設就永遠不寫 `errored` 列。
+  - `SyncResult.errored_ids`（這次寫入的 `errored` 列的 id，照寫入順序）與唯讀 property `errored`
+    （它的長度）。
+  - `StatusView.errored`（必填，只有 `status()` 建它）；`ReportRow.errored`（預設 `False`，放在
+    最後，位置參數的建構照舊）。
+  - `SubmissionLedger.outcomes`、`assigned_outcomes`、`latest_outcome`、`outcome_for_ref`。
+    `score_for_ref` 保留，但 vcp 自己不再用它。
+  - `assign_scores` 搬到 `vcp.submit.ledger`（`final` 也要用，放在 `report` 會循環 import）；
+    `vcp.submit.report` 照樣匯出它，舊的 import 不用改。它的 `scores` 也可以帶 `errored` 列。
+
+### 相容性與升級
+- 0.13.0 以前的 vcp 讀到 `errored` 列會 FAIL `bad ledger row`：每個讀者都嚴格驗每一列。所以一份
+  台帳的每個讀者與寫者都先升到 0.14.0，才讓 0.14.0 對它跑 `sync` 或 `upload`：
+  - `configs` 模式的台帳跟著 git 走：共用它的每個 checkout；
+  - `shared` 模式的正本：同一個 data root 的每個 worktree。
+- 不用遷移：升級後第一次 `sync` 替平台上已經出錯的那幾發各補寫一列 `errored`，WARN 一次
+  （`errored=`），之後 `status` 不再因為它們 WARN。先跑的若是 `upload`，上傳前同步照樣補寫，但它的
+  VERDICT 不報。
+- 沒有 `errored` 列的台帳，讀寫行為跟 0.13.0 相同；`submit.yaml` 與其他產物的格式不變。
+- `final` 可能從 OK 變成 WARN：候選或 baseline 的最新一發出錯時，它算進 `unranked=`、列在沒排名的
+  清單裡。同一份台帳在 0.13.0 看不出出錯，可能是 OK。
+- 已知限制（後記 §1；開放待辦在後記 §2.2）：
+  - 沒有錯誤訊息的文字：CLI 2.2.4 的 JSON 沒有，vcp 不碰憑證、也不改用 Python API；錯在哪要到
+    平台的提交頁看。
+  - 沒有公開排行榜的比賽，每一發 COMPLETE 都沒有分數，會被判成出錯；`final` 因此一發都排不了，只會
+    FAIL `no_sealed_readings:`（0.13.0 照 sealed 讀數排名）。目前沒有這種比賽。
+  - foreign 列不變：它本來就存 `platform_status`，出錯的 foreign 一發只多一筆快照，不寫 `errored`
+    列。
+  - Manual 平台沒有列表：出錯的一發在 `status` 裡一直是 `unscored`，需要時用 `note` 事件手記。
+  - 平台若把出錯的一發排回 PENDING，pending 什麼都不寫，結果仍是出錯，直到它出分或再出錯（Kaggle
+    目前不會這樣）。
+  - `upload` 的 VERDICT 不報上傳前同步寫的 `errored` 列，之後的 `status` / `report` 才看得到。
+  - `status` 只看每個 id 最新的一發：較早的一發出錯、最新的已出分時不列它（`report` 那一行仍標
+    ` errored`）。
+  - `final` 也只看最新的一發（刻意偏保守）：較早的一發有分數、最新重傳的那一發出錯時，這個 id 是
+    `why=errored`、不排名；再傳一次、出分之後恢復排名。
+  - 狀態字在解析時就經過 redact：32 個以上連續英數字的狀態會變成 `<redacted>`，認不出出錯。實際的
+    狀態字遠短於此。
+
 ## [0.13.0] - 2026-10-05
 
 第三輪回報的 VCP-044～047 與文件同步（#35）；tag `v0.13.0` 打在發版 PR 的合併 commit 上。

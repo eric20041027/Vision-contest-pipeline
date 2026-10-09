@@ -1,8 +1,8 @@
 # vcp — vision contest pipeline
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.13.0](https://img.shields.io/badge/version-0.13.0-informational.svg)](CHANGELOG.md)
-[![Tests 2044](https://img.shields.io/badge/tests-2044%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.14.0](https://img.shields.io/badge/version-0.14.0-informational.svg)](CHANGELOG.md)
+[![Tests 2085](https://img.shields.io/badge/tests-2085%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -120,7 +120,7 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 
 ## Status and roadmap
 
-`0.13.0`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
+`0.14.0`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
 
 - **Proven end to end** on a local RSNA knee subset — data, training, judgement, staging, backup — and in use for that competition now.
 - **PostgreSQL provenance backend**: five live evidence sets (integration 51/51; a 1,224-measurement calibration; a 3,672-measurement six-method benchmark at 1K–100K entities; a held-out evaluation whose aggregate gate passes at 1.018 / 1.017; a real-data track), with exact parity against canonical replay throughout. Two findings are reported as limitations, not hidden: incremental maintenance beats a full rebuild at every change ratio measured, and the v1 adaptive policy picks FULL wrongly on small graphs and near-total changes. Details: [docs/benchmarks/postgres-provenance-report-v1.md](docs/benchmarks/postgres-provenance-report-v1.md).

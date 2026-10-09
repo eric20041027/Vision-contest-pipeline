@@ -374,16 +374,16 @@ def test_an_errored_code_submission_as_cli_2_2_4_lists_it():
     """VCP-048: the shape observed on 2026-10-09 -- COMPLETE, both scores empty strings, and no
     error field in the JSON at all."""
     row = {
-        "ref": 56979225,
+        "ref": 90000001,
         "fileName": "submission.csv",
-        "date": "2026-10-09T00:01:21.410000",
+        "date": "2026-01-02T03:04:05.678000",
         "description": "S1 hidden rerun",
         "status": "SubmissionStatus.COMPLETE",
         "publicScore": "",
         "privateScore": "",
     }
     [sub], _ = parse_submissions(json.dumps([row]))
-    assert (sub.platform_ref, sub.at) == ("56979225", "2026-10-09T00:01:21.410Z")
+    assert (sub.platform_ref, sub.at) == ("90000001", "2026-01-02T03:04:05.678Z")
     assert (sub.public, sub.private, sub.status) == (None, None, "SubmissionStatus.COMPLETE")
     assert sub.errored is True
 

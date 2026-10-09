@@ -1,10 +1,10 @@
-# 給 Codex 的接續開發 prompt（2026-10-05）
+# 給 Codex 的接續開發 prompt（2026-10-09）
 
 把下面整段貼給 Codex（repo 根目錄開啟）。它假設 Codex 能讀 repo、跑 `uv`、跑測試、開 worktree / 分支與 commit。2026-09-07 的舊版所列的第一、第二階段（待辦清理、RSNA Knee 膠水）都已完成；RSNA 比賽現在在獨立工作區推進，不在這個 repo 裡。
 
 ---
 
-你接手的是 `vcp`（vision contest pipeline，Python 3.12 / pydantic v2 / typer / pytest / ruff，MIT 開源），一個給 Kaggle 與台灣視覺比賽用的通用框架。八層（資料、量測、融合、訓練、提交治理、備份審計、不可變產物、dataset evolution provenance 含 optional PostgreSQL adaptive backend）都已交付並合併到 `main`，版本 `0.13.0`（tag `v0.13.0`），全套測試綠（2044 passed / 76 skipped，覆蓋率 95.43%）。開始前依序讀：
+你接手的是 `vcp`（vision contest pipeline，Python 3.12 / pydantic v2 / typer / pytest / ruff，MIT 開源），一個給 Kaggle 與台灣視覺比賽用的通用框架。八層（資料、量測、融合、訓練、提交治理、備份審計、不可變產物、dataset evolution provenance 含 optional PostgreSQL adaptive backend）都已交付並合併到 `main`，版本 `0.14.0`（tag `v0.14.0`），全套測試綠（2085 passed / 76 skipped，覆蓋率 95.45%）。0.14.0 的提交台帳多一個事件 `errored`（VCP-048，平台做完卻沒有分數的一發）：0.13.0 以前的 vcp 讀到會 FAIL `bad ledger row`，所以讀寫同一份台帳的每個 checkout 都要先升級，才讓 0.14.0 對它跑 `sync` 或 `upload`。開始前依序讀：
 
 1. `AGENTS.md`（機械鐵則、路徑、常用命令——每一條都是硬性規定）與 `.agents/skills/vcp-orientation/SKILL.md`（層、台帳、VERDICT、四種不可變等級、文件權威順序、skill 路由）。
 2. `docs/handover/HANDOVER.md`（現況、程式碼地圖、慣例、陷阱、開放待辦）。
@@ -34,7 +34,7 @@
 
 ## 完成的定義
 
-- 全套測試綠、覆蓋率 ≥ 80%（現在 95.43%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
+- 全套測試綠、覆蓋率 ≥ 80%（現在 95.45%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
 - 每個 CLI 命令仍以 VERDICT 收尾、exit code 對、`--json` 可解析；沒有任何憑證進 repo / 台帳 / log。
 - 後記、spec 補充決定、`docs/reference/cli.md`、AGENTS.md / CLAUDE.md、對應 skill 已更新；PR 合併、需要時 tag 已 push。
 

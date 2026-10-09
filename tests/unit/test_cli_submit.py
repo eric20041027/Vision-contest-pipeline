@@ -329,7 +329,7 @@ def test_status_and_report_cli_show_an_errored_upload_without_warning(pair):
             submission_id="S2",
             source="platform",
             at=stamp(s2_at + timedelta(seconds=3)),
-            platform_ref="56979225",
+            platform_ref="90000001",
             platform_status="SubmissionStatus.COMPLETE",
         )
     )

@@ -447,6 +447,7 @@ def sync_cmd(
             "dataset": dataset,
             "platform_rows": res.platform_rows,
             "scored": res.scored,
+            "errored": res.errored,
             "foreign": res.foreign,
             "refreshed": res.refreshed,
             "unconfirmed": len(res.unconfirmed),
@@ -454,12 +455,17 @@ def sync_cmd(
             "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
-        status: Status = "WARN" if res.foreign or res.unconfirmed else "OK"
+        # spec 2026-10-09 §4.1: a new error WARNs once, on the sync that wrote its row
+        human += [
+            f"errored: {sid} (the platform finished it without a score)" for sid in res.errored_ids
+        ]
+        status: Status = "WARN" if res.foreign or res.unconfirmed or res.errored else "OK"
         payload = {
             "matched": res.matched,
             "unconfirmed": res.unconfirmed,
             "refreshed": res.refreshed,
             "bound": res.bound,
+            "errored": res.errored_ids,
         }
         return status, fields, payload, human
 

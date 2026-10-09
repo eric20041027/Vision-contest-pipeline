@@ -282,6 +282,28 @@ def test_latest_score_is_by_platform_time_and_a_manual_score_counts_as_oldest(tm
     assert only_manual.latest_score("S2").public == 0.2
 
 
+def _errored(sid, ref, at, status="SubmissionStatus.COMPLETE"):
+    return LedgerRow(
+        event="errored",
+        ts=T2,
+        submission_id=sid,
+        source="platform",
+        at=at,
+        platform_ref=ref,
+        platform_status=status,
+    )
+
+
+def test_errored_for_ref_is_the_newest_errored_row_of_that_entry(tmp_path):
+    led = SubmissionLedger(tmp_path / "s.jsonl")
+    led.append(_errored("S1", "k1", T1))
+    led.append(_scored("S1", "k1", T1))
+    led.append(_errored("S1", "k1", T1, "SubmissionStatus.ERROR"))
+    assert led.errored_for_ref("S1", "k1").platform_status == "SubmissionStatus.ERROR"
+    assert led.errored_for_ref("S1", "k2") is None and led.errored_for_ref("S2", "k1") is None
+    assert led.score_for_ref("S1", "k1").public == 0.5  # the other event is not mixed in
+
+
 def test_score_for_ref_is_the_newest_row_of_that_entry(tmp_path):
     led = SubmissionLedger(tmp_path / "s.jsonl")
     led.append(_scored("S1", "k1", T1))

@@ -8,6 +8,14 @@
   - `c21a5d9` feat(submit): sync writes errored rows
   - `b91cb8a` feat(submit): status, report and final read errored outcomes
   - 文件一個 commit（本檔、`cli.md`、CLAUDE.md / AGENTS.md、skill 與鏡射、治理 spec 第 32 條、稽核 §18）。
+- 審查第 1 輪（審查檔不進 repo）：沒有 Critical；1 個 Important（I1，測試缺口）與 Minor 1–7。修正：
+  - `69ee4a6` test(submit): a later score of an errored entry is its outcome（I1）
+  - `76d7cf9` fix(submit): sync compares an entry with its ref's newest outcome row（Minor 1，spec 作者裁決，見 §2.1 第 4 條）
+  - `bef5210` docs(spec): VCP-048 sync compares with the ref's newest outcome row
+  - `52b6924` test(submit): status prints errored= even when it is 0（Minor 2）
+  - `29c5564` fix(submit): final's no_sealed_readings says how many uploads errored（Minor 3，§2.1 第 16 條）
+  - `0a6775a` test(submit): point the withdrawn-score test at followups §2.1 ruling 9（Minor 4）
+  - 本檔的已知限制與待辦（Minor 5、6）另一個 commit。Minor 7（commit 粒度、後補的測試）只記錄，不改。
 - 每個行為變更都先寫測試、看它失敗再實作。例外：第一版 `errored_for_ref` 的單元測試是在 sync 的測試（先紅）帶出這個函式之後才補的；審查第 1 輪換成 `outcome_for_ref`，它的測試先紅。
 - 版本、`CHANGELOG.md` 都沒動，發版時再做（§2 待辦第 1 條）。
 
@@ -20,6 +28,7 @@
 - **出錯之後又回到 PENDING。** 平台若把出錯的一發重新排進佇列，pending 什麼都不寫，結果仍是出錯，直到它出分或再出錯。Kaggle 目前不會這樣。
 - **`upload` 的 VERDICT 不報出錯。** 上傳前同步照樣寫 `errored` 列，但只有之後的 `status` / `report` 看得到（spec §2 的決定）。
 - **`status` 只看每個 id 最新的一發。** 同一個 id 較早的一發出錯、最新的一發已出分時，`status` 不列它；`report` 那一行仍標 ` errored`。
+- **`final` 也只看最新的一發（spec §4.5，刻意偏保守）。** 舊的一發有分數、最新重傳的那一發出錯（例如 `--force "final re-send"` 碰上平台的暫時問題）時，`final` 把這個 id 列成 `why=errored`、不排名，雖然平台上較早那一發仍有分數、可以選。再傳一次、出分之後就恢復排名。
 - **長得像憑證的狀態字。** Kaggle 的狀態字在解析時就經過 redact；32 個以上連續英數字的狀態會變成 `<redacted>`，認不出 `error` / `complete`，當成不是出錯。實際的狀態字遠短於此。
 - **舊 vcp 讀不動新台帳。** 0.13.0 以前的 vcp 讀到 `errored` 列會 FAIL `bad ledger row`。`configs` 台帳跟著 git 走，所有 checkout 都要先升級；`shared` 正本是同一個 data root 的所有 worktree。
 
@@ -47,6 +56,7 @@
 13. **skill 的建議。** 平台的暫時問題才用同一個 id `--force` 重傳；程式錯了要修好、用新的 notebook 版本以新 id stage（`stage.json` 寫一次不改，同一個 id 只能送同一個版本）。
 14. **CLAUDE.md / AGENTS.md。** spec 只要求事件清單加 `errored`；另加半句「舊 vcp 讀到會 FAIL，讀寫同一份台帳的都先升級」，因為這是升級時唯一會踩到的事。
 15. **sync 的 CLI 測試走真的 Kaggle 平台。** 把 `kaggle.timed_runner` 換成假 runner（`test_actions` 已經這樣做），從 JSON 解析、配對到 VERDICT 都是真的程式碼。
+16. **`final` 什麼都排不了時，說出有幾發出錯（審查 Minor 3，PATCH 等級的措辭）。** 原本一律是 `no_sealed_readings: … run vcp eval measure … --unseal …`，所有候選都出錯時也叫人去解封 sealed。現在字彙照舊是 `no_sealed_readings:`，但有 `why=errored` 的條目時，訊息改說「N 個出錯（列出 id）：最新一發沒有分數，到平台看、再傳一次」；還有其他沒排上的條目（沒有 sealed 讀數、來源不符等）才接著保留解封的提示。VERDICT 不加欄位。
 
 ### 2.2 開放待辦（依優先順序）
 
@@ -55,8 +65,10 @@
    - VERDICT 新欄位：`sync` 的 `errored=`（大於 0 時 WARN）、`status` 的 `errored=`；`final` 表的 `why=errored`；
    - `--json`：`sync` 與 `status` 的 `errored` 清單、`report` 每列的 `errored`；
    - Python API：`PlatformSubmission.errored`、`SyncResult.errored_ids` / `errored`、`StatusView.errored`、`ReportRow.errored`、`SubmissionLedger.outcomes` / `assigned_outcomes` / `latest_outcome` / `outcome_for_ref`，以及 `assign_scores` 改放在 `vcp.submit.ledger`；
-   - `sync` 的冪等改跟同一個 ref 最新的結果列比（沒有 `errored` 列時行為不變）。
+   - `sync` 的冪等改跟同一個 ref 最新的結果列比（沒有 `errored` 列時行為不變）；
+   - `final` 的 `no_sealed_readings:` 在有出錯的候選時改說有幾發出錯（§2.1 第 16 條）。
 2. **比賽工作區升級。** 讀寫同一份台帳的每個 checkout 一起升到 0.14.0；升級後第一次 `sync` 會替已經出錯的那兩發補寫 `errored` 列（WARN 一次），之後 `status` 不再因為它們 WARN。
 3. **交接文件。** `HANDOVER.md` 與 `CODEX_PROMPT.md` 在發版時提到新事件與升級順序。
-4. **端到端測試。** `test_e2e_submit.py` 的假 Kaggle CLI 可以加一發「COMPLETE、分數空字串」，走完 sync → status → final；目前這條鏈由單元測試分段覆蓋。
-5. **錯誤訊息。** Kaggle CLI 若在之後的版本把錯誤說明（Python API 的 `error_description`）放進 JSON，可以存進 `errored` 列（要經過 redact），再決定要不要加欄位。
+4. **`board_rule=last` 的榜面現任可能是出錯的那一發（審查 Minor 6）。** `status` 的 `current` 取最後一個到達、不看結果；`final` 的 `needs_reupload` 也看 `last_uploaded()`。平台的最後一發出錯時，榜面算哪一發因平台而異，spec 沒有規定。要先查清楚 Kaggle 在這種情況下計哪一發，再決定 `current` 與 `needs_reupload` 要不要跳過出錯的那一發。
+5. **端到端測試。** `test_e2e_submit.py` 的假 Kaggle CLI 可以加一發「COMPLETE、分數空字串」，走完 sync → status → final；目前這條鏈由單元測試分段覆蓋。
+6. **錯誤訊息。** Kaggle CLI 若在之後的版本把錯誤說明（Python API 的 `error_description`）放進 JSON，可以存進 `errored` 列（要經過 redact），再決定要不要加欄位。

@@ -306,6 +306,28 @@ def test_final_does_not_rank_an_id_whose_newest_upload_errored(uploaded, failed,
     assert res.chosen == [chosen] and res.unranked == [failed]
 
 
+def test_no_ranked_entry_because_of_errors_says_so_beside_no_sealed_readings(uploaded):
+    """Review Minor 3: when the uploads errored on the platform, unsealing the holdout is not
+    the advice; the FAIL keeps its word and says how many errored. The unseal hint stays only
+    for entries that did not error."""
+    led = SubmissionLedger(uploaded.test_paths.submissions_log)
+    led.append(_errored("S1", led.uploads("S1")[0].at))
+    with pytest.raises(ValidationFailed) as ei:
+        final(TEST, dry_run=True, **_kw(uploaded))
+    message = str(ei.value)
+    assert message.startswith("no_sealed_readings: ")
+    assert "1 of them errored on the platform (S1)" in message
+    assert "--unseal" in message  # S2 has no sealed reading yet
+    led.append(_errored("S2", led.uploads("S2")[0].at))
+    with pytest.raises(ValidationFailed) as ei:
+        final(TEST, dry_run=True, **_kw(uploaded))
+    message = str(ei.value)
+    assert message.startswith("no_sealed_readings: ")
+    assert "2 of them errored on the platform (S1, S2)" in message
+    assert "--unseal" not in message
+    assert SubmissionLedger(uploaded.test_paths.submissions_log).of("final") == []
+
+
 def test_final_ranks_an_id_sent_again_and_scored_after_it_errored(uploaded):
     _measure_holdout(uploaded, "good")
     _measure_holdout(uploaded, "bad")

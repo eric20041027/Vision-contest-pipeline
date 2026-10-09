@@ -124,6 +124,29 @@ def _errored(ledger: SubmissionLedger, submission_id: str) -> bool:
     return outcome is not None and outcome.event == "errored"
 
 
+UNSEAL_HINT = "run `vcp eval measure --run R --subsets <sealed> --unseal --reason ...` first"
+
+
+def _nothing_ranked(entries: list[FinalEntry]) -> ValidationFailed:
+    """``no_sealed_readings:``, and when uploads errored on the platform, how many: unsealing
+    the holdout does not help those (review of spec 2026-10-09, Minor 3). The unseal hint stays
+    for the entries that did not error."""
+    errored = [e.submission_id for e in entries if e.why == "errored"]
+    if not errored:
+        return ValidationFailed(
+            "no_sealed_readings: no uploaded candidate or baseline has a usable sealed reading; "
+            + UNSEAL_HINT
+        )
+    message = (
+        "no_sealed_readings: no uploaded candidate or baseline can be ranked; "
+        f"{len(errored)} of them errored on the platform ({', '.join(errored)}): their newest "
+        "upload has no score, so look there and send them again"
+    )
+    if any(e.why not in (*NOT_RANKED, "errored") for e in entries):
+        message += f"; for the others, {UNSEAL_HINT}"
+    return ValidationFailed(message)
+
+
 def rank_key(sign: float) -> Callable[[FinalEntry], tuple[float, float, str]]:
     """Spec 6.4: rank by the sealed reading, public breaks ties, ``staged_at`` breaks the rest.
     Both value keys follow ``higher_is_better`` (``sign`` is +1 or -1) because the board reports
@@ -226,10 +249,7 @@ def _final_locked(
         )
     ranked = sorted((e for e in entries if e.eligible), key=rank_key(sign))
     if not ranked:
-        raise ValidationFailed(
-            "no_sealed_readings: no uploaded candidate or baseline has a usable sealed reading; "
-            "run `vcp eval measure --run R --subsets <sealed> --unseal --reason ...` first"
-        )
+        raise _nothing_ranked(entries)
     n = slots if slots is not None else profile.final_slots
     chosen = [e.submission_id for e in ranked[:n]]
     unranked = [e.submission_id for e in entries if not e.eligible and e.why not in NOT_RANKED]

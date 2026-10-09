@@ -120,6 +120,16 @@ def parse_date(value: Any) -> str:
     return stamp(dt)
 
 
+def is_errored(status: str, public: float | None, private: float | None) -> bool:
+    """spec 2026-10-09 §3.1: the last ``.``-separated word of the status, lower-cased, is
+    ``error``, or ``complete`` with neither score -- CLI 2.2.4 lists a code submission whose
+    hidden rerun failed as ``SubmissionStatus.COMPLETE`` with empty scores and no error field.
+    An entry with a score is never errored, whatever its status says."""
+    if public is not None or private is not None:
+        return False
+    return status.rsplit(".", 1)[-1].lower() in ("error", "complete")
+
+
 def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None]:
     """One page of ``competitions submissions --format json``: a bare list, or an object holding
     the list plus a ``nextPageToken`` -- or the CLI's plain-text word that there are none."""
@@ -152,16 +162,20 @@ def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None]:
         platform_ref = (
             str(ref) if ref not in (None, "") else sha256_text(f"{item['fileName']}|{at}")[:16]
         )
+        public = parse_score(item.get("publicScore"), "publicScore")
+        private = parse_score(item.get("privateScore"), "privateScore")
+        status = redact(str(item.get("status") or ""))
         out.append(
             PlatformSubmission(
                 platform_ref=platform_ref,
                 file_name=redact(str(item["fileName"])),
                 at=at,
                 description=redact(str(item.get("description") or "")),
-                public=parse_score(item.get("publicScore"), "publicScore"),
-                private=parse_score(item.get("privateScore"), "privateScore"),
-                status=redact(str(item.get("status") or "")),
+                public=public,
+                private=private,
+                status=status,
                 submitted_by=redact(str(item["submittedBy"])) if item.get("submittedBy") else None,
+                errored=is_errored(status, public, private),
             )
         )
     return out, token

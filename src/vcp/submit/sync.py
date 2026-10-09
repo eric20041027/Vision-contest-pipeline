@@ -173,19 +173,18 @@ def _check(p: PlatformSubmission) -> None:
         _errored_row("-", p)
 
 
-def _error_changed(ledger: SubmissionLedger, sid: str, row: LedgerRow) -> bool:
-    """spec 2026-10-09 §4.1, the rule of 2026-09-28 §4.6: an ``errored`` row only for a ref that
-    has none yet, or whose status differs from that ref's newest ``errored`` row."""
-    previous = ledger.errored_for_ref(sid, str(row.platform_ref))
-    return previous is None or previous.platform_status != row.platform_status
-
-
-def _score_changed(ledger: SubmissionLedger, sid: str, row: LedgerRow) -> bool:
-    """spec 2026-09-28 §4.6: a ``scored`` row only for a ref that has none yet (VCP-038: that row
-    ties the ref to the id), or whose score or status differs from that ref's newest row -- so an
-    id scored differently on two uploads is not rewritten by every sync."""
-    previous = ledger.score_for_ref(sid, str(row.platform_ref))
-    return previous is None or any(getattr(previous, f) != getattr(row, f) for f in SCORE_FIELDS)
+def _outcome_changed(ledger: SubmissionLedger, sid: str, row: LedgerRow) -> bool:
+    """spec 2026-09-28 §4.6 as amended by 2026-10-09 §4.1: a ``scored`` or ``errored`` row only
+    when the ref's newest outcome row -- ``scored`` or ``errored`` -- is missing (VCP-038: the
+    row ties the ref to the id), is the other event, or differs in score or status. A stable
+    entry is not rewritten by every sync, an id scored differently on two uploads neither, and
+    an entry that goes from a score to none and back ends on the platform's last word. Without
+    ``errored`` rows this is the 0.13.0 rule: the newest outcome row is the newest scored row.
+    An ``errored`` row has no score, so comparing ``SCORE_FIELDS`` compares its status."""
+    previous = ledger.outcome_for_ref(sid, str(row.platform_ref))
+    if previous is None or previous.event != row.event:
+        return True
+    return any(getattr(previous, f) != getattr(row, f) for f in SCORE_FIELDS)
 
 
 def _file_names(paths: DatasetPaths, ledger: SubmissionLedger) -> dict[str, str]:
@@ -240,14 +239,14 @@ def reconcile(
             bound += 1
         if p.errored:
             row = _errored_row(sid, p)
-            if _error_changed(ledger, sid, row):
+            if _outcome_changed(ledger, sid, row):
                 ledger.append(row)
                 errored.append(sid)
             continue
         if p.public is None and p.private is None:
             continue  # still pending: nothing to write yet
         row = _scored_row(sid, p)
-        if _score_changed(ledger, sid, row):
+        if _outcome_changed(ledger, sid, row):
             ledger.append(row)
             scored += 1
     confirmed = set(matched.values())

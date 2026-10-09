@@ -198,17 +198,14 @@ class SubmissionLedger:
 
     def score_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
         """The newest ``scored`` row of one platform entry of this id, in ledger order."""
-        return self._newest_for_ref("scored", submission_id, platform_ref)
+        rows = [r for r in self.of("scored", submission_id) if r.platform_ref == platform_ref]
+        return rows[-1] if rows else None
 
-    def errored_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
-        """The newest ``errored`` row of one platform entry of this id, in ledger order (spec
-        2026-10-09 §4.1)."""
-        return self._newest_for_ref("errored", submission_id, platform_ref)
-
-    def _newest_for_ref(
-        self, event: str, submission_id: str, platform_ref: str
-    ) -> LedgerRow | None:
-        rows = [r for r in self.of(event, submission_id) if r.platform_ref == platform_ref]
+    def outcome_for_ref(self, submission_id: str, platform_ref: str) -> LedgerRow | None:
+        """The newest ``scored`` or ``errored`` row of one platform entry of this id, in ledger
+        order: what ``sync`` compares the entry with (spec 2026-10-09 §4.1, amended the same
+        day). A ledger without ``errored`` rows gives what ``score_for_ref`` gives."""
+        rows = [r for r in self.outcomes(submission_id) if r.platform_ref == platform_ref]
         return rows[-1] if rows else None
 
     def arrivals(self) -> list[LedgerRow]:

@@ -702,6 +702,46 @@ def test_an_errored_entry_whose_status_changes_is_written_again_and_a_later_scor
     assert (st.errored, st.unscored) == ([], [])
 
 
+def _flip(pair, ref, states):
+    """Sync S1's entry ``ref`` once per state ("0.8": scored, "": finished without a score) and
+    return the (scored, errored) rows each sync wrote."""
+    _only_s1(pair)
+    now = utc_now()
+    record(TEST, "S1", now.strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    at = stamp(now + timedelta(seconds=3))
+    written = []
+    for public in states:
+        res = sync(
+            TEST, runner=FakeRunner([_hidden_rerun(ref, at, publicScore=public)]), **_kw(pair)
+        )
+        written.append((res.scored, res.errored))
+    return written
+
+
+def _outcome_events(pair, ref):
+    return [r.event for r in _ledger(pair).outcomes("S1") if r.platform_ref == ref]
+
+
+def test_a_score_withdrawn_and_given_back_ends_scored(pair):
+    """spec 2026-10-09 §4.1 (amended 2026-10-09): each sync compares the entry with the newest
+    outcome row of its ref, scored or errored -- not with the newest row of its own event, which
+    left the restored 0.8 unwritten and the id errored. A stable state writes nothing."""
+    assert _flip(pair, 66, ["0.8", "", "0.8", "0.8"]) == [(1, 0), (0, 1), (1, 0), (0, 0)]
+    assert _outcome_events(pair, "66") == ["scored", "errored", "scored"]
+    assert _ledger(pair).latest_outcome("S1").event == "scored"
+    st = status(TEST, **_kw(pair))
+    assert (st.errored, st.unscored) == ([], [])
+
+
+def test_an_error_scored_and_then_withdrawn_again_ends_errored(pair):
+    """The other direction: the platform's last word is "no score", so the ledger's must be too
+    -- otherwise final could pick an id that has no result on the platform (spec §1)."""
+    assert _flip(pair, 67, ["", "0.8", "", ""]) == [(0, 1), (1, 0), (0, 1), (0, 0)]
+    assert _outcome_events(pair, "67") == ["errored", "scored", "errored"]
+    assert _ledger(pair).latest_outcome("S1").event == "errored"
+    assert status(TEST, **_kw(pair)).errored == ["S1"]
+
+
 def test_an_errored_entry_the_ledger_never_recorded_is_bound_then_errored(pair):
     """spec 2026-10-09 §4.1: the binding (spec 2026-09-28 §4.4) comes first, as for a score."""
     _only_s1(pair)

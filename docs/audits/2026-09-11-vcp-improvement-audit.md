@@ -944,8 +944,8 @@ VCP 下一個含上述改動的 release，不應只以 unit tests 數量判定�
 
 | ID | 類型 | 嚴重度 | 問題 | 處置 |
 |---|---|---|---|---|
-| VCP-048 | DEFECT | 中 | 平台做完卻沒有分數的提交（Kaggle code submission 隱藏重跑出錯）在台帳裡跟「還在跑」一樣：`status` 永遠 WARN，`final` 看不出那個 id 在平台上沒有結果 | 已實作，待 0.14.0 發出 |
+| VCP-048 | DEFECT | 中 | 平台做完卻沒有分數的提交（Kaggle code submission 隱藏重跑出錯）在台帳裡跟「還在跑」一樣：`status` 永遠 WARN，`final` 看不出那個 id 在平台上沒有結果 | 隨 0.14.0 |
 
 ### VCP-048：平台出錯、沒有分數的提交
 
-**狀態：已實作，待 0.14.0 發出。** Kaggle CLI 2.2.4 把隱藏重跑出錯的 code submission 列成 `SubmissionStatus.COMPLETE`、兩個分數都是空字串，JSON 沒有錯誤訊息；`sync` 只看分數，出錯的兩發都沒寫列，`status` 一直算 `unscored=2` 而 WARN，`final` 可能選中一個在平台上根本沒有結果的 id。現在平台契約多一個 `errored`（狀態最後一段是 `error`，或 `complete` 而兩個分數都空；帶分數的不算），台帳多一個事件 `errored`，由 `sync`（含上傳前同步）在綁定之後寫入；這個 ref 最新的結果列（`scored` 或 `errored`）跟這次一樣就不再寫，寫入的那一次 WARN（`errored=`）。每一發的結果由 `scored` 與 `errored` 列一起歸屬：`status` 把最新一發出錯的 id 列成 `errored=`、不算 unscored、不 WARN；`report` 每列帶 `errored`；`final` 不排名它（`why=errored`）；`errored` 列也能把 foreign ref 綁回自己的上傳。錯誤訊息的文字不做（CLI 的 JSON 沒有，vcp 不碰憑證）。舊 vcp 讀到 `errored` 列會 FAIL，讀寫同一份台帳的都要先升級。
+**狀態：已實作，隨 0.14.0 發出。** Kaggle CLI 2.2.4 把隱藏重跑出錯的 code submission 列成 `SubmissionStatus.COMPLETE`、兩個分數都是空字串，JSON 沒有錯誤訊息；`sync` 只看分數，出錯的兩發都沒寫列，`status` 一直算 `unscored=2` 而 WARN，`final` 可能選中一個在平台上根本沒有結果的 id。現在平台契約多一個 `errored`（狀態最後一段是 `error`，或 `complete` 而兩個分數都空；帶分數的不算），台帳多一個事件 `errored`，由 `sync`（含上傳前同步）在綁定之後寫入；這個 ref 最新的結果列（`scored` 或 `errored`）跟這次一樣就不再寫，寫入的那一次 WARN（`errored=`）。每一發的結果由 `scored` 與 `errored` 列一起歸屬：`status` 把最新一發出錯的 id 列成 `errored=`、不算 unscored、不 WARN；`report` 每列帶 `errored`；`final` 不排名它（`why=errored`）；`errored` 列也能把 foreign ref 綁回自己的上傳。錯誤訊息的文字不做（CLI 的 JSON 沒有，vcp 不碰憑證）。舊 vcp 讀到 `errored` 列會 FAIL，讀寫同一份台帳的都要先升級。

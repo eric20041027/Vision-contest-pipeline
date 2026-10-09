@@ -308,7 +308,7 @@ def test_report_marks_the_upload_whose_outcome_is_errored(pair):
 
 
 def test_an_errored_row_newer_than_the_score_of_the_same_upload_wins(pair):
-    """Ruling (followups §3): the outcome is the newest of the upload's scored and errored rows,
+    """Ruling 9 (followups §2.1): the outcome is the newest of the upload's scored and errored rows,
     so a score the platform later withdrew is not shown, and the best board passes it over."""
     _seed(pair, _profile(board_rule="best"))
     assert status(TEST, **_kw(pair)).current == "S1"

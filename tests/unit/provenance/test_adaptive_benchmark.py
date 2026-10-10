@@ -604,7 +604,11 @@ def test_formal_main_uses_persistent_isolated_checkpoint_runner(tmp_path, monkey
     policy_path = tmp_path / "policy.json"
     policy = SimpleNamespace(id="unit-policy")
     observed = {}
+    checked = []
     monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg-runtime")
+    monkeypatch.setattr(
+        bench, "require_policy_environment", lambda runtime, *policies: checked.append(policies)
+    )
     monkeypatch.setattr(bench, "load_frozen_policy", lambda path: (policy, "evidence", "a" * 64))
     monkeypatch.setattr(bench, "empirical_crossover", lambda evidence: {})
     monkeypatch.setattr(
@@ -614,6 +618,7 @@ def test_formal_main_uses_persistent_isolated_checkpoint_runner(tmp_path, monkey
     )
 
     def isolated(root, scenarios, **kwargs):
+        assert checked == [(policy,)]  # the environment is checked first
         observed.update(root=root, scenarios=list(scenarios), kwargs=kwargs)
         return [{"method": "postgres_full", "status": "ok", "environment": {}}]
 
@@ -1325,6 +1330,7 @@ def test_every_formal_runner_rejects_sensitive_explain_before_publication(
     }
     if runner_name == "adaptive":
         monkeypatch.setattr(bench, "postgres_preflight", lambda: object())
+        monkeypatch.setattr(bench, "require_policy_environment", lambda *args: None)
         monkeypatch.setattr(
             bench,
             "load_frozen_policy",
@@ -1742,6 +1748,7 @@ def _real_pair_probe(monkeypatch):
     """Real policy documents behind ``validate``; preflight and the measurement are stubbed."""
     measured = []
     monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg")
+    monkeypatch.setattr(bench, "require_policy_environment", lambda *args: None)
     monkeypatch.setattr(
         real_validation, "_six_method_rows", lambda *args, **kwargs: measured.append(kwargs)
     )
@@ -1786,3 +1793,125 @@ def test_real_validation_accepts_the_v2_policy_beside_its_own_v1(tmp_path, monke
         real_validation.validate(
             tmp_path, tmp_path, six_method=True, policy_from=v2_path, comparison_from=v1_path
         )
+
+
+LIVE_ENVIRONMENT = {
+    "environment_fingerprint": "a" * 64,
+    "postgresql_major": 17,
+    "backend_schema_version": 1,
+}
+
+
+def _live_environment(monkeypatch, **override):
+    """Stand in for the live server: what the checkpoint contract would record."""
+    seen = []
+
+    def checkpoint_environment(root, pg_runtime):
+        seen.append((Path(root), pg_runtime))
+        return {**LIVE_ENVIRONMENT, **override}
+
+    monkeypatch.setattr(bench, "_checkpoint_environment", checkpoint_environment)
+    return seen
+
+
+def test_require_policy_environment_passes_for_matching_policies(monkeypatch, tmp_path):
+    seen = _live_environment(monkeypatch)
+    _, v1, _, v2 = publish_v1_and_v2(tmp_path)
+    assert bench.require_policy_environment("pg", v2, v1) is None
+    assert [runtime for _, runtime in seen] == ["pg"]
+
+
+def test_require_policy_environment_without_policies_never_asks_the_server(monkeypatch):
+    monkeypatch.setattr(
+        bench, "_checkpoint_environment", lambda *args: pytest.fail("no policy, no preflight")
+    )
+    assert bench.require_policy_environment("pg") is None
+
+
+@pytest.mark.parametrize(
+    ("field", "label", "live"),
+    [
+        ("environment_fingerprint", "environment fingerprint", "c" * 64),
+        ("postgresql_major", "PostgreSQL major", 18),
+        ("backend_schema_version", "backend schema version", 2),
+    ],
+)
+@pytest.mark.parametrize("position", ["first", "second"])
+def test_require_policy_environment_names_the_mismatched_field_and_never_its_values(
+    monkeypatch, field, label, live, position
+):
+    _live_environment(monkeypatch, **{field: live})
+    policy = SimpleNamespace(**LIVE_ENVIRONMENT)
+    other = SimpleNamespace(**{**LIVE_ENVIRONMENT, field: "unit-other-value"})
+    policies = (other, policy) if position == "first" else (policy, other)
+    with pytest.raises(ValidationFailed, match=f"^incompatible_policy: {label}$") as error:
+        bench.require_policy_environment("pg", *policies)
+    message = str(error.value)
+    assert "a" * 64 not in message and "unit-other-value" not in message
+    assert str(live) not in message
+
+
+def test_require_policy_environment_reads_the_environment_once_in_a_scratch_directory(
+    monkeypatch,
+):
+    seen = _live_environment(monkeypatch)
+    policy = SimpleNamespace(**LIVE_ENVIRONMENT)
+    bench.require_policy_environment("pg", policy, policy, policy)
+    assert len(seen) == 1
+    assert not seen[0][0].exists()  # a temporary directory, removed afterwards
+
+
+def _environment_gate(monkeypatch):
+    """Record the calls of an environment check that always refuses."""
+    calls = []
+
+    def refuse(pg_runtime, *policies):
+        calls.append((pg_runtime, policies))
+        raise ValidationFailed("incompatible_policy: environment fingerprint")
+
+    monkeypatch.setattr(bench, "require_policy_environment", refuse)
+    return calls
+
+
+def test_formal_main_checks_the_policy_environment_before_any_scenario_is_measured(
+    tmp_path, monkeypatch
+):
+    calls = _environment_gate(monkeypatch)
+    policy = SimpleNamespace(id="unit-policy")
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg-runtime")
+    monkeypatch.setattr(bench, "load_frozen_policy", lambda path: (policy, "evidence", "a" * 64))
+    monkeypatch.setattr(
+        bench, "run_matrix_isolated", lambda *a, **k: pytest.fail("measured despite the gate")
+    )
+    output = tmp_path / "result.json"
+    status = bench.main(["--policy-from", str(tmp_path / "policy.json"), "--output", str(output)])
+    assert status == 1
+    assert calls == [("pg-runtime", (policy,))]
+    assert not output.exists()
+    assert not (tmp_path / "result-work").exists()
+
+
+def test_real_validation_checks_the_policy_environment_before_copying_anything(
+    tmp_path, monkeypatch
+):
+    measured = _real_pair_probe(monkeypatch)
+    calls = _environment_gate(monkeypatch)
+    _, _, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    with pytest.raises(ValidationFailed, match="incompatible_policy: environment fingerprint"):
+        real_validation.validate(tmp_path, tmp_path, six_method=True, policy_from=v2_path)
+    assert calls == [("pg", (v2,))]
+    assert measured == []
+
+
+def test_real_validation_checks_both_policies_of_a_pair_before_copying_anything(
+    tmp_path, monkeypatch
+):
+    measured = _real_pair_probe(monkeypatch)
+    calls = _environment_gate(monkeypatch)
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    with pytest.raises(ValidationFailed, match="incompatible_policy: environment fingerprint"):
+        real_validation.validate(
+            tmp_path, tmp_path, six_method=True, policy_from=v2_path, comparison_from=v1_path
+        )
+    assert calls == [("pg", (v2, v1))]
+    assert measured == []

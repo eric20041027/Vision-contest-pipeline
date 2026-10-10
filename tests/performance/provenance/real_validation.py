@@ -176,6 +176,7 @@ def validate(
                 empirical_crossover,
                 load_frozen_policy,
                 postgres_preflight,
+                require_policy_environment,
                 require_policy_pair,
             )
         else:
@@ -183,6 +184,7 @@ def validate(
                 empirical_crossover,
                 load_frozen_policy,
                 postgres_preflight,
+                require_policy_environment,
                 require_policy_pair,
             )
         if policy_from is None:
@@ -193,6 +195,9 @@ def validate(
         if comparison_from is not None:
             comparison, comparison_evidence, comparison_sha256 = load_frozen_policy(comparison_from)
             require_policy_pair(policy, evidence, comparison, comparison_evidence)
+        require_policy_environment(
+            runtime, *((policy,) if comparison is None else (policy, comparison))
+        )
     with tempfile.TemporaryDirectory(prefix="vcp-real-provenance-") as directory:
         root = Path(directory)
         data = root / "data"

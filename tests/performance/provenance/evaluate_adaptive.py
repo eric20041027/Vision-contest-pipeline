@@ -901,6 +901,7 @@ def _heldout_v1(args) -> int:
     if policy.policy_version != POLICY_VERSION:
         raise ValidationFailed("invalid_policy_pair")
     pg_runtime = benchmark.postgres_preflight()
+    benchmark.require_policy_environment(pg_runtime, policy)
     work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
     rows = collect_rows(
         work_dir,
@@ -930,6 +931,7 @@ def _heldout_v2(args) -> int:
     comparison, comparison_evidence = load_calibration(args.comparison_policy_from)
     _require_policy_pair(policy, evidence, comparison, comparison_evidence)
     pg_runtime = benchmark.postgres_preflight()
+    benchmark.require_policy_environment(pg_runtime, policy, comparison)
     work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
     rows = collect_rows(
         work_dir,

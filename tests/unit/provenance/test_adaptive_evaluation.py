@@ -580,11 +580,14 @@ def test_heldout_cli_publishes_honest_gates_on_unit_data(tmp_path, monkeypatch, 
                 for sample in row["samples"]:
                     sample["maintenance_ms"] = 100.0
                 row["throughput_samples_per_second"] = 100.0
-    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: object())
+    runtime = object()
+    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: runtime)
+    checked = _accepting_environment(monkeypatch)
 
     def collect(root, scenarios, **kwargs):
         assert {s.seed for s in scenarios} == set(strategy.HELDOUT_SEEDS)
         assert kwargs["policy"] == policy
+        assert checked == [(runtime, (policy,))]  # the environment is checked first
         return rows
 
     monkeypatch.setattr(evaluation, "collect_rows", collect)
@@ -1199,12 +1202,15 @@ def test_evaluate_policies_rejects_a_v1_row_decided_by_v2(tmp_path):
 def test_heldout_v2_cli_publishes_both_policies(tmp_path, monkeypatch, capsys):
     v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
     rows = _slow_v1(benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1))
-    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: object())
+    runtime = object()
+    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: runtime)
+    checked = _accepting_environment(monkeypatch)
 
     def collect(root, scenarios, **kwargs):
         assert {s.seed for s in scenarios} == set(strategy.HELDOUT_V2_SEEDS)
         assert kwargs["methods"] == evaluation.HELDOUT_V2_METHODS
         assert (kwargs["policy"], kwargs["comparison"]) == (v2, v1)
+        assert checked == [(runtime, (v2, v1))]  # both environments are checked first
         return rows
 
     monkeypatch.setattr(evaluation, "collect_rows", collect)
@@ -1321,3 +1327,62 @@ def test_collect_rows_with_a_comparison_hashes_each_policy_once(tmp_path, monkey
         "postgres_adaptive": "v2",
         "postgres_adaptive_v1": "v1",
     }
+
+
+def _accepting_environment(monkeypatch):
+    """A policy-environment check that always accepts; returns the calls it received."""
+    calls = []
+    monkeypatch.setattr(
+        evaluation.benchmark,
+        "require_policy_environment",
+        lambda pg_runtime, *policies: calls.append((pg_runtime, policies)),
+    )
+    return calls
+
+
+def _refusing_environment(monkeypatch):
+    """A policy-environment check that always refuses; returns the calls it received."""
+    calls = []
+
+    def refuse(pg_runtime, *policies):
+        calls.append((pg_runtime, policies))
+        raise ValidationFailed("incompatible_policy: environment fingerprint")
+
+    monkeypatch.setattr(evaluation.benchmark, "require_policy_environment", refuse)
+    return calls
+
+
+def test_heldout_v1_cli_checks_the_policy_environment_before_measuring(
+    tmp_path, monkeypatch, capsys
+):
+    path = tmp_path / "unit-policy.json"
+    policy = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), path)
+    runtime = object()
+    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: runtime)
+    calls = _refusing_environment(monkeypatch)
+    monkeypatch.setattr(
+        evaluation, "collect_rows", lambda *a, **k: pytest.fail("measured despite the gate")
+    )
+    output = tmp_path / "unit-heldout.json"
+    assert evaluation.main(["--policy-from", str(path), "--output", str(output)]) == 1
+    assert calls == [(runtime, (policy,))]
+    assert not output.exists() and not (tmp_path / "unit-heldout-work").exists()
+    assert "status=FAIL" in capsys.readouterr().err
+
+
+def test_heldout_v2_cli_checks_both_policy_environments_before_measuring(
+    tmp_path, monkeypatch, capsys
+):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    runtime = object()
+    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: runtime)
+    calls = _refusing_environment(monkeypatch)
+    monkeypatch.setattr(
+        evaluation, "collect_rows", lambda *a, **k: pytest.fail("measured despite the gate")
+    )
+    output = tmp_path / "unit-heldout-v2.json"
+    argv = ["--policy-from", str(v2_path), "--comparison-policy-from", str(v1_path)]
+    assert evaluation.main([*argv, "--output", str(output)]) == 1
+    assert calls == [(runtime, (v2, v1))]
+    assert not output.exists() and not (tmp_path / "unit-heldout-v2-work").exists()
+    assert "status=FAIL" in capsys.readouterr().err

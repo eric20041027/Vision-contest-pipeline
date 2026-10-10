@@ -35,6 +35,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from vcp.core.atomic import write_once_text
+from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.time import stamp
 from vcp.provenance.backend import BackendConfig, BackendName, SQLiteBackend
@@ -1359,6 +1360,34 @@ def _checkpoint_environment(root: Path, pg_runtime):
         return state.environment
 
 
+# (policy attribute, environment key, name in the error), most specific first: a different
+# PostgreSQL major also changes the fingerprint, and the major is the more useful thing to say.
+_POLICY_ENVIRONMENT_FIELDS = (
+    ("postgresql_major", "postgresql_major", "PostgreSQL major"),
+    ("backend_schema_version", "backend_schema_version", "backend schema version"),
+    ("environment_fingerprint", "environment_fingerprint", "environment fingerprint"),
+)
+
+
+def require_policy_environment(pg_runtime, *policies) -> None:
+    """Fail closed, before anything is measured, unless every frozen policy was fitted under
+    the environment this run measures in.
+
+    ``ingest_diff`` refuses a policy of another environment too, but only per adaptive row,
+    where ``run_method`` records the refusal as that row's failure and the run carries on for
+    days. The environment is read the way the checkpoint contract reads it, so a run that
+    passes here can also resume. The error names the field, never the values.
+    """
+    if not policies:
+        return
+    with tempfile.TemporaryDirectory(prefix="vcp-policy-environment-") as temporary:
+        environment = _checkpoint_environment(Path(temporary) / "preflight", pg_runtime)
+    for policy in policies:
+        for attribute, key, name in _POLICY_ENVIRONMENT_FIELDS:
+            if getattr(policy, attribute) != environment[key]:
+                raise ValidationFailed(f"incompatible_policy: {name}")
+
+
 def _drop_owned_database(pg_runtime, database: str) -> None:
     driver, service = pg_runtime
     if not re.fullmatch(r"vcp_bench_[0-9a-f]{32}", database):
@@ -1672,6 +1701,7 @@ def main(argv=None) -> int:
         if args.policy_from is None:
             raise ValueError("six-method benchmark requires a frozen policy")
         policy, evidence, policy_sha256 = load_frozen_policy(args.policy_from)
+        require_policy_environment(pg_runtime, policy)
         scenarios = scenario_matrix(seeds=args.seeds, entities=args.entities, ratios=args.ratios)
         work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
         rows = run_matrix_isolated(

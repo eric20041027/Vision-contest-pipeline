@@ -29,7 +29,8 @@ dataset、plan、run、reading、artifact、fusion、submission 與 backup 建 d
 `<data_root>/indexes/provenance-<configs root id>.sqlite3`（0.13.0 起；id 是 configs root 解析後路徑的 sha256 前
 16 碼，跟台帳鎖檔同一個規則），可刪除、可由 canonical records 完整重建，不進 Git。PostgreSQL 是 optional、noncanonical 的另一個衍生索引；所有
 命令可加 `--backend postgresql [--pg-service SERVICE]`，只有 `ingest` 另接受
-`--strategy incremental|full|auto [--policy ID]`。`--policy` 只適用於 PostgreSQL auto；auto 沒有
+`--strategy incremental|full|auto [--policy ID]`。`--policy` 只適用於 PostgreSQL auto（接受 v1
+`postgres-adaptive-v1-…` 與 0.15.0 起的 v2 `postgres-adaptive-v2-…`）；auto 沒有
 policy 時會 WARN 並安全選 FULL（已驗證的零 semantic work 除外）。
 
 索引的 root（0.13.0，VCP-044）：索引記下它服務的 configs root 與 data root。每個 `vcp provenance` 命令都

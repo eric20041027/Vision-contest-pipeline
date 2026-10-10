@@ -21,20 +21,24 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from vcp.artifact import store
 from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed, VcpError
-from vcp.core.hashing import sha256_text
+from vcp.core.hashing import sha256_file, sha256_text
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import graph_hash
+from vcp.provenance.policy_bands import edges_decade
 from vcp.provenance.strategy import (
     CALIBRATION_SEEDS,
     HELDOUT_SEEDS,
+    HELDOUT_V2_SEEDS,
     POLICY_VERSION,
-    AdaptivePolicy,
+    POLICY_VERSION_V2,
     CalibrationEvidence,
     MaintenanceFeatures,
+    ProvenancePolicy,
     _object_without_duplicate_keys,
     _policy_sha256,
     calibration_text,
     load_policy_artifact,
+    policy_from_payload,
     select_strategy,
     write_policy_artifact,
 )
@@ -48,6 +52,14 @@ else:
 
 FIXED_METHODS = ("postgres_full", "postgres_incremental")
 EVALUATION_METHODS = (*FIXED_METHODS, "postgres_adaptive")
+HELDOUT_V2_METHODS = (*EVALUATION_METHODS, "postgres_adaptive_v1")
+_ADAPTIVE_METHODS = ("postgres_adaptive", "postgres_adaptive_v1")
+_REQUESTED = {
+    "postgres_full": "full",
+    "postgres_incremental": "incremental",
+    "postgres_adaptive": "auto",
+    "postgres_adaptive_v1": "auto",
+}
 _STORAGE = "PostgreSQL pg_database_size plus vcp_provenance total relation and index bytes"
 
 
@@ -133,7 +145,7 @@ class _Sample(_Strict):
         "calibrated_full_lower_or_uncertain_cost",
         "fallback_policy_absent_full",
     ]
-    policy_version: Literal["safe-fallback-v1", "postgres-adaptive-v1"]
+    policy_version: Literal["safe-fallback-v1", "postgres-adaptive-v1", "postgres-adaptive-v2"]
     estimated_incremental_ms: float | None = Field(ge=0)
     estimated_full_ms: float | None = Field(ge=0)
     dirty_entities: int = Field(ge=0)
@@ -148,7 +160,9 @@ class BenchmarkRow(_Sample):
     impact_ms: float = Field(default=0.0, exclude=True)
     explain_ms: float = Field(default=0.0, exclude=True)
     schema_version: Literal[1]
-    method: Literal["postgres_full", "postgres_incremental", "postgres_adaptive"]
+    method: Literal[
+        "postgres_full", "postgres_incremental", "postgres_adaptive", "postgres_adaptive_v1"
+    ]
     policy_id: str | None = None
     policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     scenario_id: str = Field(pattern=r"^scaled-\d+-\d+-[0-9a-f]{16}$")
@@ -251,14 +265,10 @@ def validate_rows(rows, *, seeds, methods):
                 for key in (*benchmark.DECISION_FIELDS, "graph_hash", "dirty_entities"):
                     if getattr(sample, key) != getattr(row, key):
                         raise ValueError
-            expected_requested = {
-                "postgres_full": "full",
-                "postgres_incremental": "incremental",
-                "postgres_adaptive": "auto",
-            }[row.method]
+            expected_requested = _REQUESTED[row.method]
             if row.requested_strategy != expected_requested:
                 raise ValueError
-            if row.method == "postgres_adaptive":
+            if row.method in _ADAPTIVE_METHODS:
                 if row.policy_id is None or row.policy_sha256 is None:
                     raise ValueError
             elif row.policy_id is not None or row.policy_sha256 is not None:
@@ -312,7 +322,7 @@ def _safe_raw_explain(value) -> bool:
 
 def expected_scenarios(seeds):
     """Pinned normative manifest, independent of benchmark runner defaults."""
-    if tuple(seeds) not in (CALIBRATION_SEEDS, HELDOUT_SEEDS):
+    if tuple(seeds) not in (CALIBRATION_SEEDS, HELDOUT_SEEDS, HELDOUT_V2_SEEDS):
         raise ValueError("invalid scenario partition")
     scenarios = scenario_matrix(
         seeds=seeds,
@@ -381,6 +391,38 @@ def paired_observations(rows):
     return result
 
 
+# The wrapper documents a policy can come in (spec 2026-10-09 §4.4): v1 inside the
+# calibration it was fitted from, v2 published from that calibration plus the band comparison.
+_POLICY_DOCUMENTS = {
+    "postgres-provenance-calibration-v1": (
+        frozenset({"kind", "policy", "calibration", "empirical_crossover"}),
+        POLICY_VERSION,
+    ),
+    "postgres-provenance-policy-v2": (
+        frozenset({"kind", "policy", "calibration", "empirical_crossover", "band_comparison"}),
+        POLICY_VERSION_V2,
+    ),
+}
+
+
+def _check_band_comparison(directory: Path, record, policy) -> None:
+    """The v2 document names the comparison that chose its band; it must still say so."""
+    if set(record) != {"path", "sha256", "winner"} or Path(record["path"]).name != record["path"]:
+        raise ValueError
+    path = directory / record["path"]
+    comparison = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicate_keys
+    )
+    if (
+        sha256_file(path) != record["sha256"]
+        or comparison.get("kind") != "postgres-provenance-band-comparison-v1"
+        or comparison.get("winner") != record["winner"]
+        or record["winner"] != policy.band.kind
+        or comparison.get("calibration_sha256") != policy.calibration_sha256
+    ):
+        raise ValueError
+
+
 def load_calibration(path: Path):
     """Read embedded policy, then verify it against the immutable on-disk artifact."""
     try:
@@ -388,11 +430,12 @@ def load_calibration(path: Path):
         document = json.loads(
             path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicate_keys
         )
-        if set(document) != {"kind", "policy", "calibration", "empirical_crossover"}:
+        keys, version = _POLICY_DOCUMENTS[document["kind"]]
+        if set(document) != keys:
             raise ValueError
-        if document["kind"] != "postgres-provenance-calibration-v1":
+        policy = policy_from_payload(document["policy"])
+        if policy.policy_version != version:
             raise ValueError
-        policy = AdaptivePolicy.model_validate(document["policy"])
         evidence = CalibrationEvidence.model_validate(document["calibration"])
         validate_calibration_manifest(evidence)
         first = evidence.observations[0]
@@ -412,12 +455,14 @@ def load_calibration(path: Path):
             or document["empirical_crossover"] != empirical_crossover(evidence)
         ):
             raise ValueError
+        if "band_comparison" in document:
+            _check_band_comparison(path.parent, document["band_comparison"], verified)
         return verified, evidence
-    except (OSError, TypeError, ValueError, VcpError):
+    except (OSError, TypeError, ValueError, KeyError, VcpError):
         raise ValidationFailed("invalid_calibration_artifact") from None
 
 
-def policy_file_sha256(policy_from: Path, policy: AdaptivePolicy) -> str:
+def policy_file_sha256(policy_from: Path, policy: ProvenancePolicy) -> str:
     """Return the verified immutable policy payload hash, not the wrapper hash."""
     try:
         policy_from = Path(policy_from)
@@ -502,11 +547,17 @@ def empirical_crossover(evidence: CalibrationEvidence) -> dict[str, object]:
     }
 
 
-def prepare_workload(workload, policy, evidence):
-    """Install policy before baseline; rebuild candidate oracle outside measured runs."""
+def prepare_workload(workload, policy, evidence, comparisons=()):
+    """Install the policies before the baseline; rebuild the candidate oracle outside measured
+    runs. A comparison policy (spec 2026-10-09 §6.3) must share the primary's calibration, so
+    one pinned calibration copy serves both."""
     evidence_path = workload.data / "policy-inputs" / "calibration.json"
     write_once_text(evidence_path, calibration_text(evidence))
     write_policy_artifact(workload.data, policy, evidence_path)
+    for comparison in comparisons:
+        if comparison.calibration_sha256 != policy.calibration_sha256:
+            raise ValidationFailed("invalid_policy_workload_oracle")
+        write_policy_artifact(workload.data, comparison, evidence_path)
     baseline = build_graph(workload.data, workload.configs)
     with tempfile.TemporaryDirectory(prefix="vcp-policy-oracle-") as temporary:
         data, configs = workload.clone(Path(temporary))
@@ -536,36 +587,45 @@ def collect_rows(
     policy=None,
     evidence=None,
     policy_from=None,
+    comparison=None,
+    comparison_from=None,
     isolated=False,
 ):
     if isolated:
         policy_sha256 = policy_file_sha256(policy_from, policy) if policy is not None else None
-        return benchmark.run_matrix_isolated(
-            root,
-            scenarios,
-            methods=methods,
-            pg_runtime=pg_runtime,
-            policy_from=policy_from,
-            policy_sha256=policy_sha256,
-        )
+        kwargs = {
+            "methods": methods,
+            "pg_runtime": pg_runtime,
+            "policy_from": policy_from,
+            "policy_sha256": policy_sha256,
+        }
+        if comparison is not None:
+            kwargs["comparison_from"] = comparison_from
+            kwargs["comparison_sha256"] = policy_file_sha256(comparison_from, comparison)
+        return benchmark.run_matrix_isolated(root, scenarios, **kwargs)
     rows = []
+    policy_digest = _policy_sha256(policy) if policy else None
+    comparison_digest = _policy_sha256(comparison) if comparison else None
     for scenario in scenarios:
         with tempfile.TemporaryDirectory(prefix="scenario-", dir=root) as temporary:
             workload = build_scenario(Path(temporary) / "fixture", scenario)
             if policy is not None:
-                workload = prepare_workload(workload, policy, evidence)
+                workload = (
+                    prepare_workload(workload, policy, evidence)
+                    if comparison is None
+                    else prepare_workload(workload, policy, evidence, (comparison,))
+                )
             for method in methods:
+                method_policy, method_sha256 = benchmark.policy_for(
+                    method, policy, policy_digest, comparison, comparison_digest
+                )
                 rows.append(
                     benchmark.run_method(
                         workload,
                         method,
                         pg_runtime=pg_runtime,
-                        policy_id=policy.id if policy and method == "postgres_adaptive" else None,
-                        policy_sha256=(
-                            _policy_sha256(policy)
-                            if policy and method == "postgres_adaptive"
-                            else None
-                        ),
+                        policy_id=method_policy,
+                        policy_sha256=method_sha256,
                     ).to_dict()
                 )
     return rows
@@ -588,12 +648,8 @@ class EvaluationResult(_Strict):
     empirical_crossover: dict[str, object]
 
 
-def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
-    policy, evidence = load_calibration(policy_from)
-    policy_from = Path(policy_from)
-    policy_sha256 = policy_file_sha256(policy_from, policy)
-    # Use complete verified coverage, including NO_OP scenarios excluded from fit.
-    # Count distinct calibration scenarios, not repeated methods or identity aliases.
+def _leakage(evidence, heldout_rows) -> int:
+    """Distinct calibration scenarios a held-out row names by id, scenario hash or workload."""
     identities = {
         "scenario_id": dict(zip(evidence.scenario_ids, evidence.scenario_hashes, strict=True)),
         "scenario_hash": {value: value for value in evidence.scenario_hashes},
@@ -608,32 +664,65 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
                 value = row.get(field)
                 if isinstance(value, str) and value in lookup:
                     overlaps.add(lookup[value])
+    return len(overlaps)
+
+
+def _check_adaptive_row(adaptive, policy, policy_sha256) -> None:
+    """The row ran under this policy and its decision is the one the policy makes."""
+    env = adaptive.environment
+    if (
+        env.environment_fingerprint != policy.environment_fingerprint
+        or env.postgresql_major != policy.postgresql_major
+        or env.backend_schema_version != policy.backend_schema_version
+        or adaptive.schema_version != policy.benchmark_schema_version
+    ):
+        raise ValidationFailed("incompatible_policy")
+    decision = select_strategy("auto", adaptive.features(), policy)
+    if (
+        adaptive.policy_id != policy.id
+        or adaptive.policy_sha256 != policy_sha256
+        or adaptive.selected_strategy != decision.selected_strategy.value
+        or adaptive.strategy_reason != decision.reason
+        or adaptive.policy_version != policy.policy_version
+        or adaptive.estimated_incremental_ms != decision.estimated_incremental_ms
+        or adaptive.estimated_full_ms != decision.estimated_full_ms
+    ):
+        raise ValidationFailed("policy_decision_mismatch")
+
+
+def _aggregates(pooled) -> dict[str, dict[str, float]]:
+    return {
+        method: {
+            "p50": statistics.median(values),
+            "p95": sorted(values)[round(0.95 * (len(values) - 1))],
+        }
+        for method, values in pooled.items()
+    }
+
+
+def _gate_ratios(aggregates, method) -> tuple[float, float]:
+    median_ratio = aggregates[method]["p50"] / min(aggregates[m]["p50"] for m in FIXED_METHODS)
+    p95_ratio = aggregates[method]["p95"] / min(aggregates[m]["p95"] for m in FIXED_METHODS)
+    if not all(math.isfinite(value) for value in (median_ratio, p95_ratio)):
+        raise ValidationFailed("invalid_evaluation_aggregate")
+    return median_ratio, p95_ratio
+
+
+def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
+    policy, evidence = load_calibration(policy_from)
+    policy_from = Path(policy_from)
+    policy_sha256 = policy_file_sha256(policy_from, policy)
+    # Use complete verified coverage, including NO_OP scenarios excluded from fit.
+    # Count distinct calibration scenarios, not repeated methods or identity aliases.
+    overlaps = _leakage(evidence, heldout_rows)
     if overlaps:
-        raise ValidationFailed("workload_leakage", fields={"overlap_count": len(overlaps)})
+        raise ValidationFailed("workload_leakage", fields={"overlap_count": overlaps})
     groups = validate_rows(heldout_rows, seeds=HELDOUT_SEEDS, methods=EVALUATION_METHODS)
     ratios50, ratios95, reports = [], [], []
     pooled = {method: [] for method in EVALUATION_METHODS}
     for scenario_hash, group in groups.items():
         adaptive = group["postgres_adaptive"]
-        env = adaptive.environment
-        if (
-            env.environment_fingerprint != policy.environment_fingerprint
-            or env.postgresql_major != policy.postgresql_major
-            or env.backend_schema_version != policy.backend_schema_version
-            or adaptive.schema_version != policy.benchmark_schema_version
-        ):
-            raise ValidationFailed("incompatible_policy")
-        decision = select_strategy("auto", adaptive.features(), policy)
-        if (
-            adaptive.policy_id != policy.id
-            or adaptive.policy_sha256 != policy_sha256
-            or adaptive.selected_strategy != decision.selected_strategy.value
-            or adaptive.strategy_reason != decision.reason
-            or adaptive.policy_version != POLICY_VERSION
-            or adaptive.estimated_incremental_ms != decision.estimated_incremental_ms
-            or adaptive.estimated_full_ms != decision.estimated_full_ms
-        ):
-            raise ValidationFailed("policy_decision_mismatch")
+        _check_adaptive_row(adaptive, policy, policy_sha256)
         fixed = [group[method] for method in FIXED_METHODS]
         ratio50 = adaptive.maintenance_p50_ms / min(r.maintenance_p50_ms for r in fixed)
         ratio95 = adaptive.maintenance_p95_ms / min(r.maintenance_p95_ms for r in fixed)
@@ -651,18 +740,8 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
         )
     # Normative gates use each method's pooled held-out latency distribution.
     # Retain per-scenario regressions as a separate conservative diagnostic.
-    aggregates = {
-        method: {
-            "p50": statistics.median(values),
-            "p95": sorted(values)[round(0.95 * (len(values) - 1))],
-        }
-        for method, values in pooled.items()
-    }
-    adaptive_costs = aggregates["postgres_adaptive"]
-    median_ratio = adaptive_costs["p50"] / min(aggregates[m]["p50"] for m in FIXED_METHODS)
-    p95_ratio = adaptive_costs["p95"] / min(aggregates[m]["p95"] for m in FIXED_METHODS)
-    if not all(math.isfinite(value) for value in (median_ratio, p95_ratio)):
-        raise ValidationFailed("invalid_evaluation_aggregate")
+    aggregates = _aggregates(pooled)
+    median_ratio, p95_ratio = _gate_ratios(aggregates, "postgres_adaptive")
     return EvaluationResult(
         policy_id=policy.id,
         policy_sha256=policy_sha256,
@@ -682,39 +761,220 @@ def evaluate_policy(policy_from, heldout_rows) -> EvaluationResult:
     )
 
 
+DIAGNOSTIC_RATIO = 1.05  # spec 2026-10-09 §7.3: a scenario is "slow" above this p50 ratio
+
+
+class PolicyEvaluation(_Strict):
+    method: str
+    policy_id: str
+    policy_sha256: str
+    policy_version: str
+    median_ratio: float
+    p95_ratio: float
+    median_gate_pass: bool
+    p95_gate_pass: bool
+    performance_pass: bool
+    non_no_op_scenarios: int
+    scenarios_over: int
+    worst_ratio: float | None
+    by_decade: dict[str, dict[str, object]]
+    scenarios: list[dict]
+
+
+class HeldoutV2Result(_Strict):
+    seeds: list[int]
+    parity_rate: float
+    overlap_count: int
+    scenario_count: int
+    v2: PolicyEvaluation
+    v1: PolicyEvaluation
+    h1: bool
+    h1a: bool
+    aggregate_maintenance_ms: dict[str, dict[str, float]]
+    empirical_crossover: dict[str, object]
+
+
+def _policy_evaluation(method, policy, policy_sha256, aggregates, reports) -> PolicyEvaluation:
+    median_ratio, p95_ratio = _gate_ratios(aggregates, method)
+    active = [report for report in reports if report["selected_strategy"] != "NO_OP"]
+    by_decade: dict[str, dict[str, object]] = {}
+    for report in reports:
+        cell = by_decade.setdefault(
+            str(report["decade"]),
+            {"scenarios": 0, "over": 0, "worst_ratio": None, "selected": {}},
+        )
+        selected = cell["selected"]
+        selected[report["selected_strategy"]] = selected.get(report["selected_strategy"], 0) + 1
+        if report["selected_strategy"] == "NO_OP":
+            continue
+        cell["scenarios"] += 1
+        cell["over"] += int(report["median_ratio"] > DIAGNOSTIC_RATIO)
+        worst = cell["worst_ratio"]
+        cell["worst_ratio"] = (
+            report["median_ratio"] if worst is None else max(worst, report["median_ratio"])
+        )
+    return PolicyEvaluation(
+        method=method,
+        policy_id=policy.id,
+        policy_sha256=policy_sha256,
+        policy_version=policy.policy_version,
+        median_ratio=median_ratio,
+        p95_ratio=p95_ratio,
+        median_gate_pass=median_ratio <= 1.05,
+        p95_gate_pass=p95_ratio <= 1.10,
+        performance_pass=median_ratio <= 1.05 and p95_ratio <= 1.10,
+        non_no_op_scenarios=len(active),
+        scenarios_over=sum(report["median_ratio"] > DIAGNOSTIC_RATIO for report in active),
+        worst_ratio=max((report["median_ratio"] for report in active), default=None),
+        by_decade=dict(sorted(by_decade.items(), key=lambda item: int(item[0]))),
+        scenarios=reports,
+    )
+
+
+def _require_policy_pair(policy, evidence, comparison, comparison_evidence) -> None:
+    """Held-out v2 sets policy v2 beside the frozen v1 fitted from the same calibration."""
+    if (
+        policy.policy_version != POLICY_VERSION_V2
+        or comparison.policy_version != POLICY_VERSION
+        or calibration_text(evidence) != calibration_text(comparison_evidence)
+    ):
+        raise ValidationFailed("invalid_policy_pair")
+
+
+def evaluate_policies(policy_from, comparison_from, heldout_rows) -> HeldoutV2Result:
+    """Held-out v2 (spec 2026-10-09 §6.3, §7): policy v2 and the frozen v1 on the same unseen
+    rows. The gate is v2's; v1's numbers stand beside it; H1 and H1a compare the two."""
+    policy, evidence = load_calibration(policy_from)
+    comparison, comparison_evidence = load_calibration(comparison_from)
+    _require_policy_pair(policy, evidence, comparison, comparison_evidence)
+    overlaps = _leakage(evidence, heldout_rows)
+    if overlaps:
+        raise ValidationFailed("workload_leakage", fields={"overlap_count": overlaps})
+    groups = validate_rows(heldout_rows, seeds=HELDOUT_V2_SEEDS, methods=HELDOUT_V2_METHODS)
+    policies = {"postgres_adaptive": policy, "postgres_adaptive_v1": comparison}
+    shas = {
+        "postgres_adaptive": policy_file_sha256(Path(policy_from), policy),
+        "postgres_adaptive_v1": policy_file_sha256(Path(comparison_from), comparison),
+    }
+    pooled = {method: [] for method in HELDOUT_V2_METHODS}
+    reports = {method: [] for method in _ADAPTIVE_METHODS}
+    for scenario_hash, group in groups.items():
+        best = min(group[method].maintenance_p50_ms for method in FIXED_METHODS)
+        for method in _ADAPTIVE_METHODS:
+            row = group[method]
+            _check_adaptive_row(row, policies[method], shas[method])
+            reports[method].append(
+                {
+                    "scenario_hash": scenario_hash,
+                    "decade": edges_decade(row.total_edges),
+                    "median_ratio": row.maintenance_p50_ms / best,
+                    "selected_strategy": row.selected_strategy,
+                }
+            )
+        for method, row in group.items():
+            pooled[method].extend(sample.maintenance_ms for sample in row.samples)
+    aggregates = _aggregates(pooled)
+    v2, v1 = (
+        _policy_evaluation(method, policies[method], shas[method], aggregates, reports[method])
+        for method in _ADAPTIVE_METHODS
+    )
+
+    def over(evaluation: PolicyEvaluation, decade: str) -> int:
+        return int(evaluation.by_decade.get(decade, {}).get("over", 0))
+
+    return HeldoutV2Result(
+        seeds=list(HELDOUT_V2_SEEDS),
+        parity_rate=1.0,
+        overlap_count=0,
+        scenario_count=len(groups),
+        v2=v2,
+        v1=v1,
+        h1=v2.scenarios_over < v1.scenarios_over,
+        h1a=over(v2, "3") < over(v1, "3"),
+        aggregate_maintenance_ms=aggregates,
+        empirical_crossover=empirical_crossover(evidence),
+    )
+
+
+def _heldout_v1(args) -> int:
+    policy, evidence = load_calibration(args.policy_from)
+    if policy.policy_version != POLICY_VERSION:
+        raise ValidationFailed("invalid_policy_pair")
+    pg_runtime = benchmark.postgres_preflight()
+    benchmark.require_policy_environment(pg_runtime, policy)
+    work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
+    rows = collect_rows(
+        work_dir,
+        scenario_matrix(seeds=HELDOUT_SEEDS),
+        methods=EVALUATION_METHODS,
+        pg_runtime=pg_runtime,
+        policy=policy,
+        evidence=evidence,
+        policy_from=args.policy_from,
+        isolated=True,
+    )
+    result = evaluate_policy(args.policy_from, rows)
+    document = {
+        "kind": "postgres-provenance-heldout-v1",
+        "evaluation": result.model_dump(),
+        "results": rows,
+    }
+    benchmark.validate_publication_explain(document)
+    write_once_text(args.output, json.dumps(document, indent=2) + "\n")
+    status = "OK" if result.performance_pass else "FAIL"
+    print(f"VERDICT cmd=provenance.evaluate status={status}", file=sys.stderr)
+    return 0 if result.performance_pass else 1
+
+
+def _heldout_v2(args) -> int:
+    policy, evidence = load_calibration(args.policy_from)
+    comparison, comparison_evidence = load_calibration(args.comparison_policy_from)
+    _require_policy_pair(policy, evidence, comparison, comparison_evidence)
+    pg_runtime = benchmark.postgres_preflight()
+    benchmark.require_policy_environment(pg_runtime, policy, comparison)
+    work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
+    rows = collect_rows(
+        work_dir,
+        scenario_matrix(seeds=HELDOUT_V2_SEEDS),
+        methods=HELDOUT_V2_METHODS,
+        pg_runtime=pg_runtime,
+        policy=policy,
+        evidence=evidence,
+        policy_from=args.policy_from,
+        comparison=comparison,
+        comparison_from=args.comparison_policy_from,
+        isolated=True,
+    )
+    result = evaluate_policies(args.policy_from, args.comparison_policy_from, rows)
+    document = {
+        "kind": "postgres-provenance-heldout-v2",
+        "evaluation": result.model_dump(),
+        "results": rows,
+    }
+    benchmark.validate_publication_explain(document)
+    write_once_text(args.output, json.dumps(document, indent=2) + "\n")
+    status = "OK" if result.v2.performance_pass else "FAIL"
+    print(
+        f"VERDICT cmd=provenance.evaluate status={status} "
+        f"h1={str(result.h1).lower()} h1a={str(result.h1a).lower()}",
+        file=sys.stderr,
+    )
+    return 0 if result.v2.performance_pass else 1
+
+
 def main(argv=None) -> int:
     parser = SafeArgumentParser(description=__doc__)
     parser.add_argument("--policy-from", type=Path, required=True)
+    parser.add_argument("--comparison-policy-from", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path)
     try:
         args = parser.parse_args(argv)
         if args.output.exists():
             raise ValidationFailed("heldout_output_exists")
-        policy, evidence = load_calibration(args.policy_from)
-        pg_runtime = benchmark.postgres_preflight()
-        work_dir = args.work_dir or args.output.with_name(args.output.stem + "-work")
-        rows = collect_rows(
-            work_dir,
-            scenario_matrix(seeds=HELDOUT_SEEDS),
-            methods=EVALUATION_METHODS,
-            pg_runtime=pg_runtime,
-            policy=policy,
-            evidence=evidence,
-            policy_from=args.policy_from,
-            isolated=True,
-        )
-        result = evaluate_policy(args.policy_from, rows)
-        document = {
-            "kind": "postgres-provenance-heldout-v1",
-            "evaluation": result.model_dump(),
-            "results": rows,
-        }
-        benchmark.validate_publication_explain(document)
-        write_once_text(args.output, json.dumps(document, indent=2) + "\n")
-        status = "OK" if result.performance_pass else "FAIL"
-        print(f"VERDICT cmd=provenance.evaluate status={status}", file=sys.stderr)
-        return 0 if result.performance_pass else 1
+        if args.comparison_policy_from is None:
+            return _heldout_v1(args)
+        return _heldout_v2(args)
     except Exception:
         print(
             "Held-out evaluation failed (live service or verified evidence required)",

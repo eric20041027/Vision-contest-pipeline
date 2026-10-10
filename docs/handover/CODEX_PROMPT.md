@@ -24,11 +24,11 @@
 
 ## 目前的開放待辦（依價值排序；每項都在對應後記有裁決脈絡）
 
-1. **稽核 Wave 1c：程式碼快照與產物授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 從 0.11.0 起記下工作樹狀態與追蹤檔的 patch（VCP-041），但訓練程式的快照與授權邊界還沒有做成產物。先寫 spec。
-2. **凍結前的契約項**：各後記最後一節的待辦裡，會改變寫入內容、VERDICT 欄位、`reason=` 字彙或 exit 類別的那些（例如共用台帳後記 §3 的幾項），在 1.0 之前做完，或明寫留到 1.0 之後；1.0 之後再改就是 MAJOR。
-3. **`1.0.0`**：留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
-4. **PostgreSQL adaptive policy v2**（Plan 12 後記 §3-6、§5、§7）：selector 的信心帶改為相對預估差距或分層 RMSE；需重跑 calibration → six-method → held-out → real；v1 的 policy 與五份證據不改。
-5. **full rebuild 後的 dead tuples**（§3-7）：是否在 rebuild 收尾 `VACUUM`，或只寫進操作指南。
+1. **PostgreSQL adaptive policy v2**：進行中（spec `docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`、計畫同日期、後記 `docs/superpowers/plans/2026-10-09-vcp-postgres-adaptive-policy-v2-followups.md`），排在稽核 Wave 1c 之前；發 0.15.0 後依計畫附錄 A 量測。
+2. **稽核 Wave 1c：程式碼快照與產物授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 從 0.11.0 起記下工作樹狀態與追蹤檔的 patch（VCP-041），但訓練程式的快照與授權邊界還沒有做成產物。先寫 spec。
+3. **凍結前的契約項**：各後記最後一節的待辦裡，會改變寫入內容、VERDICT 欄位、`reason=` 字彙或 exit 類別的那些（例如共用台帳後記 §3 的幾項），在 1.0 之前做完，或明寫留到 1.0 之後；1.0 之後再改就是 MAJOR。
+4. **`1.0.0`**：留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
+5. **full rebuild 後的 dead tuples**（§3-7）：是否在 rebuild 收尾 `VACUUM`，或只寫進操作指南（2026-10-09 裁決：不加 VACUUM，寫進操作指南）。
 6. **EXPLAIN 覆蓋 `status` / `impact` 查詢計畫**（§3-4）；**Linux host 的 live integration record**（§3-3）；**1M 規模**要 ≥128 GB 的機器。
 7. 各層後記最後一節標「未做」的小項。
 

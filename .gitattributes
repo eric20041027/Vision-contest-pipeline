@@ -1,0 +1,4 @@
+# Evidence under docs/benchmarks is hashed byte for byte (policy.json, calibration
+# inputs, manifests): never convert its line endings on checkout, or a Windows
+# checkout with core.autocrlf=true changes every SHA-256 the tests and loaders pin.
+docs/benchmarks/** -text

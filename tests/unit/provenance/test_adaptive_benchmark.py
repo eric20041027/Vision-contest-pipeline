@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from performance.provenance import adaptive_benchmark as bench
+from performance.provenance import calibrate_adaptive as calibration
 from performance.provenance import production_benchmark, real_validation, workloads
 from performance.provenance.workloads import Scenario, build_scenario, scenario_matrix
 from vcp.core.config import dump_yaml_model
@@ -16,8 +18,11 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.schema import DatasetCard, Sample, SourceInfo, View
+from vcp.provenance import strategy
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
+
+from .test_adaptive_evaluation import benchmark_rows, publish_v1_and_v2
 
 
 def test_scenario_matrix_is_complete_deterministic_and_disjoint():
@@ -599,7 +604,11 @@ def test_formal_main_uses_persistent_isolated_checkpoint_runner(tmp_path, monkey
     policy_path = tmp_path / "policy.json"
     policy = SimpleNamespace(id="unit-policy")
     observed = {}
+    checked = []
     monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg-runtime")
+    monkeypatch.setattr(
+        bench, "require_policy_environment", lambda runtime, *policies: checked.append(policies)
+    )
     monkeypatch.setattr(bench, "load_frozen_policy", lambda path: (policy, "evidence", "a" * 64))
     monkeypatch.setattr(bench, "empirical_crossover", lambda evidence: {})
     monkeypatch.setattr(
@@ -609,6 +618,7 @@ def test_formal_main_uses_persistent_isolated_checkpoint_runner(tmp_path, monkey
     )
 
     def isolated(root, scenarios, **kwargs):
+        assert checked == [(policy,)]  # the environment is checked first
         observed.update(root=root, scenarios=list(scenarios), kwargs=kwargs)
         return [{"method": "postgres_full", "status": "ok", "environment": {}}]
 
@@ -1320,6 +1330,7 @@ def test_every_formal_runner_rejects_sensitive_explain_before_publication(
     }
     if runner_name == "adaptive":
         monkeypatch.setattr(bench, "postgres_preflight", lambda: object())
+        monkeypatch.setattr(bench, "require_policy_environment", lambda *args: None)
         monkeypatch.setattr(
             bench,
             "load_frozen_policy",
@@ -1477,3 +1488,430 @@ def test_normative_manifest_and_runner_ladder_cannot_drift_apart():
     # The production ladder keeps 1M; adaptive acceptance never reads it.
     assert 1_000_000 in workloads.PRODUCTION_SCALES
     assert len(manifest) == len(scenario_matrix(seeds=(20260913, 20260914)))
+
+
+def test_the_v1_comparison_is_known_but_not_a_seventh_six_method_method():
+    assert bench.METHODS == (
+        "canonical_full",
+        "sqlite_full",
+        "sqlite_incremental",
+        "postgres_full",
+        "postgres_incremental",
+        "postgres_adaptive",
+    )
+    assert bench.COMPARISON_METHOD == "postgres_adaptive_v1"
+    assert bench.KNOWN_METHODS == (*bench.METHODS, "postgres_adaptive_v1")
+    assert bench.ADAPTIVE_METHODS == ("postgres_adaptive", "postgres_adaptive_v1")
+
+
+def test_the_v1_comparison_runs_auto_under_its_own_policy():
+    calls = []
+    state = SimpleNamespace(
+        backend=SimpleNamespace(ingest_diff=lambda *args, **kwargs: calls.append((args, kwargs)))
+    )
+    workload = SimpleNamespace(artifact_id="delta")
+    bench._maintain(state, "postgres_adaptive_v1", workload, "data", "configs", "frozen-v1")
+    assert calls == [
+        (("delta", "data", "configs"), {"requested_strategy": "auto", "policy_id": "frozen-v1"})
+    ]
+
+
+def test_policy_for_maps_each_adaptive_method_to_its_policy():
+    v2 = SimpleNamespace(id="v2-id")
+    v1 = SimpleNamespace(id="v1-id")
+    assert bench.policy_for("postgres_adaptive", v2, "a" * 64, v1, "b" * 64) == ("v2-id", "a" * 64)
+    assert bench.policy_for("postgres_adaptive_v1", v2, "a" * 64, v1, "b" * 64) == (
+        "v1-id",
+        "b" * 64,
+    )
+    assert bench.policy_for("postgres_full", v2, "a" * 64, v1, "b" * 64) == (None, None)
+    assert bench.policy_for("postgres_adaptive_v1", v2, "a" * 64) == (None, None)
+
+
+def test_run_method_requires_a_policy_for_the_v1_comparison(tmp_path):
+    workload = SimpleNamespace(
+        scenario=SimpleNamespace(repetitions=1), data=tmp_path, configs=tmp_path
+    )
+    with pytest.raises(ValueError, match="postgres_adaptive_v1 requires a frozen policy"):
+        bench.run_method(workload, "postgres_adaptive_v1")
+
+
+def test_the_comparison_policy_is_pinned_only_when_given(tmp_path):
+    without = bench._checkpoint_contract(
+        tmp_path, [], bench.METHODS, 1, "a" * 64, _postgres_identity()
+    )
+    assert "comparison_policy_sha256" not in without
+    with_comparison = bench._checkpoint_contract(
+        tmp_path,
+        [],
+        bench.KNOWN_METHODS,
+        1,
+        "a" * 64,
+        _postgres_identity(),
+        comparison_policy_sha256="b" * 64,
+    )
+    assert with_comparison["comparison_policy_sha256"] == "b" * 64
+
+
+def test_the_child_command_carries_the_comparison_only_when_given(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(
+        bench.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append(command) or SimpleNamespace(returncode=0),
+    )
+    store = SimpleNamespace(root=tmp_path)
+    bench._run_scenario_child(store, "h" * 64, policy_from=tmp_path / "v2.json")
+    bench._run_scenario_child(
+        store, "h" * 64, policy_from=tmp_path / "v2.json", comparison_from=tmp_path / "v1.json"
+    )
+    assert "--_child-comparison-policy-from" not in commands[0]
+    assert commands[1][-2:] == [
+        "--_child-comparison-policy-from",
+        str((tmp_path / "v1.json").resolve()),
+    ]
+
+
+def test_hidden_child_entrypoint_forwards_the_comparison_policy_only_when_given(
+    tmp_path, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(bench, "_child_run_scenario", lambda *args: calls.append(args) or 0)
+    base = ["--_child-work-dir", str(tmp_path), "--_child-scenario-hash", "a" * 64]
+    assert bench.main(base) == 0
+    assert bench.main([*base, "--_child-comparison-policy-from", str(tmp_path / "v1.json")]) == 0
+    assert calls == [
+        (tmp_path, "a" * 64, None),
+        (tmp_path, "a" * 64, None, tmp_path / "v1.json"),
+    ]
+
+
+def _isolated_runner_probe(monkeypatch, tmp_path):
+    """Stub everything run_matrix_isolated touches except its own comparison plumbing."""
+    seen = {"contract": [], "children": []}
+
+    class Store:
+        root = tmp_path
+        contract_sha256 = "s" * 64
+
+        def __init__(self, work_dir, contract):
+            pass
+
+        def initialize(self):
+            pass
+
+        def read(self, key):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg")
+    monkeypatch.setattr(bench, "_checkpoint_environment", lambda *args: {})
+    monkeypatch.setattr(
+        bench,
+        "_checkpoint_contract",
+        lambda *args, **kwargs: seen["contract"].append((args, kwargs)) or {},
+    )
+    monkeypatch.setattr(bench, "CheckpointStore", Store)
+    monkeypatch.setattr(
+        bench,
+        "_run_scenario_child",
+        lambda store, scenario_hash, **kwargs: (
+            seen["children"].append(kwargs) or SimpleNamespace(returncode=0)
+        ),
+    )
+    monkeypatch.setattr(bench, "_merge_repetition_rows", lambda rows, explain: rows[0])
+    return seen, [SimpleNamespace(scenario_hash="c" * 64, repetitions=1)]
+
+
+def test_run_matrix_isolated_pins_and_spawns_the_comparison_only_when_given(tmp_path, monkeypatch):
+    seen, scenarios = _isolated_runner_probe(monkeypatch, tmp_path)
+    bench.run_matrix_isolated(
+        tmp_path, scenarios, methods=("postgres_full",), policy_from="v2.json", policy_sha256="a"
+    )
+    assert seen["contract"] == [((tmp_path, scenarios, ("postgres_full",), None, "a", {}), {})]
+    assert seen["children"] == [{"policy_from": "v2.json"}]
+
+    seen, scenarios = _isolated_runner_probe(monkeypatch, tmp_path)
+    bench.run_matrix_isolated(
+        tmp_path,
+        scenarios,
+        methods=bench.KNOWN_METHODS,
+        policy_from="v2.json",
+        policy_sha256="a",
+        comparison_from="v1.json",
+        comparison_sha256="b",
+    )
+    assert seen["contract"][0][1] == {"comparison_policy_sha256": "b"}
+    assert seen["children"] == [{"policy_from": "v2.json", "comparison_from": "v1.json"}]
+
+
+def _child_policy_probe(monkeypatch, tmp_path, contract):
+    """A child whose checkpoint contract is ``contract`` and whose policy files are stubs; it
+    stops with a sentinel as soon as the policy checks pass."""
+    row = {"scenario_hash": "c" * 64}
+    monkeypatch.setattr(
+        bench,
+        "_load_contract",
+        lambda path: {"matrix": [row], "policy_sha256": "a" * 64, **contract},
+    )
+    monkeypatch.setattr(
+        bench,
+        "CheckpointStore",
+        lambda work_dir, loaded: SimpleNamespace(initialize=lambda: None),
+    )
+    monkeypatch.setattr(bench, "_scenario_from_contract", lambda row: None)
+    frozen = {"v2.json": ("v2", "evidence", "a" * 64), "v1.json": ("v1", "evidence", "b" * 64)}
+    monkeypatch.setattr(bench, "load_frozen_policy", lambda path: frozen[Path(path).name])
+
+    def stop():
+        raise RuntimeError("policy checks passed")
+
+    monkeypatch.setattr(bench, "postgres_preflight", stop)
+
+
+def test_the_child_refuses_a_comparison_the_checkpoint_did_not_pin(tmp_path, monkeypatch):
+    _child_policy_probe(monkeypatch, tmp_path, {})
+    with pytest.raises(ValueError, match="checkpoint policy mismatch"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"), Path("v1.json"))
+
+
+def test_the_child_refuses_a_missing_comparison_the_checkpoint_pinned(tmp_path, monkeypatch):
+    _child_policy_probe(monkeypatch, tmp_path, {"comparison_policy_sha256": "b" * 64})
+    with pytest.raises(ValueError, match="checkpoint policy mismatch"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"))
+    with pytest.raises(ValueError, match="checkpoint policy mismatch"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"), Path("v2.json"))
+
+
+def test_the_child_accepts_the_pinned_comparison_and_a_comparison_free_contract(
+    tmp_path, monkeypatch
+):
+    _child_policy_probe(monkeypatch, tmp_path, {"comparison_policy_sha256": "b" * 64})
+    with pytest.raises(RuntimeError, match="policy checks passed"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"), Path("v1.json"))
+    _child_policy_probe(monkeypatch, tmp_path, {})
+    with pytest.raises(RuntimeError, match="policy checks passed"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"))
+
+
+def test_real_six_method_rows_add_the_v1_comparison_only_when_given(tmp_path, monkeypatch):
+    calls = []
+    installs = []
+    monkeypatch.setattr(real_validation, "TRANSITIONS", (("a", "b"),))
+    monkeypatch.setattr(
+        real_validation, "build_real_scenario", lambda root, data, configs, index: "workload"
+    )
+    monkeypatch.setattr(
+        bench,
+        "prepare_policy_workload",
+        lambda workload, policy, evidence, *comparisons: installs.append(comparisons) or workload,
+    )
+
+    def run(workload, method, *, pg_runtime, policy_id=None, policy_sha256=None):
+        calls.append((method, policy_id, policy_sha256))
+        return SimpleNamespace(to_dict=lambda: {"method": method, "status": "ok"})
+
+    monkeypatch.setattr(bench, "run_method", run)
+    v2 = SimpleNamespace(id="v2-id")
+    v1 = SimpleNamespace(id="v1-id")
+    real_validation._six_method_rows(
+        tmp_path, "data", "configs", runtime="pg", policy=v2, evidence="e", policy_sha256="a" * 64
+    )
+    assert [call[0] for call in calls] == list(bench.METHODS)
+    assert installs == [()]
+    calls.clear()
+    installs.clear()
+    real_validation._six_method_rows(
+        tmp_path,
+        "data",
+        "configs",
+        runtime="pg",
+        policy=v2,
+        evidence="e",
+        policy_sha256="a" * 64,
+        comparison=v1,
+        comparison_sha256="b" * 64,
+    )
+    assert [call[0] for call in calls] == [*bench.METHODS, "postgres_adaptive_v1"]
+    assert ("postgres_adaptive", "v2-id", "a" * 64) in calls
+    assert ("postgres_adaptive_v1", "v1-id", "b" * 64) in calls
+    assert ("postgres_full", None, None) in calls
+    assert ("postgres_incremental", None, None) in calls
+    assert installs == [(v1,)]
+
+
+def test_real_validation_refuses_a_comparison_without_six_method(tmp_path):
+    with pytest.raises(ValueError, match="six-method"):
+        real_validation.validate(tmp_path, tmp_path, comparison_from=tmp_path / "v1.json")
+
+
+def _real_pair_probe(monkeypatch):
+    """Real policy documents behind ``validate``; preflight and the measurement are stubbed."""
+    measured = []
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg")
+    monkeypatch.setattr(bench, "require_policy_environment", lambda *args: None)
+    monkeypatch.setattr(
+        real_validation, "_six_method_rows", lambda *args, **kwargs: measured.append(kwargs)
+    )
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("policy pair accepted")
+
+    monkeypatch.setattr(real_validation, "_copy_snapshot", stop)
+    return measured
+
+
+def _other_v1(tmp_path):
+    """A v1 calibration of other measurements (every workload hash differs by one bit)."""
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    for row in rows:
+        row["workload_hash"] = f"{int(row['workload_hash'], 16) ^ 1:064x}"
+    path = tmp_path / "other-calibration.json"
+    calibration.publish_calibration(rows, path)
+    return path
+
+
+@pytest.mark.parametrize("case", ["swapped", "same-version", "other-calibration"])
+def test_real_validation_refuses_a_wrong_policy_pair_before_measuring(tmp_path, monkeypatch, case):
+    measured = _real_pair_probe(monkeypatch)
+    v1_path, _, v2_path, _ = publish_v1_and_v2(tmp_path)
+    primary, comparison = {
+        "swapped": lambda: (v1_path, v2_path),
+        "same-version": lambda: (v1_path, v1_path),
+        "other-calibration": lambda: (v2_path, _other_v1(tmp_path)),
+    }[case]()
+    with pytest.raises(ValidationFailed, match="invalid_policy_pair"):
+        real_validation.validate(
+            tmp_path, tmp_path, six_method=True, policy_from=primary, comparison_from=comparison
+        )
+    assert measured == []
+
+
+def test_real_validation_accepts_the_v2_policy_beside_its_own_v1(tmp_path, monkeypatch):
+    _real_pair_probe(monkeypatch)
+    v1_path, _, v2_path, _ = publish_v1_and_v2(tmp_path)
+    with pytest.raises(RuntimeError, match="policy pair accepted"):
+        real_validation.validate(
+            tmp_path, tmp_path, six_method=True, policy_from=v2_path, comparison_from=v1_path
+        )
+
+
+LIVE_ENVIRONMENT = {
+    "environment_fingerprint": "a" * 64,
+    "postgresql_major": 17,
+    "backend_schema_version": 1,
+}
+
+
+def _live_environment(monkeypatch, **override):
+    """Stand in for the live server: what the checkpoint contract would record."""
+    seen = []
+
+    def checkpoint_environment(root, pg_runtime):
+        seen.append((Path(root), pg_runtime))
+        return {**LIVE_ENVIRONMENT, **override}
+
+    monkeypatch.setattr(bench, "_checkpoint_environment", checkpoint_environment)
+    return seen
+
+
+def test_require_policy_environment_passes_for_matching_policies(monkeypatch, tmp_path):
+    seen = _live_environment(monkeypatch)
+    _, v1, _, v2 = publish_v1_and_v2(tmp_path)
+    assert bench.require_policy_environment("pg", v2, v1) is None
+    assert [runtime for _, runtime in seen] == ["pg"]
+
+
+def test_require_policy_environment_without_policies_never_asks_the_server(monkeypatch):
+    monkeypatch.setattr(
+        bench, "_checkpoint_environment", lambda *args: pytest.fail("no policy, no preflight")
+    )
+    assert bench.require_policy_environment("pg") is None
+
+
+@pytest.mark.parametrize(
+    ("field", "label", "live"),
+    [
+        ("environment_fingerprint", "environment fingerprint", "c" * 64),
+        ("postgresql_major", "PostgreSQL major", 18),
+        ("backend_schema_version", "backend schema version", 2),
+    ],
+)
+@pytest.mark.parametrize("position", ["first", "second"])
+def test_require_policy_environment_names_the_mismatched_field_and_never_its_values(
+    monkeypatch, field, label, live, position
+):
+    _live_environment(monkeypatch, **{field: live})
+    policy = SimpleNamespace(**LIVE_ENVIRONMENT)
+    other = SimpleNamespace(**{**LIVE_ENVIRONMENT, field: "unit-other-value"})
+    policies = (other, policy) if position == "first" else (policy, other)
+    with pytest.raises(ValidationFailed, match=f"^incompatible_policy: {label}$") as error:
+        bench.require_policy_environment("pg", *policies)
+    message = str(error.value)
+    assert "a" * 64 not in message and "unit-other-value" not in message
+    assert str(live) not in message
+
+
+def test_require_policy_environment_reads_the_environment_once_in_a_scratch_directory(
+    monkeypatch,
+):
+    seen = _live_environment(monkeypatch)
+    policy = SimpleNamespace(**LIVE_ENVIRONMENT)
+    bench.require_policy_environment("pg", policy, policy, policy)
+    assert len(seen) == 1
+    assert not seen[0][0].exists()  # a temporary directory, removed afterwards
+
+
+def _environment_gate(monkeypatch):
+    """Record the calls of an environment check that always refuses."""
+    calls = []
+
+    def refuse(pg_runtime, *policies):
+        calls.append((pg_runtime, policies))
+        raise ValidationFailed("incompatible_policy: environment fingerprint")
+
+    monkeypatch.setattr(bench, "require_policy_environment", refuse)
+    return calls
+
+
+def test_formal_main_checks_the_policy_environment_before_any_scenario_is_measured(
+    tmp_path, monkeypatch
+):
+    calls = _environment_gate(monkeypatch)
+    policy = SimpleNamespace(id="unit-policy")
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg-runtime")
+    monkeypatch.setattr(bench, "load_frozen_policy", lambda path: (policy, "evidence", "a" * 64))
+    monkeypatch.setattr(
+        bench, "run_matrix_isolated", lambda *a, **k: pytest.fail("measured despite the gate")
+    )
+    output = tmp_path / "result.json"
+    status = bench.main(["--policy-from", str(tmp_path / "policy.json"), "--output", str(output)])
+    assert status == 1
+    assert calls == [("pg-runtime", (policy,))]
+    assert not output.exists()
+    assert not (tmp_path / "result-work").exists()
+
+
+def test_real_validation_checks_the_policy_environment_before_copying_anything(
+    tmp_path, monkeypatch
+):
+    measured = _real_pair_probe(monkeypatch)
+    calls = _environment_gate(monkeypatch)
+    _, _, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    with pytest.raises(ValidationFailed, match="incompatible_policy: environment fingerprint"):
+        real_validation.validate(tmp_path, tmp_path, six_method=True, policy_from=v2_path)
+    assert calls == [("pg", (v2,))]
+    assert measured == []
+
+
+def test_real_validation_checks_both_policies_of_a_pair_before_copying_anything(
+    tmp_path, monkeypatch
+):
+    measured = _real_pair_probe(monkeypatch)
+    calls = _environment_gate(monkeypatch)
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    with pytest.raises(ValidationFailed, match="incompatible_policy: environment fingerprint"):
+        real_validation.validate(
+            tmp_path, tmp_path, six_method=True, policy_from=v2_path, comparison_from=v1_path
+        )
+    assert calls == [("pg", (v2, v1))]
+    assert measured == []

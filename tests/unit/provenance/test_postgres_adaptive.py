@@ -13,11 +13,15 @@ from vcp.provenance import postgres
 from vcp.provenance.backend import RequestedStrategy
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import ProvenanceGraph
+from vcp.provenance.policy_bands import EdgesStratum, StratifiedEdgesBand, edges_decade
 from vcp.provenance.schema import ProvenanceEntity
 from vcp.provenance.strategy import (
     FULL_FEATURE_ORDER,
     INCREMENTAL_FEATURE_ORDER,
+    POLICY_VERSION,
+    POLICY_VERSION_V2,
     AdaptivePolicy,
+    AdaptivePolicyV2,
     CostModel,
     MaintenanceFeatures,
     select_strategy,
@@ -35,13 +39,18 @@ from .test_postgres_incremental import (
 fake_postgres = incremental_tests.fake_postgres
 
 
-def _policy(roots, connection, selected):
+def _calibration(roots):
     calibration = roots.data / "calibration.json"
     calibration.write_text(
         json.dumps({"scenario_ids": ["adaptive-test"], "scenario_hashes": ["a" * 64]}) + "\n",
         encoding="utf-8",
         newline="\n",
     )
+    return calibration
+
+
+def _policy(roots, connection, selected):
+    calibration = _calibration(roots)
     major, fingerprint = postgres.maintenance_environment(connection)
     policy = AdaptivePolicy(
         backend_schema_version=1,
@@ -67,18 +76,67 @@ def _policy(roots, connection, selected):
     return policy
 
 
+# Policy v2 estimates 40 ms (incremental) against 100 ms (full) whatever the graph. A 1 ms
+# stratum trusts that gap (INCREMENTAL); a 50 ms stratum does not (40 + 50 is not below
+# 100 - 50), so the band alone decides the path.
+V2_INCREMENTAL_MS, V2_FULL_MS = 40.0, 100.0
+NEAR_DECADE, FAR_DECADE = 0, 8
+
+
+def _stratum(decade, rmse_ms):
+    return EdgesStratum(
+        decade=decade, incremental_rmse_ms=rmse_ms, full_rmse_ms=rmse_ms, observations=1
+    )
+
+
+def _policy_v2(roots, connection, selected):
+    """Policy v2 whose stratified band says ``selected`` for the (small) graph under test: the
+    stratum nearest to its size decade is narrow or wide, the far stratum the opposite."""
+    calibration = _calibration(roots)
+    major, fingerprint = postgres.maintenance_environment(connection)
+    near, far = (50.0, 1.0) if selected == "FULL" else (1.0, 50.0)
+    policy = AdaptivePolicyV2(
+        backend_schema_version=1,
+        postgresql_major=major,
+        benchmark_schema_version=1,
+        environment_fingerprint=fingerprint,
+        calibration_sha256=sha256_file(calibration),
+        incremental_model=CostModel(
+            feature_order=INCREMENTAL_FEATURE_ORDER,
+            coefficients={name: 0.0 for name in INCREMENTAL_FEATURE_ORDER},
+            intercept_ms=V2_INCREMENTAL_MS,
+        ),
+        full_model=CostModel(
+            feature_order=FULL_FEATURE_ORDER,
+            coefficients={name: 0.0 for name in FULL_FEATURE_ORDER},
+            intercept_ms=V2_FULL_MS,
+        ),
+        band=StratifiedEdgesBand(strata=(_stratum(NEAR_DECADE, near), _stratum(FAR_DECADE, far))),
+        training_row_count=10,
+    )
+    write_policy_artifact(roots.data, policy, calibration)
+    return policy
+
+
 def _decision(connection):
     rows = connection.snapshot()["maintenance_decisions"]
     assert len(rows) == 1
     return dict(zip(connection.tables["maintenance_decisions"][0].split(), rows[0], strict=True))
 
 
+@pytest.mark.parametrize(
+    ("make_policy", "policy_version"),
+    [(_policy, POLICY_VERSION), (_policy_v2, POLICY_VERSION_V2)],
+    ids=["v1", "v2"],
+)
 @pytest.mark.parametrize("selected", ["NO_OP", "INCREMENTAL", "FULL"])
-def test_selected_path_and_complete_decision_commit_together(fake_postgres, roots, selected):
+def test_selected_path_and_complete_decision_commit_together(
+    fake_postgres, roots, selected, make_policy, policy_version
+):
     _versions(roots)
     if selected == "NO_OP":
         _dataset(roots, "idx-new", det_samples(4, seed=21))
-    policy = _policy(roots, fake_postgres, selected)
+    policy = make_policy(roots, fake_postgres, selected)
     fake_postgres.backend.rebuild(roots.data, roots.configs)
     old_generation = fake_postgres.snapshot()["active_generation"][0][1]
     _diff(roots)
@@ -93,6 +151,14 @@ def test_selected_path_and_complete_decision_commit_together(fake_postgres, root
     assert result.inserted and result.backend == "postgresql"
     assert result.elapsed_ms >= 0
     row = _decision(fake_postgres)
+    assert row["policy_version"] == policy_version == policy.policy_version
+    if make_policy is _policy_v2:
+        # The fixture graph is small enough for the near stratum to be the nearest one.
+        assert edges_decade(row["total_edges"]) < (NEAR_DECADE + FAR_DECADE) // 2
+        assert (row["estimated_incremental_ms"], row["estimated_full_ms"]) == (
+            V2_INCREMENTAL_MS,
+            V2_FULL_MS,
+        )
     features = MaintenanceFeatures(**{key: row[key] for key in MaintenanceFeatures.model_fields})
     recomputed = select_strategy("auto", features, policy)
     for key, value in recomputed.model_dump(mode="json").items():

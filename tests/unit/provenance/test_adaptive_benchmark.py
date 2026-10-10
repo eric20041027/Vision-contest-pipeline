@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from performance.provenance import adaptive_benchmark as bench
+from performance.provenance import calibrate_adaptive as calibration
 from performance.provenance import production_benchmark, real_validation, workloads
 from performance.provenance.workloads import Scenario, build_scenario, scenario_matrix
 from vcp.core.config import dump_yaml_model
@@ -17,8 +18,11 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.schema import DatasetCard, Sample, SourceInfo, View
+from vcp.provenance import strategy
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
 from vcp.provenance.graph import build_graph
+
+from .test_adaptive_evaluation import benchmark_rows, publish_v1_and_v2
 
 
 def test_scenario_matrix_is_complete_deterministic_and_disjoint():
@@ -1724,9 +1728,61 @@ def test_real_six_method_rows_add_the_v1_comparison_only_when_given(tmp_path, mo
     assert [call[0] for call in calls] == [*bench.METHODS, "postgres_adaptive_v1"]
     assert ("postgres_adaptive", "v2-id", "a" * 64) in calls
     assert ("postgres_adaptive_v1", "v1-id", "b" * 64) in calls
+    assert ("postgres_full", None, None) in calls
+    assert ("postgres_incremental", None, None) in calls
     assert installs == [(v1,)]
 
 
 def test_real_validation_refuses_a_comparison_without_six_method(tmp_path):
     with pytest.raises(ValueError, match="six-method"):
         real_validation.validate(tmp_path, tmp_path, comparison_from=tmp_path / "v1.json")
+
+
+def _real_pair_probe(monkeypatch):
+    """Real policy documents behind ``validate``; preflight and the measurement are stubbed."""
+    measured = []
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg")
+    monkeypatch.setattr(
+        real_validation, "_six_method_rows", lambda *args, **kwargs: measured.append(kwargs)
+    )
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("policy pair accepted")
+
+    monkeypatch.setattr(real_validation, "_copy_snapshot", stop)
+    return measured
+
+
+def _other_v1(tmp_path):
+    """A v1 calibration of other measurements (every workload hash differs by one bit)."""
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    for row in rows:
+        row["workload_hash"] = f"{int(row['workload_hash'], 16) ^ 1:064x}"
+    path = tmp_path / "other-calibration.json"
+    calibration.publish_calibration(rows, path)
+    return path
+
+
+@pytest.mark.parametrize("case", ["swapped", "same-version", "other-calibration"])
+def test_real_validation_refuses_a_wrong_policy_pair_before_measuring(tmp_path, monkeypatch, case):
+    measured = _real_pair_probe(monkeypatch)
+    v1_path, _, v2_path, _ = publish_v1_and_v2(tmp_path)
+    primary, comparison = {
+        "swapped": lambda: (v1_path, v2_path),
+        "same-version": lambda: (v1_path, v1_path),
+        "other-calibration": lambda: (v2_path, _other_v1(tmp_path)),
+    }[case]()
+    with pytest.raises(ValidationFailed, match="invalid_policy_pair"):
+        real_validation.validate(
+            tmp_path, tmp_path, six_method=True, policy_from=primary, comparison_from=comparison
+        )
+    assert measured == []
+
+
+def test_real_validation_accepts_the_v2_policy_beside_its_own_v1(tmp_path, monkeypatch):
+    _real_pair_probe(monkeypatch)
+    v1_path, _, v2_path, _ = publish_v1_and_v2(tmp_path)
+    with pytest.raises(RuntimeError, match="policy pair accepted"):
+        real_validation.validate(
+            tmp_path, tmp_path, six_method=True, policy_from=v2_path, comparison_from=v1_path
+        )

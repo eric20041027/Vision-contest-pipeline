@@ -176,12 +176,14 @@ def validate(
                 empirical_crossover,
                 load_frozen_policy,
                 postgres_preflight,
+                require_policy_pair,
             )
         else:
             from adaptive_benchmark import (
                 empirical_crossover,
                 load_frozen_policy,
                 postgres_preflight,
+                require_policy_pair,
             )
         if policy_from is None:
             raise ValueError("six-method validation requires a frozen policy")
@@ -189,9 +191,8 @@ def validate(
         policy, evidence, policy_sha256 = load_frozen_policy(policy_from)
         comparison = comparison_sha256 = None
         if comparison_from is not None:
-            comparison, _comparison_evidence, comparison_sha256 = load_frozen_policy(
-                comparison_from
-            )
+            comparison, comparison_evidence, comparison_sha256 = load_frozen_policy(comparison_from)
+            require_policy_pair(policy, evidence, comparison, comparison_evidence)
     with tempfile.TemporaryDirectory(prefix="vcp-real-provenance-") as directory:
         root = Path(directory)
         data = root / "data"

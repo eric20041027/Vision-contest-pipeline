@@ -1624,6 +1624,16 @@ def load_frozen_policy(path: Path):
     return policy, evidence, policy_file_sha256(path, policy)
 
 
+def require_policy_pair(policy, evidence, comparison, comparison_evidence) -> None:
+    """Fail closed unless ``policy`` is v2 and ``comparison`` the frozen v1 of the same
+    calibration (the held-out v2 guard, reused by the real validation)."""
+    if __package__:
+        from .evaluate_adaptive import _require_policy_pair
+    else:
+        from evaluate_adaptive import _require_policy_pair
+    _require_policy_pair(policy, evidence, comparison, comparison_evidence)
+
+
 def empirical_crossover(evidence):
     if __package__:
         from .evaluate_adaptive import empirical_crossover as build_crossover

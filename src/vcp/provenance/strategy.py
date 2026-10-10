@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -17,10 +19,13 @@ from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import artifact_dir, resolve_stored_path
 from vcp.provenance.backend import BackendName, RequestedStrategy, SelectedStrategy
+from vcp.provenance.policy_bands import BAND_KINDS, Band, band_allows_incremental, fit_band
 from vcp.provenance.postgres_schema import POSTGRES_SCHEMA_VERSION
 
 POLICY_KIND = "provenance_policy"
 POLICY_VERSION = "postgres-adaptive-v1"
+POLICY_VERSION_V2 = "postgres-adaptive-v2"
+SUPPORTED_POLICY_VERSIONS = (POLICY_VERSION, POLICY_VERSION_V2)
 BENCHMARK_SCHEMA_VERSION = 1
 POLICY_FILE = "policy.json"
 CALIBRATION_FILE = "calibration.json"
@@ -43,11 +48,18 @@ _SCENARIO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _LOWER_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 CALIBRATION_SEEDS = (20260913, 20260914)
 HELDOUT_SEEDS = (20261001, 20261002)
+# Policy v2's held-out seeds (spec 2026-10-09 §6.3): never measured before; the v1 held-out
+# seeds above shaped v2's design and can no longer stand for unseen data.
+HELDOUT_V2_SEEDS = (20261101, 20261102)
 
 
 def _derived_policy_id(calibration_sha256: str) -> str:
     derived_id = f"postgres-adaptive-v1-{calibration_sha256[:12]}"
     return derived_id
+
+
+def _derived_policy_v2_id(calibration_sha256: str) -> str:
+    return f"postgres-adaptive-v2-{calibration_sha256[:12]}"
 
 
 class _Strict(BaseModel):
@@ -283,6 +295,55 @@ class AdaptivePolicy(_Strict):
         return _derived_policy_id(self.calibration_sha256)
 
 
+class AdaptivePolicyV2(_Strict):
+    """Policy v2 (spec 2026-10-09 §4): v1's two cost models with a band derived from the
+    calibration residuals -- relative to each estimate, or per order of magnitude of the
+    graph -- chosen by the pre-registered comparison of §5."""
+
+    policy_version: Literal["postgres-adaptive-v2"] = POLICY_VERSION_V2
+    backend: BackendName = BackendName.POSTGRESQL
+    backend_schema_version: int = Field(ge=1)
+    postgresql_major: int = Field(ge=1)
+    benchmark_schema_version: int = Field(ge=1)
+    environment_fingerprint: str = Field(min_length=1)
+    calibration_sha256: str
+    incremental_model: CostModel
+    full_model: CostModel
+    band: Band
+    training_row_count: int = Field(ge=1)
+
+    @field_validator("calibration_sha256")
+    @classmethod
+    def _valid_sha256(cls, value: str) -> str:
+        if not _LOWER_SHA256.fullmatch(value):
+            raise ValueError("calibration_sha256 must be 64 lowercase hex characters")
+        return value
+
+    @model_validator(mode="after")
+    def _fixed_feature_orders(self) -> AdaptivePolicyV2:
+        if self.incremental_model.feature_order != INCREMENTAL_FEATURE_ORDER:
+            raise ValueError("incremental model feature_order is incompatible")
+        if self.full_model.feature_order != FULL_FEATURE_ORDER:
+            raise ValueError("full model feature_order is incompatible")
+        return self
+
+    @property
+    def id(self) -> str:
+        return _derived_policy_v2_id(self.calibration_sha256)
+
+
+ProvenancePolicy = AdaptivePolicy | AdaptivePolicyV2
+
+
+def policy_from_payload(payload: object) -> ProvenancePolicy:
+    """Validate a ``policy.json`` payload with the model its ``policy_version`` names (spec
+    2026-10-09 §4.4). Any other version validates as v1 and then fails the version check of
+    whoever loads it, exactly as before v2 existed."""
+    if isinstance(payload, Mapping) and payload.get("policy_version") == POLICY_VERSION_V2:
+        return AdaptivePolicyV2.model_validate(payload)
+    return AdaptivePolicy.model_validate(payload)
+
+
 class StrategyDecision(_Strict):
     requested_strategy: RequestedStrategy
     selected_strategy: SelectedStrategy
@@ -299,17 +360,28 @@ class StrategyDecision(_Strict):
     reason: str
 
 
-def fit_policy(calibration_rows) -> AdaptivePolicy:
-    """Fit nonnegative models on calibration observations only, in frozen order.
+@dataclass(frozen=True)
+class FittedCostModel:
+    model: CostModel
+    rmse_ms: float
+    predicted: tuple[float, ...]
+    actual: tuple[float, ...]
 
-    The numerical dependency is imported only when fitting. Held-out runners use
-    artifact loading and selection, and never invoke this API.
+
+def fit_cost_models(
+    rows: Sequence[CalibrationObservation],
+) -> tuple[FittedCostModel, FittedCostModel]:
+    """The incremental and the full cost model, fitted as v1 fits them (nonnegative linear
+    regression in frozen feature order). Nothing is validated here: callers pass a whole
+    verified calibration or one fold of a cross-validation (spec 2026-10-09 §5.3).
+
+    The numerical dependency is imported only when fitting. Held-out runners use artifact
+    loading and selection, and never invoke this API.
     """
-    evidence = calibration_evidence(calibration_rows)
     from sklearn.linear_model import LinearRegression
 
-    rows = evidence.observations
-    assert rows
+    if not rows:
+        raise ValueError("no calibration observations")
 
     def fit(order, target):
         matrix = [[float(getattr(row, feature)) for feature in order] for row in rows]
@@ -320,14 +392,24 @@ def fit_policy(calibration_rows) -> AdaptivePolicy:
             coefficients=dict(zip(order, fitted.coef_, strict=True)),
             intercept_ms=float(fitted.intercept_),
         )
+        predicted = tuple(model.predict(row) for row in rows)
         rmse = math.sqrt(
-            sum((model.predict(row) - value) ** 2 for row, value in zip(rows, values, strict=True))
-            / len(rows)
+            sum((p - value) ** 2 for p, value in zip(predicted, values, strict=True)) / len(rows)
         )
-        return model, rmse
+        return FittedCostModel(model, rmse, predicted, tuple(values))
 
-    incremental, incremental_rmse = fit(INCREMENTAL_FEATURE_ORDER, "incremental_p50_ms")
-    full, full_rmse = fit(FULL_FEATURE_ORDER, "full_p50_ms")
+    return (
+        fit(INCREMENTAL_FEATURE_ORDER, "incremental_p50_ms"),
+        fit(FULL_FEATURE_ORDER, "full_p50_ms"),
+    )
+
+
+def fit_policy(calibration_rows) -> AdaptivePolicy:
+    """Fit nonnegative models on calibration observations only, in frozen order."""
+    evidence = calibration_evidence(calibration_rows)
+    rows = evidence.observations
+    assert rows
+    incremental, full = fit_cost_models(rows)
     first = rows[0]
     return AdaptivePolicy(
         backend_schema_version=first.backend_schema_version,
@@ -335,10 +417,44 @@ def fit_policy(calibration_rows) -> AdaptivePolicy:
         benchmark_schema_version=first.benchmark_schema_version,
         environment_fingerprint=first.environment_fingerprint,
         calibration_sha256=sha256_text(calibration_text(evidence)),
-        incremental_model=incremental,
-        full_model=full,
-        incremental_rmse_ms=incremental_rmse,
-        full_rmse_ms=full_rmse,
+        incremental_model=incremental.model,
+        full_model=full.model,
+        incremental_rmse_ms=incremental.rmse_ms,
+        full_rmse_ms=full.rmse_ms,
+        training_row_count=len(rows),
+    )
+
+
+def fit_policy_v2(calibration_rows, *, band: str) -> AdaptivePolicyV2:
+    """Policy v2 from the same calibration as v1: the same cost models, plus the band the
+    pre-registered comparison chose (spec 2026-10-09 §4.3, §13)."""
+    if band not in BAND_KINDS:
+        raise ValidationFailed(f"unsupported_band: {band}")
+    evidence = calibration_evidence(calibration_rows)
+    rows = evidence.observations
+    assert rows
+    incremental, full = fit_cost_models(rows)
+    try:
+        fitted = fit_band(
+            band,
+            total_edges=[row.total_edges for row in rows],
+            incremental_predicted=incremental.predicted,
+            incremental_actual=incremental.actual,
+            full_predicted=full.predicted,
+            full_actual=full.actual,
+        )
+    except ValueError:
+        raise ValidationFailed("invalid_calibration_rows") from None
+    first = rows[0]
+    return AdaptivePolicyV2(
+        backend_schema_version=first.backend_schema_version,
+        postgresql_major=first.postgresql_major,
+        benchmark_schema_version=first.benchmark_schema_version,
+        environment_fingerprint=first.environment_fingerprint,
+        calibration_sha256=sha256_text(calibration_text(evidence)),
+        incremental_model=incremental.model,
+        full_model=full.model,
+        band=fitted,
         training_row_count=len(rows),
     )
 
@@ -355,7 +471,7 @@ def _requested(value: RequestedStrategy | str) -> RequestedStrategy:
 def select_strategy(
     requested: RequestedStrategy | str,
     features: MaintenanceFeatures,
-    policy: AdaptivePolicy | None,
+    policy: ProvenancePolicy | None,
 ) -> StrategyDecision:
     """Select one maintenance path using only verified features and a frozen policy."""
     requested_strategy = _requested(requested)
@@ -377,9 +493,14 @@ def select_strategy(
         reason = "fallback_policy_absent_full"
     else:
         assert incremental_ms is not None and full_ms is not None
-        incremental_is_confidently_lower = (
-            incremental_ms + policy.incremental_rmse_ms < full_ms - policy.full_rmse_ms
-        )
+        if isinstance(policy, AdaptivePolicyV2):
+            incremental_is_confidently_lower = band_allows_incremental(
+                policy.band, incremental_ms, full_ms, features.total_edges
+            )
+        else:
+            incremental_is_confidently_lower = (
+                incremental_ms + policy.incremental_rmse_ms < full_ms - policy.full_rmse_ms
+            )
         selected = (
             SelectedStrategy.INCREMENTAL
             if incremental_is_confidently_lower
@@ -402,7 +523,7 @@ def select_strategy(
     )
 
 
-def _policy_spec(policy: AdaptivePolicy, calibration_path: Path) -> ArtifactSpec:
+def _policy_spec(policy: ProvenancePolicy, calibration_path: Path) -> ArtifactSpec:
     return ArtifactSpec(
         kind=POLICY_KIND,
         id=policy.id,
@@ -426,7 +547,7 @@ def _policy_spec(policy: AdaptivePolicy, calibration_path: Path) -> ArtifactSpec
     )
 
 
-def _policy_sha256(policy: AdaptivePolicy) -> str:
+def _policy_sha256(policy: ProvenancePolicy) -> str:
     text = json.dumps(policy.model_dump(mode="json"), ensure_ascii=False, indent=1) + "\n"
     return sha256_text(text)
 
@@ -453,7 +574,7 @@ def _read_calibration(path: Path, *, committed: bool = False) -> CalibrationEvid
         raise ValidationFailed("bad calibration evidence") from None
 
 
-def _check_calibration_policy(evidence: CalibrationEvidence, policy: AdaptivePolicy) -> None:
+def _check_calibration_policy(evidence: CalibrationEvidence, policy: ProvenancePolicy) -> None:
     if evidence.observations is None:
         return  # Task 6's original two-field manifest remains supported.
     first = evidence.observations[0]
@@ -467,14 +588,16 @@ def _check_calibration_policy(evidence: CalibrationEvidence, policy: AdaptivePol
         raise ValidationFailed("incompatible_policy: calibration metadata")
 
 
-def write_policy_artifact(data_root: Path, policy: AdaptivePolicy, calibration_path: Path) -> str:
+def write_policy_artifact(data_root: Path, policy: ProvenancePolicy, calibration_path: Path) -> str:
     """Publish or idempotently reuse a policy derived from one pinned calibration JSON."""
+    model = AdaptivePolicyV2 if isinstance(policy, AdaptivePolicyV2) else AdaptivePolicy
     try:
-        policy = AdaptivePolicy.model_validate(policy.model_dump(mode="json"))
+        policy = model.model_validate(policy.model_dump(mode="json"))
     except (TypeError, ValueError):
         raise ValidationFailed("bad provenance policy payload") from None
+    expected_version = POLICY_VERSION_V2 if model is AdaptivePolicyV2 else POLICY_VERSION
     if (
-        policy.policy_version != POLICY_VERSION
+        policy.policy_version != expected_version
         or policy.backend is not BackendName.POSTGRESQL
         or policy.backend_schema_version != POSTGRES_SCHEMA_VERSION
         or policy.benchmark_schema_version != BENCHMARK_SCHEMA_VERSION
@@ -519,7 +642,7 @@ def load_policy_artifact(
     postgresql_major: int | None = None,
     benchmark_schema_version: int = BENCHMARK_SCHEMA_VERSION,
     environment_fingerprint: str | None = None,
-) -> AdaptivePolicy:
+) -> ProvenancePolicy:
     """Verify a committed policy, its source pin, and caller-supplied compatibility context."""
     data_root = Path(data_root)
     try:
@@ -544,10 +667,10 @@ def load_policy_artifact(
     except (OSError, ValidationError, ValueError):
         raise IntegrityError("mismatch: provenance policy spec") from None
     try:
-        policy = AdaptivePolicy.model_validate_json(
-            (directory / POLICY_FILE).read_text(encoding="utf-8")
+        policy = policy_from_payload(
+            json.loads((directory / POLICY_FILE).read_text(encoding="utf-8"))
         )
-    except (OSError, ValidationError, ValueError):
+    except (OSError, ValidationError, ValueError, TypeError):
         raise IntegrityError("mismatch: provenance policy payload") from None
     if record.spec != manifest.spec:
         raise IntegrityError("mismatch: provenance policy manifest")
@@ -582,7 +705,7 @@ def load_policy_artifact(
     except (TypeError, ValueError):
         raise _compatibility_error("backend") from None
     checks = {
-        "policy version": policy.policy_version == POLICY_VERSION,
+        "policy version": policy.policy_version in SUPPORTED_POLICY_VERSIONS,
         "backend": policy.backend is expected_backend,
         "backend schema version": policy.backend_schema_version == backend_schema_version,
         "benchmark schema version": policy.benchmark_schema_version == benchmark_schema_version,
@@ -602,20 +725,29 @@ __all__ = [
     "FULL_FEATURE_ORDER",
     "INCREMENTAL_FEATURE_ORDER",
     "HELDOUT_SEEDS",
+    "HELDOUT_V2_SEEDS",
     "POLICY_KIND",
     "POLICY_VERSION",
+    "POLICY_VERSION_V2",
+    "SUPPORTED_POLICY_VERSIONS",
     "AdaptivePolicy",
+    "AdaptivePolicyV2",
     "CalibrationEvidence",
     "CalibrationObservation",
     "CostModel",
+    "FittedCostModel",
     "MaintenanceFeatures",
+    "ProvenancePolicy",
     "RequestedStrategy",
     "SelectedStrategy",
     "StrategyDecision",
     "calibration_evidence",
     "calibration_text",
+    "fit_cost_models",
     "fit_policy",
+    "fit_policy_v2",
     "load_policy_artifact",
+    "policy_from_payload",
     "select_strategy",
     "write_policy_artifact",
 ]

@@ -115,34 +115,83 @@ def build_real_scenario(
     return finish_workload(root, scenario, before, after, sample_entities=samples)
 
 
+def _six_method_rows(
+    root: Path,
+    source_data: Path,
+    source_configs: Path,
+    *,
+    runtime,
+    policy,
+    evidence,
+    policy_sha256,
+    comparison=None,
+    comparison_sha256=None,
+) -> list[dict]:
+    """Every transition under the six methods, plus the frozen v1 policy when given (spec
+    2026-10-09 §6.4: a sanity check of the case that motivated v2, never held-out evidence)."""
+    if __package__:
+        from . import adaptive_benchmark as benchmark
+    else:
+        import adaptive_benchmark as benchmark
+    methods = benchmark.METHODS
+    comparisons = ()
+    if comparison is not None:
+        methods = (*methods, benchmark.COMPARISON_METHOD)
+        comparisons = (comparison,)
+    rows = []
+    for transition in range(len(TRANSITIONS)):
+        workload = build_real_scenario(
+            root / f"real-{transition}", source_data, source_configs, transition
+        )
+        workload = benchmark.prepare_policy_workload(workload, policy, evidence, *comparisons)
+        for method in methods:
+            method_policy, method_sha256 = benchmark.policy_for(
+                method, policy, policy_sha256, comparison, comparison_sha256
+            )
+            rows.append(
+                benchmark.run_method(
+                    workload,
+                    method,
+                    pg_runtime=runtime,
+                    policy_id=method_policy,
+                    policy_sha256=method_sha256,
+                ).to_dict()
+            )
+    return rows
+
+
 def validate(
     source_data: Path,
     source_configs: Path,
     *,
     six_method=False,
     policy_from: Path | None = None,
+    comparison_from: Path | None = None,
 ) -> dict[str, object]:
+    if comparison_from is not None and not six_method:
+        raise ValueError("a comparison policy needs the six-method validation")
     if six_method:
         if __package__:
             from .adaptive_benchmark import (
-                METHODS,
                 empirical_crossover,
                 load_frozen_policy,
                 postgres_preflight,
-                run_method,
             )
         else:
             from adaptive_benchmark import (
-                METHODS,
                 empirical_crossover,
                 load_frozen_policy,
                 postgres_preflight,
-                run_method,
             )
         if policy_from is None:
             raise ValueError("six-method validation requires a frozen policy")
         runtime = postgres_preflight()
         policy, evidence, policy_sha256 = load_frozen_policy(policy_from)
+        comparison = comparison_sha256 = None
+        if comparison_from is not None:
+            comparison, _comparison_evidence, comparison_sha256 = load_frozen_policy(
+                comparison_from
+            )
     with tempfile.TemporaryDirectory(prefix="vcp-real-provenance-") as directory:
         root = Path(directory)
         data = root / "data"
@@ -211,31 +260,23 @@ def validate(
             "verify_index": verification.__dict__,
         }
         if six_method:
-            rows = []
-            for transition in range(len(TRANSITIONS)):
-                workload = build_real_scenario(
-                    root / f"real-{transition}", source_data, source_configs, transition
-                )
-                if __package__:
-                    from .adaptive_benchmark import prepare_policy_workload
-                else:
-                    from adaptive_benchmark import prepare_policy_workload
-                workload = prepare_policy_workload(workload, policy, evidence)
-                for method in METHODS:
-                    rows.append(
-                        run_method(
-                            workload,
-                            method,
-                            pg_runtime=runtime,
-                            policy_id=policy.id if method == "postgres_adaptive" else None,
-                            policy_sha256=(
-                                policy_sha256 if method == "postgres_adaptive" else None
-                            ),
-                        ).to_dict()
-                    )
+            rows = _six_method_rows(
+                root,
+                source_data,
+                source_configs,
+                runtime=runtime,
+                policy=policy,
+                evidence=evidence,
+                policy_sha256=policy_sha256,
+                comparison=comparison,
+                comparison_sha256=comparison_sha256,
+            )
             document["six_method_benchmark"] = rows
             document["policy_id"] = policy.id
             document["policy_sha256"] = policy_sha256
+            if comparison is not None:
+                document["comparison_policy_id"] = comparison.id
+                document["comparison_policy_sha256"] = comparison_sha256
             document["empirical_crossover"] = empirical_crossover(evidence)
             document["postgresql_environment"] = next(
                 (
@@ -255,6 +296,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--six-method", action="store_true")
     parser.add_argument("--policy-from", type=Path)
+    parser.add_argument("--comparison-policy-from", type=Path)
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError("real validation output is write-once")
@@ -263,6 +305,7 @@ def main() -> int:
         args.configs_root.resolve(),
         six_method=args.six_method,
         policy_from=args.policy_from,
+        comparison_from=args.comparison_policy_from,
     )
     if __package__:
         from .adaptive_benchmark import validate_publication_explain

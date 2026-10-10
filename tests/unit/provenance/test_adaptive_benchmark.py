@@ -1681,3 +1681,52 @@ def test_the_child_accepts_the_pinned_comparison_and_a_comparison_free_contract(
     _child_policy_probe(monkeypatch, tmp_path, {})
     with pytest.raises(RuntimeError, match="policy checks passed"):
         bench._child_run_scenario("w", "c" * 64, Path("v2.json"))
+
+
+def test_real_six_method_rows_add_the_v1_comparison_only_when_given(tmp_path, monkeypatch):
+    calls = []
+    installs = []
+    monkeypatch.setattr(real_validation, "TRANSITIONS", (("a", "b"),))
+    monkeypatch.setattr(
+        real_validation, "build_real_scenario", lambda root, data, configs, index: "workload"
+    )
+    monkeypatch.setattr(
+        bench,
+        "prepare_policy_workload",
+        lambda workload, policy, evidence, *comparisons: installs.append(comparisons) or workload,
+    )
+
+    def run(workload, method, *, pg_runtime, policy_id=None, policy_sha256=None):
+        calls.append((method, policy_id, policy_sha256))
+        return SimpleNamespace(to_dict=lambda: {"method": method, "status": "ok"})
+
+    monkeypatch.setattr(bench, "run_method", run)
+    v2 = SimpleNamespace(id="v2-id")
+    v1 = SimpleNamespace(id="v1-id")
+    real_validation._six_method_rows(
+        tmp_path, "data", "configs", runtime="pg", policy=v2, evidence="e", policy_sha256="a" * 64
+    )
+    assert [call[0] for call in calls] == list(bench.METHODS)
+    assert installs == [()]
+    calls.clear()
+    installs.clear()
+    real_validation._six_method_rows(
+        tmp_path,
+        "data",
+        "configs",
+        runtime="pg",
+        policy=v2,
+        evidence="e",
+        policy_sha256="a" * 64,
+        comparison=v1,
+        comparison_sha256="b" * 64,
+    )
+    assert [call[0] for call in calls] == [*bench.METHODS, "postgres_adaptive_v1"]
+    assert ("postgres_adaptive", "v2-id", "a" * 64) in calls
+    assert ("postgres_adaptive_v1", "v1-id", "b" * 64) in calls
+    assert installs == [(v1,)]
+
+
+def test_real_validation_refuses_a_comparison_without_six_method(tmp_path):
+    with pytest.raises(ValueError, match="six-method"):
+        real_validation.validate(tmp_path, tmp_path, comparison_from=tmp_path / "v1.json")

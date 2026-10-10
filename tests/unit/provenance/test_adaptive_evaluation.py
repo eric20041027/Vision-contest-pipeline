@@ -144,7 +144,7 @@ def test_runners_fail_without_pg_and_do_not_emit_json(tmp_path, monkeypatch, cap
     assert "Traceback" not in captured.err
 
 
-def benchmark_rows(seeds, policy=None):
+def benchmark_rows(seeds, policy=None, comparison=None):
     """Clearly synthetic Task 10-shaped rows, never saved as research output."""
     rows = []
     for scenario in scenario_matrix(seeds=seeds):
@@ -160,14 +160,23 @@ def benchmark_rows(seeds, policy=None):
             historical_changes=600,
             head_count=1,
         )
-        for method in evaluation.EVALUATION_METHODS if policy else evaluation.FIXED_METHODS:
+        methods = (
+            evaluation.HELDOUT_V2_METHODS
+            if comparison
+            else evaluation.EVALUATION_METHODS
+            if policy
+            else evaluation.FIXED_METHODS
+        )
+        for method in methods:
             requested = {
                 "postgres_full": "full",
                 "postgres_incremental": "incremental",
                 "postgres_adaptive": "auto",
+                "postgres_adaptive_v1": "auto",
             }[method]
+            method_policy = comparison if method == "postgres_adaptive_v1" else policy
             decision = strategy.select_strategy(
-                requested, features, policy if requested == "auto" else None
+                requested, features, method_policy if requested == "auto" else None
             )
             latency = 20.0 if requested == "full" else 10.0
             sample = dict(
@@ -204,9 +213,9 @@ def benchmark_rows(seeds, policy=None):
             row.update(
                 schema_version=1,
                 method=method,
-                policy_id=policy.id if method == "postgres_adaptive" else None,
+                policy_id=method_policy.id if requested == "auto" else None,
                 policy_sha256=(
-                    strategy._policy_sha256(policy) if method == "postgres_adaptive" else None
+                    strategy._policy_sha256(method_policy) if requested == "auto" else None
                 ),
                 scenario_id=scenario.scenario_id,
                 scenario_hash=scenario.scenario_hash,
@@ -1124,3 +1133,191 @@ def test_collect_rows_passes_the_comparison_to_the_isolated_runner(tmp_path, mon
     assert observed["comparison_from"] == tmp_path / "v1.json"
     assert observed["comparison_sha256"] == "b" * 64
     assert observed["policy_sha256"] == "a" * 64
+
+
+def _slow_v1(rows):
+    """Make every non-NO_OP v1 adaptive row three times slower than the fixed methods."""
+    for row in rows:
+        if row["method"] == "postgres_adaptive_v1" and row["selected_strategy"] != "NO_OP":
+            row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = 30.0
+            for sample in row["samples"]:
+                sample["maintenance_ms"] = 30.0
+            row["throughput_samples_per_second"] = row["changed_samples"] / 0.03
+    return rows
+
+
+def test_heldout_v2_rows_validate_with_four_methods_on_the_new_seeds(tmp_path):
+    _, v1, _, v2 = publish_v1_and_v2(tmp_path)
+    rows = benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1)
+    groups = evaluation.validate_rows(
+        rows, seeds=strategy.HELDOUT_V2_SEEDS, methods=evaluation.HELDOUT_V2_METHODS
+    )
+    assert len(groups) == 108
+    assert all(set(group) == set(evaluation.HELDOUT_V2_METHODS) for group in groups.values())
+
+
+def test_evaluate_policies_reports_both_and_tests_h1(tmp_path):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    rows = _slow_v1(benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1))
+    result = evaluation.evaluate_policies(v2_path, v1_path, rows)
+    assert (result.v2.policy_id, result.v1.policy_id) == (v2.id, v1.id)
+    assert result.v2.performance_pass is True
+    assert result.v1.performance_pass is False
+    assert result.v2.scenarios_over == 0
+    assert result.v1.scenarios_over == result.v1.non_no_op_scenarios > 0
+    assert result.h1 is True and result.h1a is True
+    assert set(result.v2.by_decade) == {"3"}
+    assert result.seeds == list(strategy.HELDOUT_V2_SEEDS)
+
+
+def test_evaluate_policies_with_equal_policies_does_not_claim_h1(tmp_path):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    result = evaluation.evaluate_policies(
+        v2_path, v1_path, benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1)
+    )
+    assert result.v2.scenarios_over == result.v1.scenarios_over == 0
+    assert result.h1 is False and result.h1a is False
+
+
+def test_evaluate_policies_refuses_a_swapped_pair(tmp_path):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    rows = benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1)
+    with pytest.raises(ValidationFailed, match="invalid_policy_pair"):
+        evaluation.evaluate_policies(v1_path, v2_path, rows)
+
+
+def test_evaluate_policies_rejects_a_v1_row_decided_by_v2(tmp_path):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    rows = benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1)
+    for row in rows:
+        if row["method"] == "postgres_adaptive_v1":
+            row["policy_id"] = v2.id
+    with pytest.raises(ValidationFailed, match="policy_decision_mismatch"):
+        evaluation.evaluate_policies(v2_path, v1_path, rows)
+
+
+def test_heldout_v2_cli_publishes_both_policies(tmp_path, monkeypatch, capsys):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    rows = _slow_v1(benchmark_rows(strategy.HELDOUT_V2_SEEDS, v2, v1))
+    monkeypatch.setattr(evaluation.benchmark, "postgres_preflight", lambda: object())
+
+    def collect(root, scenarios, **kwargs):
+        assert {s.seed for s in scenarios} == set(strategy.HELDOUT_V2_SEEDS)
+        assert kwargs["methods"] == evaluation.HELDOUT_V2_METHODS
+        assert (kwargs["policy"], kwargs["comparison"]) == (v2, v1)
+        return rows
+
+    monkeypatch.setattr(evaluation, "collect_rows", collect)
+    output = tmp_path / "unit-heldout-v2.json"
+    argv = ["--policy-from", str(v2_path), "--comparison-policy-from", str(v1_path)]
+    assert evaluation.main([*argv, "--output", str(output)]) == 0
+    document = json.loads(output.read_text())
+    assert document["kind"] == "postgres-provenance-heldout-v2"
+    assert document["evaluation"]["h1"] is True
+    assert "status=OK h1=true h1a=true" in capsys.readouterr().err
+
+
+def _other_calibration(tmp_path):
+    """A v1 calibration fitted from different synthetic latencies, so its evidence differs."""
+    rows = benchmark_rows(strategy.CALIBRATION_SEEDS)
+    for row in rows:
+        if row["method"] == "postgres_full":
+            row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = 25.0
+            for sample in row["samples"]:
+                sample["maintenance_ms"] = 25.0
+    path = tmp_path / "other" / "unit-calibration.json"
+    path.parent.mkdir()
+    calibration.publish_calibration(rows, path)
+    return path
+
+
+@pytest.mark.parametrize("case", ["v2_alone", "swapped", "both_v2", "other_calibration"])
+def test_heldout_cli_refuses_a_wrong_policy_pair_before_measuring(
+    tmp_path, monkeypatch, capsys, case
+):
+    v1_path, _, v2_path, _ = publish_v1_and_v2(tmp_path)
+    argv = {
+        "v2_alone": ["--policy-from", str(v2_path)],
+        "swapped": ["--policy-from", str(v1_path), "--comparison-policy-from", str(v2_path)],
+        "both_v2": ["--policy-from", str(v2_path), "--comparison-policy-from", str(v2_path)],
+        "other_calibration": [
+            "--policy-from",
+            str(v2_path),
+            "--comparison-policy-from",
+            str(_other_calibration(tmp_path)),
+        ],
+    }[case]
+    calls = []
+    monkeypatch.setattr(
+        evaluation.benchmark, "postgres_preflight", lambda: calls.append("preflight")
+    )
+    monkeypatch.setattr(evaluation, "collect_rows", lambda *a, **k: calls.append("collect"))
+    output = tmp_path / "unit-heldout.json"
+    assert evaluation.main([*argv, "--output", str(output)]) == 1
+    assert calls == []
+    assert not output.exists()
+    assert "status=FAIL" in capsys.readouterr().err
+
+
+def _stub_scenario_run(monkeypatch):
+    """Replace the live pieces of collect_rows; return what prepare_workload and the policy
+    hasher were called with, and which policy id each method ran under."""
+    prepared, hashed, ran = [], [], {}
+    monkeypatch.setattr(evaluation, "build_scenario", lambda path, scenario: "workload")
+    monkeypatch.setattr(
+        evaluation,
+        "prepare_workload",
+        lambda *args, **kwargs: prepared.append((args, kwargs)) or args[0],
+    )
+    monkeypatch.setattr(
+        evaluation, "_policy_sha256", lambda value: hashed.append(value) or "a" * 64
+    )
+
+    def run_method(workload, method, **kwargs):
+        ran[method] = kwargs["policy_id"]
+        return SimpleNamespace(to_dict=lambda: {"method": method})
+
+    monkeypatch.setattr(evaluation.benchmark, "run_method", run_method)
+    return prepared, hashed, ran
+
+
+def test_collect_rows_without_a_comparison_keeps_the_three_argument_call_shape(
+    tmp_path, monkeypatch
+):
+    prepared, hashed, _ = _stub_scenario_run(monkeypatch)
+    policy = SimpleNamespace(id="policy")
+    scenarios = [Scenario(40, 0.5, "chain", seed) for seed in strategy.HELDOUT_SEEDS]
+    rows = evaluation.collect_rows(
+        tmp_path,
+        scenarios,
+        methods=evaluation.EVALUATION_METHODS,
+        pg_runtime="pg",
+        policy=policy,
+        evidence="evidence",
+    )
+    assert len(rows) == len(scenarios) * len(evaluation.EVALUATION_METHODS)
+    assert prepared == [(("workload", policy, "evidence"), {})] * len(scenarios)
+    assert hashed == [policy]
+
+
+def test_collect_rows_with_a_comparison_hashes_each_policy_once(tmp_path, monkeypatch):
+    prepared, hashed, ran = _stub_scenario_run(monkeypatch)
+    policy, comparison = SimpleNamespace(id="v2"), SimpleNamespace(id="v1")
+    scenarios = [Scenario(40, 0.5, "chain", seed) for seed in strategy.HELDOUT_V2_SEEDS]
+    evaluation.collect_rows(
+        tmp_path,
+        scenarios,
+        methods=evaluation.HELDOUT_V2_METHODS,
+        pg_runtime="pg",
+        policy=policy,
+        evidence="evidence",
+        comparison=comparison,
+    )
+    assert prepared == [(("workload", policy, "evidence", (comparison,)), {})] * len(scenarios)
+    assert hashed == [policy, comparison]
+    assert ran == {
+        "postgres_full": None,
+        "postgres_incremental": None,
+        "postgres_adaptive": "v2",
+        "postgres_adaptive_v1": "v1",
+    }

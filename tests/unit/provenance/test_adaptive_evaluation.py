@@ -7,11 +7,13 @@ import json
 import subprocess
 import sys
 import traceback
+from pathlib import Path
 
 import pytest
 
 from performance.provenance import calibrate_adaptive as calibration
 from performance.provenance import evaluate_adaptive as evaluation
+from performance.provenance import publish_policy_v2 as publish_v2
 from performance.provenance.workloads import Scenario, build_scenario, scenario_matrix
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
@@ -988,3 +990,88 @@ def test_every_runtime_environment_key_is_accepted_by_the_row_model(tmp_path):
         "declared_but_never_emitted": sorted(declared - set(emitted) - set(postgres_keys)),
     }
     evaluation._Environment.model_validate({**emitted, **postgres_keys})
+
+
+def publish_v1_and_v2(tmp_path, band="relative"):
+    """A unit v1 calibration document, a unit band comparison naming ``band``, and the v2
+    policy document published from them; all synthetic."""
+    v1_path = tmp_path / "unit-calibration.json"
+    v1 = calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), v1_path)
+    comparison = tmp_path / "unit-band-comparison.json"
+    comparison.write_text(
+        json.dumps(
+            {
+                "kind": "postgres-provenance-band-comparison-v1",
+                "winner": band,
+                "calibration_sha256": v1.calibration_sha256,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    v2_path = tmp_path / "unit-policy-v2.json"
+    v2 = publish_v2.publish_policy_v2(v1_path, comparison, v2_path)
+    return v1_path, v1, v2_path, v2
+
+
+@pytest.mark.parametrize("band", ["relative", "stratified_edges"])
+def test_policy_v2_is_published_from_the_v1_calibration_and_loads(tmp_path, band):
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path, band)
+    assert v2.policy_version == strategy.POLICY_VERSION_V2
+    assert v2.band.kind == band
+    assert (v2.incremental_model, v2.full_model) == (v1.incremental_model, v1.full_model)
+    assert v2.id == "postgres-adaptive-v2-" + v1.calibration_sha256[:12]
+    loaded, evidence = evaluation.load_calibration(v2_path)
+    assert loaded == v2
+    assert strategy.calibration_text(evidence) == strategy.calibration_text(
+        evaluation.load_calibration(v1_path)[1]
+    )
+    document = json.loads(v2_path.read_text(encoding="utf-8"))
+    assert document["kind"] == "postgres-provenance-policy-v2"
+    assert document["band_comparison"]["path"] == "unit-band-comparison.json"
+    assert evaluation.policy_file_sha256(v2_path, v2) == strategy._policy_sha256(v2)
+
+
+def test_policy_v2_document_must_match_its_band_comparison(tmp_path):
+    _, _, v2_path, _ = publish_v1_and_v2(tmp_path)
+    comparison = tmp_path / "unit-band-comparison.json"
+    comparison.write_text(comparison.read_text().replace("relative", "stratified_edges"))
+    with pytest.raises(ValidationFailed, match="invalid_calibration_artifact"):
+        evaluation.load_calibration(v2_path)
+
+
+def test_publish_policy_v2_refuses_a_comparison_of_another_calibration(tmp_path):
+    v1_path = tmp_path / "unit-calibration.json"
+    calibration.publish_calibration(benchmark_rows(strategy.CALIBRATION_SEEDS), v1_path)
+    comparison = tmp_path / "unit-band-comparison.json"
+    comparison.write_text(
+        json.dumps(
+            {
+                "kind": "postgres-provenance-band-comparison-v1",
+                "winner": "relative",
+                "calibration_sha256": "e" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationFailed, match="invalid_band_comparison"):
+        publish_v2.publish_policy_v2(v1_path, comparison, tmp_path / "unit-policy-v2.json")
+
+
+def test_a_v1_calibration_document_cannot_carry_a_v2_policy(tmp_path):
+    v1_path, _, _, v2 = publish_v1_and_v2(tmp_path)
+    document = json.loads(v1_path.read_text(encoding="utf-8"))
+    document["policy"] = v2.model_dump(mode="json")
+    v1_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="invalid_calibration_artifact"):
+        evaluation.load_calibration(v1_path)
+
+
+def test_publish_policy_v2_accepts_relative_paths(tmp_path, monkeypatch):
+    v1_path, _, _, _ = publish_v1_and_v2(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    policy = publish_v2.publish_policy_v2(
+        Path(v1_path.name), Path("unit-band-comparison.json"), Path("unit-policy-v2-rel.json")
+    )
+    assert evaluation.load_calibration("unit-policy-v2-rel.json")[0] == policy

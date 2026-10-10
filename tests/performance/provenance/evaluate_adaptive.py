@@ -21,20 +21,22 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from vcp.artifact import store
 from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed, VcpError
-from vcp.core.hashing import sha256_text
+from vcp.core.hashing import sha256_file, sha256_text
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import graph_hash
 from vcp.provenance.strategy import (
     CALIBRATION_SEEDS,
     HELDOUT_SEEDS,
     POLICY_VERSION,
-    AdaptivePolicy,
+    POLICY_VERSION_V2,
     CalibrationEvidence,
     MaintenanceFeatures,
+    ProvenancePolicy,
     _object_without_duplicate_keys,
     _policy_sha256,
     calibration_text,
     load_policy_artifact,
+    policy_from_payload,
     select_strategy,
     write_policy_artifact,
 )
@@ -381,6 +383,38 @@ def paired_observations(rows):
     return result
 
 
+# The wrapper documents a policy can come in (spec 2026-10-09 §4.4): v1 inside the
+# calibration it was fitted from, v2 published from that calibration plus the band comparison.
+_POLICY_DOCUMENTS = {
+    "postgres-provenance-calibration-v1": (
+        frozenset({"kind", "policy", "calibration", "empirical_crossover"}),
+        POLICY_VERSION,
+    ),
+    "postgres-provenance-policy-v2": (
+        frozenset({"kind", "policy", "calibration", "empirical_crossover", "band_comparison"}),
+        POLICY_VERSION_V2,
+    ),
+}
+
+
+def _check_band_comparison(directory: Path, record, policy) -> None:
+    """The v2 document names the comparison that chose its band; it must still say so."""
+    if set(record) != {"path", "sha256", "winner"} or Path(record["path"]).name != record["path"]:
+        raise ValueError
+    path = directory / record["path"]
+    comparison = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicate_keys
+    )
+    if (
+        sha256_file(path) != record["sha256"]
+        or comparison.get("kind") != "postgres-provenance-band-comparison-v1"
+        or comparison.get("winner") != record["winner"]
+        or record["winner"] != policy.band.kind
+        or comparison.get("calibration_sha256") != policy.calibration_sha256
+    ):
+        raise ValueError
+
+
 def load_calibration(path: Path):
     """Read embedded policy, then verify it against the immutable on-disk artifact."""
     try:
@@ -388,11 +422,12 @@ def load_calibration(path: Path):
         document = json.loads(
             path.read_text(encoding="utf-8"), object_pairs_hook=_object_without_duplicate_keys
         )
-        if set(document) != {"kind", "policy", "calibration", "empirical_crossover"}:
+        keys, version = _POLICY_DOCUMENTS[document["kind"]]
+        if set(document) != keys:
             raise ValueError
-        if document["kind"] != "postgres-provenance-calibration-v1":
+        policy = policy_from_payload(document["policy"])
+        if policy.policy_version != version:
             raise ValueError
-        policy = AdaptivePolicy.model_validate(document["policy"])
         evidence = CalibrationEvidence.model_validate(document["calibration"])
         validate_calibration_manifest(evidence)
         first = evidence.observations[0]
@@ -412,12 +447,14 @@ def load_calibration(path: Path):
             or document["empirical_crossover"] != empirical_crossover(evidence)
         ):
             raise ValueError
+        if "band_comparison" in document:
+            _check_band_comparison(path.parent, document["band_comparison"], verified)
         return verified, evidence
-    except (OSError, TypeError, ValueError, VcpError):
+    except (OSError, TypeError, ValueError, KeyError, VcpError):
         raise ValidationFailed("invalid_calibration_artifact") from None
 
 
-def policy_file_sha256(policy_from: Path, policy: AdaptivePolicy) -> str:
+def policy_file_sha256(policy_from: Path, policy: ProvenancePolicy) -> str:
     """Return the verified immutable policy payload hash, not the wrapper hash."""
     try:
         policy_from = Path(policy_from)

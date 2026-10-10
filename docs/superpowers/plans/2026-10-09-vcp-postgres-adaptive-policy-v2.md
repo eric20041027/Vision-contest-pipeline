@@ -3216,7 +3216,7 @@ git commit -m "docs: adaptive policy v2 in the roadmap, guide, skill and regress
   - MINOR 的理由：policy artifact 的新內容（`policy_version: postgres-adaptive-v2` 與 `band`）；telemetry 與 VERDICT 的 `policy_version` 多一個值；benchmark runner 的新 seeds 常數 `HELDOUT_V2_SEEDS`、新方法 `postgres_adaptive_v1`、新選項 `--comparison-policy-from`。
   - Added：`policy_bands.py`、`AdaptivePolicyV2`、`fit_policy_v2`、`fit_cost_models`、`policy_from_payload`；`compare_bands.py`、`publish_policy_v2.py`；held-out v2 評估；比較證據與 v2 policy 產物。
   - Changed：`load_policy_artifact` / `write_policy_artifact` 依 `policy_version` 分派；操作指南的 VACUUM 建議；README 路線圖。
-  - 相容性：DDL、`POSTGRES_SCHEMA_VERSION`（1）、`BENCHMARK_SCHEMA_VERSION`（1）、SQLite 索引與台帳不變，不需要遷移；0.14.0 讀不了 v2 的 `policy.json`（`incompatible_policy`），v1 policy 在 0.15.0 照舊可用。
+  - 相容性：DDL、`POSTGRES_SCHEMA_VERSION`（1）、`BENCHMARK_SCHEMA_VERSION`（1）、SQLite 索引與台帳不變，不需要遷移；0.14.0 讀不了 v2 的 `policy.json`（報 `mismatch: provenance policy payload`：它把每個 `policy.json` 都當 v1 嚴格驗證），v1 policy 在 0.15.0 照舊可用。
 - [ ] **Step 4：重裝、全套**：`uv sync --frozen --reinstall-package vcp`，`uv run pytest --cov=vcp -o addopts="" -p no:cacheprovider`，取 P passed / S skipped / C%。
 - [ ] **Step 5：交接與 README 的版本、日期、數字**（HANDOVER 的標題日期、版本行、測試行；CODEX_PROMPT 的標題日期、版本行、覆蓋率；兩份 README 的版本與測試數 badge、狀態行），照 0.14.0 那次的位置改。
 - [ ] **Step 6：檢查、commit、PR**：`uv run ruff check . && uv run ruff format --check .`、`git diff --check`；`git commit -m "chore(release): v0.15.0"`（不加署名）；push、`gh pr create`，PR 描述寫摘要與測試計畫，不加署名行。

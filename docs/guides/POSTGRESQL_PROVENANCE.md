@@ -95,12 +95,11 @@ SQLite 只支援預設 incremental request，不接受 full、auto 或 policy。
   8.8K entities、98.7% 變更時預估差距 5.7 s → FULL，慢 1.79 倍）。這兩種情況請直接用 `--strategy incremental`，
   `auto` 留給 10K 以上、變更比例不極端的 index（`docs/benchmarks/postgres-provenance-v1.md` §六方法正式結果、
   §Real RSNA six-method，Plan 12 後記 §5、§7）。
+- auto 未加 policy 時，非零 semantic work 安全選 FULL，命令回 WARN。
 - policy v2（`postgres-adaptive-v2-9f4e58346529`，0.15.0 起）用同樣的成本模型，但信心帶依圖的
   `total_edges` 數量級分層（spec `2026-10-09-vcp-postgres-adaptive-policy-v2-design.md` §13 的比較選出
   `stratified_edges`，而不是固定 7.3 秒）。`--policy` 傳 v2 的 id 就走 v2；決策紀錄的 `policy_version`
-  欄位分辨 v1 與 v2，reason 字彙不變。
-  v2 在 held-out v2 上的結果出來之前，上面對 v1 的建議照舊適用。
-- auto 未加 policy 時，非零 semantic work 安全選 FULL，命令回 WARN。
+  欄位分辨 v1 與 v2，reason 字彙不變。v2 在 held-out v2 上的結果出來之前，上面對 v1 的建議照舊適用。
 - full rebuild 以新 generation 原子發布後刪除舊 generation，但 PostgreSQL 在 VACUUM 前不回收那些 dead
   tuples：重建後 relation/index 約為 incremental 維護的 2 倍，`status` 也變慢，直到 autovacuum 追上。
   vcp 不在 rebuild 收尾自動 VACUUM（2026-10-09 裁決：它會改變 FULL 的量測成本）。想讓 `status` 立刻變快，
@@ -194,13 +193,15 @@ uv run python tests/performance/provenance/evaluate_adaptive.py `
   --output docs/benchmarks/postgres-provenance-heldout-v1.json
 ```
 
-held-out v2 與 real v2 另外以 `--comparison-policy-from docs/benchmarks/postgres-provenance-calibration-v2.json` 指定凍結的 v1 作為同場比較，v2 的 policy 文件是 `docs/benchmarks/postgres-provenance-policy-v2.json`（計畫附錄 A）。
-
 Calibration 只用 seeds `20260913/20260914` 的 fixed PostgreSQL methods，完整驗證 108 scenarios 後從
 92 個 positive-change pairs fit nonnegative models；16 個 NO_OP scenarios仍屬 coverage/leakage evidence，
 不進 fit。Held-out 只用 seeds `20261001/20261002`，在另一 process 驗 immutable policy，禁止 fit，並以
 scenario ID/hash/workload hash 拒絕 leakage。兩個 output 都是 write-once；policy artifact 在 calibration
 output 的 sibling `-artifacts` data root。
+
+held-out v2 與 real v2 另外以 `--comparison-policy-from docs/benchmarks/postgres-provenance-calibration-v2.json`
+指定凍結的 v1 作為同場比較，v2 的 policy 文件是
+`docs/benchmarks/postgres-provenance-policy-v2.json`（計畫附錄 A）。
 
 效能 gate 使用完整 matched held-out rows 的 raw maintenance samples：adaptive aggregate p50 不得比同
 percentile 較佳 fixed method 慢超過 5%，p95 不得慢超過 10%；每個 scenario 的 canonical graph/hash、

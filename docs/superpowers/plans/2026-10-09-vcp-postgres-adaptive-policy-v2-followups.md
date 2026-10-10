@@ -15,7 +15,9 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 ## 2. 已知限制
 
 - calibration v2 量於 commit `b1512ae`，成本模型可能因之後的程式改動略有偏差；six-method v2 與 held-out v2 量的是 0.15.0 的程式碼（spec §12）。
-- B 往較大規模外推時偏窄（spec §13 的留一層外推）：超過約 200K edges 的圖，v2 會用 decade 5 的帶，可能偏向 INCREMENTAL。只影響速度。
+- B 的外推（spec §13）：超過約 200K edges 的圖用 decade 5 的帶，偏窄、可能偏向 INCREMENTAL；小於約 1.3K edges 的圖用 decade 3 的帶，偏寬約 10 倍、可能偏向 FULL（v1 的老問題）。只影響速度。
+- decade 5 的帶（3,695.5 + 7,336.4 = 11.0 s）比 v1 的 7.3 s 寬：100K 級的圖上 v2 比 v1 保守；calibration 裡 decade 5 最小的預估差距是 84.5 s，所以樣本內的選擇不變。
+- held-out v2 與 real v2 的 workload 同時安裝 v1 與 v2 兩個 policy artifact，圖比 six-method v2 與所有 v1 證據多一個 entity，workload hash 也不同；同一次執行內的比較公平，但 real v2 的 `postgres_adaptive_v1` 列不會逐位元重現 real v1 已發布的預估值。
 
 ## 3. 開放待辦
 

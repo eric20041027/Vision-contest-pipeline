@@ -5,6 +5,7 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 ## 1. 裁決
 
 1. **候選帶比較**（Task 5，2026-10-10）：勝者 `stratified_edges`，分數 A 1.584 / B 1.011（spec §13）。比較腳本在 commit `1823807` 預先登記，之後才執行。
+2. **v2 policy**：`postgres-adaptive-v2-9f4e58346529`，`policy.json` SHA-256 `6fe654a90468edb57aa84fdec7ac2e53cf18b20106f7a77d65df8ac7cd27c000`；成本模型與 v1 相同（相對誤差 ≤ 1e-9 的檢查通過）。
 
 ## 2. 已知限制
 

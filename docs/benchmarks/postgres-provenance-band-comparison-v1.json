@@ -1,0 +1,358 @@
+{
+  "calibration_decisions": {
+    "relative": {
+      "3": {
+        "extra_ms": 0.0,
+        "full": 0,
+        "incremental": 28,
+        "n": 28,
+        "slower_choice": 0
+      },
+      "4": {
+        "extra_ms": 0.0,
+        "full": 0,
+        "incremental": 32,
+        "n": 32,
+        "slower_choice": 0
+      },
+      "5": {
+        "extra_ms": 0.0,
+        "full": 0,
+        "incremental": 32,
+        "n": 32,
+        "slower_choice": 0
+      }
+    },
+    "stratified_edges": {
+      "3": {
+        "extra_ms": 0.0,
+        "full": 0,
+        "incremental": 28,
+        "n": 28,
+        "slower_choice": 0
+      },
+      "4": {
+        "extra_ms": 0.0,
+        "full": 0,
+        "incremental": 32,
+        "n": 32,
+        "slower_choice": 0
+      },
+      "5": {
+        "extra_ms": 0.0,
+        "full": 0,
+        "incremental": 32,
+        "n": 32,
+        "slower_choice": 0
+      }
+    }
+  },
+  "calibration_sha256": "9f4e5834652945c879ae785aa175cca31aa073c6d1332bb0300036a44118b84f",
+  "candidates": {
+    "relative": [
+      {
+        "decade": 3,
+        "model": "incremental",
+        "n": 14,
+        "s": 0.7705958172539693,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 4,
+        "model": "incremental",
+        "n": 16,
+        "s": 1.4445114226166362,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 5,
+        "model": "incremental",
+        "n": 16,
+        "s": 0.8113413645056743,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 3,
+        "model": "full",
+        "n": 14,
+        "s": 1.189530051441144,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 4,
+        "model": "full",
+        "n": 16,
+        "s": 1.128063175935969,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 5,
+        "model": "full",
+        "n": 16,
+        "s": 0.20523081214034197,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 3,
+        "model": "incremental",
+        "n": 14,
+        "s": 0.8272969294134025,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 4,
+        "model": "incremental",
+        "n": 16,
+        "s": 1.4492265122422796,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 5,
+        "model": "incremental",
+        "n": 16,
+        "s": 0.6248000149046397,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 3,
+        "model": "full",
+        "n": 14,
+        "s": 1.2946773221917487,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 4,
+        "model": "full",
+        "n": 16,
+        "s": 1.3065051115486934,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 5,
+        "model": "full",
+        "n": 16,
+        "s": 0.26207841514522373,
+        "split": "train-20260914-test-20260913"
+      }
+    ],
+    "stratified_edges": [
+      {
+        "decade": 3,
+        "model": "incremental",
+        "n": 14,
+        "s": 1.0091747888462639,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 4,
+        "model": "incremental",
+        "n": 16,
+        "s": 1.080215685365682,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 5,
+        "model": "incremental",
+        "n": 16,
+        "s": 2.748556240817081,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 3,
+        "model": "full",
+        "n": 14,
+        "s": 0.9725884917564929,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 4,
+        "model": "full",
+        "n": 16,
+        "s": 0.9121697448697572,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 5,
+        "model": "full",
+        "n": 16,
+        "s": 1.0934923967050947,
+        "split": "train-20260913-test-20260914"
+      },
+      {
+        "decade": 3,
+        "model": "incremental",
+        "n": 14,
+        "s": 1.0048755154507096,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 4,
+        "model": "incremental",
+        "n": 16,
+        "s": 0.9451905207027467,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 5,
+        "model": "incremental",
+        "n": 16,
+        "s": 2.201990964938474,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 3,
+        "model": "full",
+        "n": 14,
+        "s": 1.0265505463623266,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 4,
+        "model": "full",
+        "n": 16,
+        "s": 1.0862646150180677,
+        "split": "train-20260914-test-20260913"
+      },
+      {
+        "decade": 5,
+        "model": "full",
+        "n": 16,
+        "s": 1.3071920850675791,
+        "split": "train-20260914-test-20260913"
+      }
+    ]
+  },
+  "full_data_bands": {
+    "relative": {
+      "full_relative_rmse": 0.30684038337518255,
+      "incremental_relative_rmse": 0.22735209015675212,
+      "kind": "relative"
+    },
+    "stratified_edges": {
+      "kind": "stratified_edges",
+      "strata": [
+        {
+          "decade": 3,
+          "full_rmse_ms": 465.3010046068887,
+          "incremental_rmse_ms": 90.89562158244125,
+          "observations": 28
+        },
+        {
+          "decade": 4,
+          "full_rmse_ms": 4418.334249538739,
+          "incremental_rmse_ms": 1167.996584738111,
+          "observations": 32
+        },
+        {
+          "decade": 5,
+          "full_rmse_ms": 7336.375881019759,
+          "incremental_rmse_ms": 3695.5154971991374,
+          "observations": 32
+        }
+      ]
+    }
+  },
+  "kind": "postgres-provenance-band-comparison-v1",
+  "leave_one_decade_out": {
+    "relative": [
+      {
+        "decade": 3,
+        "model": "incremental",
+        "n": 28,
+        "s": 0.6791884160356603,
+        "split": "without-decade-3"
+      },
+      {
+        "decade": 3,
+        "model": "full",
+        "n": 28,
+        "s": 1.41467148094232,
+        "split": "without-decade-3"
+      },
+      {
+        "decade": 4,
+        "model": "incremental",
+        "n": 32,
+        "s": 2.104261879842113,
+        "split": "without-decade-4"
+      },
+      {
+        "decade": 4,
+        "model": "full",
+        "n": 32,
+        "s": 1.4136588266952463,
+        "split": "without-decade-4"
+      },
+      {
+        "decade": 5,
+        "model": "incremental",
+        "n": 32,
+        "s": 7.6037072587850725,
+        "split": "without-decade-5"
+      },
+      {
+        "decade": 5,
+        "model": "full",
+        "n": 32,
+        "s": 12.75506761228238,
+        "split": "without-decade-5"
+      }
+    ],
+    "stratified_edges": [
+      {
+        "decade": 3,
+        "model": "incremental",
+        "n": 28,
+        "s": 0.07743500906161273,
+        "split": "without-decade-3"
+      },
+      {
+        "decade": 3,
+        "model": "full",
+        "n": 28,
+        "s": 0.10490179583448403,
+        "split": "without-decade-3"
+      },
+      {
+        "decade": 4,
+        "model": "incremental",
+        "n": 32,
+        "s": 0.3089113429694402,
+        "split": "without-decade-4"
+      },
+      {
+        "decade": 4,
+        "model": "full",
+        "n": 32,
+        "s": 0.6064544107776066,
+        "split": "without-decade-4"
+      },
+      {
+        "decade": 5,
+        "model": "incremental",
+        "n": 32,
+        "s": 83.30805956177949,
+        "split": "without-decade-5"
+      },
+      {
+        "decade": 5,
+        "model": "full",
+        "n": 32,
+        "s": 141.76439220201522,
+        "split": "without-decade-5"
+      }
+    ]
+  },
+  "scikit_learn_version": "1.9.0",
+  "scores": {
+    "relative": 1.583620020328554,
+    "stratified_edges": 1.0110757704767293
+  },
+  "script_commit": "1823807760d4ec437def33e59db315af5f94a548",
+  "tie": 0.1,
+  "v1_rmse_ms": {
+    "full": 5057.359011941265,
+    "incremental": 2286.313157010564
+  },
+  "winner": "stratified_edges"
+}

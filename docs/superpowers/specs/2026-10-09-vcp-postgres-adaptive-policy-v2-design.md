@@ -316,4 +316,14 @@ policy v2 的 id 尾段跟 v1 相同（`9f4e58346529`），因為 id 由 calibra
 
 ## 13. 執行期修訂
 
-（§5 的比較完成後，在此記錄：比較證據的路徑與 SHA-256、兩個分數、勝者，以及 §4.3 的 `band` 值。在那之前不得產生正式的 v2 policy artifact。）
+- 候選帶比較（2026-10-10，腳本 commit `1823807`，scikit-learn 1.9.0）：`docs/benchmarks/postgres-provenance-band-comparison-v1.json`，SHA-256 `ade06945cc2411f950d9a4f25346b934fd1dd86af151ed934f4b0ce3a610b16c`。
+- 分數（§5.3，越小越好）：A `relative` = 1.584、B `stratified_edges` = 1.011；相差 0.573，不在 0.1 的平手範圍內。勝者 **`stratified_edges`**，`fit_policy_v2(..., band="stratified_edges")`。
+- 決定分數的那一格：A 最差的是 100K 層的 full（s = 0.205，帶寬約為實際誤差的 5 倍，太寬）；B 最差的是 100K 層的 incremental（s = 2.749，帶寬只有實際誤差的約 0.36 倍，太窄）。
+- 全資料的帶：
+  - A：`r_inc` = 0.227、`r_full` = 0.307；
+  - B（incremental / full，毫秒）：decade 3 = 90.9 / 465.3（28 個觀測）、decade 4 = 1,168.0 / 4,418.3（32 個）、decade 5 = 3,695.5 / 7,336.4（32 個）；
+  - v1（不分層）：2,286.3 / 5,057.4。
+- §5.4 只報告的數字：
+  - 在 calibration 的 92 個觀測上，A 與 B 都全部選 INCREMENTAL（1K 層 28/28）；選了較慢一方 0 次、多花 0 ms。
+  - 留一層外推：B 外推到沒見過的**較大**規模時嚴重偏窄（用 decade 3、4 擬合，檢驗 decade 5：incremental s = 83.3、full s = 141.8）；A 是 7.6 / 12.8。往較小規模外推時 B 較好（不含 decade 3：B 0.08 / 0.11，A 0.68 / 1.42）。所以超過 calibration 範圍（約 200K edges 以上）的圖，B 用 decade 5 的帶，可能偏向 INCREMENTAL；這只影響速度，不影響正確性（FULL 與 INCREMENTAL 的結果逐位元相同）。
+- 更正 §4.3 的措辭：「截距 0」描述的是 v1 擬合出的結果。擬合器（v1 與 v2 共用）是非負截距的線性迴歸，這一版不改；v2 的成本模型仍與 v1 相同。

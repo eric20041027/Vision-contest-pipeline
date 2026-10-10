@@ -22,6 +22,7 @@ from vcp.core.paths import artifact_dir
 from vcp.provenance import strategy
 from vcp.provenance.graph import build_graph
 from vcp.provenance.index import graph_hash
+from vcp.provenance.policy_bands import edges_decade
 
 
 def observations(seeds=(20260913, 20260914)):
@@ -144,8 +145,9 @@ def test_runners_fail_without_pg_and_do_not_emit_json(tmp_path, monkeypatch, cap
     assert "Traceback" not in captured.err
 
 
-def benchmark_rows(seeds, policy=None, comparison=None):
-    """Clearly synthetic Task 10-shaped rows, never saved as research output."""
+def benchmark_rows(seeds, policy=None, comparison=None, total_edges=2000):
+    """Clearly synthetic Task 10-shaped rows, never saved as research output. ``total_edges``
+    is one number for every scenario, or a function of the scenario."""
     rows = []
     for scenario in scenario_matrix(seeds=seeds):
         seed = scenario.seed
@@ -156,7 +158,7 @@ def benchmark_rows(seeds, policy=None, comparison=None):
             dirty_entities=20 if changed else 0,
             total_entities=1100,
             dirty_ratio=20 / 1100 if changed else 0,
-            total_edges=2000,
+            total_edges=total_edges(scenario) if callable(total_edges) else total_edges,
             historical_changes=600,
             head_count=1,
         )
@@ -1138,10 +1140,15 @@ def test_collect_rows_passes_the_comparison_to_the_isolated_runner(tmp_path, mon
     assert observed["policy_sha256"] == "a" * 64
 
 
-def _slow_v1(rows):
-    """Make every non-NO_OP v1 adaptive row three times slower than the fixed methods."""
+def _slow_v1(rows, decade=None):
+    """Make every non-NO_OP v1 adaptive row three times slower than the fixed methods; only
+    those of one size decade when ``decade`` is given."""
     for row in rows:
-        if row["method"] == "postgres_adaptive_v1" and row["selected_strategy"] != "NO_OP":
+        if (
+            row["method"] == "postgres_adaptive_v1"
+            and row["selected_strategy"] != "NO_OP"
+            and (decade is None or edges_decade(row["total_edges"]) == decade)
+        ):
             row["maintenance_p50_ms"] = row["maintenance_p95_ms"] = 30.0
             for sample in row["samples"]:
                 sample["maintenance_ms"] = 30.0
@@ -1171,6 +1178,49 @@ def test_evaluate_policies_reports_both_and_tests_h1(tmp_path):
     assert result.h1 is True and result.h1a is True
     assert set(result.v2.by_decade) == {"3"}
     assert result.seeds == list(strategy.HELDOUT_V2_SEEDS)
+
+
+def test_evaluate_policies_splits_both_policies_by_size_decade(tmp_path):
+    """v1 is slow only on graphs of 10^4 edges: H1 holds overall, H1a (decade 3) does not."""
+    v1_path, v1, v2_path, v2 = publish_v1_and_v2(tmp_path)
+    by_scale = benchmark_rows(
+        strategy.HELDOUT_V2_SEEDS, v2, v1, total_edges=lambda scenario: 2 * scenario.entities
+    )
+    rows = _slow_v1(by_scale, decade=4)
+    result = evaluation.evaluate_policies(v2_path, v1_path, list(reversed(rows)))
+    no_op = {
+        "3": 8,
+        "4": 4,
+        "5": 4,
+    }  # change ratio 0 (and 0.001 of 1,000), two topologies, two seeds
+    for evaluated, method in (
+        (result.v2, "postgres_adaptive"),
+        (result.v1, "postgres_adaptive_v1"),
+    ):
+        assert list(evaluated.by_decade) == ["3", "4", "5"]
+        for decade, cell in evaluated.by_decade.items():
+            decade_rows = [
+                row
+                for row in rows
+                if row["method"] == method and str(edges_decade(row["total_edges"])) == decade
+            ]
+            selected = {}
+            for row in decade_rows:
+                selected[row["selected_strategy"]] = selected.get(row["selected_strategy"], 0) + 1
+            assert cell["selected"] == selected
+            assert cell["selected"]["NO_OP"] == no_op[decade]
+            assert sum(cell["selected"].values()) == 36
+            assert cell["scenarios"] == 36 - no_op[decade]
+    assert result.v2.non_no_op_scenarios == result.v1.non_no_op_scenarios == 92
+    assert result.v2.scenarios_over == 0 and result.v2.worst_ratio == 1.0
+    assert result.v1.scenarios_over == 32 and result.v1.worst_ratio == 3.0
+    for decade in ("3", "4", "5"):
+        assert result.v2.by_decade[decade]["over"] == 0
+        assert result.v2.by_decade[decade]["worst_ratio"] == 1.0
+    assert [result.v1.by_decade[d]["over"] for d in ("3", "4", "5")] == [0, 32, 0]
+    assert [result.v1.by_decade[d]["worst_ratio"] for d in ("3", "4", "5")] == [1.0, 3.0, 1.0]
+    assert result.h1 is True
+    assert result.h1a is False
 
 
 def test_evaluate_policies_with_equal_policies_does_not_claim_h1(tmp_path):
@@ -1210,6 +1260,8 @@ def test_heldout_v2_cli_publishes_both_policies(tmp_path, monkeypatch, capsys):
         assert {s.seed for s in scenarios} == set(strategy.HELDOUT_V2_SEEDS)
         assert kwargs["methods"] == evaluation.HELDOUT_V2_METHODS
         assert (kwargs["policy"], kwargs["comparison"]) == (v2, v1)
+        assert (kwargs["policy_from"], kwargs["comparison_from"]) == (v2_path, v1_path)
+        assert kwargs["isolated"] is True
         assert checked == [(runtime, (v2, v1))]  # both environments are checked first
         return rows
 

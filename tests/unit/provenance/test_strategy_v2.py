@@ -164,6 +164,37 @@ def test_v1_and_v2_payloads_do_not_mix():
     assert v2.id == "postgres-adaptive-v2-" + "c" * 12
 
 
+@pytest.mark.parametrize(
+    "calibration_sha256",
+    ["", "c" * 63, "c" * 65, "C" * 64, "g" * 64, "c" * 63 + " ", "c" * 64 + "\n"],
+    ids=["empty", "short", "long", "uppercase", "not-hex", "space", "newline"],
+)
+def test_v2_calibration_sha256_must_be_64_lowercase_hex_characters(calibration_sha256):
+    band = RelativeBand(incremental_relative_rmse=0.1, full_relative_rmse=0.1)
+    with pytest.raises(ValidationError, match="calibration_sha256 must be 64 lowercase hex"):
+        _v2(band, calibration_sha256=calibration_sha256)
+    payload = _v2(band).model_dump(mode="json")
+    with pytest.raises(ValidationError, match="calibration_sha256 must be 64 lowercase hex"):
+        policy_from_payload({**payload, "calibration_sha256": calibration_sha256})
+
+
+def test_v2_refuses_swapped_cost_model_feature_orders():
+    band = RelativeBand(incremental_relative_rmse=0.1, full_relative_rmse=0.1)
+    incremental, full = _models(100.0, 150.0)
+    good = _v2(band).model_dump(mode="python")
+    assert good["incremental_model"] == incremental.model_dump(mode="python")
+    # The incremental model carries the full model's feature order ...
+    with pytest.raises(ValidationError, match="incremental model feature_order is incompatible"):
+        AdaptivePolicyV2.model_validate({**good, "incremental_model": full})
+    # ... and the full model carries the incremental model's.
+    with pytest.raises(ValidationError, match="full model feature_order is incompatible"):
+        AdaptivePolicyV2.model_validate({**good, "full_model": incremental})
+    with pytest.raises(ValidationError, match="feature_order is incompatible"):
+        AdaptivePolicyV2.model_validate(
+            {**good, "incremental_model": full, "full_model": incremental}
+        )
+
+
 def test_fit_cost_models_and_fit_policy_v2_keep_the_v1_cost_models():
     rows = _observations()
     v1 = fit_policy(rows)

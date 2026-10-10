@@ -826,7 +826,7 @@ def _policy_evaluation(method, policy, policy_sha256, aggregates, reports) -> Po
         non_no_op_scenarios=len(active),
         scenarios_over=sum(report["median_ratio"] > DIAGNOSTIC_RATIO for report in active),
         worst_ratio=max((report["median_ratio"] for report in active), default=None),
-        by_decade=by_decade,
+        by_decade=dict(sorted(by_decade.items(), key=lambda item: int(item[0]))),
         scenarios=reports,
     )
 

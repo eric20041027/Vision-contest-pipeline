@@ -402,12 +402,21 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
     (
         "policy v2 (0.15.0)",
         "provenance: policy v1 reproduces every published decision; policy v2 keeps v1's cost "
-        "models, scales its band with the estimate or the size decade, and is told apart by "
-        "policy_version; the band comparison picks the relative band within 0.1; held-out v2 "
-        "evaluates v2 and the frozen v1 on the same new seeds",
+        "models, widens its band with the estimate or by the graph's size decade, is told apart "
+        "by policy_version and decides through the PostgreSQL backend; the committed v2 artifact "
+        "stays the one the band comparison chose; the band comparison prefers the relative band "
+        "when the scores are within 0.1; held-out v2 evaluates v2 and the frozen v1 on the same "
+        "new seeds, split by size decade; every benchmark entry point refuses a policy of "
+        "another environment before it measures",
         {
             "tests/unit/provenance/test_policy_v1_regression.py": [
                 "test_v1_policy_reproduces_every_published_decision",
+            ],
+            "tests/unit/provenance/test_policy_v2_artifact.py": [
+                "test_the_committed_v2_document_loads_as_the_stratified_policy",
+                "test_the_band_is_the_one_the_comparison_fitted_on_all_data",
+                "test_the_cost_models_are_the_frozen_v1_ones",
+                "test_v2_and_the_frozen_v1_pass_the_held_out_pair_check",
             ],
             "tests/unit/provenance/test_policy_bands.py": [
                 "test_relative_band_scales_with_the_estimate",
@@ -416,12 +425,24 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             "tests/unit/provenance/test_strategy_v2.py": [
                 "test_fit_cost_models_and_fit_policy_v2_keep_the_v1_cost_models",
                 "test_v2_relative_band_decides_and_keeps_the_v1_reasons",
+                "test_v2_stratified_band_uses_the_features_size_decade",
                 "test_an_unknown_policy_version_is_incompatible_on_load",
+            ],
+            "tests/unit/provenance/test_postgres_adaptive.py": [
+                "test_selected_path_and_complete_decision_commit_together",
             ],
             "tests/unit/provenance/test_compare_bands.py": ["test_distance_and_choose"],
             "tests/unit/provenance/test_adaptive_evaluation.py": [
                 "test_evaluate_policies_reports_both_and_tests_h1",
+                "test_evaluate_policies_splits_both_policies_by_size_decade",
                 "test_evaluate_policies_rejects_a_v1_row_decided_by_v2",
+                "test_heldout_v1_cli_checks_the_policy_environment_before_measuring",
+                "test_heldout_v2_cli_checks_both_policy_environments_before_measuring",
+            ],
+            "tests/unit/provenance/test_adaptive_benchmark.py": [
+                "test_require_policy_environment_names_the_mismatched_field_and_never_its_values",
+                "test_formal_main_checks_the_policy_environment_before_any_scenario_is_measured",
+                "test_real_validation_checks_the_policy_environment_before_copying_anything",
             ],
         },
     ),

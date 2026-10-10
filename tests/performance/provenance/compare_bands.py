@@ -154,6 +154,8 @@ def _jsonable(value):
 
 
 def compare(observations, *, calibration_sha256: str, commit: str) -> dict:
+    import sklearn  # imported here as the fitter does; its version is part of the evidence
+
     observations = list(observations)
     candidates = {kind: seed_crossvalidation(observations, kind) for kind in CANDIDATES}
     scores = {kind: _score(cells) for kind, cells in candidates.items()}
@@ -177,6 +179,7 @@ def compare(observations, *, calibration_sha256: str, commit: str) -> dict:
             "calibration_decisions": decisions,
             "full_data_bands": bands,
             "v1_rmse_ms": {"incremental": incremental.rmse_ms, "full": full.rmse_ms},
+            "scikit_learn_version": sklearn.__version__,
         }
     )
 
@@ -208,7 +211,8 @@ def main(argv=None) -> int:
             calibration_sha256=sha256_file(args.calibration),
             commit=commit,
         )
-        write_once_text(args.output, json.dumps(document, indent=2, sort_keys=True) + "\n")
+        text = json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        write_once_text(args.output, text)
     except Exception as error:  # a script: say what failed, then a VERDICT
         print(f"band comparison failed: {type(error).__name__}: {error}", file=sys.stderr)
         print("VERDICT cmd=provenance.compare_bands status=FAIL", file=sys.stderr)

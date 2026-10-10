@@ -32,6 +32,8 @@ uv run vcp provenance verify-index                          # 重算 canonical g
 - 預設 `incremental`；`full` 是損毀修復、索引漂移、schema 換代的重建路徑，**不是效能選項**（100K entities 一次 75–140 s，是 canonical replay 的 7–10 倍，重建後 dead tuples 讓 storage 約 2 倍）。
 - `auto` 要 frozen policy（`--policy postgres-adaptive-v1-9f4e58346529`）；沒 policy 就 WARN 並安全選 FULL。
 - **已知限制**：policy v1 的信心帶是絕對毫秒，預估差距 < 7.3 s 時一律 FULL——小圖（~1K）與接近全量變更的 transition 會選錯、慢 2–4 倍。這兩種情況直接 `--strategy incremental`。
+- **policy v2**（0.15.0 起，`--policy postgres-adaptive-v2-9f4e58346529`）：同樣的成本模型，信心帶由 calibration 推導、依圖的 `total_edges` 數量級分層（spec §13 的比較選出）；決策的 `policy_version` 分辨 v1／v2。held-out v2 的結果出來前，v1 的建議照舊。
+- full rebuild 後要 `status` 立刻變快：手動 `VACUUM (ANALYZE)`（不鎖讀者，storage 不縮小）；不要 `VACUUM FULL`。
 - 決策是 derived telemetry（`maintenance_decisions` 表 + VERDICT 的 requested / selected / reason），不改 status 語意。
 
 ## 基準量測（研究線）

@@ -399,6 +399,32 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "policy v2 (0.15.0)",
+        "provenance: policy v1 reproduces every published decision; policy v2 keeps v1's cost "
+        "models, scales its band with the estimate or the size decade, and is told apart by "
+        "policy_version; the band comparison picks the relative band within 0.1; held-out v2 "
+        "evaluates v2 and the frozen v1 on the same new seeds",
+        {
+            "tests/unit/provenance/test_policy_v1_regression.py": [
+                "test_v1_policy_reproduces_every_published_decision",
+            ],
+            "tests/unit/provenance/test_policy_bands.py": [
+                "test_relative_band_scales_with_the_estimate",
+                "test_stratified_band_uses_the_size_decade_and_the_nearest_stratum",
+            ],
+            "tests/unit/provenance/test_strategy_v2.py": [
+                "test_fit_cost_models_and_fit_policy_v2_keep_the_v1_cost_models",
+                "test_v2_relative_band_decides_and_keeps_the_v1_reasons",
+                "test_an_unknown_policy_version_is_incompatible_on_load",
+            ],
+            "tests/unit/provenance/test_compare_bands.py": ["test_distance_and_choose"],
+            "tests/unit/provenance/test_adaptive_evaluation.py": [
+                "test_evaluate_policies_reports_both_and_tests_h1",
+                "test_evaluate_policies_rejects_a_v1_row_decided_by_v2",
+            ],
+        },
+    ),
 ]
 
 

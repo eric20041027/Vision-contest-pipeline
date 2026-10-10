@@ -327,3 +327,4 @@ policy v2 的 id 尾段跟 v1 相同（`9f4e58346529`），因為 id 由 calibra
   - 在 calibration 的 92 個觀測上，A 與 B 都全部選 INCREMENTAL（1K 層 28/28）；選了較慢一方 0 次、多花 0 ms。
   - 留一層外推：B 外推到沒見過的**較大**規模時嚴重偏窄（用 decade 3、4 擬合，檢驗 decade 5：incremental s = 83.3、full s = 141.8）；A 是 7.6 / 12.8。往較小規模外推時 B 較好（不含 decade 3：B 0.08 / 0.11，A 0.68 / 1.42）。所以超過 calibration 範圍（約 200K edges 以上）的圖，B 用 decade 5 的帶，可能偏向 INCREMENTAL；這只影響速度，不影響正確性（FULL 與 INCREMENTAL 的結果逐位元相同）。
 - 更正 §4.3 的措辭：「截距 0」描述的是 v1 擬合出的結果。擬合器（v1 與 v2 共用）是非負截距的線性迴歸，這一版不改；v2 的成本模型仍與 v1 相同。
+- 更正 §9：0.14.0 讀到 v2 的 `policy.json` 會報 `mismatch: provenance policy payload`（它把每個 `policy.json` 都當 v1 嚴格驗證），不是 `incompatible_policy`。

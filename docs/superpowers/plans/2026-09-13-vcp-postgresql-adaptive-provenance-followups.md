@@ -25,8 +25,8 @@
 3. **Linux CI / Docker Compose host** 的 integration evidence 仍缺（本機是原生 Windows 服務）。
 4. **EXPLAIN 覆蓋面**：目前只涵蓋每種 DML SQL 形狀的第一列，不含 `status` / `impact` / `explain` 查詢自身的計畫（runner 既有限制）。
 5. **`docs/benchmarks/postgres-provenance-v1.md` 的 acceptance 表**：只有拿到 machine-readable 結果回讀後才准填；探路數字不得填入。2026-09-20 起沒有空格（six-method、held-out、gate 裁決、real RSNA 都已回讀填入）。
-6. **policy v2：規模相對的信心帶**（spec 變更，§5、§7）。`select_strategy` 的絕對 RMSE 帶要改成相對於預估值的帶（或按 `total_edges` 分層的 RMSE），並重跑 calibration → six-method → held-out → real；v1 的 policy 與五份證據不改。真實資料的 r4→r5（8.8K entities、98.7% 變更、預估差距 5.7 s）也中了這個問題，所以 v2 的門檻不能只看規模，要看預估差距對預估值的比例。
-7. **全量重建後的 dead tuples**（§5 觀察 4）：`_publish_generation` 刪除舊 generation 後不 VACUUM，storage 約 2 倍、`status` 變慢直到 autovacuum 追上。是否在 full rebuild 收尾加 `VACUUM`（不能在交易內）或記錄為操作指南事項，待裁決；量測口徑（`pg_total_relation_size`）不改。
+6. **policy v2：規模相對的信心帶**（spec 變更，§5、§7）。`select_strategy` 的絕對 RMSE 帶要改成相對於預估值的帶（或按 `total_edges` 分層的 RMSE），並重跑 calibration → six-method → held-out → real；v1 的 policy 與五份證據不改。真實資料的 r4→r5（8.8K entities、98.7% 變更、預估差距 5.7 s）也中了這個問題，所以 v2 的門檻不能只看規模，要看預估差距對預估值的比例。（2026-10-09：見 `docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`；第 7 項裁決為不加 VACUUM，寫進操作指南。）
+7. **全量重建後的 dead tuples**（§5 觀察 4）：`_publish_generation` 刪除舊 generation 後不 VACUUM，storage 約 2 倍、`status` 變慢直到 autovacuum 追上。是否在 full rebuild 收尾加 `VACUUM`（不能在交易內）或記錄為操作指南事項，待裁決；量測口徑（`pg_total_relation_size`）不改。（2026-10-09：見 `docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`；第 7 項裁決為不加 VACUUM，寫進操作指南。）
 
 ## 4. 裁決：calibration v2 從 checkpoint 發布（2026-09-16）
 

@@ -667,10 +667,21 @@ def load_policy_artifact(
     except (OSError, ValidationError, ValueError):
         raise IntegrityError("mismatch: provenance policy spec") from None
     try:
-        policy = policy_from_payload(
-            json.loads((directory / POLICY_FILE).read_text(encoding="utf-8"))
-        )
-    except (OSError, ValidationError, ValueError, TypeError):
+        payload = json.loads((directory / POLICY_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        raise IntegrityError("mismatch: provenance policy payload") from None
+    # Spec 2026-10-09 §4.4: a version this code does not know is an incompatibility, whatever
+    # shape the rest of the payload has -- so say so before any model validates it. A payload
+    # that names no version at all stays what it was before v2: v1 validation decides.
+    if (
+        isinstance(payload, Mapping)
+        and "policy_version" in payload
+        and payload["policy_version"] not in SUPPORTED_POLICY_VERSIONS
+    ):
+        raise _compatibility_error("policy version")
+    try:
+        policy = policy_from_payload(payload)
+    except (ValidationError, ValueError, TypeError, RecursionError):
         raise IntegrityError("mismatch: provenance policy payload") from None
     if record.spec != manifest.spec:
         raise IntegrityError("mismatch: provenance policy manifest")

@@ -279,6 +279,8 @@ def test_task10_rows_fit_and_heldout_never_refits(tmp_path, monkeypatch):
         pytest.fail("held-out called fitting")
 
     monkeypatch.setattr(strategy, "fit_policy", forbidden)
+    monkeypatch.setattr(strategy, "fit_cost_models", forbidden)
+    monkeypatch.setattr(strategy, "fit_policy_v2", forbidden)
     monkeypatch.setattr(calibration, "fit_policy", forbidden)
     heldout = benchmark_rows(strategy.HELDOUT_SEEDS, policy)
     result = evaluation.evaluate_policy(path, heldout)
@@ -299,6 +301,7 @@ def test_task10_rows_fit_and_heldout_never_refits(tmp_path, monkeypatch):
         and name not in {"CalibrationEvidence", "calibration_text"}
         or "sklearn" in name
         or "fit_policy" in name
+        or "fit_cost_models" in name
         for name in imports
     )
 

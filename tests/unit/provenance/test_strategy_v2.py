@@ -1,5 +1,6 @@
 """Adaptive policy v2 in strategy.py (spec 2026-10-09 §4)."""
 
+import dataclasses
 import json
 
 import pytest
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 from vcp.artifact.writer import ArtifactWriter
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
+from vcp.provenance import strategy
 from vcp.provenance.policy_bands import EdgesStratum, RelativeBand, StratifiedEdgesBand
 from vcp.provenance.strategy import (
     FULL_FEATURE_ORDER,
@@ -184,6 +186,15 @@ def test_fit_policy_v2_rejects_an_unknown_band():
         fit_policy_v2(_observations(), band="absolute")
 
 
+def test_fit_policy_v2_rejects_a_non_positive_estimate(monkeypatch):
+    rows = _observations()
+    incremental, full = fit_cost_models(calibration_evidence(rows).observations)
+    zeroed = dataclasses.replace(incremental, predicted=(0.0, *incremental.predicted[1:]))
+    monkeypatch.setattr(strategy, "fit_cost_models", lambda _rows: (zeroed, full))
+    with pytest.raises(ValidationFailed, match="invalid_calibration_rows"):
+        fit_policy_v2(rows, band="relative")
+
+
 def _calibration(roots):
     path = roots.data / "inputs" / "calibration-result.json"
     path.parent.mkdir(parents=True)
@@ -243,3 +254,21 @@ def test_an_unknown_policy_version_is_incompatible_on_load(roots):
         ValidationFailed, match="incompatible_policy: provenance policy policy version"
     ):
         load_policy_artifact(roots.data, unknown.id, **_compatibility())
+
+
+def test_a_v2_shaped_payload_with_an_unknown_version_is_incompatible_on_load(roots):
+    calibration = _calibration(roots)
+    policy = _v2(
+        RelativeBand(incremental_relative_rmse=0.1, full_relative_rmse=0.2),
+        calibration_sha256=sha256_file(calibration),
+    )
+    payload = {**policy.model_dump(mode="json"), "policy_version": "postgres-adaptive-v3"}
+    # Only a foreign writer could publish this: v2's fields under a version v2 does not name.
+    with ArtifactWriter.create(_policy_spec(policy, calibration), data_root=roots.data) as writer:
+        writer.write_json("policy.json", payload)
+        writer.add_file("calibration.json", calibration)
+        writer.commit()
+    with pytest.raises(
+        ValidationFailed, match="incompatible_policy: provenance policy policy version"
+    ):
+        load_policy_artifact(roots.data, policy.id, **_compatibility())

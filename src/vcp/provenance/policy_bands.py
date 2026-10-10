@@ -128,7 +128,13 @@ def fit_band(
     full_actual: Sequence[float],
 ) -> RelativeBand | StratifiedEdgesBand:
     """One band of ``kind`` from paired estimates and measurements of the same observations."""
-    sizes = {len(total_edges), len(incremental_predicted), len(full_predicted)}
+    sizes = {
+        len(total_edges),
+        len(incremental_predicted),
+        len(incremental_actual),
+        len(full_predicted),
+        len(full_actual),
+    }
     if len(sizes) != 1:
         raise ValueError("every series must cover the same observations")
     if kind == "relative":

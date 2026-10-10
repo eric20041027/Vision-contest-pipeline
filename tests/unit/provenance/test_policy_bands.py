@@ -104,6 +104,25 @@ def test_fit_band_relative_and_stratified():
         fit_band("relative", **{**kwargs, "total_edges": [1500]})
 
 
+def test_fit_band_rejects_misaligned_measurements():
+    kwargs = dict(
+        total_edges=[1500, 1600, 150_000, 160_000],
+        incremental_predicted=[10.0, 10.0, 1000.0, 1000.0],
+        incremental_actual=[11.0, 9.0, 1100.0, 900.0],
+        full_predicted=[20.0, 20.0, 2000.0, 2000.0],
+        full_actual=[22.0, 18.0, 2200.0, 1800.0],
+    )
+    misaligned = [
+        {"incremental_actual": [11.0, 9.0, 1100.0]},
+        {"incremental_actual": [11.0, 9.0, 1100.0, 900.0, 1000.0]},
+        {"full_actual": [22.0, 18.0, 2200.0]},
+    ]
+    for kind in BAND_KINDS:
+        for override in misaligned:
+            with pytest.raises(ValueError, match="same observations"):
+                fit_band(kind, **{**kwargs, **override})
+
+
 def test_band_models_are_strict():
     assert BAND_KINDS == ("relative", "stratified_edges")
     with pytest.raises(ValidationError):

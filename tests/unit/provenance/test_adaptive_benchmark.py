@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1477,3 +1478,206 @@ def test_normative_manifest_and_runner_ladder_cannot_drift_apart():
     # The production ladder keeps 1M; adaptive acceptance never reads it.
     assert 1_000_000 in workloads.PRODUCTION_SCALES
     assert len(manifest) == len(scenario_matrix(seeds=(20260913, 20260914)))
+
+
+def test_the_v1_comparison_is_known_but_not_a_seventh_six_method_method():
+    assert bench.METHODS == (
+        "canonical_full",
+        "sqlite_full",
+        "sqlite_incremental",
+        "postgres_full",
+        "postgres_incremental",
+        "postgres_adaptive",
+    )
+    assert bench.COMPARISON_METHOD == "postgres_adaptive_v1"
+    assert bench.KNOWN_METHODS == (*bench.METHODS, "postgres_adaptive_v1")
+    assert bench.ADAPTIVE_METHODS == ("postgres_adaptive", "postgres_adaptive_v1")
+
+
+def test_the_v1_comparison_runs_auto_under_its_own_policy():
+    calls = []
+    state = SimpleNamespace(
+        backend=SimpleNamespace(ingest_diff=lambda *args, **kwargs: calls.append((args, kwargs)))
+    )
+    workload = SimpleNamespace(artifact_id="delta")
+    bench._maintain(state, "postgres_adaptive_v1", workload, "data", "configs", "frozen-v1")
+    assert calls == [
+        (("delta", "data", "configs"), {"requested_strategy": "auto", "policy_id": "frozen-v1"})
+    ]
+
+
+def test_policy_for_maps_each_adaptive_method_to_its_policy():
+    v2 = SimpleNamespace(id="v2-id")
+    v1 = SimpleNamespace(id="v1-id")
+    assert bench.policy_for("postgres_adaptive", v2, "a" * 64, v1, "b" * 64) == ("v2-id", "a" * 64)
+    assert bench.policy_for("postgres_adaptive_v1", v2, "a" * 64, v1, "b" * 64) == (
+        "v1-id",
+        "b" * 64,
+    )
+    assert bench.policy_for("postgres_full", v2, "a" * 64, v1, "b" * 64) == (None, None)
+    assert bench.policy_for("postgres_adaptive_v1", v2, "a" * 64) == (None, None)
+
+
+def test_run_method_requires_a_policy_for_the_v1_comparison(tmp_path):
+    workload = SimpleNamespace(
+        scenario=SimpleNamespace(repetitions=1), data=tmp_path, configs=tmp_path
+    )
+    with pytest.raises(ValueError, match="postgres_adaptive_v1 requires a frozen policy"):
+        bench.run_method(workload, "postgres_adaptive_v1")
+
+
+def test_the_comparison_policy_is_pinned_only_when_given(tmp_path):
+    without = bench._checkpoint_contract(
+        tmp_path, [], bench.METHODS, 1, "a" * 64, _postgres_identity()
+    )
+    assert "comparison_policy_sha256" not in without
+    with_comparison = bench._checkpoint_contract(
+        tmp_path,
+        [],
+        bench.KNOWN_METHODS,
+        1,
+        "a" * 64,
+        _postgres_identity(),
+        comparison_policy_sha256="b" * 64,
+    )
+    assert with_comparison["comparison_policy_sha256"] == "b" * 64
+
+
+def test_the_child_command_carries_the_comparison_only_when_given(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(
+        bench.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append(command) or SimpleNamespace(returncode=0),
+    )
+    store = SimpleNamespace(root=tmp_path)
+    bench._run_scenario_child(store, "h" * 64, policy_from=tmp_path / "v2.json")
+    bench._run_scenario_child(
+        store, "h" * 64, policy_from=tmp_path / "v2.json", comparison_from=tmp_path / "v1.json"
+    )
+    assert "--_child-comparison-policy-from" not in commands[0]
+    assert commands[1][-2:] == [
+        "--_child-comparison-policy-from",
+        str((tmp_path / "v1.json").resolve()),
+    ]
+
+
+def test_hidden_child_entrypoint_forwards_the_comparison_policy_only_when_given(
+    tmp_path, monkeypatch
+):
+    calls = []
+    monkeypatch.setattr(bench, "_child_run_scenario", lambda *args: calls.append(args) or 0)
+    base = ["--_child-work-dir", str(tmp_path), "--_child-scenario-hash", "a" * 64]
+    assert bench.main(base) == 0
+    assert bench.main([*base, "--_child-comparison-policy-from", str(tmp_path / "v1.json")]) == 0
+    assert calls == [
+        (tmp_path, "a" * 64, None),
+        (tmp_path, "a" * 64, None, tmp_path / "v1.json"),
+    ]
+
+
+def _isolated_runner_probe(monkeypatch, tmp_path):
+    """Stub everything run_matrix_isolated touches except its own comparison plumbing."""
+    seen = {"contract": [], "children": []}
+
+    class Store:
+        root = tmp_path
+        contract_sha256 = "s" * 64
+
+        def __init__(self, work_dir, contract):
+            pass
+
+        def initialize(self):
+            pass
+
+        def read(self, key):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(bench, "postgres_preflight", lambda: "pg")
+    monkeypatch.setattr(bench, "_checkpoint_environment", lambda *args: {})
+    monkeypatch.setattr(
+        bench,
+        "_checkpoint_contract",
+        lambda *args, **kwargs: seen["contract"].append((args, kwargs)) or {},
+    )
+    monkeypatch.setattr(bench, "CheckpointStore", Store)
+    monkeypatch.setattr(
+        bench,
+        "_run_scenario_child",
+        lambda store, scenario_hash, **kwargs: (
+            seen["children"].append(kwargs) or SimpleNamespace(returncode=0)
+        ),
+    )
+    monkeypatch.setattr(bench, "_merge_repetition_rows", lambda rows, explain: rows[0])
+    return seen, [SimpleNamespace(scenario_hash="c" * 64, repetitions=1)]
+
+
+def test_run_matrix_isolated_pins_and_spawns_the_comparison_only_when_given(tmp_path, monkeypatch):
+    seen, scenarios = _isolated_runner_probe(monkeypatch, tmp_path)
+    bench.run_matrix_isolated(
+        tmp_path, scenarios, methods=("postgres_full",), policy_from="v2.json", policy_sha256="a"
+    )
+    assert seen["contract"] == [((tmp_path, scenarios, ("postgres_full",), None, "a", {}), {})]
+    assert seen["children"] == [{"policy_from": "v2.json"}]
+
+    seen, scenarios = _isolated_runner_probe(monkeypatch, tmp_path)
+    bench.run_matrix_isolated(
+        tmp_path,
+        scenarios,
+        methods=bench.KNOWN_METHODS,
+        policy_from="v2.json",
+        policy_sha256="a",
+        comparison_from="v1.json",
+        comparison_sha256="b",
+    )
+    assert seen["contract"][0][1] == {"comparison_policy_sha256": "b"}
+    assert seen["children"] == [{"policy_from": "v2.json", "comparison_from": "v1.json"}]
+
+
+def _child_policy_probe(monkeypatch, tmp_path, contract):
+    """A child whose checkpoint contract is ``contract`` and whose policy files are stubs; it
+    stops with a sentinel as soon as the policy checks pass."""
+    row = {"scenario_hash": "c" * 64}
+    monkeypatch.setattr(
+        bench,
+        "_load_contract",
+        lambda path: {"matrix": [row], "policy_sha256": "a" * 64, **contract},
+    )
+    monkeypatch.setattr(
+        bench,
+        "CheckpointStore",
+        lambda work_dir, loaded: SimpleNamespace(initialize=lambda: None),
+    )
+    monkeypatch.setattr(bench, "_scenario_from_contract", lambda row: None)
+    frozen = {"v2.json": ("v2", "evidence", "a" * 64), "v1.json": ("v1", "evidence", "b" * 64)}
+    monkeypatch.setattr(bench, "load_frozen_policy", lambda path: frozen[Path(path).name])
+
+    def stop():
+        raise RuntimeError("policy checks passed")
+
+    monkeypatch.setattr(bench, "postgres_preflight", stop)
+
+
+def test_the_child_refuses_a_comparison_the_checkpoint_did_not_pin(tmp_path, monkeypatch):
+    _child_policy_probe(monkeypatch, tmp_path, {})
+    with pytest.raises(ValueError, match="checkpoint policy mismatch"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"), Path("v1.json"))
+
+
+def test_the_child_refuses_a_missing_comparison_the_checkpoint_pinned(tmp_path, monkeypatch):
+    _child_policy_probe(monkeypatch, tmp_path, {"comparison_policy_sha256": "b" * 64})
+    with pytest.raises(ValueError, match="checkpoint policy mismatch"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"))
+    with pytest.raises(ValueError, match="checkpoint policy mismatch"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"), Path("v2.json"))
+
+
+def test_the_child_accepts_the_pinned_comparison_and_a_comparison_free_contract(
+    tmp_path, monkeypatch
+):
+    _child_policy_probe(monkeypatch, tmp_path, {"comparison_policy_sha256": "b" * 64})
+    with pytest.raises(RuntimeError, match="policy checks passed"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"), Path("v1.json"))
+    _child_policy_probe(monkeypatch, tmp_path, {})
+    with pytest.raises(RuntimeError, match="policy checks passed"):
+        bench._child_run_scenario("w", "c" * 64, Path("v2.json"))

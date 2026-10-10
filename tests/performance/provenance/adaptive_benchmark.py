@@ -56,6 +56,17 @@ METHODS = (
     "postgres_incremental",
     "postgres_adaptive",
 )
+# Held-out v2 and real v2 also run the frozen v1 policy beside v2 (spec 2026-10-09 §6.3,
+# §6.4). It is not a seventh six-method method: METHODS stays the published six.
+COMPARISON_METHOD = "postgres_adaptive_v1"
+ADAPTIVE_METHODS = ("postgres_adaptive", COMPARISON_METHOD)
+KNOWN_METHODS = (*METHODS, COMPARISON_METHOD)
+REQUESTED_STRATEGY = {
+    "postgres_full": "full",
+    "postgres_incremental": "incremental",
+    "postgres_adaptive": "auto",
+    COMPARISON_METHOD: "auto",
+}
 OPERATIONS = ("maintenance", "status", "impact", "explain")
 PARITY_FIELDS = ("graph_parity", "graph_hash_parity", "status_parity", "head_parity")
 DECISION_FIELDS = (
@@ -238,7 +249,7 @@ class SpoolKey:
     def __post_init__(self):
         if (
             not re.fullmatch(r"[0-9a-f]{64}", self.scenario_hash)
-            or self.method not in METHODS
+            or self.method not in KNOWN_METHODS
             or self.kind not in {"sample", "explain"}
             or self.repetition_index < 0
         ):
@@ -604,7 +615,7 @@ def fresh_backend(method: str, data: Path, *, pg_runtime=None, owned_database=No
     if method.startswith("sqlite_"):
         yield BackendState(SQLiteBackend(ProvenanceIndex(data / "indexes" / "benchmark.sqlite3")))
         return
-    if method not in METHODS:
+    if method not in KNOWN_METHODS:
         raise ValueError("unknown benchmark method")
     from vcp.provenance import postgres
 
@@ -810,7 +821,7 @@ def capture_explain_rollback(connection, method: str, action: Callable) -> list[
     plan for the Python operation. All probes and the entire action are rolled back.
     The caller supplies the action so it can bind the backend to this connection.
     """
-    if method not in METHODS or not method.startswith("postgres_"):
+    if method not in KNOWN_METHODS or not method.startswith("postgres_"):
         raise ValueError("EXPLAIN instrumentation requires a PostgreSQL method")
     from vcp.provenance import postgres
 
@@ -842,14 +853,7 @@ def _maintain(state, method, workload, data, configs, policy_id):
         return state.backend.rebuild(data, configs)
     kwargs = {}
     if method.startswith("postgres_"):
-        kwargs = {
-            "requested_strategy": {
-                "postgres_full": "full",
-                "postgres_incremental": "incremental",
-                "postgres_adaptive": "auto",
-            }[method],
-            "policy_id": policy_id,
-        }
+        kwargs = {"requested_strategy": REQUESTED_STRATEGY[method], "policy_id": policy_id}
     return state.backend.ingest_diff(workload.artifact_id, data, configs, **kwargs)
 
 
@@ -1079,19 +1083,19 @@ def run_method(
     capture_explain=True,
     owned_database=None,
 ) -> ScenarioResult:
-    if method not in METHODS:
+    if method not in KNOWN_METHODS:
         raise ValueError("unknown benchmark method")
     repetitions = workload.scenario.repetitions if repetitions is None else repetitions
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
-    if method == "postgres_adaptive" and not policy_id:
-        raise ValueError("postgres_adaptive requires a frozen policy")
+    if method in ADAPTIVE_METHODS and not policy_id:
+        raise ValueError(f"{method} requires a frozen policy")
     result = ScenarioResult(
         method,
         workload,
         runtime_environment(workload.data),
-        policy_id=policy_id if method == "postgres_adaptive" else None,
-        policy_sha256=policy_sha256 if method == "postgres_adaptive" else None,
+        policy_id=policy_id if method in ADAPTIVE_METHODS else None,
+        policy_sha256=policy_sha256 if method in ADAPTIVE_METHODS else None,
     )
     expected, expected_hash = workload.expected, graph_hash(workload.expected)
     expected_heads = _all_heads(expected)
@@ -1315,6 +1319,8 @@ def _checkpoint_contract(
     repetitions,
     policy_sha256,
     environment,
+    *,
+    comparison_policy_sha256=None,
 ):
     matrix = []
     for scenario in scenarios:
@@ -1328,7 +1334,7 @@ def _checkpoint_contract(
             }
         )
     execution_identity = _execution_identity(environment, Path(work_dir))
-    return {
+    contract = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "execution_id": sha256_text(str(Path(work_dir).resolve()))[:32],
@@ -1342,6 +1348,9 @@ def _checkpoint_contract(
         "execution_identity": execution_identity,
         "execution_identity_sha256": sha256_text(_json_text(execution_identity)),
     }
+    if comparison_policy_sha256 is not None:
+        contract["comparison_policy_sha256"] = comparison_policy_sha256
+    return contract
 
 
 def _checkpoint_environment(root: Path, pg_runtime):
@@ -1371,6 +1380,7 @@ def _run_scenario_child(
     scenario_hash: str,
     *,
     policy_from: Path | None,
+    comparison_from: Path | None = None,
 ) -> subprocess.CompletedProcess:
     command = [
         sys.executable,
@@ -1382,6 +1392,8 @@ def _run_scenario_child(
     ]
     if policy_from is not None:
         command.extend(["--_child-policy-from", str(Path(policy_from).resolve())])
+    if comparison_from is not None:
+        command.extend(["--_child-comparison-policy-from", str(Path(comparison_from).resolve())])
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
@@ -1408,7 +1420,12 @@ def _load_contract(path: Path):
     return value
 
 
-def _child_run_scenario(work_dir: Path, scenario_hash: str, policy_from: Path | None) -> int:
+def _child_run_scenario(
+    work_dir: Path,
+    scenario_hash: str,
+    policy_from: Path | None,
+    comparison_from: Path | None = None,
+) -> int:
     contract = _load_contract(Path(work_dir) / "checkpoint.json")
     store = CheckpointStore(work_dir, contract)
     store.initialize()
@@ -1422,6 +1439,11 @@ def _child_run_scenario(work_dir: Path, scenario_hash: str, policy_from: Path | 
         policy, evidence, policy_sha256 = load_frozen_policy(policy_from)
     if policy_sha256 != contract["policy_sha256"]:
         raise ValueError("checkpoint policy mismatch")
+    comparison = comparison_sha256 = None
+    if comparison_from is not None:
+        comparison, _comparison_evidence, comparison_sha256 = load_frozen_policy(comparison_from)
+    if comparison_sha256 != contract.get("comparison_policy_sha256"):
+        raise ValueError("checkpoint policy mismatch")
     pg_runtime = postgres_preflight()
     current_environment = _checkpoint_environment(Path(work_dir) / ".child-preflight", pg_runtime)
     current_identity = _execution_identity(current_environment, Path(work_dir))
@@ -1434,7 +1456,9 @@ def _child_run_scenario(work_dir: Path, scenario_hash: str, policy_from: Path | 
     with tempfile.TemporaryDirectory(prefix="scenario-", dir=runtime_root) as temporary:
         workload = build_scenario(Path(temporary) / scenario.scenario_id, scenario)
         if policy is not None:
-            workload = prepare_policy_workload(workload, policy, evidence)
+            workload = prepare_policy_workload(
+                workload, policy, evidence, *((comparison,) if comparison is not None else ())
+            )
         repetitions = matches[0]["repetitions"]
         for method in contract["methods"]:
             for repetition_index in range(repetitions):
@@ -1442,15 +1466,16 @@ def _child_run_scenario(work_dir: Path, scenario_hash: str, policy_from: Path | 
                 if store.read(key) is not None:
                     continue
                 database = _owned_database(store.contract_sha256, key)
+                method_policy, method_sha256 = policy_for(
+                    method, policy, policy_sha256, comparison, comparison_sha256
+                )
                 row = run_method(
                     workload,
                     method,
                     repetitions=1,
                     pg_runtime=pg_runtime,
-                    policy_id=policy.id if policy and method == "postgres_adaptive" else None,
-                    policy_sha256=(
-                        policy_sha256 if policy and method == "postgres_adaptive" else None
-                    ),
+                    policy_id=method_policy,
+                    policy_sha256=method_sha256,
                     capture_explain=False,
                     owned_database=database,
                 ).to_dict()
@@ -1467,7 +1492,9 @@ def _child_run_scenario(work_dir: Path, scenario_hash: str, policy_from: Path | 
                         explain_workload,
                         method,
                         pg_runtime=pg_runtime,
-                        policy_id=(policy.id if policy and method == "postgres_adaptive" else None),
+                        policy_id=policy_for(
+                            method, policy, policy_sha256, comparison, comparison_sha256
+                        )[0],
                         owned_database=database,
                     )
                     store.write(key, explained)
@@ -1483,20 +1510,26 @@ def run_matrix_isolated(
     pg_runtime=None,
     policy_from=None,
     policy_sha256=None,
+    comparison_from=None,
+    comparison_sha256=None,
 ):
     """Run one child per scenario and resume only verified, pinned repetitions."""
     scenarios = list(scenarios)
     pg_runtime = pg_runtime or postgres_preflight()
     environment = _checkpoint_environment(Path(work_dir) / ".preflight", pg_runtime)
+    extra = {} if comparison_sha256 is None else {"comparison_policy_sha256": comparison_sha256}
     contract = _checkpoint_contract(
-        work_dir, scenarios, methods, repetitions, policy_sha256, environment
+        work_dir, scenarios, methods, repetitions, policy_sha256, environment, **extra
     )
     store = CheckpointStore(work_dir, contract)
     store.initialize()
     for scenario in scenarios:
         completed = False
         for _attempt in range(2):
-            process = _run_scenario_child(store, scenario.scenario_hash, policy_from=policy_from)
+            spawn = {"policy_from": policy_from}
+            if comparison_from is not None:
+                spawn["comparison_from"] = comparison_from
+            process = _run_scenario_child(store, scenario.scenario_hash, **spawn)
             if process.returncode == 0:
                 completed = True
                 break
@@ -1562,11 +1595,23 @@ def run_matrix(
     return rows
 
 
-def prepare_policy_workload(workload, policy, evidence):
+def policy_for(method, policy, policy_sha256, comparison=None, comparison_sha256=None):
+    """(policy id, policy.json sha) a method runs under: ``postgres_adaptive`` the primary
+    policy, ``postgres_adaptive_v1`` the frozen v1 comparison, every fixed method none."""
+    if method == "postgres_adaptive" and policy is not None:
+        return policy.id, policy_sha256
+    if method == COMPARISON_METHOD and comparison is not None:
+        return comparison.id, comparison_sha256
+    return None, None
+
+
+def prepare_policy_workload(workload, policy, evidence, *comparisons):
     if __package__:
         from .evaluate_adaptive import prepare_workload
     else:
         from evaluate_adaptive import prepare_workload
+    if comparisons:
+        return prepare_workload(workload, policy, evidence, comparisons)
     return prepare_workload(workload, policy, evidence)
 
 
@@ -1599,16 +1644,16 @@ def main(argv=None) -> int:
     parser.add_argument("--_child-work-dir", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--_child-scenario-hash", help=argparse.SUPPRESS)
     parser.add_argument("--_child-policy-from", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--_child-comparison-policy-from", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         if args._child_work_dir is not None:
             if args._child_scenario_hash is None or args.output is not None:
                 raise ValueError("invalid benchmark child invocation")
-            return _child_run_scenario(
-                args._child_work_dir,
-                args._child_scenario_hash,
-                args._child_policy_from,
-            )
+            child_args = [args._child_work_dir, args._child_scenario_hash, args._child_policy_from]
+            if args._child_comparison_policy_from is not None:
+                child_args.append(args._child_comparison_policy_from)
+            return _child_run_scenario(*child_args)
         if args.output is None:
             raise ValueError("benchmark output is required")
         if args.output.exists():

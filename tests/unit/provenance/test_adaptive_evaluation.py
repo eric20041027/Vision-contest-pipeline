@@ -8,6 +8,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1075,3 +1076,51 @@ def test_publish_policy_v2_accepts_relative_paths(tmp_path, monkeypatch):
         Path(v1_path.name), Path("unit-band-comparison.json"), Path("unit-policy-v2-rel.json")
     )
     assert evaluation.load_calibration("unit-policy-v2-rel.json")[0] == policy
+
+
+def test_prepare_workload_installs_the_comparison_policy_beside_the_primary(tmp_path):
+    _, v1, _, v2 = publish_v1_and_v2(tmp_path)
+    evidence = evaluation.load_calibration(tmp_path / "unit-policy-v2.json")[1]
+    workload = build_scenario(tmp_path / "fixture", Scenario(40, 0.5, "chain", 20261101))
+    prepared = evaluation.prepare_workload(workload, v2, evidence, (v1,))
+    assert strategy.load_policy_artifact(prepared.data, v2.id) == v2
+    assert strategy.load_policy_artifact(prepared.data, v1.id) == v1
+    data, configs = prepared.clone(tmp_path / "clone")
+    prepared.publish(data)
+    assert build_graph(data, configs).normalized() == prepared.expected.normalized()
+
+
+def test_prepare_workload_refuses_a_comparison_of_another_calibration(tmp_path):
+    _, v1, _, v2 = publish_v1_and_v2(tmp_path)
+    evidence = evaluation.load_calibration(tmp_path / "unit-policy-v2.json")[1]
+    other = v1.model_copy(update={"calibration_sha256": "e" * 64})
+    workload = build_scenario(tmp_path / "fixture", Scenario(40, 0.5, "chain", 20261101))
+    with pytest.raises(ValidationFailed, match="invalid_policy_workload_oracle"):
+        evaluation.prepare_workload(workload, v2, evidence, (other,))
+
+
+def test_collect_rows_passes_the_comparison_to_the_isolated_runner(tmp_path, monkeypatch):
+    observed = {}
+    monkeypatch.setattr(evaluation, "policy_file_sha256", lambda path, value: value.sha)
+
+    def isolated(root, scenarios, **kwargs):
+        observed.update(kwargs)
+        return []
+
+    monkeypatch.setattr(evaluation.benchmark, "run_matrix_isolated", isolated)
+    primary = SimpleNamespace(sha="a" * 64)
+    comparison = SimpleNamespace(sha="b" * 64)
+    evaluation.collect_rows(
+        tmp_path,
+        [],
+        methods=evaluation.HELDOUT_V2_METHODS,
+        pg_runtime="pg",
+        policy=primary,
+        policy_from=tmp_path / "v2.json",
+        comparison=comparison,
+        comparison_from=tmp_path / "v1.json",
+        isolated=True,
+    )
+    assert observed["comparison_from"] == tmp_path / "v1.json"
+    assert observed["comparison_sha256"] == "b" * 64
+    assert observed["policy_sha256"] == "a" * 64

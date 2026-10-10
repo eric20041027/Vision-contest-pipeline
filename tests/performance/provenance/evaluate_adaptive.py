@@ -50,6 +50,7 @@ else:
 
 FIXED_METHODS = ("postgres_full", "postgres_incremental")
 EVALUATION_METHODS = (*FIXED_METHODS, "postgres_adaptive")
+HELDOUT_V2_METHODS = (*EVALUATION_METHODS, "postgres_adaptive_v1")
 _STORAGE = "PostgreSQL pg_database_size plus vcp_provenance total relation and index bytes"
 
 
@@ -539,11 +540,17 @@ def empirical_crossover(evidence: CalibrationEvidence) -> dict[str, object]:
     }
 
 
-def prepare_workload(workload, policy, evidence):
-    """Install policy before baseline; rebuild candidate oracle outside measured runs."""
+def prepare_workload(workload, policy, evidence, comparisons=()):
+    """Install the policies before the baseline; rebuild the candidate oracle outside measured
+    runs. A comparison policy (spec 2026-10-09 §6.3) must share the primary's calibration, so
+    one pinned calibration copy serves both."""
     evidence_path = workload.data / "policy-inputs" / "calibration.json"
     write_once_text(evidence_path, calibration_text(evidence))
     write_policy_artifact(workload.data, policy, evidence_path)
+    for comparison in comparisons:
+        if comparison.calibration_sha256 != policy.calibration_sha256:
+            raise ValidationFailed("invalid_policy_workload_oracle")
+        write_policy_artifact(workload.data, comparison, evidence_path)
     baseline = build_graph(workload.data, workload.configs)
     with tempfile.TemporaryDirectory(prefix="vcp-policy-oracle-") as temporary:
         data, configs = workload.clone(Path(temporary))
@@ -573,36 +580,44 @@ def collect_rows(
     policy=None,
     evidence=None,
     policy_from=None,
+    comparison=None,
+    comparison_from=None,
     isolated=False,
 ):
     if isolated:
         policy_sha256 = policy_file_sha256(policy_from, policy) if policy is not None else None
-        return benchmark.run_matrix_isolated(
-            root,
-            scenarios,
-            methods=methods,
-            pg_runtime=pg_runtime,
-            policy_from=policy_from,
-            policy_sha256=policy_sha256,
-        )
+        kwargs = {
+            "methods": methods,
+            "pg_runtime": pg_runtime,
+            "policy_from": policy_from,
+            "policy_sha256": policy_sha256,
+        }
+        if comparison is not None:
+            kwargs["comparison_from"] = comparison_from
+            kwargs["comparison_sha256"] = policy_file_sha256(comparison_from, comparison)
+        return benchmark.run_matrix_isolated(root, scenarios, **kwargs)
     rows = []
     for scenario in scenarios:
         with tempfile.TemporaryDirectory(prefix="scenario-", dir=root) as temporary:
             workload = build_scenario(Path(temporary) / "fixture", scenario)
             if policy is not None:
-                workload = prepare_workload(workload, policy, evidence)
+                comparisons = () if comparison is None else (comparison,)
+                workload = prepare_workload(workload, policy, evidence, comparisons)
             for method in methods:
+                method_policy, method_sha256 = benchmark.policy_for(
+                    method,
+                    policy,
+                    _policy_sha256(policy) if policy else None,
+                    comparison,
+                    _policy_sha256(comparison) if comparison else None,
+                )
                 rows.append(
                     benchmark.run_method(
                         workload,
                         method,
                         pg_runtime=pg_runtime,
-                        policy_id=policy.id if policy and method == "postgres_adaptive" else None,
-                        policy_sha256=(
-                            _policy_sha256(policy)
-                            if policy and method == "postgres_adaptive"
-                            else None
-                        ),
+                        policy_id=method_policy,
+                        policy_sha256=method_sha256,
                     ).to_dict()
                 )
     return rows

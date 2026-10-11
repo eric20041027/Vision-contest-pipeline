@@ -16,6 +16,56 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.15.0] - 2026-10-10
+
+PostgreSQL adaptive provenance 的 policy v2（#39，Data_Base 課程專題；spec
+`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`）；tag `v0.15.0` 打在發版 PR
+的合併 commit 上。
+MINOR 的理由：
+- policy artifact 的新內容：`policy.json` 可以是 `policy_version: postgres-adaptive-v2`，帶 `band`
+  （`stratified_edges`：依 `⌊log10 total_edges⌋` 分層，每層記 incremental／full 的 RMSE 與觀測數；或
+  `relative`），沒有 v1 的兩個 RMSE 欄位；id 是 `postgres-adaptive-v2-<calibration sha 前 12 碼>`。
+- 決策 telemetry 與 `vcp provenance ingest` VERDICT 的 `policy_version` 多一個值 `postgres-adaptive-v2`；
+  reason 字彙不變（DDL 不變）。
+- `load_policy_artifact` 對 `policy.json` 裡認不得的 `policy_version`，在模型驗證之前就報
+  `incompatible_policy: provenance policy policy version`。
+- benchmark runner（`tests/performance/provenance/`，證據契約的一部分）：held-out v2 的 seeds
+  `HELDOUT_V2_SEEDS = (20261101, 20261102)`、比較方法 `postgres_adaptive_v1`、選項
+  `--comparison-policy-from`、held-out v2 的輸出 `kind = postgres-provenance-heldout-v2`。
+
+### Added
+- `vcp.provenance.policy_bands`：兩種信心帶（`RelativeBand`、`StratifiedEdgesBand`）、
+  `band_allows_incremental`、`fit_band`、`edges_decade`、`width`。
+- `vcp.provenance.strategy`：`AdaptivePolicyV2`、`fit_cost_models`、`fit_policy_v2`、`policy_from_payload`、
+  `POLICY_VERSION_V2`、`SUPPORTED_POLICY_VERSIONS`、`HELDOUT_V2_SEEDS`；`select_strategy`、
+  `load_policy_artifact`、`write_policy_artifact` 依 `policy_version` 分派。
+- 預先登記的候選帶比較 `tests/performance/provenance/compare_bands.py`（commit `1823807`，之後才執行）與證據
+  `docs/benchmarks/postgres-provenance-band-comparison-v1.json`：以 seed 交叉驗證的標準化殘差為判準，勝者
+  `stratified_edges`（B 1.011 對 A 1.584）。
+- 凍結的 policy `postgres-adaptive-v2-9f4e58346529`（`policy.json` SHA-256
+  `6fe654a90468edb57aa84fdec7ac2e53cf18b20106f7a77d65df8ac7cd27c000`）：
+  `docs/benchmarks/postgres-provenance-policy-v2.json` 與它的 `-artifacts/`，由 `publish_policy_v2.py` 從
+  calibration v2 與比較結果發布；成本模型與 v1 完全相同，只差信心帶。
+- held-out v2 評估（`evaluate_adaptive.py --comparison-policy-from`）：v2 與凍結的 v1 在新 seeds 上同場，
+  v2 的正式 gate、v1 並列、各規模層的診斷與 H1／H1a；real 驗證同樣可加 v1 比較方法。
+- 量測前的檢查：policy 配對（v2 為主、凍結的 v1 為比較、同一份 calibration）與環境指紋（PostgreSQL 主版號、
+  backend schema、`maintenance_environment` 指紋），不符就在量測之前停下。
+
+### Changed
+- 操作指南：full rebuild 不自動 `VACUUM`（2026-10-09 裁決：它會改變 FULL 的量測成本），需要時手動
+  `VACUUM (ANALYZE)`；`auto` 的建議依 policy 版本分開寫。README 路線圖：policy v2 排在稽核 Wave 1c 之前。
+- `.gitattributes`：`docs/benchmarks/**` 不做換行轉換，Windows checkout（`core.autocrlf=true`）才不會改到
+  證據檔的雜湊。
+
+### 相容性
+- 不變：PostgreSQL DDL 與 `POSTGRES_SCHEMA_VERSION`（1）、`BENCHMARK_SCHEMA_VERSION`（1）、reason 字彙、
+  SQLite 索引、提交台帳與其他產物格式；不需要遷移，已建的 PostgreSQL 索引不必重建。
+- policy v1（`postgres-adaptive-v1-9f4e58346529`）照舊載入，決策逐位元相同：三份 v1 證據的 219 個決策都重現。
+- 0.14.0 以前的 vcp 讀到 v2 的 `policy.json` 會報 `mismatch: provenance policy payload`（它把每個
+  `policy.json` 都當 v1 嚴格驗證）。
+- 量測（six-method v2、held-out v2、real RSNA v2）在本版之後依計畫附錄 A，從 `v0.15.0` 的 worktree 跑；
+  結果另行發布。
+
 ## [0.14.0] - 2026-10-09
 
 VCP-048：平台做完卻沒有分數的提交（#37）；tag `v0.14.0` 打在發版 PR 的合併 commit 上。

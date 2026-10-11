@@ -1,10 +1,10 @@
-# 給 Codex 的接續開發 prompt（2026-10-09）
+# 給 Codex 的接續開發 prompt（2026-10-10）
 
 把下面整段貼給 Codex（repo 根目錄開啟）。它假設 Codex 能讀 repo、跑 `uv`、跑測試、開 worktree / 分支與 commit。2026-09-07 的舊版所列的第一、第二階段（待辦清理、RSNA Knee 膠水）都已完成；RSNA 比賽現在在獨立工作區推進，不在這個 repo 裡。
 
 ---
 
-你接手的是 `vcp`（vision contest pipeline，Python 3.12 / pydantic v2 / typer / pytest / ruff，MIT 開源），一個給 Kaggle 與台灣視覺比賽用的通用框架。八層（資料、量測、融合、訓練、提交治理、備份審計、不可變產物、dataset evolution provenance 含 optional PostgreSQL adaptive backend）都已交付並合併到 `main`，版本 `0.14.0`（tag `v0.14.0`），全套測試綠（2085 passed / 76 skipped，覆蓋率 95.45%）。0.14.0 的提交台帳多一個事件 `errored`（VCP-048，平台做完卻沒有分數的一發）：0.13.0 以前的 vcp 讀到會 FAIL `bad ledger row`，所以讀寫同一份台帳的每個 checkout 都要先升級，才讓 0.14.0 對它跑 `sync` 或 `upload`。開始前依序讀：
+你接手的是 `vcp`（vision contest pipeline，Python 3.12 / pydantic v2 / typer / pytest / ruff，MIT 開源），一個給 Kaggle 與台灣視覺比賽用的通用框架。八層（資料、量測、融合、訓練、提交治理、備份審計、不可變產物、dataset evolution provenance 含 optional PostgreSQL adaptive backend）都已交付並合併到 `main`，版本 `0.15.0`（tag `v0.15.0`），全套測試綠（2199 passed / 76 skipped，覆蓋率 95.48%）。0.14.0 的提交台帳多一個事件 `errored`（VCP-048，平台做完卻沒有分數的一發）：0.13.0 以前的 vcp 讀到會 FAIL `bad ledger row`，所以讀寫同一份台帳的每個 checkout 都要先升級，才讓 0.14.0 對它跑 `sync` 或 `upload`。開始前依序讀：
 
 1. `AGENTS.md`（機械鐵則、路徑、常用命令——每一條都是硬性規定）與 `.agents/skills/vcp-orientation/SKILL.md`（層、台帳、VERDICT、四種不可變等級、文件權威順序、skill 路由）。
 2. `docs/handover/HANDOVER.md`（現況、程式碼地圖、慣例、陷阱、開放待辦）。
@@ -24,7 +24,7 @@
 
 ## 目前的開放待辦（依價值排序；每項都在對應後記有裁決脈絡）
 
-1. **PostgreSQL adaptive policy v2**：進行中（spec `docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`、計畫同日期、後記 `docs/superpowers/plans/2026-10-09-vcp-postgres-adaptive-policy-v2-followups.md`），排在稽核 Wave 1c 之前；發 0.15.0 後依計畫附錄 A 量測。
+1. **PostgreSQL adaptive policy v2**：程式與凍結的 policy 已隨 0.15.0 發出，剩量測（spec `docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`、計畫同日期、後記 `docs/superpowers/plans/2026-10-09-vcp-postgres-adaptive-policy-v2-followups.md`），排在稽核 Wave 1c 之前；依計畫附錄 A 從 `v0.15.0` 的 worktree 量測，結果寫進 `docs/benchmarks/postgres-provenance-v2.md` 與 course brief v2。
 2. **稽核 Wave 1c：程式碼快照與產物授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 從 0.11.0 起記下工作樹狀態與追蹤檔的 patch（VCP-041），但訓練程式的快照與授權邊界還沒有做成產物。先寫 spec。
 3. **凍結前的契約項**：各後記最後一節的待辦裡，會改變寫入內容、VERDICT 欄位、`reason=` 字彙或 exit 類別的那些（例如共用台帳後記 §3 的幾項），在 1.0 之前做完，或明寫留到 1.0 之後；1.0 之後再改就是 MAJOR。
 4. **`1.0.0`**：留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
@@ -34,7 +34,7 @@
 
 ## 完成的定義
 
-- 全套測試綠、覆蓋率 ≥ 80%（現在 95.45%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
+- 全套測試綠、覆蓋率 ≥ 80%（現在 95.48%，不要掉）、ruff 乾淨；改了 provenance 就跑 `tests/unit/provenance/test_postgres_docs.py`（它釘住 evidence record 的精確字串）。
 - 每個 CLI 命令仍以 VERDICT 收尾、exit code 對、`--json` 可解析；沒有任何憑證進 repo / 台帳 / log。
 - 後記、spec 補充決定、`docs/reference/cli.md`、AGENTS.md / CLAUDE.md、對應 skill 已更新；PR 合併、需要時 tag 已 push。
 

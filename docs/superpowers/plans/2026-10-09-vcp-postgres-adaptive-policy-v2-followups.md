@@ -11,6 +11,14 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 5. **未知的 policy 版本**：`load_policy_artifact` 在模型驗證之前就檢查 `policy.json` 的 `policy_version`，認不得的版本報 `incompatible_policy: provenance policy policy version`；沒有這個鍵的 payload 照 v1 的舊路徑處理（spec §4.4；Task 3 審查）。
 6. **量測前的配對檢查**：held-out v2 與 real 驗證在量測之前就檢查 policy 配對（v2 為主、凍結的 v1 為比較、同一份 calibration），錯的配對不會先量好幾個小時才失敗；held-out v1 的入口只收 v1 policy（Task 6、8、9 審查）。
 7. **0.14.0 讀到 v2 的 `policy.json`**：報的是 `mismatch: provenance policy payload`，不是 spec §9 原本寫的 `incompatible_policy`——0.14.0 把每個 `policy.json` 都當 v1 嚴格驗證。CHANGELOG 照實寫。
+8. **量測提前開跑、順序改變**（使用者 2026-10-15 決定；偏離 spec §6.1 與計畫附錄 A）：
+   - spec §6.1 原訂 10/26 之後才開始，附錄 A 的順序是 six-method → held-out → real。為了讓 held-out v2 的結果趕上 10/22 凍結、10/25 繳交的課程進度報告，改為現在開跑，順序：
+     1. real RSNA v2：先跑，當整條流程的冒煙測試（v1／v2 配對檢查、`postgres_adaptive_v1`、環境指紋）；
+     2. held-out v2：正式驗收，最優先，目標 10/21 前完成；
+     3. six-method v2：預覽，10/21 前跑不完照跑。
+   - 原訂延後是為了避開 RSNA 的訓練；使用者確認從開跑到量測結束，RSNA 不在這台機器上訓練。
+   - held-out v2 與 six-method v2 另給 `--work-dir C:/vcp-data/bench/<名稱>-work`：checkpoint 放在 worktree 之外，supervisor 才能丟棄進行中的場景，跟 v1 的做法相同。不給時 runner 會放在 `docs/benchmarks/<輸出名>-work`，量到的數字兩者相同。
+   - 只改時程、順序與 checkpoint 位置。spec §7 的驗收條件、§6.3 的 seeds、附錄 A 的其他參數、spec §6.1 的看管規則（RAM 護欄、裁決 6-3 的自己人判定、裁決 6-2 的汙染處置）都不變。
 
 ## 2. 已知限制
 
@@ -21,4 +29,4 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 
 ## 3. 開放待辦
 
-1. 發 0.15.0 之後依計畫附錄 A 跑 six-method v2、held-out v2、real RSNA v2。
+1. 依裁決 8 的順序跑 real RSNA v2、held-out v2、six-method v2（`v0.15.0` 的 detached worktree，由 `supervise.py` 看管）。

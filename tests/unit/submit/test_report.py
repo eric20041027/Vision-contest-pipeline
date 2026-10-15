@@ -1,4 +1,5 @@
 import shutil
+import time
 from datetime import timedelta
 
 import pytest
@@ -257,10 +258,20 @@ def _errored_row(sid, at, *, ref="e1", status_="SubmissionStatus.COMPLETE") -> L
     )
 
 
-def _upload_row(sid, at) -> LedgerRow:
+def _stamp_after(ledger: SubmissionLedger) -> str:
+    """A ``ts`` later than every row already in the ledger. A manual score belongs to the newest
+    upload with ``upload.ts <= score.ts`` (``assign_scores``), and a fast machine can write an
+    upload in the same millisecond as the score before it, which would hand it that score."""
+    newest = max(r.ts for r in ledger.rows)
+    while (ts := stamp()) <= newest:
+        time.sleep(0.001)
+    return ts
+
+
+def _upload_row(sid, at, ledger: SubmissionLedger) -> LedgerRow:
     return LedgerRow(
         event="uploaded",
-        ts=stamp(),
+        ts=_stamp_after(ledger),
         submission_id=sid,
         at=at,
         source="manual",
@@ -282,7 +293,7 @@ def test_status_counts_an_errored_newest_upload_as_errored_not_unscored(pair):
     led.append(_errored_row("S2", _later(first, 0.05)))
     st = status(TEST, **_kw(pair))
     assert (st.unscored, st.errored) == ([], ["S2"])
-    led.append(_upload_row("S2", _later(first, 30)))
+    led.append(_upload_row("S2", _later(first, 30), led))
     st = status(TEST, **_kw(pair))
     assert (st.unscored, st.errored) == (["S2"], [])
     score(TEST, "S2", public=0.7, **_kw(pair))
@@ -297,7 +308,7 @@ def test_report_marks_the_upload_whose_outcome_is_errored(pair):
     led = SubmissionLedger(pair.test_paths.submissions_log)
     s2_at = led.uploads("S2")[0].at
     led.append(_errored_row("S2", _later(s2_at, 0.05)))
-    led.append(_upload_row("S1", _later(s2_at, 30)))
+    led.append(_upload_row("S1", _later(s2_at, 30), led))
     score(TEST, "S1", public=0.9, **_kw(pair))
     rows = report(TEST, **_kw(pair))
     assert [(r.submission_id, r.errored, r.public, r.private, r.delta) for r in rows] == [

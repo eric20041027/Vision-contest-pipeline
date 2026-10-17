@@ -1,4 +1,6 @@
-"""Read-only real-data validation using a metadata-only temporary copy."""
+"""Read-only real-data validation using a metadata-only temporary copy (the four datasets'
+configs and samples, their runs with the receipts and evidence those runs reference, and their
+measure ledgers)."""
 
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ from pathlib import Path
 
 from vcp.core.atomic import write_once_text
 from vcp.core.errors import ValidationFailed
-from vcp.core.paths import provenance_index_path
+from vcp.core.paths import artifact_dir, provenance_index_path
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.measure.runs import load_run
@@ -51,6 +53,7 @@ def _copy_snapshot(
             target_data / "datasets" / dataset / "samples.jsonl",
         )
     selected_runs: list[str] = []
+    referenced: set[tuple[str, str]] = set()
     runs_root = source_data / "runs"
     if runs_root.is_dir():
         for directory in sorted(path for path in runs_root.iterdir() if path.is_dir()):
@@ -62,6 +65,15 @@ def _copy_snapshot(
                 continue
             selected_runs.append(card.run_id)
             shutil.copytree(directory, target_data / "runs" / directory.name)
+            referenced.update(("access_receipt", ref.artifact_id) for ref in card.access)
+            referenced.update((ref.kind, ref.artifact_id) for ref in card.evidence)
+    # A run lists the receipts of its reads and the evidence and label sets it was given; the
+    # graph verifies each one, so the copy carries them or every such run is broken. One that
+    # is missing at the source stays missing here, and the scenario refuses the fixture.
+    for kind, artifact_id in sorted(referenced):
+        source = artifact_dir(source_data, kind, artifact_id)
+        if source.is_dir():
+            shutil.copytree(source, artifact_dir(target_data, kind, artifact_id))
     for dataset in DATASETS:
         source = source_data / "measure" / dataset
         if source.is_dir():

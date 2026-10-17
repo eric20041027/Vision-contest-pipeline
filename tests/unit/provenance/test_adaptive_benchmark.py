@@ -20,7 +20,7 @@ from vcp.data.dataset import Dataset
 from vcp.data.schema import DatasetCard, Sample, SourceInfo, View
 from vcp.provenance import strategy
 from vcp.provenance.diff import DatasetDiffSpec, create_dataset_diff
-from vcp.provenance.graph import build_graph
+from vcp.provenance.graph import build_graph, entity_id
 
 from .test_adaptive_evaluation import benchmark_rows, publish_v1_and_v2
 
@@ -738,6 +738,51 @@ def test_real_scenarios_copy_metadata_and_leave_source_bytes_unchanged(tmp_path,
     }
     assert before == after
     assert not (fixture.data / "raw").exists()
+
+
+def test_real_scenarios_copy_the_receipts_and_evidence_their_runs_reference(tmp_path, monkeypatch):
+    """A run trained through the accessor lists receipts, and one given evidence or labels lists
+    those artifacts; a metadata copy without them makes every such run broken, and the scenario
+    refuses its canonical fixture (the RSNA root after 2026-09-20)."""
+    from vcp.data.access.access import DatasetAccess
+    from vcp.data.evidence import RunScope, attach_evidence
+    from vcp.measure.provenance import attach_receipts
+    from vcp.measure.runs import load_run, save_run
+
+    source = build_scenario(tmp_path / "source", Scenario(40, 0.5, "chain", 20260913))
+    names = ("synthetic-a", "synthetic-b", "synthetic-source", "synthetic-target")
+    monkeypatch.setattr(real_validation, "DATASETS", names)
+    monkeypatch.setattr(
+        real_validation, "TRANSITIONS", tuple(zip(names[:-1], names[1:], strict=True))
+    )
+    card = load_run(source.data, "r-000000")
+    with DatasetAccess.open(
+        card.dataset,
+        card.plan_id,
+        subsets={"train"},
+        purpose="train",
+        run_id=card.run_id,
+        data_root=source.data,
+        configs_root=source.configs,
+    ) as access:
+        list(access.iter("train"))
+    card = attach_receipts(card, [access.receipt_id], data_root=source.data)
+    teacher = tmp_path / "teacher.jsonl"
+    teacher.write_text("t", encoding="utf-8")
+    scope = RunScope(card.run_id, card.dataset, card.samples_hash, card.plan_id, ("train",))
+    evidence = attach_evidence(
+        source.data, scope, "teacher", teacher, role="teacher", attempt=None, binding="manual"
+    )
+    save_run(source.data, card.model_copy(update={"evidence": [evidence]}))
+    run = entity_id("run", card.run_id)
+    assert build_graph(source.data, source.configs).entities[run].broken_reason is None
+
+    fixture = real_validation.build_real_scenario(tmp_path / "real", source.data, source.configs, 2)
+
+    artifacts = fixture.data / "artifacts"
+    assert (artifacts / "access_receipt" / access.receipt_id / "manifest.json").is_file()
+    assert (artifacts / "evidence" / evidence.artifact_id / "manifest.json").is_file()
+    assert build_graph(fixture.data, fixture.configs).entities[run].broken_reason is None
 
 
 def test_real_validation_retains_legacy_fields_when_six_methods_not_requested(

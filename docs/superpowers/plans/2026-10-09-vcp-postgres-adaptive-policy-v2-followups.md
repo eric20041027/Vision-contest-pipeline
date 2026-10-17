@@ -19,6 +19,11 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
    - 原訂延後是為了避開 RSNA 的訓練；使用者確認從開跑到量測結束，RSNA 不在這台機器上訓練。
    - held-out v2 與 six-method v2 另給 `--work-dir C:/vcp-data/bench/<名稱>-work`：checkpoint 放在 worktree 之外，supervisor 才能丟棄進行中的場景，跟 v1 的做法相同。不給時 runner 會放在 `docs/benchmarks/<輸出名>-work`，量到的數字兩者相同。
    - 只改時程、順序與 checkpoint 位置。spec §7 的驗收條件、§6.3 的 seeds、附錄 A 的其他參數、spec §6.1 的看管規則（RAM 護欄、裁決 6-3 的自己人判定、裁決 6-2 的汙染處置）都不變。
+9. **real RSNA v2 改由修過的 runner 量、排在 held-out v2 之後**（2026-10-17，使用者選擇）：
+   - 2026-10-17 07:45 UTC 的冒煙測試在量測前就失敗：`canonical fixture contains broken evidence`。9/20 量 real v1 時，四個 sixslot dataset 上只有 7 個 run；之後 RSNA 又加了約 90 個 run，它們列著存取收據（`access`）與 label set／證據副本（`evidence`）。v0.15.0 的 `real_validation.py` 只複製 runs、measure 與 configs，不複製這些產物，所以這些 run 在副本裡都是證據遺失（92 個 broken）。這是 runner 的複製範圍問題，與 policy v2 無關。
+   - 失敗的兩次嘗試保存在量測機上，沒有產出證據檔。held-out v2 不受影響（合成 workload），07:53 UTC 先開跑；新順序是 held-out v2 → real RSNA v2 → six-method v2。
+   - 修正：`_copy_snapshot` 另外複製被選中的 run 所引用的收據與 evidence 產物；來源就缺的照樣缺，fixture 照樣被拒。只改 `tests/performance/provenance/`，`src/vcp` 與 v0.15.0 逐位元相同。
+   - real RSNA v2 從這個修正合併後的 commit 的 detached worktree 量，證據記下該 commit；量的是當天的 RSNA root（run 比 v1 多），v1 與 v2 在同一次執行內比較。與已發布的 real v1 不是同一張圖，報告照實寫；r4→r5 仍只是 sanity check（spec §6.4）。
 
 ## 2. 已知限制
 
@@ -29,4 +34,4 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 
 ## 3. 開放待辦
 
-1. 依裁決 8 的順序跑 real RSNA v2、held-out v2、six-method v2（`v0.15.0` 的 detached worktree，由 `supervise.py` 看管）。
+1. 依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2（held-out 與 six-method 用 `v0.15.0` 的 detached worktree，real 用裁決 9 的修正 commit；都由 `supervise.py` 看管）。

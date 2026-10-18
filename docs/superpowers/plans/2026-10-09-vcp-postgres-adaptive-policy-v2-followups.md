@@ -24,6 +24,18 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
    - 失敗的兩次嘗試保存在量測機上，沒有產出證據檔。held-out v2 不受影響（合成 workload），07:53 UTC 先開跑；新順序是 held-out v2 → real RSNA v2 → six-method v2。
    - 修正：`_copy_snapshot` 另外複製被選中的 run 所引用的收據與 evidence 產物；來源就缺的照樣缺，fixture 照樣被拒。只改 `tests/performance/provenance/`，`src/vcp` 與 v0.15.0 逐位元相同。
    - real RSNA v2 從這個修正合併後的 commit 的 detached worktree 量，證據記下該 commit；量的是當天的 RSNA root（run 比 v1 多），v1 與 v2 在同一次執行內比較。與已發布的 real v1 不是同一張圖，報告照實寫；r4→r5 仍只是 sanity check（spec §6.4）。
+10. **held-out v2 在 103/108 停下；idx 99–102 依時段重量；supervisor 加靜默時段**（2026-10-18，使用者選擇）：
+    - 經過：07:25 UTC 完成第 103 個場景（idx 102）之後，idx 103 連續三次在寫出第一筆紀錄前失敗，量測鏈 08:12 照設計停下。
+    - 原因：當地 03:15（07:15 UTC）Windows 自動維護開始，07:41 Defender 重啟並更新，07:51 Windows Update 下載更新。這段時間 WMI 查詢常超過 10 秒：WMI-Activity 在 07:42–08:18 記了 61 筆 `0x80041032`（呼叫被取消）。
+      - runner 的 `_cpu_details` 每寫一筆紀錄都用 PowerShell 查一次 `Win32_Processor`；逾時就不出聲地改用 `platform.processor()`，並把實體核心數當成邏輯核心數。這和契約不符，`_validate_record_environment` 就拒寫（`checkpoint record environment mismatch`）。
+      - 拒寫是 fail closed，沒有錯的列進入 checkpoint。
+      - 同一段時間 `pg_isready` 有幾次 3 秒沒有回應，但 PostgreSQL 的排程工作一直在執行，判斷是整台主機卡頓，不是伺服器當掉。
+      - 原因是這樣確認的：在 scratch work dir 用同一份契約單獨重跑 idx 103 的 child，印出被 runner 隱藏的 traceback。這次重跑不寫正式 checkpoint。
+    - 處置一（依時段重量）：量測時間和維護時段重疊、在 07:15 UTC 之後才完成的 idx 99–102，從 work dir 移出（封存在量測機的 `heldout-v2-discarded-ruling10/`），由 runner 以同一份契約重量。
+      - 挑選只看時段，不看數值。
+      - 裁決 6-2 的門檻（six-method v1 觀察到的最大比值）在 held-out v2 分不出汙染：103 個已完成場景有 30 個超過，分散在整段量測，所以不拿它來決定。
+    - 處置二（靜默時段）：`supervise.py` 加 `--quiet HH:MM-HH:MM`（UTC），量測鏈用 `06:55-08:45`。這段時間視同機器忙：停下、丟棄進行中的場景，時段過後再續跑。這樣避開維護對 WMI 和計時的干擾，代價是 six-method v2 每天少量約 2 小時。
+    - runner 不改：`src/vcp`、runner 原始檔與契約都不變，held-out v2 繼續用 v0.15.0。
 
 ## 2. 已知限制
 
@@ -34,4 +46,6 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 
 ## 3. 開放待辦
 
-1. 依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2（held-out 與 six-method 用 `v0.15.0` 的 detached worktree，real 用裁決 9 的修正 commit；都由 `supervise.py` 看管）。
+1. 依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2（held-out 與 six-method 用 `v0.15.0` 的 detached worktree，real 用裁決 9 的修正 commit；都由 `supervise.py` 看管，裁決 10 的靜默時段 06:55–08:45 UTC 不量）。
+2. runner 的 `_cpu_details`（裁決 10）：每寫一筆紀錄都查一次 WMI，逾時就不出聲地改值。改成每個程序只查一次並快取，查不到就明確失敗。量測全部結束後再改，否則續跑會被原始檔雜湊擋下。
+3. runner 的錯誤訊息（裁決 10）：`evaluate_adaptive` 與 child 只印「details redacted」，連例外類別都看不到。在不洩漏路徑與連線資訊的前提下，至少印出例外類別與 `reason=` 字彙。

@@ -36,6 +36,13 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
       - 裁決 6-2 的門檻（six-method v1 觀察到的最大比值）在 held-out v2 分不出汙染：103 個已完成場景有 30 個超過，分散在整段量測，所以不拿它來決定。
     - 處置二（靜默時段）：`supervise.py` 加 `--quiet HH:MM-HH:MM`（UTC），量測鏈用 `06:55-08:45`。這段時間視同機器忙：停下、丟棄進行中的場景，時段過後再續跑。這樣避開維護對 WMI 和計時的干擾，代價是 six-method v2 每天少量約 2 小時。
     - runner 不改：`src/vcp`、runner 原始檔與契約都不變，held-out v2 繼續用 v0.15.0。
+11. **held-out v2 與 real RSNA v2 的證據進 repo；real 的版本改用相對路徑**（2026-10-18，使用者決定）：
+    - held-out v2：`docs/benchmarks/postgres-provenance-heldout-v2.json`，量於 commit `660d015`（v0.15.0），2026-10-18 19:31 UTC 發布，SHA-256 `e4cca33d04ea2b981a031afbe4b6a8edf64acfbe12e837f4a621594e2cc85a48`，原樣進 repo。檔內唯一像路徑的值是每列的 `disk_path = C:\`（磁碟根目錄，屬於契約的環境欄位）。
+    - real RSNA v2：`docs/benchmarks/postgres-provenance-real-rsna-v2.json`，量於 commit `cafeea2`（裁決 9），2026-10-18 20:10 UTC 發布。
+      - runner 把 `source_data_root`、`source_configs_root` 記成量測機的絕對路徑，裡面有使用者名稱。進 repo 的版本只把這兩欄改成相對於 runner 工作目錄（real 的 detached worktree）的路徑：`../RSNA_Knee_Abnormality_Detection/vcp-data` 與 `../RSNA_Knee_Abnormality_Detection/configs`。
+      - 改之前先用 runner 的寫法（`json.dumps(..., ensure_ascii=False, indent=2) + "\n"`）重新序列化原檔，確認位元完全相同；改完後 27,385 行裡只有這 2 行不同。
+      - 原檔 SHA-256 `e9eac27f34c667f37596e99feefb8bc3ac8fc99d9f57ff79893e37508d529d4d`，保存在量測機；repo 版 SHA-256 `bb29448f60db052c1d51e180437c356b09824b7b923a3eb3ea01a97e8e1ad75f`。引用 real v2 時兩個都寫。
+    - 已發布的 real v1 檔案裡仍有絕對路徑；v1 證據凍結，不改。
 
 ## 2. 已知限制
 

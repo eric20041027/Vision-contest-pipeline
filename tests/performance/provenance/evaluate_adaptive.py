@@ -975,9 +975,10 @@ def main(argv=None) -> int:
         if args.comparison_policy_from is None:
             return _heldout_v1(args)
         return _heldout_v2(args)
-    except Exception:
+    except Exception as error:
         print(
-            "Held-out evaluation failed (live service or verified evidence required)",
+            "Held-out evaluation failed (live service or verified evidence required): "
+            + benchmark.error_summary(error),
             file=sys.stderr,
         )
         print("VERDICT cmd=provenance.evaluate status=FAIL", file=sys.stderr)

@@ -1438,3 +1438,26 @@ def test_heldout_v2_cli_checks_both_policy_environments_before_measuring(
     assert calls == [(runtime, (v2, v1))]
     assert not output.exists() and not (tmp_path / "unit-heldout-v2-work").exists()
     assert "status=FAIL" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("runner", ["calibration", "evaluation"])
+def test_runner_failure_names_its_class_and_safe_reason(tmp_path, monkeypatch, capsys, runner):
+    """followups 2026-10-09 ruling 10: the redacted message hid even the exception class."""
+
+    def fail(*args, **kwargs):
+        raise ValidationFailed("incompatible_policy: provenance policy policy version")
+
+    output = tmp_path / "out.json"
+    if runner == "calibration":
+        monkeypatch.setattr(calibration.benchmark, "postgres_preflight", fail)
+        assert calibration.main(["--output", str(output)]) == 1
+    else:
+        monkeypatch.setattr(evaluation, "_heldout_v1", fail)
+        assert (
+            evaluation.main(["--policy-from", str(tmp_path / "p.json"), "--output", str(output)])
+            == 1
+        )
+    err = capsys.readouterr().err
+    assert "ValidationFailed: incompatible_policy" in err
+    assert "status=FAIL" in err
+    assert "Traceback" not in err

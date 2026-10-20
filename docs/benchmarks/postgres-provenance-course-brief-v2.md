@@ -255,7 +255,7 @@ held-out v2、six-method v2 各 12/12 切片 `not_observed`，與 v1 的三份�
 | 10-15 | 為了趕 10/22 的進度報告，量測提前開跑；主機可用記憶體只剩 0.56 GiB（核心 nonpaged pool 洩漏） | 重開機後才開跑（裁決 8） |
 | 10-17 | real RSNA 冒煙測試在量測前失敗：RSNA 新增約 90 個 run 帶存取收據，real runner 沒複製這些 artifact | 先跑 held-out；修 runner 後 real 從新 commit 量（裁決 9） |
 | 10-17 | 加自動復原：排程工作每 15 分鐘檢查，重開機或當機後從 checkpoint 接回；實際砍掉一次驗證 | 長量測不能靠人盯 |
-| 10-18 07:15 | Windows 自動維護與 Defender 更新讓 WMI 變慢；runner 每筆紀錄都查 CPU 資訊，逾時就靜默改用備用值，被環境檢查拒寫（fail closed） | 不寫錯資料，但 runner 把錯誤細節藏起來，要另外重跑才看得到原因；維護時段完成的 4 個場景依「時段」重量；每日 06:55–08:45 不量（裁決 10） |
+| 10-18 07:15 | Windows 自動維護與 Defender 更新讓 WMI 變慢；每個場景的子程序查一次 CPU 資訊，逾時就靜默改用備用值，那個場景的每筆紀錄都被環境檢查拒寫（fail closed） | 不寫錯資料，但 runner 把錯誤細節藏起來，要另外重跑才看得到原因；維護時段完成的 4 個場景依「時段」重量；每日 06:55–08:45 不量（裁決 10） |
 | 10-18 | 外部程式（遊戲）在記憶體門檻以下就會搶 CPU / GPU | 看管程式加 GPU 3D 佔用條件 |
 | 10-18 19:31 | held-out v2 發布：gate PASS、H1 / H1a 成立；20:10 real v2 發布 | |
 | 10-20 00:03 | notebook kernel 用掉約 14 核，PostgreSQL 新連線要 55 秒，連續逾時 | 看管程式加 CPU 佔用條件；當時沒有寫入任何紀錄 |
@@ -276,9 +276,9 @@ CPU、GPU、作業系統的維護時段都會干擾計時；(3) 真實資料會�
 5. **pooled gate 不敏感**：1K 的改善在 gate 上看不到，要靠診斷與 H1 / H1a。
 6. **跨次比較的絕對毫秒**受主機狀態影響（six-method v2 與 v1 相隔一個月）；同一次執行內的比值才可直接比。
 7. **量測中的重量**：held-out 4 個場景（維護時段）、six-method 2 個場景（單次重複失敗），選擇都與數值無關，原檔保存。
-8. **runner 的已知缺陷**（待修，不影響已發布的數字）：CPU 資訊查詢沒有快取、查不到時靜默改值；錯誤訊息被完全去敏。
+8. **runner 的兩個缺陷已在量測後修正**（只改 `tests/performance/provenance/`，不影響已發布的數字）：CPU 資訊查詢逾時改成重試、仍失敗就明確報錯，不再靜默改值；錯誤訊息會留下例外類別與安全的原因字彙。
 
-未來工作：外推範圍外的規模（1M、極小圖）重量；多 writer 併發吞吐；查詢計畫的 EXPLAIN；runner 的上述兩個缺陷。
+未來工作：外推範圍外的規模（1M、極小圖）重量；多 writer 併發吞吐；查詢計畫的 EXPLAIN。
 
 ---
 
@@ -343,6 +343,6 @@ PR：#39 policy v2、#40 0.15.0、#41 提前開跑、#42 real runner 修正、#4
   "heldout_v2": {"seeds": [20261101, 20261102], "rows": 432, "timed_samples": 2448, "parity": "432/432", "decisions_rechecked": "216/216", "overlap_count": 0, "aggregate_ms": {"postgres_full": {"p50": 5969.0, "p95": 115148.1}, "postgres_incremental": {"p50": 1000.8, "p95": 36139.8}, "postgres_adaptive": {"p50": 1016.5, "p95": 34608.9}, "postgres_adaptive_v1": {"p50": 1012.2, "p95": 36027.2}}, "v2": {"p50_ratio": 1.0157, "p95_ratio": 0.9576, "gate": "PASS", "over_1_05": "18/92", "by_decade_over": {"3": "13/28", "4": "5/32", "5": "0/32"}, "worst": 1.245}, "v1": {"p50_ratio": 1.0115, "p95_ratio": 0.9969, "over_1_05": "37/92", "by_decade_over": {"3": "28/28", "4": "8/32", "5": "1/32"}, "worst": 4.219}, "h1": true, "h1a": true, "crossover_slices_not_observed": "12/12", "sha256": "e4cca33d04ea2b981a031afbe4b6a8edf64acfbe12e837f4a621594e2cc85a48", "commit": "660d015"},
   "real_rsna_v2": {"rows": 21, "parity": "21/21", "graph": {"entities": 13421, "edges": 18133, "changes": 8752}, "runs": 104, "transitions": {"r3->r4": {"v1": "FULL", "v2": "FULL", "estimates_ms": [6238, 6641], "v2_over_incremental": 1.066}, "r4->r5": {"v1": "FULL", "v2": "INCREMENTAL", "estimates_ms": [7194, 13185], "v1_over_incremental": 1.72, "v2_over_incremental": 1.007}, "r5->r6": {"v1": "NO_OP", "v2": "NO_OP"}}, "sha256_repo": "bb29448f60db052c1d51e180437c356b09824b7b923a3eb3ea01a97e8e1ad75f", "sha256_original": "e9eac27f34c667f37596e99feefb8bc3ac8fc99d9f57ff79893e37508d529d4d", "commit": "cafeea2"},
   "six_method_v2": {"seeds": [20260913, 20260914], "rows": 648, "timed_samples": 3672, "parity": "648/648", "p50_ratio": 1.0277, "p95_ratio": 1.0452, "over_1_05": "18/92", "six_method_v1_same_math": {"p50_ratio": 1.018, "p95_ratio": 0.9581, "over_1_05": "31/92"}, "crossover_slices_not_observed": "12/12", "sha256": "5bbee9fad2d20b609ccd7e67a01951096cbedd37ef1e202f00d8d73d01ac5a63", "commit": "660d015"},
-  "open_items": ["runner_cpu_details_cache_and_fail_loudly", "runner_error_class_not_redacted", "extrapolation_beyond_calibration_range", "one_million_scale", "multi_writer_throughput", "explain_for_query_plans"]
+  "open_items": ["extrapolation_beyond_calibration_range", "one_million_scale", "multi_writer_throughput", "explain_for_query_plans"]
 }
 ```

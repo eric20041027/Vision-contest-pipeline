@@ -19,7 +19,14 @@
 | `auto` + policy | `INCREMENTAL` / `FULL` | `calibrated_incremental_lower_confident_cost`（`inc + inc_rmse < full − full_rmse`）/ `calibrated_full_lower_or_uncertain_cost` |
 | `auto` 無 policy | `FULL` | `fallback_policy_absent_full`（WARN） |
 
-policy v1 `postgres-adaptive-v1-9f4e58346529`：`incremental_ms ≈ 1.16·changed_samples + 0.118·total_edges`、`full_ms ≈ 0.704·total_edges + 0.097·historical_changes`；RMSE 2,286 / 5,057 ms → 帶寬 7,343 ms 絕對值。policy 不相容（環境指紋、PostgreSQL major、schema 版本）時明示 `--policy` FAIL、未明示則 FULL fallback。
+兩個 policy 的成本模型相同：`incremental_ms ≈ 1.16·changed_samples + 0.118·total_edges`、`full_ms ≈ 0.704·total_edges + 0.097·historical_changes`；`inc_rmse` / `full_rmse` 是信心帶：
+
+| policy | 帶（incremental / full，ms） | 狀態 |
+|---|---|---|
+| v1 `postgres-adaptive-v1-9f4e58346529` | 固定 2,286 / 5,057（合計 7,343） | 凍結，重現舊證據用 |
+| v2 `postgres-adaptive-v2-9f4e58346529` | 依 ⌊log10 total_edges⌋：decade 3 91 / 465、decade 4 1,168 / 4,418、decade 5 3,696 / 7,336；不在表內取最近層（等距取較大層） | 建議；held-out v2 驗收通過 |
+
+reason 字彙兩版相同，決策的 `policy_version` 分辨 v1／v2。policy 不相容（環境指紋、PostgreSQL major、schema 版本）時明示 `--policy` FAIL、未明示則 FULL fallback。0.14.0 以前讀 v2 的 `policy.json` 報 `mismatch: provenance policy payload`。
 
 ## PostgreSQL 機制（給解釋用）
 12 張正規化表、13 個索引、CHECK 約束；`WITH RECURSIVE` 求 dataset ancestors / dirty closure / descendants；writer 以 `pg_advisory_xact_lock` 序列化；full rebuild 寫新 generation → exact read-back parity → 切換 `active_generation` 指標 → `DELETE` 舊 generation；讀者在切換前看舊 generation（MVCC）。舊列在 VACUUM 前是 dead tuples（storage ≈ 2×，`status` 查詢變慢）。錯誤訊息去敏：不含 service、host、port、role、conninfo、driver 例外文字。
@@ -43,6 +50,12 @@ policy v1 `postgres-adaptive-v1-9f4e58346529`：`incremental_ms ≈ 1.16·change
 | `postgres-provenance-heldout-v1.json` | seeds 20261001/2，324 列，overlap 0，aggregate gate PASS 1.018 / 1.017，every-scenario 在 1K FAIL |
 | `postgres-provenance-real-rsna-v1.json` | 3 個真實 transition，18 列，parity 18/18；一個 transition 選錯 FULL 慢 1.79× |
 | `postgres-provenance-v1.md` / `-report-v1.md` / `-course-brief-v1.md` | acceptance record / 十項總結 / 簡報素材 |
+| `postgres-provenance-band-comparison-v1.json` | 預先登記的候選帶比較（腳本 commit `1823807`）：B `stratified_edges` 1.011 勝 A `relative` 1.584 |
+| `postgres-provenance-policy-v2.json` + `-artifacts/` | policy v2 artifact |
+| `postgres-provenance-heldout-v2.json` | seeds 20261101/2，v1 與 v2 同場 432 列，gate PASS 1.016 / 0.958，H1（18 < 37）與 H1a（13 < 28）成立 |
+| `postgres-provenance-real-rsna-v2.json` | 3 個真實 transition × 7 方法，21 列；r4→r5 v2 INCREMENTAL（1.007×）、v1 FULL（1.72×） |
+| `postgres-provenance-six-method-v2.json` | calibration seeds 的預覽，648 列 |
+| `postgres-provenance-v2.md` / `-course-brief-v2.md` | v2 證據紀錄與 acceptance record / 簡報素材 |
 
 `tests/unit/provenance/test_postgres_docs.py` 斷言 evidence record 與 handoff 的精確字串（含「沒有 Absent 格」）——改這兩份文件要同步改測試。
 
@@ -52,5 +65,6 @@ uv run python tests/performance/provenance/adaptive_benchmark.py --entities 1000
 uv run python tests/performance/provenance/calibrate_adaptive.py --output <NEW>
 uv run python tests/performance/provenance/evaluate_adaptive.py --policy-from …calibration-v2.json --output <NEW>
 uv run python tests/performance/provenance/real_validation.py --data-root <RO> --configs-root <RO> --six-method --policy-from …calibration-v2.json --output <NEW>
+# policy v2：--policy-from …policy-v2.json；held-out v2 與 real v2 另加 --comparison-policy-from …calibration-v2.json（凍結的 v1 同場比較）
 ```
 輸出路徑必須尚不存在。calibration 與 held-out 用不同 seeds、不同 process；held-out 不 fit。每方法 612 個 timed samples（1K/10K 各 7 次、100K 3 次）。發版或改原始檔前先讓量測跑完；量測期間別在該 worktree 改任何檔。

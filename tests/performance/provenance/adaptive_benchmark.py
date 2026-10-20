@@ -35,7 +35,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from vcp.core.atomic import write_once_text
-from vcp.core.errors import ValidationFailed
+from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.time import stamp
 from vcp.provenance.backend import BackendConfig, BackendName, SQLiteBackend
@@ -79,6 +79,47 @@ DECISION_FIELDS = (
     "estimated_full_ms",
 )
 NOT_CONFIGURED = "PostgreSQL benchmark service is not configured"
+# followups 2026-10-09 ruling 10: a fully redacted failure hid even the exception class, so a
+# fail-closed record check read like a lost database. A summary names the class, plus the
+# reason only when it cannot carry a path, a credential or free text: a vcp error's reason
+# token, or another error's message when it is a plain lowercase phrase.
+_SAFE_REASON = re.compile(r"[a-z][a-z_ -]{2,80}")
+_CHILD_FAILURE = re.compile(
+    r"Provenance benchmark failed \((?P<detail>[A-Za-z]\w{0,60}(?:: [a-z][a-z_ -]{2,80})?)\)"
+)
+
+
+class ScenarioChildFailed(RuntimeError):
+    """A scenario child exited non-zero on both attempts; ``detail`` is the error summary it
+    printed, or None when it printed none."""
+
+    def __init__(self, detail: str | None) -> None:
+        super().__init__("benchmark scenario child failed")
+        self.detail = detail
+
+
+def error_summary(error: BaseException) -> str:
+    """``Class`` or ``Class: reason`` for a stderr line; never the raw message otherwise."""
+    name = type(error).__name__
+    if isinstance(error, ScenarioChildFailed):
+        return f"{name}: {error.detail}" if error.detail else name
+    text = str(error)
+    if isinstance(error, VcpError):
+        text = text.split(":", 1)[0]
+    if _SAFE_REASON.fullmatch(text) and not any(word in text for word in _SENSITIVE_TEXT):
+        return f"{name}: {text}"
+    return name
+
+
+def _child_failure_detail(stderr: str) -> str | None:
+    """The summary a failed child printed, re-checked against the same pattern; no other text."""
+    for line in reversed(stderr.splitlines()):
+        match = _CHILD_FAILURE.fullmatch(line.strip())
+        if match:
+            return match.group("detail")
+    return None
+
+
 _SENSITIVE_TEXT = (
     "password",
     "secret",
@@ -409,36 +450,49 @@ def _deployment_evidence() -> dict[str, str | None]:
     }
 
 
-@lru_cache(maxsize=1)
-def _cpu_details() -> tuple[str, int, int]:
-    """Return model, physical cores and logical CPUs without an optional dependency."""
-    logical = os.cpu_count() or 1
-    model = platform.processor().strip() or os.environ.get("PROCESSOR_IDENTIFIER", "unknown")
-    physical = logical
-    try:
-        if platform.system() == "Windows":
+_WINDOWS_CPU_QUERY = (
+    "$c=Get-CimInstance Win32_Processor; "
+    "[pscustomobject]@{name=($c.Name -join '; '); "
+    "physical=($c|Measure-Object NumberOfCores -Sum).Sum; "
+    "logical=($c|Measure-Object NumberOfLogicalProcessors -Sum).Sum}"
+    "|ConvertTo-Json -Compress"
+)
+_WINDOWS_CPU_ATTEMPTS = 3
+
+
+def _windows_cpu() -> tuple[str, int, int]:
+    """Win32_Processor through PowerShell/CIM, retried. Windows automatic maintenance stalled this
+    query past its timeout on 2026-10-18 (followups 2026-10-09 ruling 10), and the old fallback to
+    ``platform.processor()`` with physical = logical gave values every checkpoint record then
+    failed against. It raises when the query keeps failing, so the run stops with that reason."""
+    for _attempt in range(_WINDOWS_CPU_ATTEMPTS):
+        try:
             result = subprocess.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    (
-                        "$c=Get-CimInstance Win32_Processor; "
-                        "[pscustomobject]@{name=($c.Name -join '; '); "
-                        "physical=($c|Measure-Object NumberOfCores -Sum).Sum; "
-                        "logical=($c|Measure-Object NumberOfLogicalProcessors -Sum).Sum}"
-                        "|ConvertTo-Json -Compress"
-                    ),
-                ],
+                ["powershell", "-NoProfile", "-Command", _WINDOWS_CPU_QUERY],
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=10,
+                timeout=30,
             )
             payload = json.loads(result.stdout)
-            model = str(payload["name"]).strip() or model
-            physical, logical = int(payload["physical"]), int(payload["logical"])
-        elif platform.system() == "Linux":
+            return str(payload["name"]).strip(), int(payload["physical"]), int(payload["logical"])
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            continue
+    raise RuntimeError("cpu identity unavailable")
+
+
+@lru_cache(maxsize=1)
+def _cpu_details() -> tuple[str, int, int]:
+    """Return model, physical cores and logical CPUs without an optional dependency; once per
+    process (a failure is not cached)."""
+    logical = os.cpu_count() or 1
+    model = platform.processor().strip() or os.environ.get("PROCESSOR_IDENTIFIER", "unknown")
+    physical = logical
+    if platform.system() == "Windows":
+        windows_model, physical, logical = _windows_cpu()
+        return windows_model or model, max(1, physical), max(1, logical)
+    try:
+        if platform.system() == "Linux":
             pairs = set()
             current: dict[str, str] = {}
             linux_model = ""
@@ -1572,7 +1626,7 @@ def run_matrix_isolated(
                         database = _owned_database(store.contract_sha256, key)
                         _drop_owned_database(pg_runtime, database)
         if not completed:
-            raise RuntimeError("benchmark scenario child failed")
+            raise ScenarioChildFailed(_child_failure_detail(getattr(process, "stderr", "") or ""))
     rows = []
     for scenario in scenarios:
         count = scenario.repetitions if repetitions is None else repetitions
@@ -1740,7 +1794,7 @@ def main(argv=None) -> int:
         message = (
             NOT_CONFIGURED
             if error.args == (NOT_CONFIGURED,)
-            else "Provenance benchmark failed (details redacted)"
+            else f"Provenance benchmark failed ({error_summary(error)})"
         )
         print(message, file=sys.stderr)
         return 1

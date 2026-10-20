@@ -1960,3 +1960,136 @@ def test_real_validation_checks_both_policies_of_a_pair_before_copying_anything(
         )
     assert calls == [("pg", (v2, v1))]
     assert measured == []
+
+
+# --- followups 2026-10-09 ruling 10: a stalled WMI query must not become a silent wrong value -----
+
+
+@pytest.fixture
+def windows_cpu_query(monkeypatch):
+    """Send ``_cpu_details`` down its Windows path; each PowerShell call takes the next outcome
+    (a JSON payload or an exception to raise). The cache is cleared before and after."""
+    calls = []
+    outcomes = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return SimpleNamespace(stdout=outcome, returncode=0)
+
+    monkeypatch.setattr(bench.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(bench.subprocess, "run", run)
+    bench._cpu_details.cache_clear()
+    yield calls, outcomes
+    bench._cpu_details.cache_clear()
+
+
+def test_cpu_details_retries_a_stalled_windows_query(windows_cpu_query):
+    calls, outcomes = windows_cpu_query
+    timeout = bench.subprocess.TimeoutExpired(["powershell"], 10)
+    outcomes.extend([timeout, '{"name": "Unit CPU   ", "physical": 8, "logical": 16}'])
+    assert bench._cpu_details() == ("Unit CPU", 8, 16)
+    assert bench._cpu_details() == ("Unit CPU", 8, 16)
+    assert len(calls) == 2
+
+
+def test_cpu_details_fails_instead_of_falling_back_when_windows_never_answers(windows_cpu_query):
+    calls, outcomes = windows_cpu_query
+    outcomes.extend([bench.subprocess.TimeoutExpired(["powershell"], 10)] * 3)
+    with pytest.raises(RuntimeError, match="cpu identity unavailable"):
+        bench._cpu_details()
+    assert len(calls) == 3
+    outcomes.append('{"name": "Unit CPU", "physical": 8, "logical": 16}')
+    assert bench._cpu_details() == ("Unit CPU", 8, 16)
+
+
+@pytest.mark.parametrize(
+    ("error", "summary"),
+    [
+        (
+            ValidationFailed("incompatible_policy: provenance policy policy version"),
+            "ValidationFailed: incompatible_policy",
+        ),
+        (
+            ValidationFailed("database_connection_failed"),
+            "ValidationFailed: database_connection_failed",
+        ),
+        (
+            ValueError("checkpoint record environment mismatch"),
+            "ValueError: checkpoint record environment mismatch",
+        ),
+        (ValueError("C:/Users/someone/PRIVATE_MARKER.json is missing"), "ValueError"),
+        (ValueError("PRIVATE_MARKER"), "ValueError"),
+        (OSError(13, "Permission denied", "C:/secret"), "PermissionError"),
+        (
+            bench.ScenarioChildFailed("ValueError: checkpoint record environment mismatch"),
+            "ScenarioChildFailed: ValueError: checkpoint record environment mismatch",
+        ),
+        (bench.ScenarioChildFailed(None), "ScenarioChildFailed"),
+    ],
+)
+def test_error_summary_names_the_class_and_only_safe_reasons(error, summary):
+    assert bench.error_summary(error) == summary
+
+
+def test_benchmark_failure_names_its_class_and_reason(tmp_path, monkeypatch, capsys):
+    def fail():
+        raise ValueError("checkpoint record environment mismatch")
+
+    monkeypatch.setattr(bench, "postgres_preflight", fail)
+    assert bench.main(["--output", str(tmp_path / "out.json")]) == 1
+    err = capsys.readouterr().err
+    assert "ValueError: checkpoint record environment mismatch" in err
+    assert "Traceback" not in err
+
+
+def test_benchmark_failure_keeps_unsafe_text_out(tmp_path, monkeypatch, capsys):
+    def fail():
+        raise ValueError("C:/Users/someone/PRIVATE_MARKER")
+
+    monkeypatch.setattr(bench, "postgres_preflight", fail)
+    assert bench.main(["--output", str(tmp_path / "out.json")]) == 1
+    err = capsys.readouterr().err
+    assert "(ValueError)" in err
+    assert "PRIVATE_MARKER" not in err
+
+
+def test_a_failed_scenario_child_reports_why(tmp_path, monkeypatch):
+    seen, scenarios = _isolated_runner_probe(monkeypatch, tmp_path)
+    stderr = "Provenance benchmark failed (ValueError: checkpoint record environment mismatch)\n"
+    monkeypatch.setattr(
+        bench,
+        "_run_scenario_child",
+        lambda store, scenario_hash, **kwargs: SimpleNamespace(returncode=1, stderr=stderr),
+    )
+    with pytest.raises(bench.ScenarioChildFailed) as failed:
+        bench.run_matrix_isolated(
+            tmp_path,
+            scenarios,
+            methods=("postgres_full",),
+            policy_from="v2.json",
+            policy_sha256="a",
+        )
+    assert failed.value.detail == "ValueError: checkpoint record environment mismatch"
+
+
+def test_a_failed_scenario_child_never_relays_unchecked_text(tmp_path, monkeypatch):
+    seen, scenarios = _isolated_runner_probe(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        bench,
+        "_run_scenario_child",
+        lambda store, scenario_hash, **kwargs: SimpleNamespace(
+            returncode=1, stderr="Traceback ...\nOSError: C:/Users/someone/PRIVATE_MARKER\n"
+        ),
+    )
+    with pytest.raises(bench.ScenarioChildFailed) as failed:
+        bench.run_matrix_isolated(
+            tmp_path,
+            scenarios,
+            methods=("postgres_full",),
+            policy_from="v2.json",
+            policy_sha256="a",
+        )
+    assert failed.value.detail is None

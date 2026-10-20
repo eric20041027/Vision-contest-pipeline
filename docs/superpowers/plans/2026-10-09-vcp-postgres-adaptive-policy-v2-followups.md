@@ -27,7 +27,7 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 10. **held-out v2 在 103/108 停下；idx 99–102 依時段重量；supervisor 加靜默時段**（2026-10-18，使用者選擇）：
     - 經過：07:25 UTC 完成第 103 個場景（idx 102）之後，idx 103 連續三次在寫出第一筆紀錄前失敗，量測鏈 08:12 照設計停下。
     - 原因：當地 03:15（07:15 UTC）Windows 自動維護開始，07:41 Defender 重啟並更新，07:51 Windows Update 下載更新。這段時間 WMI 查詢常超過 10 秒：WMI-Activity 在 07:42–08:18 記了 61 筆 `0x80041032`（呼叫被取消）。
-      - runner 的 `_cpu_details` 每寫一筆紀錄都用 PowerShell 查一次 `Win32_Processor`；逾時就不出聲地改用 `platform.processor()`，並把實體核心數當成邏輯核心數。這和契約不符，`_validate_record_environment` 就拒寫（`checkpoint record environment mismatch`）。
+      - runner 的 `_cpu_details` 在每個程序裡用 PowerShell 查一次 `Win32_Processor`（每個場景都是新的子程序；結果以 `lru_cache` 快取）；逾時就不出聲地改用 `platform.processor()`，並把實體核心數當成邏輯核心數。這和契約不符，`_validate_record_environment` 就拒寫（`checkpoint record environment mismatch`）。
       - 拒寫是 fail closed，沒有錯的列進入 checkpoint。
       - 同一段時間 `pg_isready` 有幾次 3 秒沒有回應，但 PostgreSQL 的排程工作一直在執行，判斷是整台主機卡頓，不是伺服器當掉。
       - 原因是這樣確認的：在 scratch work dir 用同一份契約單獨重跑 idx 103 的 child，印出被 runner 隱藏的 traceback。這次重跑不寫正式 checkpoint。
@@ -65,6 +65,6 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 ## 3. 開放待辦
 
 1. ~~依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2，並寫證據紀錄與 course brief v2~~：三段都已完成（2026-10-20，裁決 11、12）；證據紀錄 `docs/benchmarks/postgres-provenance-v2.md` 與 `docs/benchmarks/postgres-provenance-course-brief-v2.md` 已寫。
-2. runner 的 `_cpu_details`（裁決 10）：每寫一筆紀錄都查一次 WMI，逾時就不出聲地改值。改成每個程序只查一次並快取，查不到就明確失敗。量測全部結束後再改，否則續跑會被原始檔雜湊擋下。
-3. runner 的錯誤訊息（裁決 10）：`evaluate_adaptive` 與 child 只印「details redacted」，連例外類別都看不到。在不洩漏路徑與連線資訊的前提下，至少印出例外類別與 `reason=` 字彙。
+2. ~~runner 的 `_cpu_details`（裁決 10）~~：已修正（2026-10-20）。Windows 的查詢重試三次、每次 30 秒，仍失敗就丟出 `cpu identity unavailable`，不再改用 `platform.processor()` 與 physical = logical 的備用值；失敗不進快取。
+3. ~~runner 的錯誤訊息（裁決 10）~~：已修正（2026-10-20）。`adaptive_benchmark`、`evaluate_adaptive`、`calibrate_adaptive` 失敗時印出例外類別，原因只在不可能帶路徑、憑證或自由文字時才印（vcp 錯誤的 reason 字彙，或純小寫片語）；失敗的場景子程序把自己的摘要經 `ScenarioChildFailed.detail` 交給父程序。
 4. ~~（已完成 2026-10-20：指南與 skill 改成建議 v2，並寫明 v2 的外推限制）~~ 操作指南 `docs/guides/POSTGRESQL_PROVENANCE.md` 的 `auto` 建議依 policy 版本補上 v2（spec §8：「v2 在 held-out v2 的結果出來後補上」），skill `vcp-provenance`（與 `.agents/skills/` 的鏡射）同步：v2 的 id、與 v1 的差別、B 的外推限制；改 skill 照 writing-skills 的流程先做基準測試。

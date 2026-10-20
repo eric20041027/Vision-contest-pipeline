@@ -103,8 +103,12 @@ def main(argv=None) -> int:
         publish_calibration(rows, args.output)
         print("VERDICT cmd=provenance.calibrate status=OK", file=sys.stderr)
         return 0
-    except Exception:
-        print("Calibration failed (live PostgreSQL benchmark evidence required)", file=sys.stderr)
+    except Exception as error:
+        print(
+            "Calibration failed (live PostgreSQL benchmark evidence required): "
+            + benchmark.error_summary(error),
+            file=sys.stderr,
+        )
         print("VERDICT cmd=provenance.calibrate status=FAIL", file=sys.stderr)
         return 1
 

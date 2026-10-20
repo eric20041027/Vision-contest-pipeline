@@ -30,19 +30,19 @@ uv run vcp provenance verify-index                          # 重算 canonical g
 ## PostgreSQL 與 strategy
 `--backend postgresql --pg-service S`；`ingest` 另接受 `--strategy incremental|full|auto [--policy ID]`。
 - 預設 `incremental`；`full` 是損毀修復、索引漂移、schema 換代的重建路徑，**不是效能選項**（100K entities 一次 75–140 s，是 canonical replay 的 7–10 倍，重建後 dead tuples 讓 storage 約 2 倍）。
-- `auto` 要 frozen policy（`--policy postgres-adaptive-v1-9f4e58346529`）；沒 policy 就 WARN 並安全選 FULL。
-- **已知限制**：policy v1 的信心帶是絕對毫秒，預估差距 < 7.3 s 時一律 FULL——小圖（~1K）與接近全量變更的 transition 會選錯、慢 2–4 倍。這兩種情況直接 `--strategy incremental`。
-- **policy v2**（0.15.0 起，`--policy postgres-adaptive-v2-9f4e58346529`）：同樣的成本模型，信心帶由 calibration 推導、依圖的 `total_edges` 數量級分層（spec §13 的比較選出）；決策的 `policy_version` 分辨 v1／v2。held-out v2 的結果出來前，v1 的建議照舊。
+- `auto` 要 frozen policy；沒 policy 就 WARN 並安全選 FULL。**用 policy v2**：`--strategy auto --policy postgres-adaptive-v2-9f4e58346529`（0.15.0 起）。held-out v2（新 seeds、與 v1 同場）驗收通過：gate p50 1.016 / p95 0.958，超過 1.05 倍的場景 18/92（v1 37/92），1K 全部選 INCREMENTAL；數字在 `docs/benchmarks/postgres-provenance-v2.md`。
+- v1 與 v2 的成本模型相同，只差信心帶（`est_inc + 帶_inc < est_full − 帶_full` 才選 INCREMENTAL）：v1 固定 2,286 + 5,057 ms，預估差距 < 7.3 s 一律 FULL，所以 ~1K 的小圖與近全量變更的 transition 會選錯、慢 2–4 倍；v2 依 ⌊log10 total_edges⌋ 分層（1K 層 0.56 s、10K 層 5.6 s、100K 層 11.0 s）。v1 凍結，只留給重現舊證據；還在用 v1 時那兩種情況直接 `--strategy incremental`。決策的 `policy_version` 分辨 v1／v2。
+- **v2 的限制**（只影響速度，結果逐位元相同）：分層只在 calibration 量過的約 1.3K–200K edges 可靠。更大的圖套 100K 層的帶，偏窄、偏向 INCREMENTAL（照樣用 v2 的 `auto`；incremental 本來就是這個 workload 的較快方法）；更小的圖（幾百條 edges）套 1K 層，偏寬約 10 倍、偏向 FULL，這種直接 `--strategy incremental`；兩個預估很接近時也會保守選 FULL（真實 r3→r4 差 0.4 s → FULL，1.07 倍）。
 - full rebuild 後要 `status` 立刻變快：手動 `VACUUM (ANALYZE)`（不鎖讀者，storage 不縮小）；不要 `VACUUM FULL`。
 - 決策是 derived telemetry（`maintenance_decisions` 表 + VERDICT 的 requested / selected / reason），不改 status 語意。
 
 ## 基準量測（研究線）
 runner 在 `tests/performance/provenance/`：`adaptive_benchmark.py`（六方法）、`calibrate_adaptive.py`、`evaluate_adaptive.py`（held-out）、`real_validation.py --six-method`；都要 `VCP_TEST_PG_SERVICE` + `PGSERVICEFILE` + `PGPASSFILE` 的 opt-in preflight，否則 fail closed。
 - 有 per-repetition checkpoint 與續跑；run 合約釘住 168 個原始檔雜湊——**量測期間不能改 worktree 的任何原始檔**，否則拒絕續跑。
-- 長跑用 repo 外的 `C:/vcp-data/bench/{bench_launch.py, supervise.py}`：RAM 護欄（可用 < 2 GiB 持續 30 s 中止）、機器空閒才啟動、遊戲或別的 python ≥ 4 GiB 就停並丟棄進行中場景。
-- 結果只從 machine-readable 輸出回讀後才填 `docs/benchmarks/postgres-provenance-v1.md`；探路數字不填正式表。五份證據（integration v3、calibration v2、six-method v1、held-out v1、real RSNA v1）已齊全，1M 依裁決不在正式矩陣。
+- 長跑用 repo 外的 `C:/vcp-data/bench/{bench_launch.py, supervise.py}`：RAM 護欄（可用 < 2 GiB 持續 30 s 中止）、機器空閒才啟動；別的 python ≥ 4 GiB、外部程式用 GPU 3D ≥ 15%（`--gpu`）或 ≥ 1.5 核（`--cpu`）、每日 Windows 維護時段（`--quiet`）都會停下並丟棄進行中場景。
+- 結果只從 machine-readable 輸出回讀後才填證據紀錄；探路數字不填正式表。v1 的五份證據（integration v3、calibration v2、six-method v1、held-out v1、real RSNA v1）在 `postgres-provenance-v1.md`，policy v2 的候選帶比較與三段量測（held-out v2、real RSNA v2、six-method v2）在 `postgres-provenance-v2.md`；1M 依裁決不在正式矩陣。
 
 ## 常見錯誤
 - 手改或刪 `indexes/`、`artifacts/dataset_diff/` 以「修」索引：刪整個索引再 `rebuild` 才是正途。
 - 把 integration 測試的 `skipped` 當 PostgreSQL 通過；把 SQLite 的歷史 crossover 當 PostgreSQL 結論。
-- 在 `auto` 上對小圖抱怨慢：那是信心帶問題，不是資料問題。
+- 用 v1 的 `auto` 跑 ~1K 的小圖，再抱怨慢：那是 v1 固定信心帶的問題，不是資料問題——換 v2 policy。

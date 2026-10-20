@@ -89,17 +89,23 @@ SQLite 只支援預設 incremental request，不接受 full、auto 或 policy。
 可能是 `NO_OP`、`INCREMENTAL` 或 `FULL`：
 
 - 明示 incremental/full 時，非零 semantic work 走指定演算法。
-- auto 加 verified policy 時，使用 frozen cost models 與 RMSE noise band 決定。noise band 是絕對毫秒
-  （policy `postgres-adaptive-v1-9f4e58346529`：2286 + 5057 ms），所以小圖（約 1K entities、預估差距不到
-  7.3 s）永遠落入保守的 FULL，實測比 incremental 慢 2–4 倍；接近全量變更的 transition 也會（真實 RSNA 資料
-  8.8K entities、98.7% 變更時預估差距 5.7 s → FULL，慢 1.79 倍）。這兩種情況請直接用 `--strategy incremental`，
-  `auto` 留給 10K 以上、變更比例不極端的 index（`docs/benchmarks/postgres-provenance-v1.md` §六方法正式結果、
-  §Real RSNA six-method，Plan 12 後記 §5、§7）。
+- auto 加 verified policy 時，用 frozen cost models 與信心帶決定：`預估 incremental + 帶寬_inc < 預估 full − 帶寬_full`
+  才選 INCREMENTAL，否則 FULL。兩個 policy 的成本模型相同，只差帶寬；建議依 policy 版本：
+  - **policy v2（建議，0.15.0 起）**：`--policy postgres-adaptive-v2-9f4e58346529`。帶寬依 `total_edges` 的數量級分層：
+    1K 層 91 + 465 ms、10K 層 1,168 + 4,418 ms、100K 層 3,696 + 7,336 ms（spec
+    `2026-10-09-vcp-postgres-adaptive-policy-v2-design.md` §13）。held-out v2（2026-10-18，新 seeds，與 v1 同場）通過
+    正式 gate（p50 1.016、p95 0.958），超過 1.05 倍的場景 18/92（v1 37/92），1K 的 28 個場景全部選 INCREMENTAL；
+    真實 RSNA r4→r5 選 INCREMENTAL（v1 選 FULL、慢 1.72 倍）。數字在 `docs/benchmarks/postgres-provenance-v2.md`。
+  - v2 的限制（只影響速度，不影響結果）：分層只在 calibration 量過的範圍（約 1.3K–200K edges）可靠。比它大的圖用
+    100K 層的帶，偏窄、可能偏向 INCREMENTAL；比它小的圖（例如幾百條 edges）用 1K 層的帶，偏寬約 10 倍、可能偏向
+    FULL；兩個預估很接近時也會保守選 FULL（真實 RSNA r3→r4 差 0.4 s，選 FULL，慢 1.07 倍）。很小的圖直接用
+    `--strategy incremental`。
+  - **policy v1**（`postgres-adaptive-v1-9f4e58346529`，凍結，留給重現舊證據）：帶寬是固定的 2,286 + 5,057 ms，所以
+    預估差距不到 7.3 s 的 transition 一律 FULL：約 1K entities 的小圖實測比 incremental 慢 2–4 倍，接近全量變更的
+    transition 也會（真實 RSNA 8.8K entities、98.7% 變更 → FULL，慢 1.79 倍）。還在用 v1 時，這兩種情況請直接
+    `--strategy incremental`（`docs/benchmarks/postgres-provenance-v1.md` §六方法正式結果、§Real RSNA six-method）。
+  - 決策紀錄的 `policy_version` 欄位分辨 v1 與 v2，reason 字彙不變。
 - auto 未加 policy 時，非零 semantic work 安全選 FULL，命令回 WARN。
-- policy v2（`postgres-adaptive-v2-9f4e58346529`，0.15.0 起）用同樣的成本模型，但信心帶依圖的
-  `total_edges` 數量級分層（spec `2026-10-09-vcp-postgres-adaptive-policy-v2-design.md` §13 的比較選出
-  `stratified_edges`，而不是固定 7.3 秒）。`--policy` 傳 v2 的 id 就走 v2；決策紀錄的 `policy_version`
-  欄位分辨 v1 與 v2，reason 字彙不變。v2 在 held-out v2 上的結果出來之前，上面對 v1 的建議照舊適用。
 - full rebuild 以新 generation 原子發布後刪除舊 generation，但 PostgreSQL 在 VACUUM 前不回收那些 dead
   tuples：重建後 relation/index 約為 incremental 維護的 2 倍，`status` 也變慢，直到 autovacuum 追上。
   vcp 不在 rebuild 收尾自動 VACUUM（2026-10-09 裁決：它會改變 FULL 的量測成本）。想讓 `status` 立刻變快，

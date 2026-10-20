@@ -67,4 +67,4 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 1. ~~依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2，並寫證據紀錄與 course brief v2~~：三段都已完成（2026-10-20，裁決 11、12）；證據紀錄 `docs/benchmarks/postgres-provenance-v2.md` 與 `docs/benchmarks/postgres-provenance-course-brief-v2.md` 已寫。
 2. runner 的 `_cpu_details`（裁決 10）：每寫一筆紀錄都查一次 WMI，逾時就不出聲地改值。改成每個程序只查一次並快取，查不到就明確失敗。量測全部結束後再改，否則續跑會被原始檔雜湊擋下。
 3. runner 的錯誤訊息（裁決 10）：`evaluate_adaptive` 與 child 只印「details redacted」，連例外類別都看不到。在不洩漏路徑與連線資訊的前提下，至少印出例外類別與 `reason=` 字彙。
-4. 操作指南 `docs/guides/POSTGRESQL_PROVENANCE.md` 的 `auto` 建議依 policy 版本補上 v2（spec §8：「v2 在 held-out v2 的結果出來後補上」），skill `vcp-provenance`（與 `.agents/skills/` 的鏡射）同步：v2 的 id、與 v1 的差別、B 的外推限制；改 skill 照 writing-skills 的流程先做基準測試。
+4. ~~（已完成 2026-10-20：指南與 skill 改成建議 v2，並寫明 v2 的外推限制）~~ 操作指南 `docs/guides/POSTGRESQL_PROVENANCE.md` 的 `auto` 建議依 policy 版本補上 v2（spec §8：「v2 在 held-out v2 的結果出來後補上」），skill `vcp-provenance`（與 `.agents/skills/` 的鏡射）同步：v2 的 id、與 v1 的差別、B 的外推限制；改 skill 照 writing-skills 的流程先做基準測試。

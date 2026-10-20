@@ -24,7 +24,7 @@
 
 ## 目前的開放待辦（依價值排序；每項都在對應後記有裁決脈絡）
 
-1. **PostgreSQL adaptive policy v2**：程式與凍結的 policy 已隨 0.15.0 發出，剩量測（spec `docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design.md`、計畫同日期、後記 `docs/superpowers/plans/2026-10-09-vcp-postgres-adaptive-policy-v2-followups.md`），排在稽核 Wave 1c 之前；依計畫附錄 A 從 `v0.15.0` 的 worktree 量測，結果寫進 `docs/benchmarks/postgres-provenance-v2.md` 與 course brief v2。
+1. **PostgreSQL adaptive policy v2 的收尾**：程式與凍結的 policy 隨 0.15.0 發出，三段量測已完成（2026-10-20；held-out v2 驗收通過、H1 與 H1a 成立；證據紀錄 `docs/benchmarks/postgres-provenance-v2.md`、課程素材 `docs/benchmarks/postgres-provenance-course-brief-v2.md`）。剩後記 `docs/superpowers/plans/2026-10-09-vcp-postgres-adaptive-policy-v2-followups.md` §3 的兩個 runner 缺陷：`_cpu_details` 每筆紀錄都查 WMI、逾時就靜默改值（改成每個程序查一次並快取、查不到就失敗）；錯誤訊息完全去敏（至少留下例外類別）。只改 `tests/performance/provenance/`，不需要發版。
 2. **稽核 Wave 1c：程式碼快照與產物授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 從 0.11.0 起記下工作樹狀態與追蹤檔的 patch（VCP-041），但訓練程式的快照與授權邊界還沒有做成產物。先寫 spec。
 3. **凍結前的契約項**：各後記最後一節的待辦裡，會改變寫入內容、VERDICT 欄位、`reason=` 字彙或 exit 類別的那些（例如共用台帳後記 §3 的幾項），在 1.0 之前做完，或明寫留到 1.0 之後；1.0 之後再改就是 MAJOR。
 4. **`1.0.0`**：留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。

@@ -43,6 +43,17 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
       - 改之前先用 runner 的寫法（`json.dumps(..., ensure_ascii=False, indent=2) + "\n"`）重新序列化原檔，確認位元完全相同；改完後 27,385 行裡只有這 2 行不同。
       - 原檔 SHA-256 `e9eac27f34c667f37596e99feefb8bc3ac8fc99d9f57ff79893e37508d529d4d`，保存在量測機；repo 版 SHA-256 `bb29448f60db052c1d51e180437c356b09824b7b923a3eb3ea01a97e8e1ad75f`。引用 real v2 時兩個都寫。
     - 已發布的 real v1 檔案裡仍有絕對路徑；v1 證據凍結，不改。
+12. **six-method v2：兩個場景因單次重複失敗而重量；量測期間 supervisor 加 GPU 與 CPU 條件**（2026-10-20）：
+    - 第一次發布（16:43 UTC）的 648 列裡有 2 列 `failed`，各只有一次重複回報 `benchmark_operation_failed`；runner 不保存細節，當下也沒有已知的干擾事件：
+      - `postgres_adaptive`，1K、0.05、branched、seed 20260914，第 6 次重複，10/19 17:21 UTC；
+      - `postgres_full`，10K、0.01、branched、seed 20260914，第 7 次重複，10/20 02:49 UTC。
+    - 處置：依「失敗」這個狀態（不看數值）選出這兩個場景，把它們的紀錄移出 work dir，用同一份契約重量。17:17 UTC 發布，648 列全部 ok。第一次發布的檔案（SHA-256 `d5adce06877e27f2dd9336867f5cb58b02320c461927462668707a4b5b151682`）保存在量測機。
+    - 證據：`docs/benchmarks/postgres-provenance-six-method-v2.json`，量於 commit `660d015`（v0.15.0），SHA-256 `5bbee9fad2d20b609ccd7e67a01951096cbedd37ef1e202f00d8d73d01ac5a63`，policy `postgres-adaptive-v2-9f4e58346529`。檔內唯一像路徑的值是 `disk_path = C:\`，原樣進 repo。
+    - 量測期間的看管：`C:/vcp-data/bench/supervise.py` 不在 repo 裡，它加了兩個條件，達到就視同機器忙。
+      - `--gpu 15`：外部程式使用 GPU 3D 引擎 ≥ 15%。遊戲在記憶體門檻以下就會搶資源。
+      - `--cpu 1.5`：外部程式在 3 秒取樣內用 ≥ 1.5 核。
+      - 10/17–10/20 的量測期間，這兩個條件、記憶體門檻與靜默時段都觸發過。每次停下都丟棄進行中的場景，停機的那段時間沒有寫入任何紀錄。
+    - 10/19 20:06 起的 Defender 事件、10/20 00:03 起的外部 CPU 負載讓連線與 WMI 逾時，runner 照裁決 10 的機制拒寫（fail closed）；事件時段內沒有任何場景完成。
 
 ## 2. 已知限制
 
@@ -53,6 +64,6 @@ spec：`docs/superpowers/specs/2026-10-09-vcp-postgres-adaptive-policy-v2-design
 
 ## 3. 開放待辦
 
-1. 依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2（held-out 與 six-method 用 `v0.15.0` 的 detached worktree，real 用裁決 9 的修正 commit；都由 `supervise.py` 看管，裁決 10 的靜默時段 06:55–08:45 UTC 不量）。
+1. ~~依裁決 9 的順序跑 held-out v2、real RSNA v2、six-method v2~~：三段都已完成（2026-10-20，裁決 11、12）。接著依計畫附錄 A 寫證據紀錄 `docs/benchmarks/postgres-provenance-v2.md` 與 course brief v2（11/12 前）。
 2. runner 的 `_cpu_details`（裁決 10）：每寫一筆紀錄都查一次 WMI，逾時就不出聲地改值。改成每個程序只查一次並快取，查不到就明確失敗。量測全部結束後再改，否則續跑會被原始檔雜湊擋下。
 3. runner 的錯誤訊息（裁決 10）：`evaluate_adaptive` 與 child 只印「details redacted」，連例外類別都看不到。在不洩漏路徑與連線資訊的前提下，至少印出例外類別與 `reason=` 字彙。

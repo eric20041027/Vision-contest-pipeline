@@ -1,19 +1,22 @@
-"""E5 pre-registered analysis (spec 2026-10-23 §6.3-§6.4).
+"""E5 pre-registered analysis (spec 2026-10-23 §6.1-§6.4).
 
-Reads only the measured rows (one per scenario and method, already validated by the runner)
-and returns every verdict, table and diagnostic of the experiment. Committed before any E5
-measurement; never edited after the first one.
+Reads only the measured rows plus the runner's overlap count, and returns every verdict, table
+and diagnostic of the experiment. The runner rechecks each adaptive decision against its policy
+and fails closed before calling this. Committed before any E5 measurement; never edited after
+the first one.
 """
 
 from __future__ import annotations
 
 import statistics
 from collections import Counter, defaultdict
+from collections.abc import Set
 from typing import Any
 
 FIXED = ("postgres_full", "postgres_incremental")
 ADAPTIVE = {"v2": "postgres_adaptive", "v1": "postgres_adaptive_v1"}
 METHODS = (*FIXED, *ADAPTIVE.values())
+PARITY_FIELDS = ("graph_parity", "graph_hash_parity", "head_parity", "status_parity")
 FULL_WIN = 0.95  # §6.3 H5a: pg_full p50 <= 0.95 x pg_incr p50
 CLEAR_GAP = 1.05  # §6.4: the fixed methods differ by more than 5%
 MEDIAN_GATE, P95_GATE = 1.05, 1.10  # §6.3 H5b, the E3 gate
@@ -21,15 +24,35 @@ MEDIAN_GATE, P95_GATE = 1.05, 1.10  # §6.3 H5b, the E3 gate
 Row = dict[str, Any]
 
 
+def correctness_gate(
+    rows: list[Row], *, expected_hashes: Set[str], overlap_count: int
+) -> list[str]:
+    """§6.1: the reasons the evidence is invalid; empty when it passes. Touches no timing, so
+    a failed row (no percentiles) is a reason, never a crash."""
+    reasons = []
+    seen: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        methods = seen[row["scenario_hash"]]
+        if row["method"] in methods or row["method"] not in METHODS:
+            reasons.append(f"unexpected_row:{row['scenario_hash']}:{row['method']}")
+        methods.add(row["method"])
+        if row.get("status") != "ok":
+            reasons.append(f"failed_row:{row['scenario_hash']}:{row['method']}")
+        elif row.get("parity_rate") != 1.0 or not all(row.get(f) is True for f in PARITY_FIELDS):
+            reasons.append(f"parity:{row['scenario_hash']}:{row['method']}")
+    if set(seen) != set(expected_hashes):
+        reasons.append("coverage:scenarios")
+    if any(methods != set(METHODS) for methods in seen.values()):
+        reasons.append("coverage:methods")
+    if overlap_count != 0:
+        reasons.append(f"overlap_count:{overlap_count}")
+    return reasons
+
+
 def _groups(rows: list[Row]) -> dict[str, dict[str, Row]]:
     groups: dict[str, dict[str, Row]] = defaultdict(dict)
     for row in rows:
-        group = groups[row["scenario_hash"]]
-        if row["method"] in group or row["method"] not in METHODS:
-            raise ValueError("one row per scenario and known method")
-        group[row["method"]] = row
-    if any(set(group) != set(METHODS) for group in groups.values()):
-        raise ValueError("every scenario needs every method")
+        groups[row["scenario_hash"]][row["method"]] = row
     return dict(groups)
 
 
@@ -137,7 +160,11 @@ def _cell(entities: int, level: float, groups: list[dict[str, Row]]) -> dict[str
     }
 
 
-def analyze(rows: list[Row]) -> dict[str, Any]:
+def analyze(rows: list[Row], *, expected_hashes: Set[str], overlap_count: int) -> dict[str, Any]:
+    """The whole §6 result; only the §6.1 gate when the evidence is invalid."""
+    reasons = correctness_gate(rows, expected_hashes=expected_hashes, overlap_count=overlap_count)
+    if reasons:
+        return {"correctness_gate": {"verdict": "fails", "reasons": reasons}}
     groups = _groups(rows)
     cells: dict[int, dict[float, list[dict[str, Row]]]] = defaultdict(lambda: defaultdict(list))
     for group in groups.values():
@@ -176,6 +203,7 @@ def analyze(rows: list[Row]) -> dict[str, Any]:
         h5c = {"verdict": "not_applicable", "scenarios": len(region)}
     pooled = _pooled(list(groups.values()))
     return {
+        "correctness_gate": {"verdict": "holds", "reasons": []},
         "scenario_count": len(groups),
         "h5a": {"verdict": "holds" if h5a else "fails"},
         "layers": layers,

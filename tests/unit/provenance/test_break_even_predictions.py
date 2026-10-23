@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from performance.provenance import break_even_predictions as predictions
+from performance.provenance.evaluate_adaptive import prepare_workload
 from performance.provenance.workloads import DENSE_LEVELS, Scenario, build_scenario
 from vcp.core.errors import ValidationFailed
 
@@ -27,6 +28,23 @@ def test_loads_the_frozen_pair(frozen):
     assert frozen.policies["postgres_adaptive"].id == "postgres-adaptive-v2-9f4e58346529"
     assert frozen.policies["postgres_adaptive_v1"].id == "postgres-adaptive-v1-9f4e58346529"
     assert frozen.sha256 == {"postgres_adaptive": V2_SHA256, "postgres_adaptive_v1": V1_SHA256}
+
+
+def test_a_published_heldout_workload_still_rebuilds_bit_for_bit(tmp_path, frozen):
+    """Spec §3.2: adding the dense family left the scaled one untouched. Held-out v2's 1K chain
+    scenario at ratio 0.5 still rebuilds, with both policies installed, to its published hash."""
+    scenario = Scenario(1_000, 0.5, "chain", 20261101)
+    assert scenario.scenario_id == "scaled-20261101-1000-38ff0577eba57ab7"
+    workload = build_scenario(tmp_path / "w", scenario)
+    prepared = prepare_workload(
+        workload,
+        frozen.policies["postgres_adaptive"],
+        frozen.evidence,
+        (frozen.policies["postgres_adaptive_v1"],),
+    )
+    assert prepared.workload_hash == (
+        "a37ac0eca6eb86d20e9b70a7337d91e0cc976b37f7385a9fbfb8b581a5e505ce"
+    )
 
 
 def test_a_policy_that_sees_dirty_entities_is_refused(frozen):

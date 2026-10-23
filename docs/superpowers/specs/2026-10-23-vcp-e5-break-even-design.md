@@ -38,9 +38,9 @@
 
 ### 3.1 結構
 
-- 兩個 dataset：`dense-source`（`S` 個樣本）與 `dense-target`，由 vcp 自己的 `create_dataset_diff` 從兩份 samples 產生 pending diff。**沒有歷史 diff**（`H = 0`），讓密度成為唯一變動的特徵。
+- `dense-source`（`S = m + 1` 個樣本，留一個不變，任何版本都不是空的）與 `dense-target`，由 vcp 自己的 `create_dataset_diff` 從兩份 samples 產生 pending diff。**沒有歷史 diff**（`H = 0`），讓密度成為唯一變動的特徵。
 - 這次的 diff 有 `m` 筆 MODIFIED 與 `a` 筆 ADDED，`C = m + a`。
-- 填充（filler）沿用既有 family 的尾巴拓樸：一個 split plan、一個消費 `dense-source` 的 run，以及 `F` 筆讀數（每筆 1 個 entity、1 條邊）。
+- 填充（filler）放在第三個、和 delta 無關的 dataset `dense-filler`：一個 split plan、一個消費它的 run，以及 `F` 筆讀數（每筆 1 個 entity、1 條邊）。不像既有 family 把讀數掛在 source 的 run 下：那樣讀數會落進 incremental 的 dirty 範圍（`DIRTY_CLOSURE_SQL` 從 delta 的 source 往下走），L1–L3 每次 ingest 要多修 394–13,194 筆讀數，而成本模型看不到 dirty，密度就不再是唯一的變數。
 - 每層固定一個邊數目標，讓各密度級的 `E` 幾乎相同、只有 `C` 改變：
   - decade 3 層：`E ≈ 2,000`；
   - decade 4 層：`E ≈ 20,000`。
@@ -59,7 +59,7 @@
 | L7 | 1.00（約 0.997） | B | 全部新增，`F = 0` |
 
 - 實際的 `C`、`E`、`d` 由產生器建出 workload 後回報，連同 §6.2 的預測一起在量測前 commit。
-- 新 family 不改動既有 family：既有場景的 `scenario_hash`、產生結果與 `TOPOLOGIES` 預設矩陣都不變（測試鎖住）。
+- 新 family 不改動既有 family：既有場景的 `scenario_hash`、產生結果與 `TOPOLOGIES` 預設矩陣都不變。測試鎖住三組已發表矩陣的場景清單，以及一個已發表 1K 場景的 `workload_hash`。
 
 ### 3.3 規模與 seeds
 
@@ -67,6 +67,7 @@
 - 100K（decade 5）：只有 1K、10K 量完、時間與 C 槽空間都夠時才加；不加就在結果寫明。
 - Seeds：`20261201`、`20261202`，從未用過。overlap 檢查：E5 的 seeds 與 calibration（20260913、20260914）、held-out v1（20261001、20261002）、held-out v2（20261101、20261102）不相交，場景 hash 也不相交；`overlap_count` 必須為 0。
 - 場景數：2 層 × 7 級 × 2 seeds = 28 個，全部非零。
+- 兩個 seed 的圖幾乎一樣：圖的形狀完全由 `m`、`a`、`F` 決定，seed 只改樣本內容與哪一個樣本不變。所以兩個 seed 是同一種 workload 的重複計時，不是獨立的重現；報告不寫成「跨 seed 重現」。
 
 ## 4. 方法與量測
 
@@ -126,7 +127,9 @@
 
 ## 7. 分析腳本
 
-- `tests/performance/provenance/break_even_analysis.py`：只吃量測輸出的列，算出 §6.1–§6.4 的全部判定與表格，不讀其他來源。
+- `tests/performance/provenance/break_even_analysis.py`：只吃量測輸出的列與 runner 交給它的 `overlap_count`，算出 §6.1–§6.4 的全部判定與表格，不讀其他來源。
+  - §6.1 的關卡由它檢查：列要剛好涵蓋 `dense_matrix()` 的 28 個場景 × 四個方法；每列 `status` 為 ok、`parity_rate` 為 1、graph／graph hash／head／status 四個 parity 都為 true；`overlap_count` 為 0。不通過就只輸出關卡，不輸出任何假設判定。
+  - 決策重算由 runner 在呼叫分析之前做，不一致就整份失敗。
 - 單元測試用捏造的列覆蓋每個判定分支（成立、不成立、不適用、交會點的定義）。
 - 與 §6.2 的預測檔一起，在量測前 commit。
 

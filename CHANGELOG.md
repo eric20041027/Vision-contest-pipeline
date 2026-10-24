@@ -16,6 +16,33 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.15.1] - 2026-10-24
+
+Kaggle CLI 的版本警告不再讓讀提交列表失敗（#52，RSNA 收尾後記
+`docs/superpowers/plans/2026-10-23-rsna-wrapup-followups.md` §1 的 1a）；tag `v0.15.1` 打在發版 PR 的合併
+commit 上。PATCH 的理由：CLI 命令、VERDICT 欄位、exit code、`reason=` 字彙與產物／台帳內容都沒變；略過的
+警告只寫進 vcp 的 log，log 行不是 CLI 契約（VERDICT 的 WARN 排在 0.16.0，後記 §1 的 1b）。
+
+### Fixed
+- 讀 Kaggle 提交列表的三條路徑（`submit sync`、`submit upload` 的上傳前同步、CLI 失敗後的回讀）：kaggle CLI
+  2.2.4 在伺服器知道有更新版時，會把 `Warning: Looks like you're using an outdated kaggle version…` 印在
+  stdout、JSON 的前面，`parse_submissions` 對整段輸出做 `json.loads`，因而 FAIL
+  `platform_response: not JSON`（RSNA，2026-10）。現在只略過答案前面以 `Warning:` 開頭的行與空白行，每一行經
+  redact 後寫進 vcp logger 的 WARNING；其他任何行、只有警告沒有答案、答案之後才出現的警告，都還是 `not JSON`。
+
+### 0.15.0 之後在 main 上、本身不需要發版的內容
+- policy v2 的三段量測證據與紀錄、操作指南與 `vcp-provenance` skill 的 v2 建議（#41–#48），以及 benchmark
+  runner 的兩個修正（#42 real validation 的 artifacts、#48 CPU 身分錯誤）。skill 的更新隨本版的 plugin 版本
+  發出。
+- RSNA 收尾的後續計畫（#49）；E5 打平點實驗的事先登記、dense workload、分析腳本與 runner，以及 PostgreSQL 的
+  ADDED／REMOVED 正確性測試（#50、#51）。
+- 以上只動 `docs/`、`tests/`、skill 與 CI 的路徑篩選，`src/vcp` 不變。
+
+### 相容性
+- 不變：台帳、產物、SQLite 索引、PostgreSQL DDL 與 policy；不需要遷移，也不需要重建索引。
+- CLI 2.2.5 的 JSON 形狀沒有另外確認：RSNA 端升到 2.2.5 之後 `submit sync` 成功，代表 2.2.5 的列表能被解析；
+  `is_errored` 依賴的出錯形狀沒有再驗證。
+
 ## [0.15.0] - 2026-10-10
 
 PostgreSQL adaptive provenance 的 policy v2（#39，Data_Base 課程專題；spec

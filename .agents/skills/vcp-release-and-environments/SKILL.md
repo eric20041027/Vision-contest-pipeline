@@ -14,7 +14,7 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 1. 改 `__version__`；**同步改 `tests/unit/test_package.py` 的 `EXPECTED_CANDIDATE_VERSION` 與 Claude Code plugin 的 `.claude/.claude-plugin/plugin.json` `version`**（別的專案靠它收到新版 skill）。
 2. `CHANGELOG.md` 最上方加 `## [x.y.z] - YYYY-MM-DD`，寫 MINOR/PATCH 的理由與 Added / Changed / Fixed。
 3. `uv sync --frozen --reinstall-package vcp`（editable metadata 不會自動更新）→ `uv run pytest --cov=vcp`（`test_package` 擋三者不一致）→ `uv run ruff check . && uv run ruff format --check .`。
-4. commit `chore(release): vx.y.z` → PR → CI 綠 → merge → 在**合併 commit** 上 `git tag -a vx.y.z -m "vcp x.y.z"` → `git push origin vx.y.z`。main 有 branch protection（三個 required checks、strict），所以走 PR。
+4. commit `chore(release): vx.y.z` → PR → CI 綠 → merge → 在**合併 commit** 上 `git tag -a vx.y.z -m "vcp x.y.z"` → `git push origin vx.y.z` → `gh release create vx.y.z --verify-tag --title "vcp x.y.z" --notes-file <CHANGELOG 該版段落>`（repo 首頁的 Releases 欄才會跟上）。main 有 branch protection（三個 required checks、strict），所以走 PR。
 
 ## 環境拓樸（一場比賽一個釘版 worktree）
 - **main checkout**（`Vision-contest-pipeline/`）只做開發；它的 `.venv` 不拿來跑比賽。

@@ -369,7 +369,7 @@ def test_warning_lines_ahead_of_the_answer_are_skipped_and_logged(caplog):
     two = f"{OUTDATED}\n\n  Warning: {SECRET}\n" + json.dumps({"submissions": rows})
     with caplog.at_level(logging.WARNING, logger="vcp"):
         assert len(parse_submissions(two)[0]) == 1
-    assert SECRET not in caplog.text
+    assert "Warning: <redacted>" in caplog.text and SECRET not in caplog.text
     assert parse_submissions(f"{OUTDATED}\nNo submissions found\n") == ([], None)
 
 
@@ -388,12 +388,22 @@ def test_only_warning_lines_before_the_answer_are_skipped(text):
         parse_submissions(text)
 
 
-def test_sync_reads_a_list_the_cli_prefixed_with_a_warning():
-    """RSNA's ``submit sync`` failed with ``platform_response: not JSON`` on this answer."""
-    page = json.dumps([{"fileName": "a.csv", "date": "2026-09-01T00:00:00Z"}])
-    runner = FakeRunner([(0, f"{OUTDATED}\n{page}", "")])
-    subs = get_platform("kaggle").list_submissions(_profile(), runner)
-    assert [s.file_name for s in subs] == ["a.csv"]
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_sync_reads_a_list_the_cli_prefixed_with_a_warning(newline):
+    """RSNA's ``submit sync`` failed with ``platform_response: not JSON`` on such answers: the CLI
+    warns ahead of every page, and ahead of its word that there are none."""
+    page1 = json.dumps(
+        {
+            "submissions": [{"fileName": "a.csv", "date": "2026-09-01T00:00:00Z"}],
+            "nextPageToken": "t2",
+        }
+    )
+    page2 = json.dumps([{"fileName": "b.csv", "date": "2026-09-02T00:00:00Z"}])
+    runner = FakeRunner([(0, f"{OUTDATED}{newline}{page}", "") for page in (page1, page2)])
+    p = get_platform("kaggle")
+    assert [s.file_name for s in p.list_submissions(_profile(), runner)] == ["a.csv", "b.csv"]
+    runner = FakeRunner([(0, f"{OUTDATED}{newline}No submissions found{newline}", "")])
+    assert p.list_submissions(_profile(), runner) == []
 
 
 def test_parse_submissions_redacts_platform_strings():

@@ -6,10 +6,17 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from time import monotonic
+from types import SimpleNamespace
 
 import pytest
 
 from helpers import det_samples, det_with_runs, make_card
+from performance.provenance.workloads import (
+    DENSE_SEEDS,
+    DENSE_TOPOLOGY,
+    Scenario,
+    build_scenario,
+)
 from vcp.core.errors import IntegrityError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
@@ -178,6 +185,63 @@ def test_every_strategy_matches_canonical_and_sqlite(postgres_harness, roots, tm
     backend.rebuild(roots.data, roots.configs)
     assert backend.normalized() == before
     assert_parity(backend, roots)
+
+
+@pytest.mark.parametrize("requested", ["incremental", "full", "auto"])
+def test_added_and_removed_rows_match_canonical_and_sqlite(
+    postgres_harness, roots, tmp_path, requested
+):
+    """The tests above only modify existing rows (E5 spec 2026-10-23 §10): grow ``tiny`` by
+    adding, removing and modifying rows, then remove two of the added rows again."""
+    first, _, _ = det_with_runs(roots, tmp_path, n=24)
+    grown = [sample.model_copy(deep=True) for sample in first.samples[1:]]
+    grown[0] = grown[0].model_copy(update={"group": "changed"})
+    grown += det_samples(27, seed=0)[24:]
+    dataset(roots, "grown", grown)
+    dataset(roots, "shrunk", grown[:-2])
+    backend = postgres_harness.backend
+    backend.rebuild(roots.data, roots.configs)
+    sqlite = ProvenanceIndex(tmp_path / "reference.sqlite3")
+    sqlite.rebuild(roots.data, roots.configs)
+    for ident, source, target, counts in (
+        ("grow", "tiny", "grown", {"ADDED": 3, "MODIFIED": 1, "REMOVED": 1}),
+        ("shrink", "grown", "shrunk", {"REMOVED": 2}),
+    ):
+        assert diff(roots, ident, source, target).summary.counts == counts
+        result = backend.ingest_diff(ident, roots.data, roots.configs, requested_strategy=requested)
+        assert result.inserted and result.changed_samples == sum(counts.values())
+        assert result.selected_strategy == ("INCREMENTAL" if requested == "incremental" else "FULL")
+        sqlite.ingest_diff(ident, roots.data, roots.configs)
+        assert backend.normalized() == sqlite.normalized()
+        assert_parity(backend, roots)
+    head = next(key for key in backend.load_graph().entities if key.startswith("dataset:grown@"))
+    assert any(record.status.value == "STALE" for record in backend.statuses(head).values())
+
+
+@pytest.mark.parametrize("requested", ["incremental", "full"])
+@pytest.mark.parametrize(
+    ("level", "kinds"),
+    [(0.30, {"MODIFIED"}), (0.60, {"ADDED", "MODIFIED"}), (1.0, {"ADDED"})],
+)
+def test_e5_dense_deltas_match_their_expected_graph(
+    postgres_harness, tmp_path, requested, level, kinds
+):
+    """The E5 dense shapes at 32 edges: modified rows only, mixed, and added rows only."""
+    workload = build_scenario(
+        tmp_path / "workload",
+        Scenario(16, level, DENSE_TOPOLOGY, DENSE_SEEDS[0], track="dense"),
+    )
+    assert {change.change_type.value for change in workload.expected.changes.values()} == kinds
+    backend = postgres_harness.backend
+    backend.rebuild(workload.data, workload.configs)
+    workload.publish(workload.data)
+    result = backend.ingest_diff(
+        workload.artifact_id, workload.data, workload.configs, requested_strategy=requested
+    )
+    assert result.changed_samples == workload.changed_samples
+    assert result.selected_strategy == requested.upper()
+    assert backend.load_graph().normalized() == workload.expected.normalized()
+    assert_parity(backend, SimpleNamespace(data=workload.data, configs=workload.configs))
 
 
 @pytest.mark.parametrize("requested", ["incremental", "full", "auto"])

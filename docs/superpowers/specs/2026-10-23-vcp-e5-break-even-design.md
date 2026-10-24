@@ -141,7 +141,7 @@
 
 ## 9. 相容性與版本
 
-- `src/vcp` 不變，不發版。新程式只在 `tests/performance/provenance/`：`workloads.py` 的 `dense` family、`evaluate_adaptive.py` 的 E5 模式、`break_even_analysis.py`。
+- `src/vcp` 不變，不發版。新程式只在 `tests/performance/provenance/`：`workloads.py` 的 `dense` family、E5 runner `break_even_evaluation.py`（共用 `evaluate_adaptive.py` 的列驗證與隔離量測；量測前從「`evaluate_adaptive.py` 的 E5 模式」改為獨立入口，見後記裁決 8）、`break_even_analysis.py`。
 - 既有 workload 與既有證據的重現性由測試鎖住（§3.2）。
 
 ## 10. 風險與已知限制

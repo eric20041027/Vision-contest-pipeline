@@ -8,6 +8,7 @@ on:
       - "tests/integration/conftest.py"
       - "tests/integration/provenance/**"
       - "tests/integration/postgres/**"
+      - "tests/performance/provenance/workloads.py"
       - "tests/unit/provenance/**"
       - "pyproject.toml"
       - "uv.lock"

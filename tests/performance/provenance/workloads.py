@@ -61,6 +61,15 @@ RATIOS = (0, 0.001, 0.01, 0.05, 0.10, 0.25, 0.50, 0.90, 1.0)
 TOPOLOGIES = ("chain", "branched")
 CALIBRATION_SEEDS = (20260913, 20260914)
 HELDOUT_SEEDS = (20261001, 20261002)
+# E5 break-even family (spec 2026-10-23 §3): ``change_ratio`` is the target density
+# changed_samples / total_edges, and the graph after the delta has 2 x ``entities`` edges.
+DENSE_SEEDS = (20261201, 20261202)
+DENSE_SCALES = (1_000, 10_000)
+DENSE_LEVELS = (0.17, 0.30, 0.40, 0.50, 0.60, 0.75, 1.0)
+DENSE_TOPOLOGY = "flat"
+# Every dense graph after the delta also has the delta's DERIVED_FROM and two PRODUCED_BY
+# edges, and the filler dataset's split, plan->run and dataset->run edges.
+DENSE_STRUCTURAL_EDGES = 6
 
 
 @dataclass(frozen=True)
@@ -76,8 +85,11 @@ class Scenario:
         minimum = 32 if self.track == "scaled" else 1
         if self.entities < minimum or not math.isfinite(self.change_ratio):
             raise ValueError("scenario has too few entities or a non-finite ratio")
-        if not 0 <= self.change_ratio <= 1 or self.topology not in TOPOLOGIES:
+        topologies = (DENSE_TOPOLOGY,) if self.track == "dense" else TOPOLOGIES
+        if not 0 <= self.change_ratio <= 1 or self.topology not in topologies:
             raise ValueError("invalid scenario ratio or topology")
+        if self.track == "dense" and self.change_ratio == 0:
+            raise ValueError("a dense scenario needs a nonzero density")
 
     @property
     def scenario_hash(self) -> str:
@@ -109,6 +121,42 @@ def scenario_matrix(
     if len({s.scenario_id for s in result}) != len(result):
         raise ValueError("duplicate scenario in matrix")
     return result
+
+
+def dense_matrix(
+    *, seeds=DENSE_SEEDS, entities=DENSE_SCALES, levels=DENSE_LEVELS
+) -> list[Scenario]:
+    result = []
+    for seed in seeds:
+        batch = [
+            Scenario(size, level, DENSE_TOPOLOGY, seed, track="dense")
+            for size in entities
+            for level in levels
+        ]
+        random.Random(seed).shuffle(batch)
+        result.extend(batch)
+    if len({s.scenario_id for s in result}) != len(result):
+        raise ValueError("duplicate scenario in matrix")
+    return result
+
+
+def dense_counts(edge_target: int, density: float) -> tuple[int, int, int]:
+    """(modified, added, readings) whose graph after the delta has exactly ``edge_target``
+    edges at the nearest reachable density. A MODIFIED row adds two change edges and an ADDED
+    row one, so up to 0.5 the delta modifies and readings fill the rest; above it the delta
+    trades modified rows for added ones and there are no readings."""
+    room = edge_target - DENSE_STRUCTURAL_EDGES
+    if room < 2 or not 0 < density <= 1:
+        raise ValueError("infeasible dense edge target or density")
+    changed = round(density * edge_target)
+    if density <= 0.5:
+        changed = min(changed, room // 2)
+        return changed, 0, room - 2 * changed
+    changed = min(changed, room)
+    modified = room - changed
+    if modified > changed:
+        raise ValueError("infeasible dense edge target or density")
+    return modified, changed - modified, 0
 
 
 @dataclass(frozen=True)
@@ -185,11 +233,13 @@ def finish_workload(
     after: str,
     *,
     sample_entities: int,
+    edge_target: int | None = None,
 ) -> Workload:
-    """Freeze a baseline and stage its delta outside the canonical scan root."""
+    """Freeze a baseline and stage its delta outside the canonical scan root. A dense fixture
+    is sized by the edges of the graph after its delta instead of the baseline's entities."""
     data, configs = root / "data", root / "configs"
     baseline = build_graph(data, configs)
-    if len(baseline.entities) != scenario.entities:
+    if edge_target is None and len(baseline.entities) != scenario.entities:
         raise ValueError("canonical fixture does not match the target entity count")
     baseline_hash = graph_hash(baseline)
     historical_changes = len(baseline.changes)
@@ -199,6 +249,8 @@ def finish_workload(
     expected = build_graph(data, configs)
     if expected.gaps or any(e.broken_reason for e in expected.entities.values()):
         raise ValueError("canonical fixture contains broken evidence")
+    if edge_target is not None and len(expected.edges) != edge_target:
+        raise ValueError("dense fixture does not match the target edge count")
     pending = root / "pending"
     shutil.move(str(delta.artifact_dir), pending)
     source_id = dataset_version_id(before, delta.summary.from_samples_hash)
@@ -403,6 +455,76 @@ def _write_synthetic_history_diff(
             return writer.dir
 
 
+def _synthetic_card(name: str, count: int) -> DatasetCard:
+    return DatasetCard(
+        name=name,
+        task="cls",
+        image_root=f"raw/{name}",
+        source=SourceInfo(
+            importer="synthetic",
+            importer_version="1",
+            raw_path="opaque",
+            raw_hash="0" * 64,
+            license="synthetic",
+            url="",
+            downloaded_at=stamp(),
+        ),
+        created_at=stamp(),
+        sample_count=count,
+        samples_hash="0" * 64,
+    )
+
+
+def _write_run_tail(
+    data: Path, configs: Path, card: DatasetCard, *, count: int, readings: int
+) -> None:
+    """One fixed split over ``card``'s ``count`` samples, one run trained on it, and
+    ``readings`` readings of that run: the benchmark's run->reading topology."""
+    paths = DatasetPaths.resolve(card.name, data_root=data, configs_root=configs)
+    plan = SplitPlan(
+        plan_id="fixed",
+        dataset=card.name,
+        dataset_hash=card.samples_hash,
+        strategy="fixed",
+        params={},
+        subsets=[SubsetSpec(name="train", role="train", ratio=1)],
+        assignment={f"delta-{index:08d}": "train" for index in range(count)},
+        created_at=stamp(),
+    )
+    save_plan(plan, paths)
+    run = RunCard(
+        run_id="r-000000",
+        dataset=card.name,
+        samples_hash=card.samples_hash,
+        plan_id=plan.plan_id,
+        trained_on=["train"],
+        source=RunSource(),
+        created_at=stamp(),
+    )
+    dump_yaml_model(run, data / "runs" / run.run_id / "run.yaml")
+    ledger = data / "measure" / card.name / "readings.jsonl"
+    ledger.parent.mkdir(parents=True)
+    with ledger.open("w", encoding="utf-8", newline="\n") as stream:
+        for index in range(readings):
+            reading = Reading(
+                reading_id=f"r-{index:06d}",
+                ts=stamp(),
+                run_id=run.run_id,
+                dataset=run.dataset,
+                samples_hash=run.samples_hash,
+                plan_id=run.plan_id,
+                subset="train",
+                metric="accuracy",
+                metric_version="1",
+                params={},
+                value=0.5,
+                per_class=None,
+                n_samples=count,
+                prediction_sha="0" * 64,
+            )
+            stream.write(reading.model_dump_json() + "\n")
+
+
 def build_scenario(root: Path, scenario: Scenario) -> Workload:
     """Build exact-size graphs using real DatasetCards, plans, runs, readings and diffs.
 
@@ -410,6 +532,8 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
     a->b->source; branched uses a->source and b->source. A small operational tail
     reuses the existing run->reading benchmark topology and fills the exact count.
     """
+    if scenario.track == "dense":
+        return _build_dense_scenario(root, scenario)
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=False)
     data, configs = root / "data", root / "configs"
@@ -423,26 +547,9 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
         ("synthetic-source", 2),
         ("synthetic-target", 2),
     ):
-        card = DatasetCard(
-            name=name,
-            task="cls",
-            image_root=f"raw/{name}",
-            source=SourceInfo(
-                importer="synthetic",
-                importer_version="1",
-                raw_path="opaque",
-                raw_hash="0" * 64,
-                license="synthetic",
-                url="",
-                downloaded_at=stamp(),
-            ),
-            created_at=stamp(),
-            sample_count=count,
-            samples_hash="0" * 64,
-        )
         card = _write_synthetic_dataset(
             DatasetPaths.resolve(name, data_root=data, configs_root=configs),
-            card,
+            _synthetic_card(name, count),
             count=count,
             revision=revision,
             seed=scenario.seed,
@@ -464,51 +571,46 @@ def build_scenario(root: Path, scenario: Scenario) -> Workload:
         )
     if source_card is None:  # pragma: no cover - fixed fixture definition above
         raise RuntimeError("synthetic source dataset was not built")
-    paths = DatasetPaths.resolve(source_card.name, data_root=data, configs_root=configs)
-    plan = SplitPlan(
-        plan_id="fixed",
-        dataset=source_card.name,
-        dataset_hash=source_card.samples_hash,
-        strategy="fixed",
-        params={},
-        subsets=[SubsetSpec(name="train", role="train", ratio=1)],
-        assignment={f"delta-{index:08d}": "train" for index in range(count)},
-        created_at=stamp(),
-    )
-    save_plan(plan, paths)
-    run = RunCard(
-        run_id="r-000000",
-        dataset=source_card.name,
-        samples_hash=source_card.samples_hash,
-        plan_id=plan.plan_id,
-        trained_on=["train"],
-        source=RunSource(),
-        created_at=stamp(),
-    )
-    dump_yaml_model(run, data / "runs" / run.run_id / "run.yaml")
     # Four datasets, two diff artifacts, three sample versions, one split, one run.
-    reading_count = scenario.entities - (3 * count + 8)
-    ledger = data / "measure" / source_card.name / "readings.jsonl"
-    ledger.parent.mkdir(parents=True)
-    with ledger.open("w", encoding="utf-8", newline="\n") as stream:
-        for index in range(reading_count):
-            reading = Reading(
-                reading_id=f"r-{index:06d}",
-                ts=stamp(),
-                run_id=run.run_id,
-                dataset=run.dataset,
-                samples_hash=run.samples_hash,
-                plan_id=run.plan_id,
-                subset="train",
-                metric="accuracy",
-                metric_version="1",
-                params={},
-                value=0.5,
-                per_class=None,
-                n_samples=count,
-                prediction_sha="0" * 64,
-            )
-            stream.write(reading.model_dump_json() + "\n")
+    _write_run_tail(
+        data, configs, source_card, count=count, readings=scenario.entities - (3 * count + 8)
+    )
     return finish_workload(
         root, scenario, "synthetic-source", "synthetic-target", sample_entities=count
+    )
+
+
+def _build_dense_scenario(root: Path, scenario: Scenario) -> Workload:
+    """Spec 2026-10-23 §3: no history; one delta of MODIFIED and ADDED rows from
+    ``dense-source`` to ``dense-target``; and an unrelated ``dense-filler`` dataset whose run
+    carries the readings. One source sample always stays unchanged, so no version is empty."""
+    root = Path(root).resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    data, configs = root / "data", root / "configs"
+    edge_target = 2 * scenario.entities
+    modified, added, readings = dense_counts(edge_target, scenario.change_ratio)
+    kept = modified + 1
+    changed = frozenset(random.Random(scenario.seed).sample(range(kept), modified))
+    cards = {}
+    for name, count, delta in (
+        ("dense-source", kept, frozenset()),
+        ("dense-target", kept + added, changed),
+        ("dense-filler", 1, frozenset()),
+    ):
+        cards[name] = _write_synthetic_dataset(
+            DatasetPaths.resolve(name, data_root=data, configs_root=configs),
+            _synthetic_card(name, count),
+            count=count,
+            revision=2,
+            seed=scenario.seed,
+            changed=delta,
+        )
+    _write_run_tail(data, configs, cards["dense-filler"], count=1, readings=readings)
+    return finish_workload(
+        root,
+        scenario,
+        "dense-source",
+        "dense-target",
+        sample_entities=kept + added,
+        edge_target=edge_target,
     )

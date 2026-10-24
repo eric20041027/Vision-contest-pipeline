@@ -12,7 +12,8 @@ import math
 import statistics
 import sys
 import tempfile
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -212,19 +213,50 @@ class BenchmarkRow(_Sample):
         )
 
 
+@dataclass(frozen=True)
+class RowFamily:
+    """A workload family's row model, the scenario a row names, and the row fields its
+    generator pins without building any fixture."""
+
+    row: type[BenchmarkRow]
+    scenario: Callable[[BenchmarkRow], Scenario]
+    fields: Callable[[Scenario], dict[str, int]]
+
+
+def _scaled_fields(scenario):
+    sample_entities, changed_samples = scenario_counts(scenario)
+    return {"sample_entities": sample_entities, "changed_samples": changed_samples}
+
+
+SCALED = RowFamily(
+    BenchmarkRow,
+    lambda row: Scenario(row.entities, row.change_ratio, row.topology, row.seed),
+    _scaled_fields,
+)
+
+
 def validate_rows(rows, *, seeds, methods):
     """Reject incomplete/mixed/failed inputs before any fit, publication or aggregate."""
     try:
         expected = expected_scenarios(seeds)
-        validated = [BenchmarkRow.model_validate(row) for row in rows]
-        if not validated or {r.seed for r in validated} != set(seeds):
+    except ValueError:
+        raise ValidationFailed("invalid_benchmark_rows") from None
+    return validate_family_rows(rows, expected, methods=methods, family=SCALED)
+
+
+def validate_family_rows(rows, expected, *, methods, family):
+    """``validate_rows`` for any family: exactly ``expected`` (scenario hash -> scenario)
+    x ``methods``, every row complete, consistent and from one environment."""
+    try:
+        validated = [family.row.model_validate(row) for row in rows]
+        if not validated or {r.seed for r in validated} != {s.seed for s in expected.values()}:
             raise ValueError
         groups = {}
         environments = set()
         ids = set()
         workloads = set()
         for row in validated:
-            scenario = Scenario(row.entities, row.change_ratio, row.topology, row.seed)
+            scenario = family.scenario(row)
             if (row.scenario_id, row.scenario_hash) != (
                 scenario.scenario_id,
                 scenario.scenario_hash,
@@ -237,14 +269,12 @@ def validate_rows(rows, *, seeds, methods):
                 raise ValueError
             group[row.method] = row
             row.features()
-            sample_entities, changed_samples = scenario_counts(scenario)
             if (
                 row.repetitions != len(row.samples)
                 or row.repetitions != scenario.repetitions
-                or row.sample_entities != sample_entities
-                or row.changed_samples != changed_samples
-                or (row.selected_strategy == "NO_OP") != (changed_samples == 0)
-                or (changed_samples == 0 and row.dirty_entities != 0)
+                or any(getattr(row, key) != value for key, value in family.fields(scenario).items())
+                or (row.selected_strategy == "NO_OP") != (row.changed_samples == 0)
+                or (row.changed_samples == 0 and row.dirty_entities != 0)
                 or row.dirty_ratio != row.dirty_entities / row.total_entities
                 or row.realized_change_ratio != row.changed_samples / row.sample_entities
                 or row.total_changes != row.historical_changes + row.changed_samples

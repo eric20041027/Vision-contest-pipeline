@@ -195,6 +195,11 @@ def evaluate(rows, frozen: Frozen) -> dict[str, Any]:
             for method in ADAPTIVE
         },
         "predictions": {"file": frozen.predictions_file, "sha256": PREDICTIONS_SHA256},
+        # Spec §6.5 forbids editing it after the first measurement; the bytes that ran.
+        "analysis_script": {
+            "file": Path(analysis.__file__).name,
+            "sha256": sha256_file(Path(analysis.__file__)),
+        },
         "overlap_count": overlaps,
         "prediction_agreement": _agreement(groups, frozen),
         "analysis": result,

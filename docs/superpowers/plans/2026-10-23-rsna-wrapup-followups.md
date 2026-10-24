@@ -24,6 +24,11 @@
 - 1a（PATCH 0.15.1）：解析前略過資料開始之前的警告行。哪些行可以略過（只限 `Warning:` 開頭，或資料前的任何非資料行）在實作前決定，原則是不要放寬到把真正的錯誤訊息吞掉。回歸測試：假 CLI 先印警告、再印 JSON。
 - 1b（併入 0.16.0）：略過的警告以 WARN 浮出，`submit status` 也提示 CLI 過舊。新的 VERDICT 欄位屬於 CLI 契約，是 MINOR。
 - 一併確認 CLI 2.2.5 的 JSON 形狀和 2.2.4 相同：`is_errored` 依 2.2.4 的形狀判斷出錯，形狀變了就更新假 CLI 的 fixture。
+- 1a 的處置（2026-10-23，分支 `fix/kaggle-warning-lines`）：
+  - 裁決：只略過答案前面以 `Warning:` 開頭的行與空白行，每一行經 redact 後寫進 vcp logger 的 WARNING。其他任何行、只有警告沒有答案、答案之後才出現的警告，都還是 `not JSON`。回歸測試包含 RSNA 失敗的那條路徑：`list_submissions` 讀到先印警告的列表。
+  - log 行不是 CLI 契約，VERDICT 欄位不變，所以仍是 PATCH。VERDICT 的 WARN 留給 1b。
+  - CLI 2.2.5 的 JSON 形狀沒有確認：確認要用使用者的 Kaggle 憑證呼叫一次真的 CLI，這由使用者決定。RSNA 端升到 2.2.5 之後 `submit sync` 成功，代表 2.2.5 的列表能被解析；`is_errored` 依賴的出錯形狀沒有再驗證。
+  - 發版（0.15.1）要使用者同意，修正先合併進 `main`。
 
 ## 2. 【缺口，P2】平台上實際勾選的最終提交沒有記錄、也沒有核對
 

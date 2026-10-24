@@ -53,6 +53,9 @@ UPLOAD_FAILED = "could not submit to competition"
 PRINTED_REF = re.compile(r"(?m)^\s*Submission ref:\s*([0-9]+)\s*$")
 # What CLI 2.2.4 prints for a competition without submissions, whatever --format asked for.
 NO_SUBMISSIONS = "No submissions found"
+# CLI 2.2.4 prints ``Warning: Looks like you're using an outdated ...`` on stdout ahead of its
+# answer once the server knows a newer CLI (RSNA, 2026-10).
+WARNING_PREFIX = "Warning:"
 # Seconds before each look at the list when the CLI's answer confirms nothing. The platform
 # usually lists a submission by the time the CLI returns, so the first look is at once.
 READBACK_DELAYS = (0.0, 2.0, 5.0, 10.0)
@@ -130,9 +133,25 @@ def is_errored(status: str, public: float | None, private: float | None) -> bool
     return status.rsplit(".", 1)[-1].lower() in ("error", "complete")
 
 
+def _past_warnings(text: str) -> str:
+    """The CLI's answer past the ``Warning:`` lines (and blank lines) it printed first, each
+    logged redacted. Nothing else is dropped, so an error the CLI printed is still not JSON."""
+    lines = text.splitlines(keepends=True)
+    start = 0
+    while start < len(lines) and (
+        not lines[start].strip() or lines[start].lstrip().startswith(WARNING_PREFIX)
+    ):
+        if lines[start].strip():
+            log.warning("kaggle CLI: %s", redact(lines[start].strip()))
+        start += 1
+    return "".join(lines[start:])
+
+
 def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None]:
     """One page of ``competitions submissions --format json``: a bare list, or an object holding
-    the list plus a ``nextPageToken`` -- or the CLI's plain-text word that there are none."""
+    the list plus a ``nextPageToken`` -- or the CLI's plain-text word that there are none --
+    after any warning lines the CLI printed ahead of it."""
+    text = _past_warnings(text)
     if text.strip() == NO_SUBMISSIONS:
         return [], None
     try:

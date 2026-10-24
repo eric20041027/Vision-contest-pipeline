@@ -352,6 +352,50 @@ def test_parse_submissions_shapes_and_paging():
         parse_date("yesterday")
 
 
+# What CLI 2.2.4 printed on stdout ahead of its JSON in RSNA's last week (2026-10), once the
+# server knew a newer CLI; the wording is approximate, the version numbers made up.
+OUTDATED = (
+    "Warning: Looks like you're using an outdated `kaggle` version (installed: 2.2.4), "
+    "please consider upgrading to the latest version (2.2.5)"
+)
+
+
+def test_warning_lines_ahead_of_the_answer_are_skipped_and_logged(caplog):
+    rows = [{"ref": 11, "fileName": "submission.csv", "date": "2026-08-31T21:28:00Z"}]
+    with caplog.at_level(logging.WARNING, logger="vcp"):
+        subs, token = parse_submissions(f"{OUTDATED}\n{json.dumps(rows)}\n")
+    assert [s.platform_ref for s in subs] == ["11"] and token is None
+    assert "outdated `kaggle` version" in caplog.text
+    two = f"{OUTDATED}\n\n  Warning: {SECRET}\n" + json.dumps({"submissions": rows})
+    with caplog.at_level(logging.WARNING, logger="vcp"):
+        assert len(parse_submissions(two)[0]) == 1
+    assert SECRET not in caplog.text
+    assert parse_submissions(f"{OUTDATED}\nNo submissions found\n") == ([], None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"Error: 401 Unauthorized\n{json.dumps([])}",
+        f"{OUTDATED}\nsomething else\n{json.dumps([])}",
+        f"{OUTDATED}\n",
+        f"{json.dumps([])}\n{OUTDATED}\n",
+    ],
+)
+def test_only_warning_lines_before_the_answer_are_skipped(text):
+    """Any other line, a warning without an answer, or a warning after it is still not JSON."""
+    with pytest.raises(ValidationFailed, match="not JSON"):
+        parse_submissions(text)
+
+
+def test_sync_reads_a_list_the_cli_prefixed_with_a_warning():
+    """RSNA's ``submit sync`` failed with ``platform_response: not JSON`` on this answer."""
+    page = json.dumps([{"fileName": "a.csv", "date": "2026-09-01T00:00:00Z"}])
+    runner = FakeRunner([(0, f"{OUTDATED}\n{page}", "")])
+    subs = get_platform("kaggle").list_submissions(_profile(), runner)
+    assert [s.file_name for s in subs] == ["a.csv"]
+
+
 def test_parse_submissions_redacts_platform_strings():
     rows = [
         {

@@ -13,7 +13,7 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   1. 改 `src/vcp/__init__.py` 的 `__version__`——它是唯一來源，`pyproject.toml` 以 `[tool.hatch.version]` 動態讀它，`uv.lock` 不記版本字面值。同一個 commit 把 Claude Code plugin 的 `.claude/.claude-plugin/plugin.json` 的 `version` 改成同一個號碼（`tests/unit/test_skills_plugin.py` 會擋住不一致），別的專案才會收到新版 skill。
   2. 在本檔最上方加一條 `## [x.y.z] - YYYY-MM-DD`，列 Added / Changed / Fixed / Removed 與影響的層。
   3. `uv sync --reinstall-package vcp`（editable 安裝的 metadata 不會因 `__init__.py` 改動自動重建），再 `uv run pytest --cov=vcp`（`tests/unit/test_package.py` 會擋住 `__version__`、安裝 metadata 與本檔最新條目三者不一致）與 `uv run ruff check . && uv run ruff format --check .`。
-  4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`。
+  4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`，再以本檔該版的段落建 GitHub Release：`gh release create vx.y.z --verify-tag --title "vcp x.y.z" --notes-file <該版段落>`（repo 首頁的 Releases 欄才會跟上；0.15.1 以前的 tag 在 2026-10-24 一次補齊）。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
 ## [0.15.1] - 2026-10-24

@@ -13,7 +13,9 @@
   - `401eaba` test(provenance): PostgreSQL parity for ADDED and REMOVED diffs
   - `0c5a843` feat(bench): E5 break-even runner（本後記裁決 8–12）
   - `a1d68d1` test(bench): pin every dense count and the registered workloads（code review 的處置）
-- 還沒有任何 E5 量測。spec §6 從第一個 E5 量測開始凍結。
+- 量測：2026-10-27 23:48 UTC 到 10-28 03:07 UTC，從 `86919f3` 的 detached worktree。spec §6 從那時起凍結。
+  結果 `docs/benchmarks/postgres-provenance-break-even-v1.json`（SHA-256 `c1e41cb8d6b49056dd214624e4b5c153c123dc3ead771f59f57b518eeef5d260`），
+  說明 `postgres-provenance-break-even-v1.md`。VERDICT `WARN`：H5a 成立、H5b 不成立、H5c 成立。
 
 ## 1. 裁決（spec 沒寫死、實作時決定的事）
 
@@ -65,9 +67,21 @@
   - LOW（leakage 只測兩條路徑）：改成五條路徑各一個案例，另測同一個場景的四列只算一次。
   - LOW（輸出沒有記分析腳本）：評估區塊加 `analysis_script`（檔名與 SHA-256）。
 
+- 2026-10-25 量測前的準備：detached worktree 開在 `86919f3`，`uv sync --frozen --extra postgres`；`86919f3` 到當時的 main（`eb7da5c`）之間，runner 與 benchmark 的檔案沒有變（只動了 Kaggle 與版本號）。
+  預跑檢查通過：兩個 policy 的 SHA、預測檔的 SHA、28 個場景 × 4 個方法、PostgreSQL service、policy 的環境指紋。
+  重開機前可用記憶體只有 5.2 GiB（nonpaged pool 漲到 4.19 GiB），低於看管程式的 8 GiB 啟動門檻；使用者決定重開機後就跑，不等 11/3（spec §12 第 1 項）。
+- 2026-10-27 量測：repo 外另寫一組 E5 專用的啟動、停止、續跑腳本（policy v2 的腳本保持原樣，當紀錄），續跑交給一個每 15 分鐘的排程工作。
+  看管程式只啟動一次（可用 14.5 GiB）、沒有暫停，runner 3 小時 18 分跑完；第一次啟動就是經續跑腳本發出，之後沒有中斷、也沒有再續跑；量完後刪掉排程工作，證據另備份一份在 repo 外。
+- 2026-10-28 結果（全文見結果檔）：
+  - 正確性 gate 通過；v1、v2 的 28 個選擇都和預測檔相同。
+  - H5a 成立：兩層的實測交會點都在 L4（0.4985／0.4999），模型的打平點 0.504。
+  - H5b 不成立，照 spec §6.5 如實報告：p50 比值 0.959 過關，p95 比值 1.628 超過 1.10。原因是 v2 在 L2、L3 的「不確定」區選 FULL，10K 慢 1.66–3.11 倍。
+  - H5c 成立：交會點以上 16 個場景，v2 4,979 ms 對 pg_incr 5,856 ms。
+  - 殘差的觀察：10K 的 FULL 隨填充讀數變少而變快（27.9 → 9.0 秒，`E` 不變），1K 幾乎沒有這個效應；原因沒有查（待辦 2）。
+
 ## 4. 待辦
 
-1. 量測前：確認 `VCP-PostgreSQL-17.11` 在跑（port 55432）；檢查 C 槽空間；從 runner 合併後的 commit 開 detached worktree，`uv sync --frozen --extra postgres`。
-2. 11/3–11/10 量測，在 detached worktree 裡經 `bench_launch.py`、在 `supervise.py` 看管下執行：
-   `uv run --frozen python tests/performance/provenance/break_even_evaluation.py --policy-from docs/benchmarks/postgres-provenance-policy-v2.json --comparison-policy-from docs/benchmarks/postgres-provenance-calibration-v2.json --predictions-from docs/benchmarks/postgres-provenance-break-even-v1-predictions.json --output docs/benchmarks/postgres-provenance-break-even-v1.json --work-dir C:/vcp-data/bench/break-even-v1-work`
-3. 11/12 前交付（spec §8）。
+1. 已完成：量測（2026-10-28）、spec §8 的第 1、2 項（本次結果 PR）。第 3 項（給 Data_Base 的結果摘要）放使用者的 Downloads，不進 repo。
+2. 可選、不急（12/6 之後，課程結束）：查 FULL 重建讀數的成本。10K 的 A 段每少 1,000 筆讀數，FULL 約快 1.4 秒；1K 只差 27 毫秒，看起來不是線性。
+   先在本機用 profiler 找熱點，不新增 benchmark；證實是 `src/vcp` 的效能問題再開 issue。
+3. 可選：100K 或 `H > 0` 的打平點，要另開實驗（新 seeds、新預測檔、新 id），由使用者決定。

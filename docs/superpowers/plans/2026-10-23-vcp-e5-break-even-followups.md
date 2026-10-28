@@ -67,7 +67,7 @@
   - LOW（leakage 只測兩條路徑）：改成五條路徑各一個案例，另測同一個場景的四列只算一次。
   - LOW（輸出沒有記分析腳本）：評估區塊加 `analysis_script`（檔名與 SHA-256）。
 
-- 2026-10-25 量測前的準備：detached worktree 開在 `86919f3`，`uv sync --frozen --extra postgres`；`86919f3` 到當時的 main（`eb7da5c`）之間，runner 與 benchmark 的檔案沒有變（只動了 Kaggle 與版本號）。
+- 2026-10-25 量測前的準備：detached worktree 開在 `86919f3`，`uv sync --frozen --extra postgres`；`86919f3` 到當時的 main（`eb7da5c`）之間，`tests/performance/` 沒有變（`src/vcp` 只動了 Kaggle 修正與版本號，其餘是 README、文件與 skill）。
   預跑檢查通過：兩個 policy 的 SHA、預測檔的 SHA、28 個場景 × 4 個方法、PostgreSQL service、policy 的環境指紋。
   重開機前可用記憶體只有 5.2 GiB（nonpaged pool 漲到 4.19 GiB），低於看管程式的 8 GiB 啟動門檻；使用者決定重開機後就跑，不等 11/3（spec §12 第 1 項）。
 - 2026-10-27 量測：repo 外另寫一組 E5 專用的啟動、停止、續跑腳本（policy v2 的腳本保持原樣，當紀錄），續跑交給一個每 15 分鐘的排程工作。
@@ -82,6 +82,6 @@
 ## 4. 待辦
 
 1. 已完成：量測（2026-10-28）、spec §8 的第 1、2 項（本次結果 PR）。第 3 項（給 Data_Base 的結果摘要）放使用者的 Downloads，不進 repo。
-2. 可選、不急（12/6 之後，課程結束）：查 FULL 重建讀數的成本。10K 的 A 段每少 1,000 筆讀數，FULL 約快 1.4 秒；1K 只差 27 毫秒，看起來不是線性。
+2. 可選、不急（12/6 之後，課程結束）：查 FULL 重建讀數的成本。10K 的 A 段從 L1 到 L4，平均每少 1,000 筆讀數 FULL 約快 1.4 秒（各段 1.1–2.0 秒，越往後越多）；1K 只差 27 毫秒，看起來不是線性。
    先在本機用 profiler 找熱點，不新增 benchmark；證實是 `src/vcp` 的效能問題再開 issue。
 3. 可選：100K 或 `H > 0` 的打平點，要另開實驗（新 seeds、新預測檔、新 id），由使用者決定。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from typing import Any
 
 from vcp.core.errors import ValidationFailed
 from vcp.provenance.graph import ProvenanceGraph
@@ -10,6 +11,7 @@ from vcp.provenance.schema import (
     EntityStatus,
     ExplainResult,
     ImpactResult,
+    ProvenanceEntity,
     SampleChange,
     SemanticEffect,
     StatusRecord,
@@ -68,15 +70,36 @@ def _changes_to_head(graph: ProvenanceGraph, head_id: str) -> dict[str, list[Sam
     }
 
 
-def _plan_for(graph: ProvenanceGraph, dataset_id: str | None, plan_id: str | None):
-    matches = [
-        entity
-        for entity in graph.entities.values()
-        if entity.entity_type == "split"
-        and entity.dataset_version_id == dataset_id
-        and entity.attributes.get("plan_id") == plan_id
-    ]
-    return sorted(matches, key=lambda entity: entity.entity_id)[0] if matches else None
+class _SplitLookup:
+    """Resolve a split by (dataset version, plan id) from one pass over the graph.
+
+    The index is built on first use, so a pass that never meets a run or reading pays nothing.
+    Keys keep the raw ``plan_id`` attribute: a non-string plan id never equals the stringified
+    id a run or reading looks up. Of several splits sharing a key the lowest entity id wins.
+    """
+
+    def __init__(self, graph: ProvenanceGraph) -> None:
+        self._graph = graph
+        self._index: dict[tuple[str | None, Any], ProvenanceEntity] | None = None
+
+    def get(self, dataset_id: str | None, plan_id: str | None) -> ProvenanceEntity | None:
+        if self._index is None:
+            self._index = self._build()
+        return self._index.get((dataset_id, plan_id))
+
+    def _build(self) -> dict[tuple[str | None, Any], ProvenanceEntity]:
+        index: dict[tuple[str | None, Any], ProvenanceEntity] = {}
+        for entity in self._graph.entities.values():
+            if entity.entity_type != "split":
+                continue
+            key = (entity.dataset_version_id, entity.attributes.get("plan_id"))
+            try:
+                kept = index.get(key)
+            except TypeError:  # an unhashable plan id cannot equal any looked-up id
+                continue
+            if kept is None or entity.entity_id < kept.entity_id:
+                index[key] = entity
+        return index
 
 
 def _subset(plan, sample_id: str) -> str | None:
@@ -88,12 +111,13 @@ def _subset(plan, sample_id: str) -> str | None:
 
 def _run_status(
     graph: ProvenanceGraph,
+    splits: _SplitLookup,
     statuses: dict[str, StatusRecord],
     run_id: str,
     changes: list[SampleChange],
 ) -> None:
     run = graph.entities[run_id]
-    plan = _plan_for(graph, run.dataset_version_id, str(run.attributes.get("plan_id")))
+    plan = splits.get(run.dataset_version_id, str(run.attributes.get("plan_id")))
     trained = set(run.attributes.get("trained_on", []))
     predicted = set(run.attributes.get("predicted_subsets", []))
     for change in changes:
@@ -137,6 +161,7 @@ def _run_status(
 
 def _reading_status(
     graph: ProvenanceGraph,
+    splits: _SplitLookup,
     statuses: dict[str, StatusRecord],
     reading_id: str,
     changes: list[SampleChange],
@@ -153,7 +178,7 @@ def _reading_status(
             run_id,
         )
         return
-    plan = _plan_for(graph, reading.dataset_version_id, str(reading.attributes.get("plan_id")))
+    plan = splits.get(reading.dataset_version_id, str(reading.attributes.get("plan_id")))
     wanted = reading.attributes.get("subset")
     for change in changes:
         subset = _subset(plan, change.sample_id)
@@ -192,6 +217,7 @@ def compute_statuses_for_entities(
 ) -> dict[str, StatusRecord]:
     """Recompute a dependency-closed dirty set, reusing clean predecessor statuses."""
     by_dataset = _changes_to_head(graph, head_id)
+    splits = _SplitLookup(graph)
     selected = set(entity_ids) & set(graph.entities)
     predecessors = {
         edge.source_id
@@ -237,7 +263,7 @@ def compute_statuses_for_entities(
                     entity.dataset_version_id,
                 )
         elif entity.entity_type in {"run", "fusion_run"}:
-            _run_status(graph, statuses, entity_id, changes)
+            _run_status(graph, splits, statuses, entity_id, changes)
         elif entity.entity_type in {"artifact", "export", "materialized_cache"}:
             effects = {effect for change in changes for effect in change.semantic_effects}
             if effects - {SemanticEffect.DISPLAY_ONLY, SemanticEffect.UNKNOWN}:
@@ -261,6 +287,7 @@ def compute_statuses_for_entities(
         if entity.entity_type == "reading" and statuses[entity_id].status != EntityStatus.BROKEN:
             _reading_status(
                 graph,
+                splits,
                 statuses,
                 entity_id,
                 by_dataset.get(entity.dataset_version_id or "", []),

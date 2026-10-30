@@ -17,10 +17,12 @@ from submit_fixtures import (
     staged_row,
     uploaded_row,
 )
+from vcp.core.errors import ValidationFailed
 from vcp.core.time import parse_stamp, stamp
+from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
-from vcp.submit.schema import PlatformProfile
-from vcp.submit.select import differs_line, label, selection_lines, selection_state
+from vcp.submit.schema import LedgerRow, PlatformProfile
+from vcp.submit.select import differs_line, label, select, selection_lines, selection_state
 
 NOW = parse_stamp("2026-10-20T00:00:00.000Z")
 
@@ -233,3 +235,100 @@ def test_seed_ledger_writes_the_profile_and_the_configs_ledger(roots):
     assert paths.submit_yaml.is_file() and paths.submissions_log.is_file()
     assert load_profile(paths)[0] == _profile()
     assert paths.submissions_log.read_bytes().count(b"\n") == 2
+
+
+def _kw(roots) -> dict:
+    return {"data_root": roots.data, "configs_root": roots.configs}
+
+
+def _seeded(roots, *extra: LedgerRow, **over):
+    """S1 S2 S3 staged, S1 S2 uploaded, a foreign upload k9; ``extra`` rows after them."""
+    return seed_ledger(
+        roots,
+        _profile(**over),
+        staged_row("S1"),
+        staged_row("S2"),
+        staged_row("S3"),
+        uploaded_row("S1", stamp()),
+        uploaded_row("S2", stamp()),
+        foreign_row("k9", stamp()),
+        *extra,
+    )
+
+
+def _events(paths) -> list[str]:
+    return [r.event for r in SubmissionLedger(paths.submissions_log).rows]
+
+
+def test_select_records_the_ticked_ids_once(roots):
+    paths = _seeded(roots, final_slots=3)
+    out = select(TEST, ["S1", "S2", "foreign:k9"], message="web", **_kw(roots))
+    assert out.written
+    assert (out.row.event, out.row.source, out.row.message) == ("selected", "manual", "web")
+    assert out.row.chosen == ["S1", "S2", "foreign:k9"] and out.state.words == "ok"
+    again = select(TEST, ["foreign:k9", "S2", "S1"], **_kw(roots))
+    assert not again.written and again.row == out.row and again.state.words == "ok"
+    assert _events(paths).count("selected") == 1
+
+
+@pytest.mark.parametrize(
+    ("entries", "word"),
+    [
+        ([], "invalid:"),
+        (["S1", "S1"], "invalid:"),
+        (["S9"], "not_staged:"),
+        (["S3"], "not_uploaded:"),
+        (["foreign:zz"], "not_found:"),
+    ],
+)
+def test_select_refuses_and_writes_nothing(roots, entries, word):
+    paths = _seeded(roots)
+    before = paths.submissions_log.read_bytes()
+    with pytest.raises(ValidationFailed, match=f"^{word}") as ei:
+        select(TEST, entries, **_kw(roots))
+    assert paths.submissions_log.read_bytes() == before
+    if word != "invalid:":
+        assert ei.value.fields["id"] == entries[0]
+
+
+def test_select_names_the_first_entry_that_fails_in_input_order(roots):
+    _seeded(roots)
+    with pytest.raises(ValidationFailed, match="^not_uploaded:") as ei:
+        select(TEST, ["S1", "S3", "S9"], **_kw(roots))
+    assert ei.value.fields["id"] == "S3"
+    with pytest.raises(ValidationFailed, match="^not_staged:") as ei:
+        select(TEST, ["S1", "S9", "S3"], **_kw(roots))
+    assert ei.value.fields["id"] == "S9"
+
+
+def test_select_records_after_final_locked_the_ledger(roots):
+    lock = LedgerRow(event="lock", ts=stamp(), reason="final")
+    paths = _seeded(roots, final_row(["S1"], 1), lock)
+    assert SubmissionLedger(paths.submissions_log).lock_state() is not None
+    assert select(TEST, ["S1"], **_kw(roots)).written
+
+
+def test_select_records_a_wrong_count_or_a_choice_unlike_final_and_warns(roots):
+    _seeded(roots, final_row(["S1"], 1))
+    # two ids where the final slots are one, and the set is not final's: both words, in order
+    assert select(TEST, ["S1", "S2"], **_kw(roots)).state.words == "slots,differs"
+    out = select(TEST, ["S2"], **_kw(roots))
+    assert out.written and out.state.words == "differs" and out.state.warns
+
+
+def test_select_records_a_wrong_count_alone_and_warns(roots):
+    _seeded(roots, final_row(["S1"], 2))  # two slots, two entries: two are expected
+    out = select(TEST, ["S1"], **_kw(roots))
+    assert out.written and out.state.words == "slots" and out.state.warns
+
+
+def test_board_rule_last_records_and_never_checks(roots):
+    _seeded(roots, final_row(["S1"], 1), board_rule="last")
+    out = select(TEST, ["S2"], **_kw(roots))
+    assert out.written and out.state.words == "none" and not out.state.warns
+
+
+def test_select_ignores_a_deadline_long_past(roots):
+    paths = _seeded(roots, deadline=stamp(parse_stamp(stamp()) - timedelta(days=30)))
+    assert select(TEST, ["S1", "S2"], **_kw(roots)).written
+    assert _events(paths).count("selected") == 1

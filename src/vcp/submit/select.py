@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
-from vcp.core.time import parse_stamp, stamp
+from vcp.core.errors import ValidationFailed
+from vcp.core.paths import DatasetPaths
+from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.location import transaction
+from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile
 
 NO_WARNING = ("none", "ok")  # the ``words`` that need nothing said
@@ -142,3 +147,74 @@ def selection_lines(state: SelectionState) -> list[str]:
         elif word == "differs":
             lines.append(differs_line(state.final or [], state.chosen or []))
     return lines
+
+
+@dataclass(frozen=True)
+class SelectOutcome:
+    row: LedgerRow  # the newest ``selected`` row: the one written, or the one already there
+    written: bool
+    state: SelectionState
+
+
+FOREIGN_PREFIX = "foreign:"
+
+
+def _check_entries(ledger: SubmissionLedger, entries: list[str]) -> None:
+    """Refuse the first thing the platform could not have been asked to select: nothing, an
+    entry twice, an id vcp never staged or never uploaded, a foreign ref the ledger never saw.
+    Nothing is written before every entry has passed."""
+    if not entries:
+        raise ValidationFailed("invalid: --record needs at least one id or foreign:<ref>")
+    seen: set[str] = set()
+    for entry in entries:
+        if entry in seen:
+            raise ValidationFailed(f"invalid: --record names {entry} twice")
+        seen.add(entry)
+    foreign = ledger.foreign_refs()
+    for entry in entries:
+        fields = {"id": entry}
+        if entry.startswith(FOREIGN_PREFIX):
+            if entry.removeprefix(FOREIGN_PREFIX) not in foreign:
+                raise ValidationFailed(
+                    f"not_found: {entry} is not a foreign upload in the ledger", fields=fields
+                )
+        elif ledger.staged(entry) is None:
+            raise ValidationFailed(f"not_staged: '{entry}' has no staged row", fields=fields)
+        elif not ledger.uploads(entry):
+            raise ValidationFailed(
+                f"not_uploaded: '{entry}' has no uploaded row; the platform cannot select it",
+                fields=fields,
+            )
+
+
+def select(
+    dataset: str,
+    entries: list[str],
+    *,
+    message: str | None = None,
+    data_root: Path | None = None,
+    configs_root: Path | None = None,
+) -> SelectOutcome:
+    """Write down what was ticked on the platform (spec 2026-10-30 §3.2): one ``selected`` row,
+    unless the newest one already names the same set. It records a fact about the platform, as
+    ``sync`` and ``score`` do: it is not stopped by ``lock`` or by the deadline, never calls the
+    platform, and a count or a choice that looks wrong is written and then warned about, because
+    the ledger must say what the platform holds even when that is a mistake."""
+    paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
+    profile, _ = load_profile(paths)
+    with transaction(paths, profile, command="submit.select") as ledger:
+        _check_entries(ledger, entries)
+        latest = ledger.latest_selected()
+        if latest is not None and set(latest.chosen or ()) == set(entries):
+            row, written = latest, False
+        else:
+            row = LedgerRow(
+                event="selected",
+                ts=stamp(),
+                source="manual",
+                chosen=list(entries),
+                message=message,
+            )
+            ledger.append(row)
+            written = True
+        return SelectOutcome(row, written, selection_state(ledger, profile, utc_now()))

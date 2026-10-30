@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from submit_fixtures import ledger_of, selected_row
 from vcp.cli import app
 from vcp.core import lock as lockmod
 from vcp.core.config import dump_yaml_model
@@ -180,6 +181,17 @@ def test_merge_dedupes_by_parsed_content_not_raw_bytes(tmp_path):
     assert len(rows) == 1
 
 
+def test_adopt_keeps_both_selections_and_the_newer_one_wins(tmp_path):
+    """spec 2026-10-30 §7: two checkouts each recorded a selection; both rows stay and the one
+    with the newer ``ts`` is the selection. The merge is the existing one -- this locks in that
+    it needs nothing new for the ``selected`` event."""
+    older = selected_row(["S1"], ts="2026-10-20T00:00:00.000Z")
+    newer = selected_row(["S2"], ts="2026-10-20T01:00:00.000Z")
+    rows, duplicates = merge_ledgers([[newer], [older]])
+    assert rows == [older, newer] and duplicates == 0
+    assert ledger_of(tmp_path, *rows).latest_selected().chosen == ["S2"]
+
+
 def test_the_cli_adopts_this_checkouts_configs_ledger_by_default(roots):
     paths = _setup(roots, _profile())
     _ledger(paths.submissions_log, [_staged("S1", T[0])])
@@ -313,6 +325,7 @@ def test_adopt_locks_each_source_while_reading_it(roots, monkeypatch):
         ["score", "--id", "S1", "--public", "0.5"],
         ["sync"],
         ["final"],
+        ["select", "--record", "S1"],
         ["lock", "--reason", "x"],
         ["unlock", "--reason", "x"],
         ["status"],

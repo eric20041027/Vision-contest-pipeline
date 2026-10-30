@@ -6,10 +6,18 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from submit_fixtures import make_pair
+from submit_fixtures import (
+    EVAL,
+    STAMP,
+    make_pair,
+    seed_ledger,
+    staged_row,
+    uploaded_row,
+)
 from vcp.cli import app
-from vcp.core.config import load_yaml_model
+from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.paths import DatasetPaths
+from vcp.core.time import stamp
 from vcp.submit.schema import PlatformProfile
 
 runner = CliRunner()
@@ -489,3 +497,78 @@ def test_record_cli_warns_on_an_id_already_uploaded(pair):
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v and "already_uploaded=1" in v
     assert "quota_overflow" not in v and "already_uploaded: S1 was uploaded 1 time(s)" in r.output
+
+
+def _best_board(roots, *rows, **over):
+    """A manual ``best`` board for beach-test with ``rows`` in its configs ledger."""
+    profile = PlatformProfile(
+        **{
+            **dict(
+                dataset="beach-test",
+                eval_dataset=EVAL,
+                plan_id="fixed-v1",
+                sealed_subset="holdout",
+                platform="manual",
+                board_rule="best",
+                metric="accuracy",
+                writer="scores_csv",
+                final_slots=2,
+                created_at=STAMP,
+            ),
+            **over,
+        }
+    )
+    return profile, seed_ledger(roots, profile, *rows)
+
+
+def test_select_cli_verdict_json_and_blanks(roots):
+    profile, paths = _best_board(
+        roots,
+        staged_row("S1"),
+        staged_row("S2"),
+        uploaded_row("S1", stamp()),
+        uploaded_row("S2", stamp()),
+    )
+    base = ["submit", "select", "--dataset", "beach-test"]
+    r = runner.invoke(app, [*base, "--record", " S1 , S2 ,"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selected=2" in v and "written=true" in v
+    assert "selection=ok" in v and "ledger=configs" in v and "dataset=beach-test" in v
+    r = runner.invoke(app, [*base, "--record", "S2,S1", "--json"])
+    doc = _json(r)
+    assert r.exit_code == 0 and doc["status"] == "OK", r.output
+    assert doc["fields"]["written"] is False and doc["result"]["chosen"] == ["S1", "S2"]
+    assert doc["result"]["event"] == "selected" and doc["result"]["selection"]["words"] == "ok"
+    assert set(doc["result"]["selection"]) == {
+        "chosen",
+        "recorded_at",
+        "words",
+        "expected",
+        "final",
+        "due_at",
+    }
+    r = runner.invoke(app, [*base, "--record", "S1", "--message", "web"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "selection=slots" in v, r.output
+    assert "selected=1" in v and "written=true" in v
+    assert "selection: 1 recorded, 2 expected (slots=2)" in r.output
+    dump_yaml_model(profile.model_copy(update={"ledger": "shared"}), paths.submit_yaml)
+    r = runner.invoke(app, [*base, "--record", "S1"])
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "not_adopted:" in v and "dataset=beach-test" in v, r.output
+
+
+def test_select_cli_failure_keeps_the_dataset_and_writes_nothing(roots):
+    _, paths = _best_board(roots, staged_row("S1"))
+    before = paths.submissions_log.read_bytes()
+    base = ["submit", "select", "--dataset", "beach-test"]
+    r = runner.invoke(app, [*base, "--record", "S1", "--json"])
+    doc = _json(r)
+    assert r.exit_code == 1 and doc["status"] == "FAIL", r.output
+    assert "not_uploaded:" in doc["fields"]["reason"]
+    assert doc["fields"]["id"] == "S1" and doc["fields"]["dataset"] == "beach-test"
+    r = runner.invoke(app, [*base, "--record", " , ,"])
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "invalid: --record needs at least one id" in v, r.output
+    assert paths.submissions_log.read_bytes() == before

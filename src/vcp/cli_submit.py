@@ -13,6 +13,7 @@ from vcp.cli_common import (
     ConfigsRootOpt,
     DataRootOpt,
     JsonOpt,
+    parse_csv,
     parse_opts,
     run_command,
 )
@@ -29,6 +30,7 @@ from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
+from vcp.submit.select import select, selection_lines
 from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
 
@@ -516,6 +518,48 @@ def final_cmd(
         return status, fields, res.row.model_dump(mode="json", exclude_none=True), human
 
     run_command("submit.final", json_mode, data_root, fn, context={"dataset": dataset})
+
+
+@submit_app.command("select")
+def select_cmd(
+    dataset: DatasetOpt,
+    record: Annotated[
+        str,
+        typer.Option(
+            "--record",
+            help="comma-separated ids ticked on the platform (foreign:<ref> for another's upload)",
+        ),
+    ],
+    message: Annotated[str | None, typer.Option("--message", help="a note on the ticking")] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Record the final submissions you ticked on the platform (it never calls the platform)."""
+
+    def fn() -> CmdResult:
+        out = select(
+            dataset,
+            parse_csv(record),
+            message=message,
+            data_root=data_root,
+            configs_root=configs_root,
+        )
+        fields: dict[str, FieldValue] = {
+            "dataset": dataset,
+            "selected": len(out.row.chosen or []),
+            "written": out.written,
+            "selection": out.state.words,
+            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
+        }
+        status: Status = "WARN" if out.state.warns else "OK"
+        payload = {
+            **out.row.model_dump(mode="json", exclude_none=True),
+            "selection": out.state.to_json(),
+        }
+        return status, fields, payload, selection_lines(out.state)
+
+    run_command("submit.select", json_mode, data_root, fn, context={"dataset": dataset})
 
 
 @submit_app.command("lock")

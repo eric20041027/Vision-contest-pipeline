@@ -16,7 +16,9 @@ from helpers import (
     perfect_predictions,
     write_images,
 )
+from vcp.core.config import dump_yaml_model
 from vcp.core.paths import DatasetPaths
+from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
@@ -27,6 +29,8 @@ from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg
 from vcp.measure.schema import Prediction, PreRegistration
+from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.schema import Gate, LedgerRow, PlatformProfile
 
 EVAL = "beach"
 TEST = "beach-test"
@@ -210,3 +214,75 @@ def seed_judgements(pair) -> None:
                 configs_root=pair.roots.configs,
             )
         )
+
+
+# Ledger rows without the ceremony: the least each event must carry (vcp.submit.schema._REQUIRED),
+# so a test says only what it is about. ``ts`` is the moment the row is built.
+PROFILE_SHA = "p" * 64
+
+
+def staged_row(sid: str) -> LedgerRow:
+    return LedgerRow(
+        event="staged",
+        ts=stamp(),
+        submission_id=sid,
+        kind="candidate",
+        eval_run="good",
+        gate=Gate(admission="PASS"),
+        profile_sha256=PROFILE_SHA,
+    )
+
+
+def uploaded_row(sid: str, at: str) -> LedgerRow:
+    return LedgerRow(
+        event="uploaded",
+        ts=stamp(),
+        submission_id=sid,
+        at=at,
+        source="manual",
+        confirmed=True,
+        profile_sha256=PROFILE_SHA,
+    )
+
+
+def foreign_row(ref: str, at: str) -> LedgerRow:
+    return LedgerRow(event="foreign", ts=stamp(), platform_ref=ref, file_name="x.csv", at=at)
+
+
+def final_row(chosen: list[str], slots: int) -> LedgerRow:
+    return LedgerRow(
+        event="final",
+        ts=stamp(),
+        rule="best_sealed",
+        slots=slots,
+        chosen=list(chosen),
+        table=[],
+        metric="accuracy",
+        params={},
+        holdout_unseals=0,
+        profile_sha256=PROFILE_SHA,
+    )
+
+
+def selected_row(chosen: list[str], *, ts: str | None = None) -> LedgerRow:
+    return LedgerRow(
+        event="selected", ts=stamp() if ts is None else ts, chosen=list(chosen), source="manual"
+    )
+
+
+def ledger_of(directory: Path, *rows: LedgerRow) -> SubmissionLedger:
+    """A ledger file in ``directory`` holding ``rows`` (appended in order)."""
+    ledger = SubmissionLedger(directory / "submissions.jsonl")
+    for row in rows:
+        ledger.append(row)
+    return ledger
+
+
+def seed_ledger(roots, profile: PlatformProfile, *rows: LedgerRow) -> DatasetPaths:
+    """``profile`` as the test dataset's ``submit.yaml`` and ``rows`` in its configs ledger."""
+    paths = DatasetPaths.resolve(profile.dataset, data_root=roots.data, configs_root=roots.configs)
+    dump_yaml_model(profile, paths.submit_yaml)
+    ledger = SubmissionLedger(paths.submissions_log)
+    for row in rows:
+        ledger.append(row)
+    return paths

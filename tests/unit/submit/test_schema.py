@@ -1,13 +1,16 @@
+import re
 from typing import get_args
 from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
 
+from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.submit.schema import (
     _REQUIRED,
+    DEFAULT_SELECTION_WARN_HOURS,
     EVENTS,
     Artifact,
     Event,
@@ -115,6 +118,7 @@ def test_ledger_rows_require_their_event_fields():
         "errored",
         "foreign",
         "final",
+        "selected",
         "lock",
         "unlock",
         "note",
@@ -218,3 +222,62 @@ def test_the_ledger_field_defaults_to_configs_and_is_written_only_when_shared():
     assert PlatformProfile.model_validate(shared.model_dump(mode="json")) == shared
     with pytest.raises(ValidationError):
         _profile(ledger="git")
+
+
+SELECTED = dict(event="selected", ts=STAMP, chosen=["S5", "foreign:k9"], source="manual")
+
+
+def test_a_selected_row_carries_chosen_and_source():
+    """spec 2026-10-30 §3.1: the labels ticked on the platform (ids, or ``foreign:<ref>``) and
+    where the record came from."""
+    row = LedgerRow(**SELECTED, message="ticked on the web")
+    assert "selected" in EVENTS and row.chosen == ["S5", "foreign:k9"] and row.source == "manual"
+    assert LedgerRow.model_validate_json(row.model_dump_json(exclude_none=True)) == row
+
+
+@pytest.mark.parametrize(
+    ("over", "words"),
+    [
+        ({"chosen": None}, "selected needs"),
+        ({"source": None}, "selected needs"),
+        ({"chosen": []}, "selected needs at least one entry"),
+        ({"chosen": ["S1", "S1"]}, "selected has duplicate entries"),
+    ],
+)
+def test_a_selected_row_without_a_proper_choice_fails(over, words):
+    with pytest.raises(ValidationError, match=re.escape(words)):
+        LedgerRow(**{**SELECTED, **over})
+
+
+def test_selection_warn_hours_defaults_to_48_and_is_written_only_when_changed(tmp_path):
+    """spec §3.3: the default stays out of the file, so 0.16's ``submit init`` still writes what
+    0.15 reads; any other value (a number or null) is written and read back as it was."""
+    assert DEFAULT_SELECTION_WARN_HOURS == 48
+    assert _profile().selection_warn_hours == 48
+    assert "selection_warn_hours" not in _profile().model_dump(mode="json")
+    assert "selection_warn_hours" not in _profile(selection_warn_hours=48).model_dump(mode="json")
+    assert _profile(selection_warn_hours=72).model_dump(mode="json")["selection_warn_hours"] == 72
+    dumped = _profile(selection_warn_hours=None).model_dump(mode="json")
+    assert "selection_warn_hours" in dumped and dumped["selection_warn_hours"] is None
+    path = tmp_path / "submit.yaml"
+    for value in (0, 72, None):
+        dump_yaml_model(_profile(selection_warn_hours=value), path)
+        assert load_yaml_model(path, PlatformProfile).selection_warn_hours == value
+    dump_yaml_model(_profile(), path)  # a file with no such key, as 0.15 wrote it
+    assert b"selection_warn_hours" not in path.read_bytes()
+    assert load_yaml_model(path, PlatformProfile).selection_warn_hours == 48
+
+
+@pytest.mark.parametrize(
+    ("bad", "yaml_literal"), [(-1, "-1"), (float("nan"), ".nan"), (float("inf"), ".inf")]
+)
+def test_selection_warn_hours_must_be_finite_and_not_negative(tmp_path, bad, yaml_literal):
+    words = "selection_warn_hours must be a finite number >= 0"
+    with pytest.raises(ValidationError, match=re.escape(words)):
+        _profile(selection_warn_hours=bad)
+    path = tmp_path / "submit.yaml"
+    dump_yaml_model(_profile(), path)
+    with path.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(f"selection_warn_hours: {yaml_literal}\n")
+    with pytest.raises(ValidationFailed, match=re.escape(words)):
+        load_yaml_model(path, PlatformProfile)

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from vcp.core.atomic import replace_text
 from vcp.core.errors import ValidationFailed
 
 # What counts as "yes" in a `--opt k=v` value or a CSV flag column. One tuple, one reading,
@@ -47,6 +48,4 @@ def dump_yaml_text(model: BaseModel) -> str:
 
 
 def dump_yaml_model(model: BaseModel, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(dump_yaml_text(model))
+    replace_text(path, dump_yaml_text(model))

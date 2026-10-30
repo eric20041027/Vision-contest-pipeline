@@ -17,6 +17,15 @@
 | 11/12 前 | E5 交付（結果檔 `docs/benchmarks/postgres-provenance-break-even-v1.md`） | — |
 | 12/6 之後 | §1 的 1b、§2、§3（0.16.0）；§4；Wave 1c；1.0 | MINOR |
 
+- **2026-10-30 調整（使用者的決定）**：E5 提早在 10/28 量完，課程凍結前多出約一週。§6 的 6b 照舊先做（11/8 前），之後三件都做：
+  - 0.16.0（§1 的 1b、§2、§3）提前到凍結前；11/11 前沒有全綠就只合併、發版延到 12/6 之後。發版仍要使用者同意。
+  - Wave 1c 只寫 spec、不寫程式。
+  - 查 E5 看到的 FULL 讀數成本：已查明是 `src/vcp` 的效能缺陷（E5 後記待辦 2），修正併進 0.16.0。
+- 0.16.0 的設計決定（同日）：
+  - §2 只做手動記錄加提醒，不自動讀平台：Kaggle SDK 有「只列已勾選」的查詢選項，但 CLI 2.2.5 沒有開放。
+  - 截止前 48 小時開始提醒，可設定。
+  - §3 `train run` 啟動前可用空間低於 10 GiB 就 ABORT，可覆寫。
+
 ## 1. 【Bug，P1】Kaggle CLI 的版本警告讓 `submit sync` 失敗
 
 - 症狀：`VERDICT cmd=submit.sync status=FAIL reason="ValidationFailed: platform_response: not JSON"`。
@@ -64,7 +73,7 @@
 ## 6. 【文件】
 
 - 6a（可選，10/24 前，不進 repo）：一頁「真實世界使用」素材給進度報告。數字先用唯讀命令查核。
-- 6b（11/8 前）：RSNA 賽後報告，放 `docs/postmortems/`。內容包括：
+- 6b（11/8 前；2026-10-30 寫成 `docs/postmortems/2026-10-rsna-knee-abnormality-detection.md`）：RSNA 賽後報告，放 `docs/postmortems/`。內容包括：
   - 「最終選取是手動的」這條路徑；
   - §1–§3 的實戰教訓與規模數字。
   - 它也是 1.0 路線圖的一步，以及投影片「真實世界使用」的素材。依慣例不放本機路徑與比賽資料。

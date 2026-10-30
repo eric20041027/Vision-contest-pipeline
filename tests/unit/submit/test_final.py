@@ -11,6 +11,7 @@ from submit_fixtures import (
     seed_eval_runs,
     seed_judgements,
     seed_test_runs,
+    selected_row,
 )
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
@@ -20,7 +21,7 @@ from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, save_run
 from vcp.submit.actions import record, score
-from vcp.submit.final import count_unseals, final, lock, rank_key, unlock
+from vcp.submit.final import count_unseals, final, lock, next_step_hint, rank_key, unlock
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
@@ -379,3 +380,53 @@ def test_final_reads_a_kernel_submission_the_way_stage_recorded_it(pair):
 
     assert entry.eligible
     assert entry.provenance == load_staged(pair.test_paths, "K1").provenance == "declared"
+
+
+# --- 0.16.0: final reads the recorded selection (spec 2026-10-30 §3.5) -----------------------
+
+
+def _best(pair):
+    """The board takes a ticked selection (``best``), with both holdouts read."""
+    dump_yaml_model(_profile(board_rule="best"), pair.test_paths.submit_yaml)
+    _measure_holdout(pair, "good")
+    _measure_holdout(pair, "bad")
+
+
+def test_final_on_best_prints_next_and_warns_only_when_the_recorded_selection_differs(uploaded):
+    _best(uploaded)
+    dry = final(TEST, dry_run=True, **_kw(uploaded))
+    assert dry.selection is None and dry.recorded is None
+    assert (
+        dry.next_step
+        == "select S1 on the platform, then: vcp submit select --dataset beach-test --record S1"
+    )
+    led = SubmissionLedger(uploaded.test_paths.submissions_log)
+    led.append(selected_row(["S2"]))
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert res.selection == "differs" and res.recorded == ["S2"]
+    assert res.row.model_dump_json(exclude={"ts"}) == dry.row.model_dump_json(
+        exclude={"ts"}
+    )  # golden
+    led.append(selected_row(["S1"]))
+    done = final(TEST, **_kw(uploaded))
+    assert done.selection is None and done.next_step is not None and done.chosen == ["S1"]
+    assert done.row.model_dump_json(exclude={"ts"}) == dry.row.model_dump_json(exclude={"ts"})
+
+
+def test_final_on_last_has_no_next_step_and_no_selection(uploaded):
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+    plain = final(TEST, dry_run=True, **_kw(uploaded))
+    SubmissionLedger(uploaded.test_paths.submissions_log).append(selected_row(["S2"]))
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert res.selection is None and res.next_step is None and res.recorded is None
+    assert res.row.model_dump_json(exclude={"ts"}) == plain.row.model_dump_json(exclude={"ts"})
+    assert plain.next_step is None
+
+
+def test_next_step_hint_joins_every_chosen_id():
+    assert (
+        next_step_hint(_profile(board_rule="best"), ["S1", "S2"])
+        == "select S1,S2 on the platform, then: vcp submit select --dataset beach-test "
+        "--record S1,S2"
+    )

@@ -30,7 +30,7 @@ from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
-from vcp.submit.select import select, selection_lines
+from vcp.submit.select import differs_line, select, selection_lines
 from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
 
@@ -502,6 +502,8 @@ def final_cmd(
         }
         if res.needs_reupload:
             fields["needs_reupload"] = res.needs_reupload
+        if res.selection is not None:  # best board, and what was ticked is not this choice
+            fields["selection"] = res.selection
         human = [
             f"{e.submission_id:>12}  eligible={e.eligible!s:5} sealed={e.sealed_value!r} "
             f"public={e.public!r} {e.why} provenance={e.provenance or '-'}"
@@ -513,7 +515,11 @@ def final_cmd(
                 f"needs_reupload: the board scores the last upload, and that is not "
                 f"{res.needs_reupload}; {res.resend}"
             )
-        warn = bool(res.unranked or res.needs_reupload or res.warnings)
+        if res.selection is not None:
+            human.append(differs_line(res.chosen, res.recorded or []))
+        if res.next_step is not None:
+            human.append(f"next: {res.next_step}")
+        warn = bool(res.unranked or res.needs_reupload or res.warnings or res.selection)
         status: Status = "WARN" if warn else "OK"
         return status, fields, res.row.model_dump(mode="json", exclude_none=True), human
 
@@ -638,16 +644,20 @@ def status_cmd(
         fields["current"] = st.current or "none"
         fields["unscored"] = len(st.unscored)
         fields["errored"] = len(st.errored)
+        fields["selected"] = "none" if st.selection.chosen is None else len(st.selection.chosen)
+        fields["selection"] = st.selection.words
         # spec 2026-10-09 §4.3: errored is a finished state, so it never WARNs here
-        warn = warn or st.locked is not None or bool(st.unscored)
+        warn = warn or st.locked is not None or bool(st.unscored) or st.selection.warns
         human = [f"unscored: {sid}" for sid in st.unscored]
         human += [f"errored: {sid}" for sid in st.errored]
+        human += selection_lines(st.selection)
         human += [f"provenance: {sid}={g}" for sid, g in st.provenance.items()]
         payload = {
             "quota": None if st.quota is None else st.quota.fields(),
             "current": st.current,
             "unscored": st.unscored,
             "errored": st.errored,
+            "selection": st.selection.to_json(),
             "provenance": st.provenance,
             "locked": None
             if st.locked is None
@@ -673,6 +683,7 @@ def report_cmd(
             f"{r.at}  {r.submission_id:>16}  {r.kind:>9}  public={r.public!r} delta={r.delta!r} "
             f"sealed={r.sealed_value!r} private={r.private!r} shift={r.shift!r}"
             + (" errored" if r.errored else "")  # spec 2026-10-09 §4.4
+            + (" selected" if r.selected else "")  # spec 2026-10-30 §3.5
             for r in rows
         ]
         payload = {"rows": [r.__dict__ for r in rows]}

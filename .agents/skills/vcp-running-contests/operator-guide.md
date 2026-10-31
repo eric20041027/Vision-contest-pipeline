@@ -32,6 +32,8 @@ vcp 是影像比賽的流程與證據管理框架：它不取代 PyTorch、Ultra
 - 人負責比賽規則、資料權利、評分目標、GPU/費用預算、sealed 最終窗口、平台提交與備份目的地。
 - 把每個新 id、實際命令、VERDICT、讀數、判決及平台結果寫回 RUNBOOK；失敗也保留。
 - 平台憑證只交給官方 CLI 的安全設定。不要貼進聊天、repo 或 vcp 選項。
+- 決選之後：`final` 記的是 vcp 依 sealed 讀數的建議，不是平台上的勾選。人到平台勾完，用 `vcp submit select --dataset D-test --record <ids>` 記下實際勾的（vcp 不替你勾，也讀不到平台的勾選，所以 agent 要由人告知勾了什麼）；`vcp submit status` 沒有 `selection=missing|slots|differs` 的 WARN 才算對上（只在 `board_rule: best`；截止前 `selection_warn_hours`，預設 48 小時起還沒記就 WARN）。勾錯了就回平台改、再記一次，最新的一列為準。`sync` / `upload` 的 `cli_warnings=` 一直 WARN 是平台 CLI 該升級了。
+- 訓練前 `vcp train run` 會量磁碟，低於 `--min-free-gib`（預設 10 GiB）就 ABORT `low_disk:`；失敗時 `reason=disk_full:` / `low_disk:` 是磁碟的跡象，清出空間（`vcp train status` 的 `tmp=` 列出殘留的 `.tmp`）再 `--resume`。
 - Windows 的訓練/推論用專案 venv 的絕對 interpreter；`train.yaml` 的最新執行看 `attempts[-1]`。`rclone_conf=unknown` 不是 absent，本機 `remote_copy` 也不是異機備份（0.13.0 起 `backup push --tier 3` 會把它送到目的地；推完、驗完 `backup status` 才說 verified）。
 
 ## 使用 agent 幫忙

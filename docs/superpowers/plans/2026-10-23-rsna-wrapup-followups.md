@@ -38,6 +38,11 @@
   - log 行不是 CLI 契約，VERDICT 欄位不變，所以仍是 PATCH。VERDICT 的 WARN 留給 1b。
   - CLI 2.2.5 的 JSON 形狀沒有確認：確認要用使用者的 Kaggle 憑證呼叫一次真的 CLI，這由使用者決定。RSNA 端升到 2.2.5 之後 `submit sync` 成功，代表 2.2.5 的列表能被解析；`is_errored` 依賴的出錯形狀沒有再驗證。
   - 發版（0.15.1）要使用者同意，修正先合併進 `main`。
+- 1b 的處置（2026-10-30，0.16.0，分支 `feat/v0160-selection-disk`）：
+  - `submit sync` 與 `submit upload` 的 VERDICT 一律帶 `cli_warnings=`（不同行數；> 0 WARN），人看的行每行一個 `cli_warning: <行>`，任一行含 `outdated`（不分大小寫）時多一行升級提示；警告只出現在這次命令的 VERDICT、輸出與 log，不寫台帳，每次讀列表各自報。
+  - **偏離本節的 1b：`submit status` 不提示 CLI 過舊**（controller 裁決 R1）。`status` 從不呼叫平台，要提示就得把「上次讀列表時 CLI 印了什麼」存下來；唯一讀得到的地方是治理台帳（`configs` 模式下在 git 裡），把操作面的事實寫進去，代價大於這個缺口；`upload` 一律先同步，所以每次讀平台都會 WARN。
+  - CLI 2.2.5 的 JSON 形狀仍沒有確認（沒有動）。
+  - 設計見 `../specs/2026-10-30-vcp-0160-selection-and-disk-design.md` §4，實作裁決與待辦見 `2026-10-30-vcp-0160-selection-and-disk-followups.md`。
 
 ## 2. 【缺口，P2】平台上實際勾選的最終提交沒有記錄、也沒有核對
 
@@ -47,6 +52,10 @@
   - 新的台帳事件記錄實際勾選的 id，指令例如 `submit select --record <ids>`。舊 vcp 讀到新事件會 FAIL，讀寫同一份台帳的都要先升級（同 0.14.0 的 `errored`）。
   - `submit status`：截止前 N 小時（N 可設定）還沒記錄選取、選取數和名額不同、或選取和 `final` 不同時給 WARN。
   - 調查 Kaggle API 能不能讀到 selected 旗標。CLI 的 CSV 只有 ref、fileName、date、description、status、publicScore、privateScore。讀得到就由 `sync` 自動核對。
+- 處置（2026-10-30，0.16.0，分支 `feat/v0160-selection-disk`）：照「手動記錄加提醒」做，不自動讀平台。
+  - 調查結果：kagglesdk 0.1.38 的 `ApiListSubmissionsRequest.group` 有 `SubmissionGroup.SUBMISSION_GROUP_SELECTED`，但 kaggle CLI 2.2.5 的 `competitions submissions` 沒有對應旗標，它的 JSON 也沒有 selected 欄位；vcp 只呼叫 CLI、不用 Python API、不碰憑證，所以讀不到。日後 CLI 有了旗標，`sync` 可以寫 `source=platform` 的 `selected` 列（schema 已留位置）。
+  - 做了：台帳新事件 `selected`、`vcp submit select --record`、`submit.yaml` 的 `selection_warn_hours`（預設 48）、`status` 的 `selected=` 與 `selection=missing|slots|differs`、`report` 的 `selected`、`final` 的 `selection=differs` 與 `next:` 提示。核對只在 `board_rule: best`（`last` 的平台自己算最後一發）。舊 vcp 讀到 `selected` 列會 FAIL，升級順序同 0.14.0 的 `errored`。
+  - 設計見 `../specs/2026-10-30-vcp-0160-selection-and-disk-design.md` §3，實作裁決與待辦見 `2026-10-30-vcp-0160-selection-and-disk-followups.md`。
 
 ## 3. 【韌性，P2】訓練中磁碟滿
 
@@ -55,6 +64,12 @@
   - `train run` 啟動前檢查輸出目錄所在磁碟的可用空間（門檻可設定），不足就 ABORT；可用空間記進環境快照。
   - child 因磁碟滿（ENOSPC 一類）結束時，VERDICT 的 `reason=` 寫明原因。新字彙，屬 MINOR。
   - `train status` 列出 run 輸出目錄裡殘留的 `*.tmp`。
+- 處置（2026-10-30，0.16.0，分支 `feat/v0160-selection-disk`）：三項都做，另加兩項。
+  - `train run --min-free-gib`（預設 10 GiB，`0` 只記錄）：第一次寫入前量 run 目錄、`--cwd`、checkpoint glob 前綴所在的磁碟區，不足 → ABORT `low_disk:`；量測記進 `env.<n>.json` 的 `disk`。
+  - child 失敗後的 `reason=`：console 最後 64 KiB 有磁碟滿字樣 → `disk_full:`；否則重量的空間低於門檻 → `low_disk:`（只說可能滿過）。這次的失敗後約剩 2.2 GB、console 只有 `ios_base::badbit`，靠後者報出（controller 裁決 R2：固定 1 GiB 的下限會漏掉它）。
+  - `train status` 的 `tmp=`：run 目錄（遞迴）與已登記 checkpoint 所在目錄（不遞迴）的 `*.tmp`，只列不刪。
+  - 加做：vcp 自己的 yaml 重寫改成原子替換（裁決 R3）；`train run` 第一次寫入之後 vcp 自己寫不下 → 停掉 child、ABORT `disk_full:`（`disk_evidence=vcp`，裁決 C3）。
+  - 設計見 `../specs/2026-10-30-vcp-0160-selection-and-disk-design.md` §5，實作裁決與待辦見 `2026-10-30-vcp-0160-selection-and-disk-followups.md`。
 
 ## 4. 【功能，P3】安全的清理工具 `vcp gc --dry-run`
 

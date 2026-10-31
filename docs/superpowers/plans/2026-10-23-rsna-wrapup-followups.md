@@ -40,7 +40,7 @@
   - 發版（0.15.1）要使用者同意，修正先合併進 `main`。
 - 1b 的處置（2026-10-30，0.16.0，分支 `feat/v0160-selection-disk`）：
   - `submit sync` 與 `submit upload` 的 VERDICT 一律帶 `cli_warnings=`（不同行數；> 0 WARN），人看的行每行一個 `cli_warning: <行>`，任一行含 `outdated`（不分大小寫）時多一行升級提示；警告只出現在這次命令的 VERDICT、輸出與 log，不寫台帳，每次讀列表各自報。
-  - **偏離本節的 1b：`submit status` 不提示 CLI 過舊**（controller 裁決 R1）。`status` 從不呼叫平台，要提示就得把「上次讀列表時 CLI 印了什麼」存下來；唯一讀得到的地方是治理台帳（`configs` 模式下在 git 裡），把操作面的事實寫進去，代價大於這個缺口；`upload` 一律先同步，所以每次讀平台都會 WARN。
+  - **偏離本節的 1b：`submit status` 不提示 CLI 過舊**（controller 裁決 R1）。`status` 從不呼叫平台，要提示就得把「上次讀列表時 CLI 印了什麼」存下來；唯一讀得到的地方是治理台帳（`configs` 模式下在 git 裡），把操作面的事實寫進去，代價大於這個缺口；`upload` 除了 `--no-sync` 一律先同步，上傳之後的回讀也還是會列出，所以警告仍可能出現。
   - CLI 2.2.5 的 JSON 形狀仍沒有確認（沒有動）。
   - 設計見 `../specs/2026-10-30-vcp-0160-selection-and-disk-design.md` §4，實作裁決與待辦見 `2026-10-30-vcp-0160-selection-and-disk-followups.md`。
 

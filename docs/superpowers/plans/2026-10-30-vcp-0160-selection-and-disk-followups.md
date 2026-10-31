@@ -13,8 +13,9 @@
   - `470c2ce` fix(train): treat upload bookkeeping writes as vcp's own（Task 7 審查的修正）
   - `810e027` feat(train): train status lists leftover tmp files
   - `5e32222` test(gate): guard the 0.16.0 selection, CLI-warning and disk fixes
+  - 整個分支的最終審查之後：`1dbdc4a` fix(train): point upload-step disk_full at train upload and floor GiB readings、`1815fc4` fix(submit): clamp selection_warn_hours before computing the warning window、`d5e4095` test(train): VERDICT tests for low_disk after a failure and vcp's own disk_full，另有一個文件 commit（審查修正）。
   - 文件一個 commit（本檔、`cli.md`、CLAUDE.md / AGENTS.md、三個 skill 與鏡射、治理 spec 第 33 條、訓練層 spec 第 20 條、RSNA 收尾後記的處置）。
-- 每個任務各自審查（審查檔不進 repo）：沒有 Critical；只有一個 Important（Task 7 的 `_upload_all`，見 §2.1 第 3 條），修正在 `470c2ce`。其餘 Minor 的處置見 §1、§2.2。
+- 每個任務各自審查（審查檔不進 repo）：沒有 Critical；只有一個 Important（Task 7 的 `_upload_all`，見 §2.1 第 3 條），修正在 `470c2ce`。整個分支的最終審查另有一個 Important（`--upload` 步驟的復原提示，§2.1 第 18 條）與幾個小項（§2.1 第 16、17 條；`train.log.jsonl` 半列的描述改正，見 §1），都已處置。其餘 Minor 的處置見 §1、§2.2。
 - 每個行為變更都先寫測試、看它失敗再實作。例外是只鎖現狀的測試：yaml 位元組的 golden（Task 1 的 `TrainRecord`、`RunCard`、`PlatformProfile`）與 `ledger adopt` 合併 `selected` 列的測試（原本就合併，先就是綠的）。
 - 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json` 都沒動，發版時再做（§2.2 第 1 條）。
 
@@ -34,10 +35,8 @@
   - `free` 是 `shutil.disk_usage().free`：Windows 的使用者配額不反映（C5）。
   - 失敗後的空間比啟動門檻，訓練本身吃掉大量空間而因別的原因失敗時也會報 `low_disk:`，所以措辭只說 may have filled；`train.log.jsonl` 的 `note` 記了當時的可用空間。
 - **data root 所在的磁碟滿了會停掉訓練**（C3），即使 checkpoint 寫在別顆磁碟：紀錄的完整優先於訓練的延續，清出空間後 `--resume`。`--upload` 的步驟中途 `disk_full:` 時 attempt 已經結束，用冪等的 `vcp train upload --run R --dest DEST` 補，不是 `--resume`。
-- **`train.log.jsonl` 的 append 不是原子的，`read_events` 逐行解析。** 一次 append 寫到一半遇到 ENOSPC，可能留下半列，之後讀事件（含 `--resume`）會壞。C3 的「清出空間後 `--resume`」仰賴這件事不發生；0.16.0 沒有改它（既有行為，見 §2.2 第 5 項）。
+- **`train.log.jsonl` 的 append 不是原子的。** 一次 append 寫到一半遇到 ENOSPC，可能留下半列。`read_events` 在 `src/` 裡沒有呼叫端，`--resume` 也不讀這個檔，所以 `--resume` 不受影響；實際的後果是 `backup verify` 對那一列報 `bad_stamps:`（finding 帶著該 run 的 `train.log.jsonl` 路徑與行號）而且一直報：`partial_tail` 的寬限只給 submissions 台帳，所以含這個 run 的清單永遠驗不過。0.16.0 沒有改它（既有行為，見 §2.2 第 5 項）。
 - **`.tmp` 的掃描範圍**：從沒登記過 checkpoint 的目錄看不到。
-- **`selection_warn_hours` 大得離譜**（約 1.75e7 小時以上）通過載入驗證（有限、`>= 0`），但算 `due_at` 時日期溢位，唯讀的 `status` 會 ABORT `OverflowError: date value out of range`（§2.2 第 6 項）。
-- **`assert_room` 的訊息只印一位小數，比較用精確的位元組**：9.96 GiB 對門檻 10 會印成「10.0 GiB free … below --min-free-gib 10」（§2.2 第 7 項）。
 - **Windows 的替換重試只等約 1.55 秒**：更久的佔用（例如防毒掃描大檔）仍會讓那次寫入原樣丟出，舊檔完整。
 - **舊 vcp 讀不動新台帳。** 0.15.1 以前的 vcp 讀到 `selected` 列會 FAIL `bad ledger row`。`selected` 只由人下的命令寫，所以在第一次 `select --record` 之前 0.15 與 0.16 可以共用台帳；誰先記，誰負責先讓每個讀寫那份台帳的 checkout 升級（`configs` 台帳是所有 checkout，`shared` 正本是同一個 data root 的所有 worktree）。`submit.yaml` 寫了非預設的 `selection_warn_hours`，舊 vcp 載入時 FAIL `extra_forbidden`。
 - **平台協定改了回傳型別。** 外部登記、回傳 list 的平台由包裝相容；直接呼叫 `KagglePlatform.list_submissions` 或 `parse_submissions` 的程式要改。
@@ -61,6 +60,9 @@
 13. **`unavailable(check)`：任何一個磁碟區量不到就成立**（→ WARN `disk_check=unavailable`）；`free_gib=unknown` 只在全部量不到時。
 14. **`disk_path` 是 `store_path` 的形式**（data root 底下的是相對路徑，例如 `runs` 或 `.`，其他是絕對路徑），跟 `env.<n>.json` 的 `volumes[].path` 一樣。
 15. **文件。** `submit init` 沒有 `selection_warn_hours` 的選項（spec §2 不做），`cli.md` 把這個鍵寫在 `init` 那一列；CLAUDE.md / AGENTS.md 另加半句 `sync` / `upload` 的 `cli_warnings=`（spec §11 只列選取與磁碟）。`vcp-orientation/map.md` 的版本沿革補上 0.15.0、0.15.1，讓 0.16.0 接得上。
+16. **`selection_warn_hours` 在減去之前先夾到一百年**（最終審查）。載入驗證仍是「有限、`>= 0`」（spec）；`select._due` 用常數 `MAX_SELECTION_WARN_HOURS = 24 * 365 * 100` 對小時數取 `min`，所以約 1.77e7 小時以上（Windows；Linux 上年份小於 1000 的 `stamp()` 也不一定來回一致）不再讓日期溢位。原本唯讀的 `status` 會 ABORT `OverflowError`，`select` 寫完那一列之後也會 ABORT。一百年對任何比賽都等於「一直警告」。
+17. **GiB 讀數一律無條件捨去到一位小數**（最終審查）。`_gib` 用 `math.floor(x / GIB * 10) / 10`，`assert_room` 的訊息與 `free_gib=`、`low_disk:` 的失敗後訊息都經過它，所以 9.96 GiB 對門檻 10 印成 `9.9 GiB free`，不會印成等於門檻的 `10.0`。比較仍用精確的位元組。
+18. **`own_writes(hint=)`：`--upload` 步驟的復原是 `vcp train upload`**（最終審查的 Important）。`own_writes` 多一個只能用關鍵字的 `hint`（預設 `free space, then --resume`），訊息是 `disk_full: vcp could not write its own record (<e>); <hint>`；`_upload_all` 傳 `free space, then: vcp train upload --run <run> --dest <dest>`，因為那時 attempt 已經結束，`--resume` 會把整個訓練命令再跑一次。`train_run` 主流程維持預設。
 
 ### 2.2 開放待辦（依優先順序）
 
@@ -72,14 +74,12 @@
 2. **比賽工作區升級。** 讀寫同一份台帳的每個 checkout 一起升到 0.16.0，再讓第一個人 `select --record`；共用同一個 `submit.yaml` 的 vcp 都要先升級才能寫非預設的 `selection_warn_hours`。
 3. **交接文件。** `HANDOVER.md` 與 `CODEX_PROMPT.md` 在發版時提到新事件、升級順序與磁碟檢查。
 4. **把 glob 寫進 `started` 事件**（spec §12，待使用者決定）：`--checkpoints` / `--final` 的 glob 寫進 `train.log.jsonl` 的 `started`（不驗欄位，不破舊版），`train status` 再掃它們的前綴，從沒登記過 checkpoint 的目錄的 `.tmp` 才看得到。
-5. **`train.log.jsonl` 的 append 與讀取。** `append_event` 改成單次寫入並在失敗時回復，或 `read_events` 容忍最後一列半列（只略過最後一列、不吞中間的）；之後 C3 的 `--resume` 才有把握。
-6. **`selection_warn_hours` 的上限。** 驗證加一個上限，或 `select._due` 接住 `OverflowError`、當成視窗已經打開；現在是唯讀 `status` 的 ABORT。
-7. **`assert_room` 的訊息。** ABORT 路徑改成無條件捨去（或多印一位），不要把低於門檻的值印成等於門檻。
-8. **`select --none`**（spec §12）：要支援「什麼都沒勾」（Kaggle 這時自動用 public 最好的兩發）就另加選項，現在空的選取被拒。
-9. **`--record <id>@<ref>`**（spec §12）：要分到同一個 id 的每一發時，讓 `--record` 收 `<id>@<ref>`；目前沒有需要。
-10. **`vcp gc --dry-run`**（RSNA 收尾後記 §4，不在本版）。
-11. **自動讀回平台的勾選。** 日後 kaggle CLI 開出「只列已勾選」的旗標，`sync` 可以寫 `source=platform` 的 `selected` 列（schema 已留位置），`differs` 對 `foreign:<ref>` 的誤報也一併處理。
-12. **審查留下的小項**（沒有急迫性）：
+5. **`train.log.jsonl` 的 append（PATCH）。** `append_event` 在寫之前記下 `f.tell()`，任何例外就截斷回那個位置，不留半列；`backup verify` 才不會對含這個 run 的清單永遠報 `bad_stamps:`。
+6. **`select --none`**（spec §12）：要支援「什麼都沒勾」（Kaggle 這時自動用 public 最好的兩發）就另加選項，現在空的選取被拒。
+7. **`--record <id>@<ref>`**（spec §12）：要分到同一個 id 的每一發時，讓 `--record` 收 `<id>@<ref>`；目前沒有需要。
+8. **`vcp gc --dry-run`**（RSNA 收尾後記 §4，不在本版）。
+9. **自動讀回平台的勾選。** 日後 kaggle CLI 開出「只列已勾選」的旗標，`sync` 可以寫 `source=platform` 的 `selected` 列（schema 已留位置），`differs` 對 `foreign:<ref>` 的誤報也一併處理。
+10. **審查留下的小項**（沒有急迫性）：
     - `train status` 掃到讀不了的目錄項目時會 ABORT（`PermissionError`），符號連結的 `.tmp` 以目標路徑列出；
     - `console_marker` 讀不到 console 時靜默回傳 `None`；
     - Kaggle 多頁列表的後一頁丟例外時，前一頁的警告行跟著丟掉；

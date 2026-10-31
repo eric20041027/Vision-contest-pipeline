@@ -1,8 +1,9 @@
 """What was ticked as the final submissions on the platform, and whether the record can be
-trusted (spec 2026-10-30 §3.4). ``selection_state`` is the one judgement ``status``, ``report``,
-``final`` and ``select`` all read; ``selection_lines`` and ``differs_line`` are the sentences
-that say it. Only a ``best`` board has a selection to check: a ``last`` board takes the final
-submission by itself, so its ``words`` are always ``none`` (controller ruling C1)."""
+trusted (spec 2026-10-30 §3.4). ``selection_state`` is the one judgement ``status`` and ``select``
+read (``report`` and ``final`` read the newest ``selected`` row themselves); ``selection_lines``
+and ``differs_line`` are the sentences that say it. Only a ``best`` board has a selection to
+check: a ``last`` board takes the final submission by itself, so its ``words`` are always
+``none`` (controller ruling C1)."""
 
 from __future__ import annotations
 

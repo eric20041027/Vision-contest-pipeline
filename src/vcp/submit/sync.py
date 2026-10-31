@@ -8,7 +8,7 @@ sees it. An entry the platform finished without a score is an ``errored`` row (s
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,7 @@ from vcp.core.time import parse_stamp, stamp
 from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger
 from vcp.submit.location import transaction
 from vcp.submit.matching import leads, mentions
-from vcp.submit.platforms import PlatformSubmission, Runner, get_platform
+from vcp.submit.platforms import PlatformSubmission, Runner, as_platform_list, get_platform
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
 from vcp.submit.stage import load_staged, stage_json
@@ -59,6 +59,9 @@ class SyncResult:
     bound: int = 0  # uploaded rows of source=platform written (spec 2026-09-28 §4.4)
     # the id of each errored row written, in the order written (spec 2026-10-09 §4.1)
     errored_ids: list[str] = field(default_factory=list)
+    # the platform CLI's warning lines this read of the list saw (spec 2026-10-30 §4.1): for the
+    # VERDICT; reconcile leaves them empty and no ledger row carries them
+    cli_warnings: tuple[str, ...] = ()
 
     @property
     def errored(self) -> int:
@@ -276,7 +279,10 @@ def sync(
         raise ValidationFailed("manual_platform: nothing to read back from; use `vcp submit score`")
     with transaction(paths, profile, command="submit.sync") as ledger:
         try:
-            subs = get_platform(profile.platform).list_submissions(profile, runner)
+            listed = as_platform_list(
+                get_platform(profile.platform).list_submissions(profile, runner)
+            )
         except PlatformTimeout as e:  # spec 2026-10-04 §6.3: the word upload's pre-sync uses
             raise ValidationFailed(f"sync_failed: {e}") from e
-        return reconcile(paths, profile_sha, ledger, subs)
+        res = reconcile(paths, profile_sha, ledger, listed.submissions)
+        return replace(res, cli_warnings=listed.warnings)

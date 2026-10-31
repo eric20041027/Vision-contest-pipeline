@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from helpers import seed_tiny
@@ -8,7 +10,7 @@ from vcp.data.evidence import RunScope, attach_evidence
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.records import bind_ref, load_record, read_events, save_record
 from vcp.train.schema import Attempt, TrainRecord, UploadRecord
-from vcp.train.status import status, upload_run
+from vcp.train.status import TmpFile, status, upload_run
 
 STAMP = "2026-09-05T00:00:00.000Z"
 
@@ -209,6 +211,67 @@ def test_five_folds_named_model_pt_all_upload_and_leave_nothing_unbacked(roots, 
     ]
     assert all(r.verified for r in out.records)
     assert status(roots.data, "r1").unbacked == []
+
+
+def test_status_lists_leftover_tmp_files_in_the_run_and_beside_checkpoints(roots):
+    """5.5: a failed torch.save left a 266 MB `.tmp` beside the checkpoints and nobody noticed.
+    The run directory is scanned recursively, each registered checkpoint's directory is not, and
+    the name suffix is matched without regard to case."""
+    _, w = _seeded(roots)
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True, exist_ok=True)
+    (train_dir / ".train.yaml.0a1b2c3d.tmp").write_bytes(b"12345")
+    (w / "resume.pth.TMP").write_bytes(b"x" * 266)
+    (w / "sub").mkdir()
+    (w / "sub" / "deep.tmp").write_bytes(b"deep")  # beside-checkpoint listing is not recursive
+    (roots.data / "elsewhere").mkdir()
+    (roots.data / "elsewhere" / "junk.tmp").write_bytes(b"junk")  # nobody's directory
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile("runs/r1/train/.train.yaml.0a1b2c3d.tmp", 5),
+        TmpFile("work/weights/resume.pth.TMP", 266),
+    ]
+
+
+def test_status_without_tmp_files_and_with_a_vanished_checkpoint_dir(roots):
+    _, w = _seeded(roots)
+    assert status(roots.data, "r1").tmp == []
+    shutil.rmtree(w)
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_a_checkpoint_outside_the_data_root_has_its_tmp_listed_by_absolute_path(roots, tmp_path):
+    """store_path's rule: under the data root -> relative posix, anywhere else -> absolute posix."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "m.pt").write_bytes(b"model")
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd="w",
+        command=["python"],
+        attempts=[
+            Attempt(
+                n=1, started_at=STAMP, console="train/console.1.log", status="finished", exit_code=0
+            )
+        ],
+    )
+    rec, _ = register(rec, [outside / "m.pt"], data_root=roots.data, attempt=1)
+    save_record(roots.data, rec)
+    (outside / "m.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == [TmpFile((outside / "m.pt.tmp").resolve().as_posix(), 2)]
+
+
+def test_status_lists_a_tmp_file_once_when_two_checkpoints_share_a_directory(roots):
+    """`_seeded` registers best.pt and last.pt in one directory; a `.tmp` there is one finding,
+    not one per checkpoint."""
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]
 
 
 def test_status_verify_reports_a_broken_evidence_artifact(roots, tmp_path):

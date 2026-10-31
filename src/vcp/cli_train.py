@@ -20,6 +20,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import resolve_data_root
 from vcp.data.evidence_ref import current, labels_field
+from vcp.train.disk import DEFAULT_MIN_FREE_GIB, UNKNOWN, free_gib, unavailable
 from vcp.train.run import RunSpec, train_run
 from vcp.train.status import status as status_view
 from vcp.train.status import upload_run
@@ -84,6 +85,14 @@ def run_cmd(
             "--require-clean", help="FAIL before any write when tracked files have changes"
         ),
     ] = False,
+    min_free_gib: Annotated[
+        float,
+        typer.Option(
+            "--min-free-gib",
+            help="ABORT before any write when a disk the run writes to has less free space "
+            "(GiB); 0 only records the measurement",
+        ),
+    ] = DEFAULT_MIN_FREE_GIB,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -111,6 +120,7 @@ def run_cmd(
                 evidence=list(evidence or []),
                 labels=list(labels or []),
                 require_clean=require_clean,
+                min_free_gib=min_free_gib,
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -136,7 +146,10 @@ def run_cmd(
             "evidence": res.evidence,
             "labels": res.labels,
             "commit": res.git.commit[:12] if res.git is not None else "none",
+            "free_gib": free_gib(res.disk) if res.disk is not None else UNKNOWN,
         }
+        if res.disk is not None and unavailable(res.disk):
+            fields["disk_check"] = "unavailable"
         if res.skipped:
             fields["skipped"] = res.skipped
         if res.observed_beyond:
@@ -158,6 +171,12 @@ def run_cmd(
             fields["status_attempt"] = res.attempt.status
         human = [f"attempt {res.attempt.n}: {res.attempt.status} (exit {res.attempt.exit_code})"]
         human += [f"warning: {w}" for w in res.warnings]
+        if res.disk_failure is not None:
+            # spec 2026-10-30 §5.3: the status stays FAIL; the disk is named, not blamed for sure.
+            fields["reason"] = res.disk_failure.reason
+            if res.disk_failure.evidence is not None:
+                fields["disk_evidence"] = res.disk_failure.evidence
+            human.append(f"{res.disk_failure.reason}; free space, then --resume")
         return status, fields, res.record.model_dump(mode="json"), human
 
     run_command(
@@ -230,6 +249,8 @@ def status_cmd(
             "running": st.running,
             "evidence": len(current(st.record.evidence)),
             "labels": labels_field(st.record.evidence),
+            # 5.5: leftover `*.tmp` files; always reported, > 0 is a WARN (also while running).
+            "tmp": len(st.tmp),
         }
         if verify:
             fields["drift"] = len(st.drift)
@@ -245,13 +266,15 @@ def status_cmd(
         human += [f"superseded: {p}" for p in st.superseded]
         human += [f"missing: {p}" for p in st.missing]
         human += [f"drift: {p}" for p in st.drift]
-        warn = bool(st.unbacked or st.missing or st.drift or st.running)
+        human += [f"tmp: {t.path} ({t.bytes} bytes)" for t in st.tmp]
+        warn = bool(st.unbacked or st.missing or st.drift or st.running or st.tmp)
         payload = {
             **st.record.model_dump(mode="json"),
             "drift": st.drift,
             "missing": st.missing,
             "unbacked": st.unbacked,
             "superseded": st.superseded,
+            "tmp": [{"path": t.path, "bytes": t.bytes} for t in st.tmp],
         }
         return ("WARN" if warn else "OK"), fields, payload, human
 

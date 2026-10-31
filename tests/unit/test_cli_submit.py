@@ -2,15 +2,28 @@
 this file."""
 
 import json
+from datetime import timedelta
 
 import pytest
 from typer.testing import CliRunner
 
-from submit_fixtures import make_pair
+from submit_fixtures import (
+    EVAL,
+    OUTDATED_WARNING,
+    STAMP,
+    final_row,
+    make_pair,
+    seed_ledger,
+    selected_row,
+    staged_row,
+    uploaded_row,
+)
 from vcp.cli import app
-from vcp.core.config import load_yaml_model
+from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.paths import DatasetPaths
-from vcp.submit.schema import PlatformProfile
+from vcp.core.time import stamp, utc_now
+from vcp.submit.ledger import SubmissionLedger
+from vcp.submit.schema import LedgerRow, PlatformProfile, Quota
 
 runner = CliRunner()
 
@@ -283,6 +296,7 @@ def test_final_status_report_cli(pair):
     # a manual platform has no upload: the re-send goes up by hand and record writes it down
     assert 'vcp submit record --dataset beach-test --id S1 --at "YYYY-MM-DD HH:MM"' in r.output
     assert "vcp submit upload" not in r.output
+    assert "next:" not in r.output and "selection=" not in v  # a last board has nothing to tick
     r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test", "--json"])
     assert r.exit_code == 0, r.output
     assert _json(r)["result"]["chosen"] == ["S1"]
@@ -467,6 +481,67 @@ def test_upload_cli_passes_force_and_no_sync_and_renders_the_new_fields(roots, m
     assert "forced" not in v and "--no-sync" in r.output
 
 
+def test_upload_cli_prints_cli_warnings_and_the_upgrade_hint(roots, monkeypatch):
+    """spec 2026-10-30 §4.2: ``cli_warnings=`` always; > 0 WARNs; a line that says outdated adds
+    the upgrade hint; the warning lines are printed as ``cli_warning:``."""
+    from vcp import cli_submit
+    from vcp.cli_submit import OUTDATED_HINT
+    from vcp.submit.actions import UploadOutcome
+    from vcp.submit.platforms import UploadResult
+
+    warnings: list[tuple[str, ...]] = [(OUTDATED_WARNING,)]
+
+    def fake_upload(dataset, submission_id, **_):
+        row = LedgerRow(
+            event="uploaded",
+            ts="2026-10-30T08:00:00.000Z",
+            submission_id=submission_id,
+            at="2026-10-30T08:00:00.000Z",
+            source="vcp",
+            platform_ref="7",
+            message=submission_id,
+            confirmed=True,
+            profile_sha256="p" * 64,
+        )
+        return UploadOutcome(row, UploadResult(True, "7", "ok"), None, cli_warnings=warnings[0])
+
+    monkeypatch.setattr(cli_submit, "upload", fake_upload)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
+    base = ["submit", "upload", "--dataset", "beach-test", "--id", "S1"]
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "cli_warnings=1" in v, r.output
+    assert f"cli_warning: {OUTDATED_WARNING}" in r.output and OUTDATED_HINT in r.output
+    warnings[0] = ("Warning: maintenance tonight", "Warning: rate limited")
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "cli_warnings=2" in v, r.output
+    assert "cli_warning: Warning: rate limited" in r.output and OUTDATED_HINT not in r.output
+    warnings[0] = ()
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "cli_warnings=0" in v, r.output
+    # the VERDICT's "cli_warnings=0" is not a human line; no line may start with "cli_warning:"
+    assert not [x for x in r.output.splitlines() if x.startswith("cli_warning:")], r.output
+    assert OUTDATED_HINT not in r.output
+
+
+def test_cli_warning_lines_name_each_line_and_hint_once_at_the_end():
+    from vcp.cli_submit import OUTDATED_HINT, cli_warning_lines
+
+    assert cli_warning_lines(()) == []
+    assert cli_warning_lines(("Warning: a",)) == ["cli_warning: Warning: a"]
+    lines = cli_warning_lines(("Warning: Outdated kaggle", "Warning: this is OUTDATED too"))
+    assert lines == [
+        "cli_warning: Warning: Outdated kaggle",
+        "cli_warning: Warning: this is OUTDATED too",
+        OUTDATED_HINT,
+    ]
+    assert OUTDATED_HINT == (
+        "the platform CLI says it is outdated; upgrade the CLI that kaggle_command runs"
+    )
+
+
 def test_upload_cli_refuses_an_empty_force_reason(roots):
     r = runner.invoke(
         app, ["submit", "upload", "--dataset", "beach-test", "--id", "S1", "--force", ""]
@@ -489,3 +564,201 @@ def test_record_cli_warns_on_an_id_already_uploaded(pair):
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v and "already_uploaded=1" in v
     assert "quota_overflow" not in v and "already_uploaded: S1 was uploaded 1 time(s)" in r.output
+
+
+def _best_board(roots, *rows, **over):
+    """A manual ``best`` board for beach-test with ``rows`` in its configs ledger."""
+    profile = PlatformProfile(
+        **{
+            **dict(
+                dataset="beach-test",
+                eval_dataset=EVAL,
+                plan_id="fixed-v1",
+                sealed_subset="holdout",
+                platform="manual",
+                board_rule="best",
+                metric="accuracy",
+                writer="scores_csv",
+                final_slots=2,
+                created_at=STAMP,
+            ),
+            **over,
+        }
+    )
+    return profile, seed_ledger(roots, profile, *rows)
+
+
+def test_select_cli_verdict_json_and_blanks(roots):
+    profile, paths = _best_board(
+        roots,
+        staged_row("S1"),
+        staged_row("S2"),
+        uploaded_row("S1", stamp()),
+        uploaded_row("S2", stamp()),
+    )
+    base = ["submit", "select", "--dataset", "beach-test"]
+    r = runner.invoke(app, [*base, "--record", " S1 , S2 ,"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selected=2" in v and "written=true" in v
+    assert "selection=ok" in v and "ledger=configs" in v and "dataset=beach-test" in v
+    r = runner.invoke(app, [*base, "--record", "S2,S1", "--json"])
+    doc = _json(r)
+    assert r.exit_code == 0 and doc["status"] == "OK", r.output
+    assert doc["fields"]["written"] is False and doc["result"]["chosen"] == ["S1", "S2"]
+    assert doc["result"]["event"] == "selected" and doc["result"]["selection"]["words"] == "ok"
+    assert set(doc["result"]["selection"]) == {
+        "chosen",
+        "recorded_at",
+        "words",
+        "expected",
+        "final",
+        "due_at",
+    }
+    r = runner.invoke(app, [*base, "--record", "S1", "--message", "web"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "selection=slots" in v, r.output
+    assert "selected=1" in v and "written=true" in v
+    assert "selection: 1 recorded, 2 expected (slots=2)" in r.output
+    dump_yaml_model(profile.model_copy(update={"ledger": "shared"}), paths.submit_yaml)
+    r = runner.invoke(app, [*base, "--record", "S1"])
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "not_adopted:" in v and "dataset=beach-test" in v, r.output
+
+
+def test_select_cli_failure_keeps_the_dataset_and_writes_nothing(roots):
+    _, paths = _best_board(roots, staged_row("S1"))
+    before = paths.submissions_log.read_bytes()
+    base = ["submit", "select", "--dataset", "beach-test"]
+    r = runner.invoke(app, [*base, "--record", "S1", "--json"])
+    doc = _json(r)
+    assert r.exit_code == 1 and doc["status"] == "FAIL", r.output
+    assert "not_uploaded:" in doc["fields"]["reason"]
+    assert doc["fields"]["id"] == "S1" and doc["fields"]["dataset"] == "beach-test"
+    r = runner.invoke(app, [*base, "--record", " , ,"])
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "invalid: --record needs at least one id" in v, r.output
+    assert paths.submissions_log.read_bytes() == before
+
+
+def _scored_row(sid: str, public: float) -> LedgerRow:
+    return LedgerRow(event="scored", ts=stamp(), submission_id=sid, public=public, source="manual")
+
+
+def test_status_cli_prints_selected_and_selection_and_warns(roots):
+    """spec 2026-10-30 §3.5: status always prints selected= and selection=; a missing selection
+    WARNs, a recorded one that fits does not. R1: it never prints cli_warnings=."""
+    _, paths = _best_board(
+        roots,
+        staged_row("S1"),
+        uploaded_row("S1", stamp()),
+        _scored_row("S1", 0.5),
+        final_slots=1,
+        quota=Quota(per_day=5),
+        deadline=stamp(utc_now() + timedelta(hours=30)),
+        selection_warn_hours=100,
+    )
+    base = ["submit", "status", "--dataset", "beach-test"]
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=WARN" in v and "selected=none" in v and "selection=missing" in v
+    assert "selection: missing (deadline " in r.output and "cli_warnings" not in v  # R1
+    r = runner.invoke(app, [*base, "--json"])
+    doc = _json(r)
+    assert set(doc["result"]["selection"]) == {
+        "chosen",
+        "recorded_at",
+        "words",
+        "expected",
+        "final",
+        "due_at",
+    }
+    assert doc["result"]["selection"]["words"] == "missing"
+    SubmissionLedger(paths.submissions_log).append(selected_row(["S1"]))
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selected=1" in v and "selection=ok" in v
+    assert "selection:" not in r.output
+
+
+def test_status_cli_on_a_last_board_never_warns_about_the_selection(roots):
+    _best_board(
+        roots,
+        staged_row("S1"),
+        uploaded_row("S1", stamp()),
+        _scored_row("S1", 0.5),
+        board_rule="last",
+        quota=Quota(per_day=5),
+        deadline=stamp(utc_now() + timedelta(hours=30)),
+        selection_warn_hours=100,
+    )
+    r = runner.invoke(app, ["submit", "status", "--dataset", "beach-test"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selected=none" in v and "selection=none" in v
+
+
+def test_final_and_report_cli_render_the_selection(roots, monkeypatch):
+    from vcp import cli_submit
+    from vcp.submit.final import FinalResult, next_step_hint
+    from vcp.submit.report import ReportRow
+
+    profile, _ = _best_board(roots)
+    result = FinalResult(
+        final_row(["S1"], 1),
+        ["S1"],
+        [],
+        None,
+        [],
+        True,
+        selection="differs",
+        recorded=["S2"],
+        next_step=next_step_hint(profile, ["S1"]),
+    )
+    rows = [
+        ReportRow(
+            "S1", STAMP, "candidate", 0.8, None, None, None, None, errored=True, selected=True
+        )
+    ]
+    # the fakes have no ledger behind them for the VERDICT's ledger= to read
+    monkeypatch.setattr(cli_submit, "final", lambda *a, **k: result)
+    monkeypatch.setattr(cli_submit, "report", lambda *a, **k: rows)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
+    r_final = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
+    v_final = _verdict(r_final.output)
+    assert r_final.exit_code == 0, r_final.output
+    assert "status=WARN" in v_final and "selection=differs" in v_final
+    assert (
+        "selection: final chose S1; recorded S2 (not selected: S1; selected, not final: S2)"
+        in r_final.output
+    )
+    assert (
+        "next: select S1 on the platform, then: vcp submit select --dataset beach-test "
+        "--record S1" in r_final.output
+    )
+    r_report = runner.invoke(app, ["submit", "report", "--dataset", "beach-test"])
+    assert r_report.exit_code == 0, r_report.output
+    assert next(x for x in r_report.output.splitlines() if " S1 " in x).endswith(
+        " errored selected"
+    )
+    r_report = runner.invoke(app, ["submit", "report", "--dataset", "beach-test", "--json"])
+    assert _json(r_report)["result"]["rows"][0]["selected"] is True
+
+
+def test_final_cli_without_a_differing_selection_has_no_selection_field(roots, monkeypatch):
+    from vcp import cli_submit
+    from vcp.submit.final import FinalResult, next_step_hint
+
+    profile, _ = _best_board(roots)
+    result = FinalResult(
+        final_row(["S1"], 1), ["S1"], [], None, [], True, next_step=next_step_hint(profile, ["S1"])
+    )
+    monkeypatch.setattr(cli_submit, "final", lambda *a, **k: result)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selection=" not in v and "selection:" not in r.output
+    assert "next: select S1 on the platform" in r.output

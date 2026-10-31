@@ -3,6 +3,7 @@ through before it can reach a ledger, a log or a VERDICT (spec 11)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -14,12 +15,15 @@ from vcp.submit.schema import PlatformProfile, Staged
 __all__ = [
     "PLATFORMS",
     "Platform",
+    "PlatformList",
     "PlatformSubmission",
     "Readback",
     "Runner",
     "UploadResult",
+    "as_platform_list",
     "default_runner",
     "get_platform",
+    "merge_warnings",
     "redact",
     "register_platform",
 ]
@@ -39,6 +43,9 @@ class UploadResult:
     # The CLI's own exit status: not 0 only when it failed and the read-back found the upload
     # anyway (spec 2026-10-04 §6.1) -- the row is written, the command WARNs.
     exit_code: int = 0
+    # The warning lines the CLI printed in the lists the read-back looked at (spec 2026-10-30
+    # §4.1): already redacted, each line once. For the VERDICT only -- never written to a ledger.
+    cli_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,26 @@ class PlatformSubmission:
     errored: bool = False
 
 
+@dataclass(frozen=True)
+class PlatformList:
+    """What one read of the platform's list returned (spec 2026-10-30 §4.1): the entries, and
+    the warning lines the platform's CLI printed beside them -- redacted, each line once, in the
+    order first seen. The lines are for the command's VERDICT and console; no ledger holds them."""
+
+    submissions: list[PlatformSubmission]
+    warnings: tuple[str, ...] = ()
+
+
+def as_platform_list(value: PlatformList | list[PlatformSubmission]) -> PlatformList:
+    """A platform registered against the contract before 0.16.0 returns the bare list."""
+    return value if isinstance(value, PlatformList) else PlatformList(list(value))
+
+
+def merge_warnings(*groups: Iterable[str]) -> tuple[str, ...]:
+    """The lines of every group, each once, in the order first seen."""
+    return tuple(dict.fromkeys(line for group in groups for line in group))
+
+
 class Platform(Protocol):
     name: str
 
@@ -70,9 +97,7 @@ class Platform(Protocol):
         known_refs: frozenset[str] = frozenset(),
     ) -> UploadResult: ...
 
-    def list_submissions(
-        self, profile: PlatformProfile, runner: Runner | None
-    ) -> list[PlatformSubmission]: ...
+    def list_submissions(self, profile: PlatformProfile, runner: Runner | None) -> PlatformList: ...
 
 
 PLATFORMS: dict[str, Platform] = {}

@@ -1,11 +1,15 @@
+import errno
 import json
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from helpers import (
+    ROOMY_BYTES,
     det_samples,
     det_with_runs,
     git,
@@ -14,7 +18,8 @@ from helpers import (
     make_label_set,
     write_images,
 )
-from vcp.core.errors import PlanMismatchError, ValidationFailed
+from vcp.core import atomic
+from vcp.core.errors import PlanMismatchError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
 from vcp.data.access.access import DatasetAccess
@@ -25,6 +30,9 @@ from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, run_dir, save_run
+from vcp.train import disk
+from vcp.train import run as run_module
+from vcp.train.disk import GIB, free_gib
 from vcp.train.records import load_record, read_events, save_record
 from vcp.train.run import (
     RUN_BOUND_ELSEWHERE,
@@ -902,3 +910,438 @@ def test_each_attempt_keeps_its_own_git_record(roots, tmp_path, isolated_git):
     assert (train / "git.1.patch").is_file() and (train / "git.2.patch").is_file()
     assert first.git.diff_sha256 != second.git.diff_sha256
     assert second.git.patch == "train/git.2.patch"
+
+
+def _files(roots):
+    """The bytes of what vcp writes for a run before and around its first attempt."""
+    run = run_dir(roots.data, "r1")
+    return {
+        name: (run / name).read_bytes() for name in ("run.yaml", "train.yaml", "train.log.jsonl")
+    }
+
+
+def _low_disk(monkeypatch, free=2 * GIB):
+    monkeypatch.setattr(disk, "usage", lambda path: (free, 100 * GIB))
+
+
+def _two_devices(monkeypatch, work):
+    """``work/ckpt`` is its own volume (5 GiB free); everything else shares another (50 GiB)."""
+    ckpt = work / "ckpt"
+    monkeypatch.setattr(disk, "device", lambda p: 2 if Path(p) == ckpt else 1)
+    monkeypatch.setattr(
+        disk,
+        "usage",
+        lambda p: (5 * GIB, 100 * GIB) if Path(p) == ckpt else (50 * GIB, 100 * GIB),
+    )
+
+
+def test_train_run_aborts_before_any_write_when_a_run_disk_is_low(roots, work, monkeypatch):
+    _seed(roots)
+    _low_disk(monkeypatch)
+    with pytest.raises(VcpError, match="^low_disk:") as ei:
+        train_run(_spec(roots, work))
+    assert ei.value.status == "ABORT"
+    assert set(ei.value.fields) == {"free_gib", "min_free_gib", "disk_path"}
+    assert ei.value.fields["free_gib"] == 2.0 and ei.value.fields["min_free_gib"] == 10.0
+    assert not run_dir(roots.data, "r1").exists()
+
+
+def test_resume_on_a_low_disk_aborts_and_leaves_the_record_as_it_was(roots, work, monkeypatch):
+    _seed(roots)
+    train_run(_spec(roots, work))
+    before = _files(roots)
+    _low_disk(monkeypatch)
+    with pytest.raises(VcpError, match="^low_disk:"):
+        train_run(_spec(roots, work, resume=True))
+    assert _files(roots) == before
+    assert not (run_dir(roots.data, "r1") / "train" / "console.2.log").exists()
+
+
+def test_a_low_disk_resume_does_not_close_the_attempt_left_running(roots, work, monkeypatch):
+    """The measurement comes before ``_close_running``, which would append to train.log.jsonl and
+    rewrite train.yaml: an ABORT writes nothing, not even the reconciliation of the old attempt."""
+    _seed(roots)
+    train_run(_spec(roots, work))
+    rec = load_record(roots.data, "r1")
+    crashed = rec.attempts[0].model_copy(
+        update={"status": "running", "exit_code": None, "finished_at": None, "duration_s": None}
+    )
+    save_record(roots.data, rec.model_copy(update={"attempts": [crashed]}))
+    before = _files(roots)
+    _low_disk(monkeypatch)
+    with pytest.raises(VcpError, match="^low_disk:"):
+        train_run(_spec(roots, work, resume=True))
+    assert _files(roots) == before
+    assert load_record(roots.data, "r1").attempts[0].status == "running"
+
+
+def test_input_errors_come_before_low_disk(roots, work, tmp_path, monkeypatch):
+    _seed(roots)
+    train_run(_spec(roots, work))
+    _low_disk(monkeypatch)
+    with pytest.raises(ValidationFailed, match=RUN_EXISTS):
+        train_run(_spec(roots, work))  # same id, no --resume
+    with pytest.raises(ValidationFailed, match="not_found: --cwd"):
+        train_run(_spec(roots, work, run_id="r2", cwd=tmp_path / "nowhere"))
+    assert not run_dir(roots.data, "r2").exists()
+
+
+def test_an_evidence_conflict_comes_before_low_disk(roots, work, tmp_path, monkeypatch):
+    """The measurement sits after ``check_names`` too: a --resume that trips an input check is
+    told so, however little room the disk has."""
+    _, plan, _ = _seed(roots)
+    make_label_set(roots, tmp_path, plan)
+    evidence_file = tmp_path / "corpus.txt"
+    evidence_file.write_text("x", encoding="utf-8")
+    train_run(_spec(roots, work, evidence=[f"pseudo-v1={evidence_file}"]))
+    _low_disk(monkeypatch)
+    with pytest.raises(ValidationFailed, match="evidence_conflict"):
+        train_run(_spec(roots, work, resume=True, labels=["pseudo-v1"]))
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan")])
+def test_train_run_refuses_a_bad_min_free_gib(roots, work, bad):
+    _seed(roots)
+    with pytest.raises(ValidationFailed, match="^invalid:"):
+        train_run(_spec(roots, work, min_free_gib=bad))
+    assert not run_dir(roots.data, "r1").exists()
+
+
+def test_min_free_gib_zero_never_aborts_and_still_records(roots, work, monkeypatch):
+    _seed(roots)
+    _low_disk(monkeypatch)
+    res = train_run(_spec(roots, work, min_free_gib=0))
+    assert res.attempt.status == "finished"
+    env = json.loads(
+        (run_dir(roots.data, "r1") / "train" / "env.1.json").read_text(encoding="utf-8")
+    )
+    assert env["disk"]["min_free_gib"] == 0.0
+    assert env["disk"]["volumes"][0]["free_bytes"] == 2 * GIB
+
+
+def test_a_lowered_bar_lets_a_small_disk_through(roots, work, monkeypatch):
+    _seed(roots)
+    _low_disk(monkeypatch)
+    res = train_run(_spec(roots, work, min_free_gib=1.5))
+    assert res.attempt.status == "finished" and free_gib(res.disk) == 2.0
+
+
+def test_the_env_snapshot_records_the_disk_check(roots, work):
+    _seed(roots)
+    res = train_run(_spec(roots, work, checkpoints=[], final=None))
+    env = json.loads(
+        (run_dir(roots.data, "r1") / "train" / "env.1.json").read_text(encoding="utf-8")
+    )
+    assert env["disk"]["min_free_gib"] == 10.0 and env["disk"]["checked_at"].endswith("Z")
+    vols = env["disk"]["volumes"]
+    assert len(vols) == 1 and vols[0]["roles"] == ["run", "cwd"]
+    assert vols[0]["free_bytes"] == ROOMY_BYTES == vols[0]["total_bytes"]
+    assert res.disk.model_dump(mode="json") == env["disk"]
+
+
+def test_checkpoint_globs_on_the_same_volume_add_a_role_not_an_entry(roots, work):
+    _seed(roots)
+    res = train_run(_spec(roots, work))  # weights/*.pt and weights/best.pt: same volume as cwd
+    assert [v.roles for v in res.disk.volumes] == [["run", "cwd", "checkpoints"]]
+
+
+def test_a_glob_prefix_on_another_volume_is_its_own_entry_and_the_lowest_counts(
+    roots, work, monkeypatch
+):
+    _seed(roots)
+    (work / "ckpt").mkdir()
+    _two_devices(monkeypatch, work)
+    res = train_run(_spec(roots, work, checkpoints=["ckpt/*.pt"], final=None, min_free_gib=1.0))
+    assert len(res.disk.volumes) == 2 and free_gib(res.disk) == 5.0
+    assert [v.roles for v in res.disk.volumes] == [["run", "cwd"], ["checkpoints"]]
+
+
+def test_a_low_checkpoint_volume_aborts_even_when_the_run_volume_has_room(roots, work, monkeypatch):
+    _seed(roots)
+    (work / "ckpt").mkdir()
+    _two_devices(monkeypatch, work)
+    with pytest.raises(VcpError, match="^low_disk:") as ei:
+        train_run(_spec(roots, work, checkpoints=["ckpt/*.pt"], final=None))
+    assert ei.value.fields["free_gib"] == 5.0
+    assert ei.value.fields["disk_path"] == (work / "ckpt").resolve().as_posix()
+    assert not run_dir(roots.data, "r1").exists()
+
+
+def test_an_unreadable_disk_warns_and_does_not_abort(roots, work, monkeypatch):
+    _seed(roots)
+
+    def broken(path):
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(disk, "usage", broken)
+    res = train_run(_spec(roots, work))
+    assert res.attempt.status == "finished" and "disk_check=unavailable" in res.warnings
+    assert free_gib(res.disk) == "unknown"
+    env = json.loads(
+        (run_dir(roots.data, "r1") / "train" / "env.1.json").read_text(encoding="utf-8")
+    )
+    assert env["disk"]["volumes"][0]["free_bytes"] is None
+
+
+def test_a_readable_disk_has_no_disk_warning(roots, work):
+    _seed(roots)
+    res = train_run(_spec(roots, work))
+    assert "disk_check=unavailable" not in res.warnings
+
+
+NO_SPACE = (
+    'import sys; print("OSError: [Errno 28] No space left on device", flush=True); sys.exit(1)'
+)
+WIN_FULL = 'import sys; print("OSError: [WinError 112] The disk is full", flush=True); sys.exit(1)'
+BADBIT = 'import sys; print("terminate called: ios_base::badbit", flush=True); sys.exit(1)'
+UNRELATED = 'import sys; print("KeyError: fold", flush=True); sys.exit(1)'
+EARLY = 'import sys; print("No space left on device"); print("x" * 70000); sys.exit(1)'
+SAYS_BUT_OK = 'print("No space left on device")'
+
+
+def _space_after_child(monkeypatch, gib):
+    """The disk reads ROOMY_BYTES until the child has printed its first line and ``gib`` GiB
+    after it -- the room vcp finds when it measures again. Returns the ``on_line`` that flips it."""
+    state = {"printed": False}
+    monkeypatch.setattr(
+        disk,
+        "usage",
+        lambda path: (gib * GIB if state["printed"] else ROOMY_BYTES, ROOMY_BYTES),
+    )
+
+    def on_line(line):
+        state["printed"] = True
+
+    return on_line
+
+
+def _disk_notes(roots):
+    return [
+        e
+        for e in read_events(roots.data, "r1")
+        if e["event"] == "note" and e.get("key") in ("disk_full", "low_disk")
+    ]
+
+
+def _disk_spec(roots, work, script, **kw):
+    return _spec(
+        roots, work, command=[sys.executable, "-c", script], checkpoints=[], final=None, **kw
+    )
+
+
+@pytest.mark.parametrize(
+    ("script", "marker"), [(NO_SPACE, "No space left on device"), (WIN_FULL, "[WinError 112]")]
+)
+def test_a_child_that_ran_out_of_disk_fails_with_disk_full(roots, work, script, marker):
+    _seed(roots)
+    res = train_run(_disk_spec(roots, work, script))
+    assert res.attempt.status == "failed" and res.disk_failure.key == "disk_full"
+    assert res.disk_failure.evidence == "console" and res.disk_failure.marker == marker
+    assert res.disk_failure.reason.startswith(
+        "disk_full: the command exited 1 and its console says"
+    )
+    [note] = _disk_notes(roots)
+    assert (note["key"], note["marker"], note["free_bytes"]) == ("disk_full", marker, ROOMY_BYTES)
+    assert note["attempt"] == 1 and note["ts"].endswith("Z")
+
+
+def test_a_badbit_child_on_a_low_disk_fails_with_low_disk(roots, work, monkeypatch):
+    _seed(roots)
+    on_line = _space_after_child(monkeypatch, 2)
+    res = train_run(_disk_spec(roots, work, BADBIT, on_line=on_line))
+    assert res.attempt.status == "failed" and res.disk_failure.key == "low_disk"
+    assert "may have filled" in res.disk_failure.reason
+    assert res.disk_failure.evidence is None and res.disk_failure.marker is None
+    assert [(n["key"], n["marker"], n["free_bytes"]) for n in _disk_notes(roots)] == [
+        ("low_disk", None, 2 * GIB)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("gib", "min_free", "script"),
+    [(50, 10.0, BADBIT), (2, 0.0, BADBIT), (1024, 10.0, UNRELATED), (1024, 10.0, EARLY)],
+)
+def test_no_disk_reason_when_the_evidence_is_not_there(
+    roots, work, monkeypatch, gib, min_free, script
+):
+    """Room above the bar, a bar of 0, an unrelated error, or the word further back than the last
+    64 KiB of the console: the failure is a plain failure, as in 0.15."""
+    _seed(roots)
+    on_line = _space_after_child(monkeypatch, gib)
+    res = train_run(_disk_spec(roots, work, script, min_free_gib=min_free, on_line=on_line))
+    assert res.attempt.status == "failed" and res.disk_failure is None
+    assert _disk_notes(roots) == []
+
+
+def test_the_console_wins_over_low_disk(roots, work, monkeypatch):
+    _seed(roots)
+    on_line = _space_after_child(monkeypatch, 2)
+    res = train_run(_disk_spec(roots, work, NO_SPACE, on_line=on_line))
+    assert res.disk_failure.key == "disk_full" and res.disk_failure.free_bytes == 2 * GIB
+    [note] = _disk_notes(roots)
+    assert note["key"] == "disk_full" and note["free_bytes"] == 2 * GIB
+
+
+def test_a_resumed_attempt_that_runs_out_of_disk_is_noted_under_its_own_number(roots, work):
+    _seed(roots)
+    train_run(_disk_spec(roots, work, NO_SPACE))
+    res = train_run(_disk_spec(roots, work, NO_SPACE, resume=True))  # same command: same config
+    assert res.attempt.n == 2 and res.disk_failure.key == "disk_full"
+    assert [(n["attempt"], n["key"]) for n in _disk_notes(roots)] == [
+        (1, "disk_full"),
+        (2, "disk_full"),
+    ]
+
+
+def test_success_and_interruption_are_never_diagnosed(roots, work):
+    _seed(roots)
+    ok = train_run(_disk_spec(roots, work, SAYS_BUT_OK))
+    assert ok.attempt.status == "finished" and ok.disk_failure is None
+    assert _disk_notes(roots) == []
+
+    def interrupt(line):
+        raise KeyboardInterrupt
+
+    res = train_run(_disk_spec(roots, work, NO_SPACE, run_id="r2", on_line=interrupt))
+    assert res.attempt.status == "interrupted" and res.disk_failure is None
+    assert [e for e in read_events(roots.data, "r2") if e.get("key") == "disk_full"] == []
+
+
+def test_vcp_that_cannot_write_its_console_stops_the_child_and_aborts(roots, work):
+    _seed(roots)
+    (work / "sleeper.py").write_text(SLEEPER, encoding="utf-8")
+
+    def full(line):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    started = time.monotonic()
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, command=[sys.executable, "sleeper.py"], on_line=full))
+    assert ei.value.status == "ABORT"
+    assert ei.value.fields == {"disk_evidence": "vcp"} and time.monotonic() - started < 25
+    # the child was stopped (not left sleeping its 30 s), and the attempt is still `running`
+    assert load_record(roots.data, "r1").attempts[-1].status == "running"
+
+
+def test_other_os_errors_pass_through_unchanged(roots, work):
+    _seed(roots)
+    (work / "sleeper.py").write_text(SLEEPER, encoding="utf-8")
+
+    def denied(line):
+        raise PermissionError(errno.EACCES, "denied")
+
+    with pytest.raises(PermissionError, match="denied"):
+        train_run(_spec(roots, work, command=[sys.executable, "sleeper.py"], on_line=denied))
+
+
+def test_a_train_yaml_that_cannot_be_replaced_aborts_with_disk_full_and_stays_whole(
+    roots, work, monkeypatch
+):
+    _seed(roots)
+    train_run(_spec(roots, work))
+    path = run_dir(roots.data, "r1") / "train.yaml"
+    before = path.read_bytes()
+    real_replace = os.replace
+
+    def full_disk(src, dst):
+        if Path(dst).name == "train.yaml":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(atomic.os, "replace", full_disk)
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, resume=True))
+    assert ei.value.fields == {"disk_evidence": "vcp"} and path.read_bytes() == before
+    assert not [p for p in path.parent.iterdir() if atomic.is_tmp_name(p.name)]
+
+
+def test_a_destination_that_is_full_stays_a_plain_os_error(roots, work, tmp_path, monkeypatch):
+    """The upload destination is not vcp's record: the ``upload(...)`` call in ``_upload_all`` is
+    outside ``own_writes``, so a full destination keeps its 0.15 behaviour (an OSError) instead of
+    becoming ``disk_full:``."""
+    _seed(roots)
+
+    def full_destination(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(run_module, "upload", full_destination)
+    with pytest.raises(OSError, match="No space left") as ei:
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
+    assert not isinstance(ei.value, VcpError)
+
+
+def _arm_after_upload(monkeypatch):
+    """The real ``upload`` runs against the local vault; once it has returned, ``armed`` is set,
+    so a patched write can tell upload bookkeeping from every write before it."""
+    armed = {"on": False}
+    real_upload = run_module.upload
+
+    def upload_then_arm(*args, **kwargs):
+        outcome = real_upload(*args, **kwargs)
+        armed["on"] = True
+        return outcome
+
+    monkeypatch.setattr(run_module, "upload", upload_then_arm)
+    return armed
+
+
+def _assert_recovery_is_train_upload(error):
+    """The attempt had already finished: ``--resume`` would rerun the training command, so the
+    message names the upload command instead."""
+    assert "vcp train upload --run r1 --dest" in str(error) and "--resume" not in str(error)
+
+
+def test_a_train_yaml_that_cannot_be_saved_after_an_upload_aborts_with_disk_full(
+    roots, work, tmp_path, monkeypatch
+):
+    """The bookkeeping after ``upload(...)`` is vcp's own record: ENOSPC there is the same ABORT
+    ``disk_full:`` / ``disk_evidence=vcp`` as anywhere else in ``train run``."""
+    _seed(roots)
+    armed = _arm_after_upload(monkeypatch)
+    real_save = run_module.save_record
+
+    def full_after_upload(data_root, record):
+        if armed["on"]:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_save(data_root, record)
+
+    monkeypatch.setattr(run_module, "save_record", full_after_upload)
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
+    assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+    _assert_recovery_is_train_upload(ei.value)
+
+
+def test_an_uploaded_event_that_cannot_be_appended_aborts_with_disk_full(
+    roots, work, tmp_path, monkeypatch
+):
+    _seed(roots)
+    real_append = run_module.append_event
+
+    def full_for_uploaded(data_root, run_id, event, attempt, /, **payload):
+        if event == "uploaded":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_append(data_root, run_id, event, attempt, **payload)
+
+    monkeypatch.setattr(run_module, "append_event", full_for_uploaded)
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
+    assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+    _assert_recovery_is_train_upload(ei.value)
+
+
+def test_upload_bookkeeping_errors_other_than_a_full_disk_pass_through(
+    roots, work, tmp_path, monkeypatch
+):
+    _seed(roots)
+    armed = _arm_after_upload(monkeypatch)
+    real_save = run_module.save_record
+
+    def denied_after_upload(data_root, record):
+        if armed["on"]:
+            raise PermissionError(errno.EACCES, "denied")
+        real_save(data_root, record)
+
+    monkeypatch.setattr(run_module, "save_record", denied_after_upload)
+    with pytest.raises(PermissionError, match="denied"):
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))

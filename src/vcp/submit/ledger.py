@@ -257,3 +257,10 @@ class SubmissionLedger:
     def latest_final(self) -> LedgerRow | None:
         rows = self.of("final")
         return rows[-1] if rows else None
+
+    def latest_selected(self) -> LedgerRow | None:
+        """The newest ``selected`` row in ledger order: a mistake is corrected by recording
+        again, and the last record is what the platform is taken to hold (spec 2026-10-30
+        §3.1)."""
+        rows = self.of("selected")
+        return rows[-1] if rows else None

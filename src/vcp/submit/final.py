@@ -90,6 +90,11 @@ class FinalResult:
     warnings: list[str]
     written: bool
     resend: str | None = None  # how to send needs_reupload again (resend_hint)
+    # board_rule=best only (spec 2026-10-30 §3.5): "differs" when a recorded selection is not
+    # this choice, with that selection's labels; the next step to take on the platform
+    selection: str | None = None
+    recorded: list[str] | None = None
+    next_step: str | None = None
 
 
 def resend_hint(profile: PlatformProfile, submission_id: str) -> str:
@@ -104,6 +109,23 @@ def resend_hint(profile: PlatformProfile, submission_id: str) -> str:
             '--at "YYYY-MM-DD HH:MM"'
         )
     return f'send it again: vcp submit upload --dataset {test} --id {sid} --force "{RESEND_REASON}"'
+
+
+def next_step_hint(profile: PlatformProfile, chosen: list[str]) -> str:
+    """What follows ``final`` when the board counts the submissions ticked on the platform
+    (``best``): tick them there, then write down what was ticked (spec 2026-10-30 §3.5)."""
+    c = ",".join(chosen)
+    record = f"vcp submit select --dataset {profile.dataset} --record {c}"
+    return f"select {c} on the platform, then: {record}"
+
+
+def _differing_selection(ledger: SubmissionLedger, chosen: list[str]) -> list[str] | None:
+    """The labels of the newest ``selected`` row when they are not ``chosen`` (as sets: the
+    platform's selection has no order); None when there is no such row or it is the same."""
+    selected = ledger.latest_selected()
+    if selected is None or set(selected.chosen or ()) == set(chosen):
+        return None
+    return list(selected.chosen or ())
 
 
 @contextmanager
@@ -258,6 +280,15 @@ def _final_locked(
         last = ledger.last_uploaded()
         if last is None or last.submission_id != chosen[0]:
             needs_reupload = chosen[0]
+    selection: str | None = None
+    recorded: list[str] | None = None
+    next_step: str | None = None
+    if profile.board_rule == "best":
+        # read before the rows below; a recorded selection that is not this choice is only said,
+        # never acted on, and the ``final`` row does not depend on it
+        recorded = _differing_selection(ledger, chosen)
+        selection = None if recorded is None else "differs"
+        next_step = next_step_hint(profile, chosen)
     row = LedgerRow(
         event="final",
         ts=stamp(),
@@ -274,7 +305,18 @@ def _final_locked(
         ledger.append(row)
         ledger.append(LedgerRow(event="lock", ts=stamp(), reason="final"))
     resend = None if needs_reupload is None else resend_hint(profile, needs_reupload)
-    return FinalResult(row, chosen, unranked, needs_reupload, warnings, not dry_run, resend)
+    return FinalResult(
+        row,
+        chosen,
+        unranked,
+        needs_reupload,
+        warnings,
+        not dry_run,
+        resend,
+        selection,
+        recorded,
+        next_step,
+    )
 
 
 def lock(

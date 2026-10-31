@@ -27,7 +27,7 @@
 | 7b. kernel 實跑 | 上傳已授權的 dataset/notebook、等實際成功版本與輸出 | 綁定成功 notebook id/version、輸出與 `--weights RUN[:sha]`；不捏造版本或 test run |
 | 8. 提交準備 | `submit init`, `stage`, `verify` | file 走 eval/test 配對；kernel 走 notebook/version/weights；四道門通過且 `stage.json` 可驗證 |
 | 9. 平台 | `upload` 或 `record`, `sync` 或 `score` | 台帳有真實 uploaded/scored，Kaggle 結果由 CLI 回讀 |
-| 10. 決選 | sealed `measure --unseal --reason`, `final --dry-run`, `final` | 至少一個 candidate/baseline 已真實上傳或記錄；候選固定；解封後不調參；final 記錄並封槍 |
+| 10. 決選 | sealed `measure --unseal --reason`, `final --dry-run`, `final`, 平台勾選, `select --record`, `status` | 至少一個 candidate/baseline 已真實上傳或記錄；候選固定；解封後不調參；final 記錄並封槍；平台上實際勾的用 `select --record` 記下（`final` 記的只是 vcp 的建議），`status` 沒有 `selection=missing\|slots\|differs` 的 WARN（核對只在 `board_rule: best`；`last` 的平台自己算最後一發，`selection=none`） |
 | 11. 提交證據備份 | `backup manifest`, `push --tier 1/2/3`, `verify`, `status` | 從真實 submission 重建完整證據圖；異機目的地逐檔 sha 通過 |
 
 小資料集若撐不起四個子集，可以使用較少子集，但要在 RUNBOOK 記錄決定、依據與失去的保證。先檢查每個 group 數及 metric 所需支持：例如每個 multilabel AUC cell 都需要正例與負例。少於兩個 eval 時，`min_bases=2` 不會自動成立；沒有 sealed 就不能宣稱完成正常 sealed final。門檻在看到分數後不得放寬，空集合不能假裝多重驗證。
@@ -48,7 +48,7 @@
 - `vcp train run|upload|status`：包住任意框架，記命令、環境、checkpoint 與副本；vcp 不替你定義模型。
 - `vcp eval ingest|measure|anchor|sigma|preregister|judge|status|report`：把預測正規化，保護量測條件並留下可稽核判決。
 - `vcp fuse recipe|ablate|build`：固定配方並證明每位成員的增益。
-- `vcp submit init|stage|verify|upload|record|score|sync|final|lock|unlock|status|report`：治理候選身分、配額、平台事實與決選。
+- `vcp submit init|stage|verify|upload|record|score|sync|final|select|lock|unlock|status|report`：治理候選身分、配額、平台事實與決選；`select --record` 記下你在平台上實際勾的最終提交。
 - `vcp backup manifest|push|verify|pull|status`：從結論反向收集證據並驗證恢復能力。
 - `vcp artifact create|show|verify|lineage|status|relink|clean`：不可變產物（收據、source audit、dataset diff、policy、比賽自訂 kind）的建立與稽核。
 - `vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index`：資料改版後判定哪些 run 還有效；SQLite 預設、PostgreSQL optional。

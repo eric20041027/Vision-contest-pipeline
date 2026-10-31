@@ -5,12 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from vcp.core.paths import resolve_stored_path, store_path
 from vcp.data.evidence import broken_refs
+from vcp.measure.runs import run_dir
 from vcp.train.checkpoints import drift as _drift
 from vcp.train.checkpoints import missing as _missing
 from vcp.train.records import append_event, load_record, save_record
 from vcp.train.schema import TrainRecord
 from vcp.train.upload import Runner, UploadOutcome, merge_uploads, upload
+
+TMP_SUFFIX = ".tmp"
+
+
+@dataclass(frozen=True)
+class TmpFile:
+    """A leftover ``*.tmp``; ``path`` is ``store_path``: data-root-relative, else absolute."""
+
+    path: str
+    bytes: int
 
 
 @dataclass(frozen=True)
@@ -22,6 +34,35 @@ class StatusResult:
     missing: list[str]
     drift: list[str]
     running: int
+    tmp: list[TmpFile]
+
+
+def _tmp_in(directory: Path, *, recursive: bool) -> list[Path]:
+    """Files directly in (or, if ``recursive``, under) ``directory`` named ``*.tmp``, any case."""
+    if not directory.is_dir():
+        return []
+    entries = directory.rglob("*") if recursive else directory.iterdir()
+    return [p for p in entries if p.name.lower().endswith(TMP_SUFFIX) and p.is_file()]
+
+
+def tmp_files(data_root: Path, record: TrainRecord) -> list[TmpFile]:
+    """Leftover ``*.tmp`` files a failed write left behind (spec 5.5): anywhere under the run
+    directory, and directly beside each registered checkpoint (the framework's own ``.tmp``
+    lives there, e.g. a ``torch.save`` that ran out of disk). Read-only; sorted by ``path``."""
+    found = _tmp_in(run_dir(data_root, record.run_id), recursive=True)
+    for parent in {resolve_stored_path(c.path, data_root).parent for c in record.checkpoints}:
+        found += _tmp_in(parent, recursive=False)
+    out: dict[Path, TmpFile] = {}
+    for p in found:
+        resolved = p.resolve()
+        if resolved in out:
+            continue
+        try:
+            size = p.stat().st_size
+        except FileNotFoundError:  # gone between the listing and the stat
+            continue
+        out[resolved] = TmpFile(store_path(p, data_root), size)
+    return sorted(out.values(), key=lambda t: t.path)
 
 
 def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResult:
@@ -51,6 +92,7 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
             else []
         ),
         running=sum(1 for a in record.attempts if a.status == "running"),
+        tmp=tmp_files(data_root, record),
     )
 
 

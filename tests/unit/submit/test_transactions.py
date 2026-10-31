@@ -217,3 +217,19 @@ def test_a_write_command_aborts_while_another_process_holds_the_ledger(roots, mo
     r = runner.invoke(app, ["submit", "unlock", "--dataset", TEST, "--reason", "y"])
     v = _verdict(r.output)
     assert r.exit_code == 1 and "not_adopted:" in v and "ledger=shared" in v
+
+
+def test_select_aborts_while_another_process_holds_the_ledger(roots, monkeypatch):
+    paths = _paths(roots)
+    dump_yaml_model(_profile(), paths.submit_yaml)
+    monkeypatch.setattr(lockmod, "WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(lockmod, "RETRY_SECONDS", 0.05)
+    proc, pid = _hold(ledger_lock_file(paths, paths.submissions_log), paths.submissions_log)
+    try:
+        r = runner.invoke(app, ["submit", "select", "--dataset", TEST, "--record", "S1"])
+    finally:
+        _release(proc)
+    v = _verdict(r.output)
+    assert r.exit_code == 2 and "status=ABORT" in v and "locked:" in v, r.output
+    assert f"held by test.holder (pid {pid} on " in v and f"dataset={TEST}" in v
+    assert not paths.submissions_log.exists()

@@ -1,5 +1,7 @@
+import errno
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -15,6 +17,7 @@ from helpers import (
 )
 from vcp.cli import app
 from vcp.cli_eval import load_plugins
+from vcp.core import atomic
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -159,6 +162,27 @@ def test_eval_ingest_cli(roots, tmp_path):
         ],
     )
     assert r.exit_code == 2 and "RegistryError" in _last_verdict(r.output)
+
+
+def test_ingest_that_cannot_write_run_yaml_aborts_with_the_oserror_text(
+    roots, tmp_path, monkeypatch
+):
+    """C2: only `train run` turns a full disk into `disk_full:`; every other command that
+    rewrites a yaml keeps its contract, an ABORT carrying the OSError's own text."""
+    ds, plan, _ = seed_det(roots)
+    real_replace = atomic.os.replace
+
+    def replace(src, dst):
+        if Path(dst).name == "run.yaml":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(atomic.os, "replace", replace)
+    r = ingest_perfect(roots, tmp_path, ds, plan, "m1", "valA")
+    v = _last_verdict(r.output)
+    assert r.exit_code == 2 and "status=ABORT" in v
+    assert "OSError: [Errno 28] No space left on device" in v
+    assert "disk_evidence" not in v and "disk_full" not in v
 
 
 def test_eval_ingest_coco_results_against_a_real_coco_export_cli(roots, tmp_path):

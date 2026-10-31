@@ -318,3 +318,20 @@ def test_train_run_cli_json_carries_the_disk_check(roots, tmp_path):
 def test_train_run_help_documents_min_free_gib(roots):
     out = runner.invoke(app, ["train", "run", "--help"]).output
     assert "--min-free-gib" in out and "0" in out
+
+
+def test_train_run_cli_names_disk_full(roots, tmp_path):
+    seed_det(roots)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_text(
+        'import sys\nprint("OSError: [Errno 28] No space left on device")\n'
+        "sys.exit(int(sys.argv[1]))\n",
+        encoding="utf-8",
+    )
+    r = _run(work, code="1")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "disk_evidence=console" in v
+    assert "free_gib=" in v
+    assert 'reason="disk_full: the command exited 1 and its console says' in v
+    assert "; free space, then --resume" in r.output

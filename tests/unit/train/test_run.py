@@ -1,4 +1,6 @@
+import errno
 import json
+import os
 import subprocess
 import sys
 import time
@@ -16,6 +18,7 @@ from helpers import (
     make_label_set,
     write_images,
 )
+from vcp.core import atomic
 from vcp.core.errors import PlanMismatchError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
@@ -28,6 +31,7 @@ from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, run_dir, save_run
 from vcp.train import disk
+from vcp.train import run as run_module
 from vcp.train.disk import GIB, free_gib
 from vcp.train.records import load_record, read_events, save_record
 from vcp.train.run import (
@@ -76,7 +80,6 @@ s.note("val_auc", 0.9)
 # 5-1: prints one line (so on_line runs) and then outlives any patience the wrapper has.
 SLEEPER = """
 import time
-from pathlib import Path
 print("tick", flush=True)
 time.sleep(30)
 """
@@ -1084,3 +1087,183 @@ def test_a_readable_disk_has_no_disk_warning(roots, work):
     _seed(roots)
     res = train_run(_spec(roots, work))
     assert "disk_check=unavailable" not in res.warnings
+
+
+NO_SPACE = (
+    'import sys; print("OSError: [Errno 28] No space left on device", flush=True); sys.exit(1)'
+)
+WIN_FULL = 'import sys; print("OSError: [WinError 112] The disk is full", flush=True); sys.exit(1)'
+BADBIT = 'import sys; print("terminate called: ios_base::badbit", flush=True); sys.exit(1)'
+UNRELATED = 'import sys; print("KeyError: fold", flush=True); sys.exit(1)'
+EARLY = 'import sys; print("No space left on device"); print("x" * 70000); sys.exit(1)'
+SAYS_BUT_OK = 'print("No space left on device")'
+
+
+def _space_after_child(monkeypatch, gib):
+    """The disk reads ROOMY_BYTES until the child has printed its first line and ``gib`` GiB
+    after it -- the room vcp finds when it measures again. Returns the ``on_line`` that flips it."""
+    state = {"printed": False}
+    monkeypatch.setattr(
+        disk,
+        "usage",
+        lambda path: (gib * GIB if state["printed"] else ROOMY_BYTES, ROOMY_BYTES),
+    )
+
+    def on_line(line):
+        state["printed"] = True
+
+    return on_line
+
+
+def _disk_notes(roots):
+    return [
+        e
+        for e in read_events(roots.data, "r1")
+        if e["event"] == "note" and e.get("key") in ("disk_full", "low_disk")
+    ]
+
+
+def _disk_spec(roots, work, script, **kw):
+    return _spec(
+        roots, work, command=[sys.executable, "-c", script], checkpoints=[], final=None, **kw
+    )
+
+
+@pytest.mark.parametrize(
+    ("script", "marker"), [(NO_SPACE, "No space left on device"), (WIN_FULL, "[WinError 112]")]
+)
+def test_a_child_that_ran_out_of_disk_fails_with_disk_full(roots, work, script, marker):
+    _seed(roots)
+    res = train_run(_disk_spec(roots, work, script))
+    assert res.attempt.status == "failed" and res.disk_failure.key == "disk_full"
+    assert res.disk_failure.evidence == "console" and res.disk_failure.marker == marker
+    assert res.disk_failure.reason.startswith(
+        "disk_full: the command exited 1 and its console says"
+    )
+    [note] = _disk_notes(roots)
+    assert (note["key"], note["marker"], note["free_bytes"]) == ("disk_full", marker, ROOMY_BYTES)
+    assert note["attempt"] == 1 and note["ts"].endswith("Z")
+
+
+def test_a_badbit_child_on_a_low_disk_fails_with_low_disk(roots, work, monkeypatch):
+    _seed(roots)
+    on_line = _space_after_child(monkeypatch, 2)
+    res = train_run(_disk_spec(roots, work, BADBIT, on_line=on_line))
+    assert res.attempt.status == "failed" and res.disk_failure.key == "low_disk"
+    assert "may have filled" in res.disk_failure.reason
+    assert res.disk_failure.evidence is None and res.disk_failure.marker is None
+    assert [(n["key"], n["marker"], n["free_bytes"]) for n in _disk_notes(roots)] == [
+        ("low_disk", None, 2 * GIB)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("gib", "min_free", "script"),
+    [(50, 10.0, BADBIT), (2, 0.0, BADBIT), (1024, 10.0, UNRELATED), (1024, 10.0, EARLY)],
+)
+def test_no_disk_reason_when_the_evidence_is_not_there(
+    roots, work, monkeypatch, gib, min_free, script
+):
+    """Room above the bar, a bar of 0, an unrelated error, or the word further back than the last
+    64 KiB of the console: the failure is a plain failure, as in 0.15."""
+    _seed(roots)
+    on_line = _space_after_child(monkeypatch, gib)
+    res = train_run(_disk_spec(roots, work, script, min_free_gib=min_free, on_line=on_line))
+    assert res.attempt.status == "failed" and res.disk_failure is None
+    assert _disk_notes(roots) == []
+
+
+def test_the_console_wins_over_low_disk(roots, work, monkeypatch):
+    _seed(roots)
+    on_line = _space_after_child(monkeypatch, 2)
+    res = train_run(_disk_spec(roots, work, NO_SPACE, on_line=on_line))
+    assert res.disk_failure.key == "disk_full" and res.disk_failure.free_bytes == 2 * GIB
+    [note] = _disk_notes(roots)
+    assert note["key"] == "disk_full" and note["free_bytes"] == 2 * GIB
+
+
+def test_a_resumed_attempt_that_runs_out_of_disk_is_noted_under_its_own_number(roots, work):
+    _seed(roots)
+    train_run(_disk_spec(roots, work, NO_SPACE))
+    res = train_run(_disk_spec(roots, work, NO_SPACE, resume=True))  # same command: same config
+    assert res.attempt.n == 2 and res.disk_failure.key == "disk_full"
+    assert [(n["attempt"], n["key"]) for n in _disk_notes(roots)] == [
+        (1, "disk_full"),
+        (2, "disk_full"),
+    ]
+
+
+def test_success_and_interruption_are_never_diagnosed(roots, work):
+    _seed(roots)
+    ok = train_run(_disk_spec(roots, work, SAYS_BUT_OK))
+    assert ok.attempt.status == "finished" and ok.disk_failure is None
+    assert _disk_notes(roots) == []
+
+    def interrupt(line):
+        raise KeyboardInterrupt
+
+    res = train_run(_disk_spec(roots, work, NO_SPACE, run_id="r2", on_line=interrupt))
+    assert res.attempt.status == "interrupted" and res.disk_failure is None
+    assert [e for e in read_events(roots.data, "r2") if e.get("key") == "disk_full"] == []
+
+
+def test_vcp_that_cannot_write_its_console_stops_the_child_and_aborts(roots, work):
+    _seed(roots)
+    (work / "sleeper.py").write_text(SLEEPER, encoding="utf-8")
+
+    def full(line):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    started = time.monotonic()
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, command=[sys.executable, "sleeper.py"], on_line=full))
+    assert ei.value.status == "ABORT"
+    assert ei.value.fields == {"disk_evidence": "vcp"} and time.monotonic() - started < 25
+    # the child was stopped (not left sleeping its 30 s), and the attempt is still `running`
+    assert load_record(roots.data, "r1").attempts[-1].status == "running"
+
+
+def test_other_os_errors_pass_through_unchanged(roots, work):
+    _seed(roots)
+    (work / "sleeper.py").write_text(SLEEPER, encoding="utf-8")
+
+    def denied(line):
+        raise PermissionError(errno.EACCES, "denied")
+
+    with pytest.raises(PermissionError, match="denied"):
+        train_run(_spec(roots, work, command=[sys.executable, "sleeper.py"], on_line=denied))
+
+
+def test_a_train_yaml_that_cannot_be_replaced_aborts_with_disk_full_and_stays_whole(
+    roots, work, monkeypatch
+):
+    _seed(roots)
+    train_run(_spec(roots, work))
+    path = run_dir(roots.data, "r1") / "train.yaml"
+    before = path.read_bytes()
+    real_replace = os.replace
+
+    def full_disk(src, dst):
+        if Path(dst).name == "train.yaml":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(atomic.os, "replace", full_disk)
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, resume=True))
+    assert ei.value.fields == {"disk_evidence": "vcp"} and path.read_bytes() == before
+    assert not [p for p in path.parent.iterdir() if atomic.is_tmp_name(p.name)]
+
+
+def test_a_destination_that_is_full_stays_a_plain_os_error(roots, work, tmp_path, monkeypatch):
+    """The upload destination is not vcp's record: ``_upload_all`` is outside ``own_writes``, so
+    a full destination keeps its 0.15 behaviour (an OSError) instead of becoming ``disk_full:``."""
+    _seed(roots)
+
+    def full_destination(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(run_module, "upload", full_destination)
+    with pytest.raises(OSError, match="No space left") as ei:
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
+    assert not isinstance(ei.value, VcpError)

@@ -171,6 +171,12 @@ def run_cmd(
             fields["status_attempt"] = res.attempt.status
         human = [f"attempt {res.attempt.n}: {res.attempt.status} (exit {res.attempt.exit_code})"]
         human += [f"warning: {w}" for w in res.warnings]
+        if res.disk_failure is not None:
+            # spec 2026-10-30 §5.3: the status stays FAIL; the disk is named, not blamed for sure.
+            fields["reason"] = res.disk_failure.reason
+            if res.disk_failure.evidence is not None:
+                fields["disk_evidence"] = res.disk_failure.evidence
+            human.append(f"{res.disk_failure.reason}; free space, then --resume")
         return status, fields, res.record.model_dump(mode="json"), human
 
     run_command(

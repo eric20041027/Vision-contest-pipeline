@@ -1,3 +1,4 @@
+import errno
 from pathlib import Path
 
 import pytest
@@ -5,15 +6,24 @@ import pytest
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.train import disk
 from vcp.train.disk import (
+    DISK_FULL_ERRNOS,
+    DISK_FULL_MARKERS,
+    DISK_FULL_TAIL,
+    DISK_FULL_WINERRORS,
     GIB,
+    DiskFailure,
     assert_room,
     check_min_free_gib,
+    console_marker,
+    diagnose,
     disk_free_total,
     free_gib,
     glob_prefix,
+    is_disk_full,
     lowest,
     measure,
     nearest_dir,
+    own_writes,
     targets,
     unavailable,
 )
@@ -223,3 +233,158 @@ def test_the_real_probe_reads_this_disk(tmp_path):
 
 def test_the_real_device_of_a_directory_is_an_int(tmp_path):
     assert isinstance(disk.device(tmp_path), int)
+
+
+def _log(tmp_path, text, name="console.log"):
+    return _log_bytes(tmp_path, text.encode("utf-8"), name)
+
+
+def _log_bytes(tmp_path, data, name="console.log"):
+    path = tmp_path / name
+    path.write_bytes(data)
+    return path
+
+
+def _after(free, min_free=10.0):
+    """The reading taken after a failed attempt: one volume with ``free`` bytes left (None =
+    the probe failed)."""
+    return _check(
+        _volume(free, path=".", total=None if free is None else 100 * GIB), min_free_gib=min_free
+    )
+
+
+def test_the_constants_are_the_ones_the_spec_names():
+    assert DISK_FULL_TAIL == 64 * 1024 == 65536
+    assert DISK_FULL_MARKERS == (
+        "No space left on device",
+        "[Errno 28]",
+        "[WinError 112]",
+        "[WinError 39]",
+        "There is not enough space on the disk",
+        "Disk quota exceeded",
+    )
+    assert DISK_FULL_ERRNOS == {errno.ENOSPC, errno.EDQUOT}
+    assert DISK_FULL_WINERRORS == {112, 39}
+
+
+@pytest.mark.parametrize(
+    ("line", "marker"),
+    [
+        ("OSError: [Errno 28] No space left on device", "No space left on device"),
+        ("RuntimeError: [errno 28] write failed", "[Errno 28]"),
+        ("OSError: [WinError 112] 磁碟空間不足。", "[WinError 112]"),
+        ("OSError: [WinError 39] handle disk full", "[WinError 39]"),
+        ("there is not enough space on the disk", "There is not enough space on the disk"),
+        ("DISK QUOTA EXCEEDED", "Disk quota exceeded"),
+    ],
+)
+def test_console_marker_finds_each_word_in_any_case(tmp_path, line, marker):
+    assert console_marker(_log(tmp_path, f"epoch 3\n{line}\n")) == marker
+    assert console_marker(tmp_path / "missing.log") is None
+
+
+def test_console_marker_answers_none_for_a_console_without_a_word(tmp_path):
+    assert console_marker(_log(tmp_path, "epoch 3\nterminate called: ios_base::badbit\n")) is None
+    assert console_marker(_log(tmp_path, "")) is None
+
+
+def test_console_marker_takes_the_first_word_of_the_list_not_the_earliest_in_the_text(tmp_path):
+    text = "[WinError 112] first in the text\nNo space left on device\n"
+    assert console_marker(_log(tmp_path, text)) == "No space left on device"
+
+
+def test_console_marker_reads_only_the_last_64_kib(tmp_path):
+    word = b"No space left on device\n"
+    assert console_marker(_log_bytes(tmp_path, word + b"x" * DISK_FULL_TAIL)) is None
+    # the word ends exactly at the start of the window: still outside it
+    assert console_marker(_log_bytes(tmp_path, word + b"x" * (DISK_FULL_TAIL - 1))) is None
+    assert console_marker(_log_bytes(tmp_path, word + b"x" * DISK_FULL_TAIL + b"\n" + word)) == (
+        "No space left on device"
+    )
+
+
+def test_a_tail_that_starts_inside_a_multibyte_character_still_reads(tmp_path):
+    body = ("中" * 30000).encode() + b"\n[Errno 28] write\n"
+    assert (len(body) - DISK_FULL_TAIL) % 3 != 0
+    assert console_marker(_log_bytes(tmp_path, body)) == "[Errno 28]"
+
+
+def test_diagnose_prefers_the_console_then_low_disk_then_nothing(tmp_path):
+    full = _log(tmp_path, "epoch 3\nOSError: [Errno 28] No space left on device\n", "full.log")
+    badbit = _log(tmp_path, "terminate called: ios_base::badbit\n", "badbit.log")
+    assert diagnose(1, full, _after(2 * GIB)) == DiskFailure(
+        key="disk_full",
+        marker="No space left on device",
+        free_bytes=2 * GIB,
+        evidence="console",
+        reason='disk_full: the command exited 1 and its console says "No space left on device"',
+    )
+    low = diagnose(1, badbit, _after(2 * GIB))
+    assert (low.key, low.marker, low.evidence, low.free_bytes) == ("low_disk", None, None, 2 * GIB)
+    assert low.reason == (
+        "low_disk: the command exited 1 with 2.0 GiB free "
+        "(below --min-free-gib 10); the disk may have filled"
+    )
+    assert diagnose(1, badbit, _after(50 * GIB)) is None
+    assert diagnose(1, badbit, _after(2 * GIB, min_free=0.0)) is None
+    assert diagnose(1, badbit, _after(None)) is None
+
+
+def test_diagnose_reports_the_exit_code_and_a_fractional_bar(tmp_path):
+    badbit = _log(tmp_path, "ios_base::badbit\n", "badbit.log")
+    low = diagnose(137, badbit, _after(GIB * 3 // 2, min_free=2.5))
+    assert low.reason == (
+        "low_disk: the command exited 137 with 1.5 GiB free "
+        "(below --min-free-gib 2.5); the disk may have filled"
+    )
+
+
+def test_diagnose_exactly_at_the_bar_is_not_low(tmp_path):
+    badbit = _log(tmp_path, "ios_base::badbit\n", "badbit.log")
+    assert diagnose(1, badbit, _after(10 * GIB)) is None
+    assert diagnose(1, badbit, _after(10 * GIB - 1)).key == "low_disk"
+
+
+def test_a_console_word_is_reported_even_when_the_free_space_is_unknown(tmp_path):
+    full = _log(tmp_path, "No space left on device\n", "full.log")
+    got = diagnose(1, full, _after(None))
+    assert got.key == "disk_full" and got.free_bytes is None and got.evidence == "console"
+
+
+def test_diagnose_reads_the_volume_with_the_least_room(tmp_path):
+    badbit = _log(tmp_path, "ios_base::badbit\n", "badbit.log")
+    two = _check(_volume(50 * GIB, path="data"), _volume(3 * GIB, path="D:/ckpt"))
+    got = diagnose(1, badbit, two)
+    assert got.key == "low_disk" and got.free_bytes == 3 * GIB and "3.0 GiB free" in got.reason
+
+
+class Win112(OSError):
+    winerror = 112
+
+
+class Win39(OSError):
+    winerror = 39
+
+
+def test_is_disk_full_knows_enospc_edquot_and_the_two_winerrors():
+    assert is_disk_full(OSError(errno.ENOSPC, "x")) and is_disk_full(OSError(errno.EDQUOT, "x"))
+    assert is_disk_full(Win112(errno.EINVAL, "x")) and is_disk_full(Win39(errno.EINVAL, "x"))
+    assert not is_disk_full(OSError(errno.EACCES, "x"))
+    assert not is_disk_full(OSError("no errno at all"))
+
+
+def test_own_writes_turns_disk_full_into_an_abort_and_lets_others_through():
+    with pytest.raises(VcpError, match="^disk_full: vcp could not write") as ei:
+        with own_writes():
+            raise OSError(errno.ENOSPC, "No space left on device")
+    assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+    assert "; free space, then --resume" in str(ei.value)
+    assert isinstance(ei.value.__cause__, OSError)  # the original stays on the chain
+    with pytest.raises(PermissionError, match="denied"):
+        with own_writes():
+            raise PermissionError(errno.EACCES, "denied")
+    with pytest.raises(ValueError, match="not an OSError"):
+        with own_writes():
+            raise ValueError("not an OSError")
+    with own_writes():
+        pass

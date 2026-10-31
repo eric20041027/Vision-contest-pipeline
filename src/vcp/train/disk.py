@@ -142,7 +142,9 @@ def lowest(check: DiskCheck) -> DiskVolume | None:
 
 
 def _gib(size: int) -> float:
-    return round(size / GIB, 1)
+    """GiB to one decimal, floored: a reading under the bar must never print as the bar (9.96
+    GiB against a bar of 10 reads 9.9, not 10.0)."""
+    return math.floor(size / GIB * 10) / 10
 
 
 def free_gib(check: DiskCheck) -> float | str:
@@ -249,17 +251,18 @@ def is_disk_full(error: OSError) -> bool:
 
 
 @contextmanager
-def own_writes() -> Iterator[None]:
+def own_writes(*, hint: str = "free space, then --resume") -> Iterator[None]:
     """Around the writes vcp makes to its own record in ``train run``: a full disk becomes an
-    ABORT ``disk_full:`` with ``disk_evidence=vcp`` (clear space, then ``--resume``); any other
-    ``OSError`` passes as it came. Only ``train run`` uses it -- every other command keeps the
-    OSError it always raised."""
+    ABORT ``disk_full:`` with ``disk_evidence=vcp`` and the recovery step ``hint`` (by default
+    clear space, then ``--resume``; the upload step passes its own, because by then the attempt
+    has finished and ``--resume`` would rerun it); any other ``OSError`` passes as it came. Only
+    ``train run`` uses it -- every other command keeps the OSError it always raised."""
     try:
         yield
     except OSError as e:
         if not is_disk_full(e):
             raise
         raise VcpError(
-            f"disk_full: vcp could not write its own record ({e}); free space, then --resume",
+            f"disk_full: vcp could not write its own record ({e}); {hint}",
             fields={"disk_evidence": "vcp"},
         ) from e

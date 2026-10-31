@@ -1285,6 +1285,12 @@ def _arm_after_upload(monkeypatch):
     return armed
 
 
+def _assert_recovery_is_train_upload(error):
+    """The attempt had already finished: ``--resume`` would rerun the training command, so the
+    message names the upload command instead."""
+    assert "vcp train upload --run r1 --dest" in str(error) and "--resume" not in str(error)
+
+
 def test_a_train_yaml_that_cannot_be_saved_after_an_upload_aborts_with_disk_full(
     roots, work, tmp_path, monkeypatch
 ):
@@ -1303,6 +1309,7 @@ def test_a_train_yaml_that_cannot_be_saved_after_an_upload_aborts_with_disk_full
     with pytest.raises(VcpError, match="^disk_full:") as ei:
         train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
     assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+    _assert_recovery_is_train_upload(ei.value)
 
 
 def test_an_uploaded_event_that_cannot_be_appended_aborts_with_disk_full(
@@ -1320,6 +1327,7 @@ def test_an_uploaded_event_that_cannot_be_appended_aborts_with_disk_full(
     with pytest.raises(VcpError, match="^disk_full:") as ei:
         train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
     assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+    _assert_recovery_is_train_upload(ei.value)
 
 
 def test_upload_bookkeeping_errors_other_than_a_full_disk_pass_through(

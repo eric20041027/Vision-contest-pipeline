@@ -470,7 +470,10 @@ def _upload_all(
         # The destination is not vcp's record: a full disk THERE stays the OSError it always was.
         outcome = upload(record, dest, data_root=data_root, runner=spec.rclone_runner)
         record = merge_uploads(record, outcome.records)
-        with own_writes():  # what vcp writes about the upload is its record (§5.3)
+        # What vcp writes about the upload is its record (§5.3). The attempt has finished by now,
+        # so the recovery is the idempotent `train upload`, not `--resume` (which reruns training).
+        hint = f"free space, then: vcp train upload --run {spec.run_id} --dest {dest}"
+        with own_writes(hint=hint):
             save_record(data_root, record)
             for r in outcome.records:
                 if (r.dest, r.name, r.sha256) not in before:

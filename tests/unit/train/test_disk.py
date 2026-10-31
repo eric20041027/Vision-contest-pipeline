@@ -214,6 +214,16 @@ def test_assert_room_names_the_volume_with_the_least_room():
     assert ei.value.fields["disk_path"] == "D:/ckpt" and ei.value.fields["free_gib"] == 3.0
 
 
+def test_a_reading_just_under_the_bar_never_prints_as_the_bar():
+    """9.96 GiB against a bar of 10 reads 9.9, not 10.0: the message must not claim the bar is
+    unmet while showing a number that meets it."""
+    check = _check(_volume(int(9.96 * GIB)), min_free_gib=10.0)
+    with pytest.raises(VcpError, match="^low_disk:") as ei:
+        assert_room(check)
+    assert ei.value.fields["free_gib"] == 9.9 and "9.9 GiB free" in str(ei.value)
+    assert free_gib(check) == 9.9
+
+
 @pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
 def test_min_free_gib_must_be_finite_and_not_negative(bad):
     with pytest.raises(ValidationFailed, match="^invalid: --min-free-gib") as ei:
@@ -339,6 +349,13 @@ def test_diagnose_reports_the_exit_code_and_a_fractional_bar(tmp_path):
     )
 
 
+def test_diagnose_floors_a_reading_just_under_the_bar(tmp_path):
+    badbit = _log(tmp_path, "ios_base::badbit\n", "badbit.log")
+    low = diagnose(1, badbit, _after(int(9.96 * GIB)))
+    assert low.key == "low_disk" and "9.9 GiB free" in low.reason
+    assert "10.0 GiB free" not in low.reason
+
+
 def test_diagnose_exactly_at_the_bar_is_not_low(tmp_path):
     badbit = _log(tmp_path, "ios_base::badbit\n", "badbit.log")
     assert diagnose(1, badbit, _after(10 * GIB)) is None
@@ -388,3 +405,12 @@ def test_own_writes_turns_disk_full_into_an_abort_and_lets_others_through():
             raise ValueError("not an OSError")
     with own_writes():
         pass
+
+
+def test_own_writes_hint_replaces_the_recovery_step_in_the_message():
+    hint = "free space, then: vcp train upload --run r1 --dest vault"
+    with pytest.raises(VcpError, match="^disk_full: vcp could not write") as ei:
+        with own_writes(hint=hint):
+            raise OSError(errno.ENOSPC, "No space left on device")
+    assert str(ei.value).endswith(f"); {hint}") and "--resume" not in str(ei.value)
+    assert ei.value.fields == {"disk_evidence": "vcp"}

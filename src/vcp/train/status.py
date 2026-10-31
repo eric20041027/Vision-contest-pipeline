@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +11,8 @@ from vcp.data.evidence import broken_refs
 from vcp.measure.runs import run_dir
 from vcp.train.checkpoints import drift as _drift
 from vcp.train.checkpoints import missing as _missing
-from vcp.train.records import append_event, load_record, save_record
+from vcp.train.disk import glob_prefix, nearest_dir
+from vcp.train.records import append_event, events_path, load_record, save_record
 from vcp.train.schema import TrainRecord
 from vcp.train.upload import Runner, UploadOutcome, merge_uploads, upload
 
@@ -45,12 +47,50 @@ def _tmp_in(directory: Path, *, recursive: bool) -> list[Path]:
     return [p for p in entries if p.name.lower().endswith(TMP_SUFFIX) and p.is_file()]
 
 
+def _started_globs(data_root: Path, run_id: str) -> list[str]:
+    """Every ``--checkpoints`` / ``--final`` pattern named by a ``started`` event of the run
+    (spec 2026-10-30 §12). Read tolerantly: a line that does not parse (a torn last line, a
+    half-written character), a row that is not an object, a ``started`` event from a vcp that
+    wrote no patterns, a value of the wrong type -- each adds nothing and none stops the read."""
+    path = events_path(data_root, run_id)
+    if not path.is_file():
+        return []
+    globs: list[str] = []
+    for raw in path.read_bytes().split(b"\n"):
+        try:
+            row = json.loads(raw)
+        except ValueError:  # includes UnicodeDecodeError
+            continue
+        if not isinstance(row, dict) or row.get("event") != "started":
+            continue
+        patterns = row.get("checkpoints")
+        globs += [p for p in patterns if isinstance(p, str)] if isinstance(patterns, list) else []
+        if isinstance(row.get("final"), str):
+            globs.append(row["final"])
+    return globs
+
+
+def _glob_dirs(data_root: Path, record: TrainRecord) -> set[Path]:
+    """Where the child writes checkpoints: the nearest existing directory of the record's cwd plus
+    each pattern's fixed prefix -- the same reading the disk check uses -- so a directory that
+    never had a checkpoint registered is still looked at."""
+    cwd = resolve_stored_path(record.cwd, data_root)
+    return {
+        nearest_dir(cwd / glob_prefix(pattern))
+        for pattern in _started_globs(data_root, record.run_id)
+    }
+
+
 def tmp_files(data_root: Path, record: TrainRecord) -> list[TmpFile]:
     """Leftover ``*.tmp`` files a failed write left behind (spec 5.5): anywhere under the run
     directory, and directly beside each registered checkpoint (the framework's own ``.tmp``
-    lives there, e.g. a ``torch.save`` that ran out of disk). Read-only; sorted by ``path``."""
+    lives there, e.g. a ``torch.save`` that ran out of disk), and directly in the directory of
+    every checkpoint pattern the run was started with, registered or not (a first save that
+    failed leaves a ``.tmp`` and nothing else). Never recursive below the run directory, even
+    for a ``**`` pattern. Read-only; sorted by ``path``."""
     found = _tmp_in(run_dir(data_root, record.run_id), recursive=True)
-    for parent in {resolve_stored_path(c.path, data_root).parent for c in record.checkpoints}:
+    beside = {resolve_stored_path(c.path, data_root).parent for c in record.checkpoints}
+    for parent in beside | _glob_dirs(data_root, record):
         found += _tmp_in(parent, recursive=False)
     out: dict[Path, TmpFile] = {}
     for p in found:

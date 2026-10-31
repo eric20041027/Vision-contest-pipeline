@@ -584,8 +584,19 @@ def train_run(spec: RunSpec) -> RunResult:
         if created:
             save_run(data_root, card)
         save_record(data_root, record)
+        # The patterns as given: `train status` scans their directories for leftover `.tmp`
+        # files even where no checkpoint was ever registered (spec 2026-10-30 §12). An event's
+        # payload is free-form, so an older vcp reads this row unchanged.
         append_event(
-            data_root, spec.run_id, "started", n, command=spec.command, cwd=str(cwd), seed=spec.seed
+            data_root,
+            spec.run_id,
+            "started",
+            n,
+            command=spec.command,
+            cwd=str(cwd),
+            seed=spec.seed,
+            checkpoints=list(spec.checkpoints),
+            final=spec.final,
         )
         # step 6: environment snapshot
         patch_rel = f"{TRAIN_DIR}/git.{n}.patch"

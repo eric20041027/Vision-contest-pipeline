@@ -20,6 +20,9 @@ from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile
 
 NO_WARNING = ("none", "ok")  # the ``words`` that need nothing said
+# ``selection_warn_hours`` only has to be finite and >= 0, but a deadline minus 1e10 hours is out
+# of range for ``datetime``; a hundred years before the deadline is "always" for any contest.
+MAX_SELECTION_WARN_HOURS = 24 * 365 * 100
 
 
 def label(row: LedgerRow) -> str:
@@ -69,7 +72,8 @@ def _due(
     if hours is None:
         return None, False
     if profile.deadline is not None:
-        due_at = stamp(parse_stamp(profile.deadline) - timedelta(hours=hours))
+        window = timedelta(hours=min(hours, MAX_SELECTION_WARN_HOURS))
+        due_at = stamp(parse_stamp(profile.deadline) - window)
         return due_at, now >= parse_stamp(due_at)
     if final is None:
         return None, False

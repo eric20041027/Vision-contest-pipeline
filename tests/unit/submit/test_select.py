@@ -332,3 +332,23 @@ def test_select_ignores_a_deadline_long_past(roots):
     paths = _seeded(roots, deadline=stamp(parse_stamp(stamp()) - timedelta(days=30)))
     assert select(TEST, ["S1", "S2"], **_kw(roots)).written
     assert _events(paths).count("selected") == 1
+
+
+def test_a_huge_warn_window_is_clamped_and_still_warns(tmp_path):
+    """``selection_warn_hours`` only has to be finite and >= 0; 1e10 hours would overflow the
+    date arithmetic, so the window is clamped to a hundred years before it is subtracted."""
+    st = selection_state(
+        ledger_of(tmp_path, *up("S1", "S2")),
+        _profile(deadline=_at(10), selection_warn_hours=1e10),
+        NOW,
+    )
+    assert st.words == "missing" and st.due_at is not None
+    assert parse_stamp(st.due_at) < NOW - timedelta(days=365 * 99)
+
+
+def test_select_survives_a_huge_warn_window(roots):
+    deadline = stamp(parse_stamp(stamp()) + timedelta(hours=10))
+    paths = _seeded(roots, deadline=deadline, selection_warn_hours=1e10)
+    out = select(TEST, ["S1", "S2"], **_kw(roots))
+    assert out.written and out.state.due_at is not None
+    assert _events(paths).count("selected") == 1

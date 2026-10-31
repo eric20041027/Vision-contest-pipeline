@@ -1,10 +1,14 @@
+import errno
 import json
+import os
 import sys
+from pathlib import Path
 
 from typer.testing import CliRunner
 
 from helpers import det_samples, git_repo, make_card, write_images
 from vcp.cli import app
+from vcp.core import atomic
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
@@ -367,3 +371,49 @@ def test_train_run_cli_names_disk_full(roots, tmp_path):
     assert "free_gib=" in v
     assert 'reason="disk_full: the command exited 1 and its console says' in v
     assert "; free space, then --resume" in r.output
+
+
+def test_train_run_cli_names_low_disk_after_a_failed_command(roots, tmp_path, monkeypatch):
+    """A child that fails without a disk word, on a disk that dropped below the bar after it
+    started: the VERDICT stays FAIL and says ``low_disk:`` with no ``disk_evidence=``."""
+    seed_det(roots)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        'Path("started").write_text("x")\n'
+        'print("terminate called after throwing std::ios_base::failure: ios_base::badbit set")\n'
+        "sys.exit(int(sys.argv[1]))\n",
+        encoding="utf-8",
+    )
+    started = work / "started"
+    monkeypatch.setattr(
+        disk, "usage", lambda path: (2 * GIB if started.exists() else 1024 * GIB, 1024 * GIB)
+    )
+    r = _run(work, code="1")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "run=r1" in v and "exit_code=1" in v
+    assert 'reason="low_disk: the command exited 1 with 2.0 GiB free' in v
+    assert "(below --min-free-gib 10); the disk may have filled" in v
+    assert "disk_evidence=" not in v and "disk_full" not in v
+
+
+def test_train_run_cli_aborts_when_vcp_itself_cannot_write(roots, tmp_path, monkeypatch):
+    """vcp's own record failing with ENOSPC is an ABORT ``disk_full:`` with ``disk_evidence=vcp``
+    that still names the run."""
+    seed_det(roots)
+    work = _work(tmp_path)
+    assert _run(work).exit_code == 0
+    real_replace = os.replace
+
+    def full_disk(src, dst):
+        if Path(dst).name == "train.yaml":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(atomic.os, "replace", full_disk)
+    r = _run(work, "--resume")
+    v = _verdict(r.output)
+    assert r.exit_code == 2 and "status=ABORT" in v and "disk_evidence=vcp" in v
+    assert "run=r1" in v and "disk_full: vcp could not write its own record" in v

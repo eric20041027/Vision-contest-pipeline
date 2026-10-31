@@ -470,6 +470,7 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
                 "test_a_badbit_child_on_a_low_disk_fails_with_low_disk",
                 "test_a_child_that_ran_out_of_disk_fails_with_disk_full",
                 "test_vcp_that_cannot_write_its_console_stops_the_child_and_aborts",
+                "test_a_train_yaml_that_cannot_be_saved_after_an_upload_aborts_with_disk_full",
             ],
             "tests/unit/train/test_status.py": [
                 "test_status_lists_leftover_tmp_files_in_the_run_and_beside_checkpoints",

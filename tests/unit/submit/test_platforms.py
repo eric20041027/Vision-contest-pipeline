@@ -770,6 +770,17 @@ def test_a_read_back_cut_short_keeps_the_warnings_of_the_looks_before_it(no_wait
     assert ei.value.fields["readback"] == "failed" and ei.value.cli_warnings == (OUTDATED,)
 
 
+def test_a_look_whose_later_page_fails_keeps_the_warnings_of_its_earlier_pages(no_wait):
+    """The look reads page one (a warning, a next-page token), page two fails: the upload is
+    left unconfirmed, and the warning page one printed is not dropped with the half-read look."""
+    page1, _ = _two_pages()
+    runner = FakeRunner(
+        [(0, KERNEL_REPLY, ""), (0, f"{OUTDATED}\n{page1}", ""), (2, "", "503 Service Unavailable")]
+    )
+    res = _kernel_upload(runner)
+    assert (res.confirmed, res.readback, res.cli_warnings) == (False, "failed", (OUTDATED,))
+
+
 def test_a_platform_error_carries_no_warnings_unless_given_some():
     assert PlatformError("x").cli_warnings == ()
     err = PlatformError("x", location="y", fields={"a": 1}, cli_warnings=(OUTDATED,))

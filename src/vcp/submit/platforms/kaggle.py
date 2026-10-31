@@ -330,6 +330,8 @@ class KagglePlatform:
                 return None, "interrupted", warnings  # Ctrl+C stops the wait; the row is written
             except Exception as e:  # anything at all: the upload happened, its row must follow
                 log.warning("kaggle read-back failed: %s", redact(f"{type(e).__name__}: {e}"))
+                # a look that read some pages before it broke carries their warning lines
+                warnings = merge_warnings(warnings, getattr(e, "cli_warnings", ()))
                 return None, "failed", warnings
             fresh = refs - known
             seen_known = seen_known or len(fresh) < len(refs)

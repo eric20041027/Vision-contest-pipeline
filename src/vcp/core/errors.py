@@ -71,7 +71,8 @@ class PlatformError(VcpError):
 
     ``cli_warnings`` are the warning lines the CLI printed in the answers read after the failure
     (a Kaggle upload's read-back, spec 2026-10-30 §4.1): redacted, for the VERDICT's count --
-    ``fields`` stay what the failure itself says.
+    ``fields`` stay what the failure itself says. A failed submissions list carries the warning
+    lines of the pages it had already read before the one that failed.
     """
 
     status = "FAIL"

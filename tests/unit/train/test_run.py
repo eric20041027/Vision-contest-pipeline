@@ -1256,8 +1256,9 @@ def test_a_train_yaml_that_cannot_be_replaced_aborts_with_disk_full_and_stays_wh
 
 
 def test_a_destination_that_is_full_stays_a_plain_os_error(roots, work, tmp_path, monkeypatch):
-    """The upload destination is not vcp's record: ``_upload_all`` is outside ``own_writes``, so
-    a full destination keeps its 0.15 behaviour (an OSError) instead of becoming ``disk_full:``."""
+    """The upload destination is not vcp's record: the ``upload(...)`` call in ``_upload_all`` is
+    outside ``own_writes``, so a full destination keeps its 0.15 behaviour (an OSError) instead of
+    becoming ``disk_full:``."""
     _seed(roots)
 
     def full_destination(*args, **kwargs):
@@ -1267,3 +1268,72 @@ def test_a_destination_that_is_full_stays_a_plain_os_error(roots, work, tmp_path
     with pytest.raises(OSError, match="No space left") as ei:
         train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
     assert not isinstance(ei.value, VcpError)
+
+
+def _arm_after_upload(monkeypatch):
+    """The real ``upload`` runs against the local vault; once it has returned, ``armed`` is set,
+    so a patched write can tell upload bookkeeping from every write before it."""
+    armed = {"on": False}
+    real_upload = run_module.upload
+
+    def upload_then_arm(*args, **kwargs):
+        outcome = real_upload(*args, **kwargs)
+        armed["on"] = True
+        return outcome
+
+    monkeypatch.setattr(run_module, "upload", upload_then_arm)
+    return armed
+
+
+def test_a_train_yaml_that_cannot_be_saved_after_an_upload_aborts_with_disk_full(
+    roots, work, tmp_path, monkeypatch
+):
+    """The bookkeeping after ``upload(...)`` is vcp's own record: ENOSPC there is the same ABORT
+    ``disk_full:`` / ``disk_evidence=vcp`` as anywhere else in ``train run``."""
+    _seed(roots)
+    armed = _arm_after_upload(monkeypatch)
+    real_save = run_module.save_record
+
+    def full_after_upload(data_root, record):
+        if armed["on"]:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_save(data_root, record)
+
+    monkeypatch.setattr(run_module, "save_record", full_after_upload)
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
+    assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+
+
+def test_an_uploaded_event_that_cannot_be_appended_aborts_with_disk_full(
+    roots, work, tmp_path, monkeypatch
+):
+    _seed(roots)
+    real_append = run_module.append_event
+
+    def full_for_uploaded(data_root, run_id, event, attempt, /, **payload):
+        if event == "uploaded":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_append(data_root, run_id, event, attempt, **payload)
+
+    monkeypatch.setattr(run_module, "append_event", full_for_uploaded)
+    with pytest.raises(VcpError, match="^disk_full:") as ei:
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))
+    assert ei.value.status == "ABORT" and ei.value.fields == {"disk_evidence": "vcp"}
+
+
+def test_upload_bookkeeping_errors_other_than_a_full_disk_pass_through(
+    roots, work, tmp_path, monkeypatch
+):
+    _seed(roots)
+    armed = _arm_after_upload(monkeypatch)
+    real_save = run_module.save_record
+
+    def denied_after_upload(data_root, record):
+        if armed["on"]:
+            raise PermissionError(errno.EACCES, "denied")
+        real_save(data_root, record)
+
+    monkeypatch.setattr(run_module, "save_record", denied_after_upload)
+    with pytest.raises(PermissionError, match="denied"):
+        train_run(_spec(roots, work, uploads=[str(tmp_path / "vault")]))

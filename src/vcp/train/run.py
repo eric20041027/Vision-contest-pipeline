@@ -467,21 +467,23 @@ def _upload_all(
     uploaded = verified = skipped = 0
     for dest in spec.uploads:
         before = {(u.dest, u.name, u.sha256) for u in record.uploads}
+        # The destination is not vcp's record: a full disk THERE stays the OSError it always was.
         outcome = upload(record, dest, data_root=data_root, runner=spec.rclone_runner)
         record = merge_uploads(record, outcome.records)
-        save_record(data_root, record)
-        for r in outcome.records:
-            if (r.dest, r.name, r.sha256) not in before:
-                append_event(
-                    data_root,
-                    spec.run_id,
-                    "uploaded",
-                    n,
-                    dest=dest,
-                    name=r.name,
-                    sha256=r.sha256,
-                    verified=r.verified,
-                )
+        with own_writes():  # what vcp writes about the upload is its record (§5.3)
+            save_record(data_root, record)
+            for r in outcome.records:
+                if (r.dest, r.name, r.sha256) not in before:
+                    append_event(
+                        data_root,
+                        spec.run_id,
+                        "uploaded",
+                        n,
+                        dest=dest,
+                        name=r.name,
+                        sha256=r.sha256,
+                        verified=r.verified,
+                    )
         uploaded += outcome.uploaded
         skipped += outcome.skipped
         verified += sum(1 for r in outcome.records if r.verified)
@@ -548,7 +550,8 @@ def train_run(spec: RunSpec) -> RunResult:
     assert_room(disk_check)
     # §5.3: from here on every write is vcp's own record. A full disk under it is an ABORT
     # `disk_full:` (the child is already stopped by execute() when its console write is the one
-    # that fails); `_upload_all` stays outside -- its destination is not vcp's record.
+    # that fails). The upload destination is not vcp's record, so `_upload_all` guards only its own
+    # bookkeeping writes, not the `upload(...)` call.
     with own_writes():
         # no-op for a new run
         record = _close_running(record, data_root=data_root, run_id=spec.run_id)

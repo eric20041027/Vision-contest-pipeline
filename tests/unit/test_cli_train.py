@@ -8,6 +8,8 @@ from vcp.cli import app
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
+from vcp.train import disk
+from vcp.train.disk import GIB
 
 runner = CliRunner()
 
@@ -267,3 +269,52 @@ def test_train_run_cli_git_fields(roots, tmp_path, isolated_git):
     r = _run(work, "--seed", "3", "--framework", "fake", run="r3")
     v = _verdict(r.output)
     assert "commit=none" in v and "modified=" not in v
+
+
+def _work(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_text(FAKE, encoding="utf-8")
+    return work
+
+
+def test_train_run_cli_free_gib_and_min_free_gib(roots, tmp_path, monkeypatch):
+    seed_det(roots)
+    work = _work(tmp_path)
+    assert "free_gib=1024.0" in _verdict(_run(work).output)  # the conftest's roomy probe
+    monkeypatch.setattr(disk, "usage", lambda path: (2 * GIB, 100 * GIB))
+    r = _run(work, run="r2")
+    v = _verdict(r.output)
+    assert r.exit_code == 2 and "status=ABORT" in v and "low_disk:" in v and "run=r2" in v
+    assert "free_gib=2.0" in v and "min_free_gib=10.0" in v and "disk_path=" in v
+    assert not (roots.data / "runs" / "r2").exists()
+    r = _run(work, "--min-free-gib", "0", run="r2")
+    assert r.exit_code == 0, r.output
+    assert "free_gib=2.0" in _verdict(r.output)
+    r = _run(work, "--min-free-gib=-1", run="r3")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "invalid:" in v and "run=r3" in v
+    assert not (roots.data / "runs" / "r3").exists()
+
+    def broken(path):
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(disk, "usage", broken)
+    r = _run(work, run="r4")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v
+    assert "disk_check=unavailable" in v and "free_gib=unknown" in v
+
+
+def test_train_run_cli_json_carries_the_disk_check(roots, tmp_path):
+    seed_det(roots)
+    r = _run(_work(tmp_path), "--json")
+    assert r.exit_code == 0, r.output
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["fields"]["free_gib"] == 1024.0
+    assert "disk_check" not in doc["fields"]
+
+
+def test_train_run_help_documents_min_free_gib(roots):
+    out = runner.invoke(app, ["train", "run", "--help"]).output
+    assert "--min-free-gib" in out and "0" in out

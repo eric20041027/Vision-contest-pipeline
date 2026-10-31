@@ -2,9 +2,10 @@
 
 Every check runs before the first file is written: the dataset and plan agree, the export
 manifests say which subsets were trained on, the config has a hash, the venv has a python, the
-command can be found, and the run id is free (or resumable). Only then the run card, the
-training record, the console log and the environment snapshot appear -- and whatever the
-command does next is recorded, exit code and all.
+command can be found, the run id is free (or resumable), and every disk the run writes to has
+room (spec 2026-10-30 §5.1). Only then the run card, the training record, the console log and
+the environment snapshot appear -- and whatever the command does next is recorded, exit code
+and all.
 """
 
 from __future__ import annotations
@@ -34,6 +35,14 @@ from vcp.measure.schema import RunCard, RunSource
 from vcp.train.attach import attach as attach_cli_evidence
 from vcp.train.attach import moved, preflight
 from vcp.train.checkpoints import expand, register, resolve_final
+from vcp.train.disk import (
+    DEFAULT_MIN_FREE_GIB,
+    assert_room,
+    check_min_free_gib,
+    measure,
+    targets,
+    unavailable,
+)
 from vcp.train.env import snapshot, venv_python
 from vcp.train.gitstate import changed_since, require_clean
 from vcp.train.gitstate import warning as git_warning
@@ -50,6 +59,7 @@ from vcp.train.schema import (
     AttemptStatus,
     CheckpointRecord,
     ConfigRef,
+    DiskCheck,
     ExportRef,
     GitInfo,
     TrainRecord,
@@ -86,6 +96,7 @@ class RunSpec(BaseModel):
     evidence: list[str] = Field(default_factory=list)  # NAME=PATH (spec 2026-09-26 §5.2)
     labels: list[str] = Field(default_factory=list)  # label_set ids
     require_clean: bool = False  # VCP-041: FAIL before the first write on tracked changes
+    min_free_gib: float = DEFAULT_MIN_FREE_GIB  # ABORT below this free space; 0 = only record
     command: list[str]
     on_line: Callable[[str], None] | None = None
     rclone_runner: Runner | None = None
@@ -116,6 +127,7 @@ class RunResult(BaseModel):
     evidence_changed: list[str] = Field(default_factory=list)
     git: GitInfo | None = None  # VCP-041: the attempt's start record (spec 2026-09-27 §3.1)
     git_changed: list[str] = Field(default_factory=list)
+    disk: DiskCheck | None = None  # the free space measured before the first write (§5.1)
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -383,6 +395,12 @@ def _close_running(record: TrainRecord, *, data_root: Path, run_id: str) -> Trai
     return record
 
 
+def _patterns(spec: RunSpec) -> list[str]:
+    """Every glob the run registers checkpoints from: ``--checkpoints`` and ``--final``. Also what
+    the disk check measures, so the two cannot drift apart."""
+    return [*spec.checkpoints, *([spec.final] if spec.final else [])]
+
+
 def _finish_checkpoints(
     spec: RunSpec,
     record: TrainRecord,
@@ -396,8 +414,7 @@ def _finish_checkpoints(
     """spec 6.1 step 8: register every glob hit; resolve the final one when the command
     succeeded; write weights_hash to the run card."""
     warnings: list[str] = []
-    patterns = [*spec.checkpoints, *([spec.final] if spec.final else [])]
-    record, added = register(record, expand(patterns, cwd), data_root=data_root, attempt=n)
+    record, added = register(record, expand(_patterns(spec), cwd), data_root=data_root, attempt=n)
     for c in added:
         append_event(
             data_root,
@@ -485,6 +502,7 @@ def train_run(spec: RunSpec) -> RunResult:
     # everything else that must hold before the first write.
     if not cwd.is_dir():
         raise ValidationFailed(f"not_found: --cwd {cwd} is not a directory")
+    check_min_free_gib(spec.min_free_gib)
     trained_on, refs = derive_trained_on(
         spec.exports, spec.trained_on, card=dataset_card, plan=plan, data_root=data_root
     )
@@ -517,11 +535,18 @@ def train_run(spec: RunSpec) -> RunResult:
         )
     # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
     check_names([*record.evidence, *card.evidence], evidence, spec.labels)
+    # spec 2026-10-30 §5.1: the free space of every volume the run writes to, measured after the
+    # last input check and before vcp's first write -- `_close_running` below appends to
+    # train.log.jsonl, so an ABORT here leaves the record exactly as it was, `--resume` included.
+    run_root = run_dir(data_root, spec.run_id)
+    disk_check = measure(
+        targets(run_root, cwd, _patterns(spec)), min_free_gib=spec.min_free_gib, data_root=data_root
+    )
+    assert_room(disk_check)
     record = _close_running(record, data_root=data_root, run_id=spec.run_id)  # no-op for a new run
     n = len(record.attempts) + 1
     env = {**env, "VCP_ATTEMPT": str(n)}  # VCP-043: the child's own attempt number
     # spec 6.1 step 5: the first writes.
-    run_root = run_dir(data_root, spec.run_id)
     train_dir(data_root, spec.run_id).mkdir(parents=True, exist_ok=True)
     if spec.config is not None:
         copy_rel = f"{TRAIN_DIR}/config.{n}{spec.config.suffix}"
@@ -550,7 +575,7 @@ def train_run(spec: RunSpec) -> RunResult:
     )
     # step 6: environment snapshot
     patch_rel = f"{TRAIN_DIR}/git.{n}.patch"
-    snap = snapshot(python, cwd, patch=(run_root / patch_rel, patch_rel))
+    snap = snapshot(python, cwd, patch=(run_root / patch_rel, patch_rel), disk=disk_check)
     env_rel = f"{TRAIN_DIR}/env.{n}.json"
     with (run_root / env_rel).open("w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(snap.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n")
@@ -642,6 +667,8 @@ def train_run(spec: RunSpec) -> RunResult:
         warnings.append(git_line)
     if git_changed:
         warnings.append(f"git_changed={','.join(git_changed)}")
+    if unavailable(disk_check):
+        warnings.append("disk_check=unavailable")
     info = provenance(card, data_root=data_root, configs_root=configs_root)
     observed_beyond = sorted(set(info.observed) - set(trained_on))
     if observed_beyond:
@@ -672,4 +699,5 @@ def train_run(spec: RunSpec) -> RunResult:
         evidence_changed=changed,
         git=snap.git,
         git_changed=git_changed,
+        disk=disk_check,
     )

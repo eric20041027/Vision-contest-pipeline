@@ -20,6 +20,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import resolve_data_root
 from vcp.data.evidence_ref import current, labels_field
+from vcp.train.disk import DEFAULT_MIN_FREE_GIB, UNKNOWN, free_gib, unavailable
 from vcp.train.run import RunSpec, train_run
 from vcp.train.status import status as status_view
 from vcp.train.status import upload_run
@@ -84,6 +85,14 @@ def run_cmd(
             "--require-clean", help="FAIL before any write when tracked files have changes"
         ),
     ] = False,
+    min_free_gib: Annotated[
+        float,
+        typer.Option(
+            "--min-free-gib",
+            help="ABORT before any write when a disk the run writes to has less free space "
+            "(GiB); 0 only records the measurement",
+        ),
+    ] = DEFAULT_MIN_FREE_GIB,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -111,6 +120,7 @@ def run_cmd(
                 evidence=list(evidence or []),
                 labels=list(labels or []),
                 require_clean=require_clean,
+                min_free_gib=min_free_gib,
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -136,7 +146,10 @@ def run_cmd(
             "evidence": res.evidence,
             "labels": res.labels,
             "commit": res.git.commit[:12] if res.git is not None else "none",
+            "free_gib": free_gib(res.disk) if res.disk is not None else UNKNOWN,
         }
+        if res.disk is not None and unavailable(res.disk):
+            fields["disk_check"] = "unavailable"
         if res.skipped:
             fields["skipped"] = res.skipped
         if res.observed_beyond:

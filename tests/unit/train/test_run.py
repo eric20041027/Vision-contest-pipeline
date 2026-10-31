@@ -2,10 +2,12 @@ import json
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from helpers import (
+    ROOMY_BYTES,
     det_samples,
     det_with_runs,
     git,
@@ -14,7 +16,7 @@ from helpers import (
     make_label_set,
     write_images,
 )
-from vcp.core.errors import PlanMismatchError, ValidationFailed
+from vcp.core.errors import PlanMismatchError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths
 from vcp.data.access.access import DatasetAccess
@@ -25,6 +27,8 @@ from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, run_dir, save_run
+from vcp.train import disk
+from vcp.train.disk import GIB, free_gib
 from vcp.train.records import load_record, read_events, save_record
 from vcp.train.run import (
     RUN_BOUND_ELSEWHERE,
@@ -72,6 +76,7 @@ s.note("val_auc", 0.9)
 # 5-1: prints one line (so on_line runs) and then outlives any patience the wrapper has.
 SLEEPER = """
 import time
+from pathlib import Path
 print("tick", flush=True)
 time.sleep(30)
 """
@@ -902,3 +907,180 @@ def test_each_attempt_keeps_its_own_git_record(roots, tmp_path, isolated_git):
     assert (train / "git.1.patch").is_file() and (train / "git.2.patch").is_file()
     assert first.git.diff_sha256 != second.git.diff_sha256
     assert second.git.patch == "train/git.2.patch"
+
+
+def _files(roots):
+    """The bytes of what vcp writes for a run before and around its first attempt."""
+    run = run_dir(roots.data, "r1")
+    return {
+        name: (run / name).read_bytes() for name in ("run.yaml", "train.yaml", "train.log.jsonl")
+    }
+
+
+def _low_disk(monkeypatch, free=2 * GIB):
+    monkeypatch.setattr(disk, "usage", lambda path: (free, 100 * GIB))
+
+
+def _two_devices(monkeypatch, work):
+    """``work/ckpt`` is its own volume (5 GiB free); everything else shares another (50 GiB)."""
+    ckpt = work / "ckpt"
+    monkeypatch.setattr(disk, "device", lambda p: 2 if Path(p) == ckpt else 1)
+    monkeypatch.setattr(
+        disk,
+        "usage",
+        lambda p: (5 * GIB, 100 * GIB) if Path(p) == ckpt else (50 * GIB, 100 * GIB),
+    )
+
+
+def test_train_run_aborts_before_any_write_when_a_run_disk_is_low(roots, work, monkeypatch):
+    _seed(roots)
+    _low_disk(monkeypatch)
+    with pytest.raises(VcpError, match="^low_disk:") as ei:
+        train_run(_spec(roots, work))
+    assert ei.value.status == "ABORT"
+    assert set(ei.value.fields) == {"free_gib", "min_free_gib", "disk_path"}
+    assert ei.value.fields["free_gib"] == 2.0 and ei.value.fields["min_free_gib"] == 10.0
+    assert not run_dir(roots.data, "r1").exists()
+
+
+def test_resume_on_a_low_disk_aborts_and_leaves_the_record_as_it_was(roots, work, monkeypatch):
+    _seed(roots)
+    train_run(_spec(roots, work))
+    before = _files(roots)
+    _low_disk(monkeypatch)
+    with pytest.raises(VcpError, match="^low_disk:"):
+        train_run(_spec(roots, work, resume=True))
+    assert _files(roots) == before
+    assert not (run_dir(roots.data, "r1") / "train" / "console.2.log").exists()
+
+
+def test_a_low_disk_resume_does_not_close_the_attempt_left_running(roots, work, monkeypatch):
+    """The measurement comes before ``_close_running``, which would append to train.log.jsonl and
+    rewrite train.yaml: an ABORT writes nothing, not even the reconciliation of the old attempt."""
+    _seed(roots)
+    train_run(_spec(roots, work))
+    rec = load_record(roots.data, "r1")
+    crashed = rec.attempts[0].model_copy(
+        update={"status": "running", "exit_code": None, "finished_at": None, "duration_s": None}
+    )
+    save_record(roots.data, rec.model_copy(update={"attempts": [crashed]}))
+    before = _files(roots)
+    _low_disk(monkeypatch)
+    with pytest.raises(VcpError, match="^low_disk:"):
+        train_run(_spec(roots, work, resume=True))
+    assert _files(roots) == before
+    assert load_record(roots.data, "r1").attempts[0].status == "running"
+
+
+def test_input_errors_come_before_low_disk(roots, work, tmp_path, monkeypatch):
+    _seed(roots)
+    train_run(_spec(roots, work))
+    _low_disk(monkeypatch)
+    with pytest.raises(ValidationFailed, match=RUN_EXISTS):
+        train_run(_spec(roots, work))  # same id, no --resume
+    with pytest.raises(ValidationFailed, match="not_found: --cwd"):
+        train_run(_spec(roots, work, run_id="r2", cwd=tmp_path / "nowhere"))
+    assert not run_dir(roots.data, "r2").exists()
+
+
+def test_an_evidence_conflict_comes_before_low_disk(roots, work, tmp_path, monkeypatch):
+    """The measurement sits after ``check_names`` too: a --resume that trips an input check is
+    told so, however little room the disk has."""
+    _, plan, _ = _seed(roots)
+    make_label_set(roots, tmp_path, plan)
+    evidence_file = tmp_path / "corpus.txt"
+    evidence_file.write_text("x", encoding="utf-8")
+    train_run(_spec(roots, work, evidence=[f"pseudo-v1={evidence_file}"]))
+    _low_disk(monkeypatch)
+    with pytest.raises(ValidationFailed, match="evidence_conflict"):
+        train_run(_spec(roots, work, resume=True, labels=["pseudo-v1"]))
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan")])
+def test_train_run_refuses_a_bad_min_free_gib(roots, work, bad):
+    _seed(roots)
+    with pytest.raises(ValidationFailed, match="^invalid:"):
+        train_run(_spec(roots, work, min_free_gib=bad))
+    assert not run_dir(roots.data, "r1").exists()
+
+
+def test_min_free_gib_zero_never_aborts_and_still_records(roots, work, monkeypatch):
+    _seed(roots)
+    _low_disk(monkeypatch)
+    res = train_run(_spec(roots, work, min_free_gib=0))
+    assert res.attempt.status == "finished"
+    env = json.loads(
+        (run_dir(roots.data, "r1") / "train" / "env.1.json").read_text(encoding="utf-8")
+    )
+    assert env["disk"]["min_free_gib"] == 0.0
+    assert env["disk"]["volumes"][0]["free_bytes"] == 2 * GIB
+
+
+def test_a_lowered_bar_lets_a_small_disk_through(roots, work, monkeypatch):
+    _seed(roots)
+    _low_disk(monkeypatch)
+    res = train_run(_spec(roots, work, min_free_gib=1.5))
+    assert res.attempt.status == "finished" and free_gib(res.disk) == 2.0
+
+
+def test_the_env_snapshot_records_the_disk_check(roots, work):
+    _seed(roots)
+    res = train_run(_spec(roots, work, checkpoints=[], final=None))
+    env = json.loads(
+        (run_dir(roots.data, "r1") / "train" / "env.1.json").read_text(encoding="utf-8")
+    )
+    assert env["disk"]["min_free_gib"] == 10.0 and env["disk"]["checked_at"].endswith("Z")
+    vols = env["disk"]["volumes"]
+    assert len(vols) == 1 and vols[0]["roles"] == ["run", "cwd"]
+    assert vols[0]["free_bytes"] == ROOMY_BYTES == vols[0]["total_bytes"]
+    assert res.disk.model_dump(mode="json") == env["disk"]
+
+
+def test_checkpoint_globs_on_the_same_volume_add_a_role_not_an_entry(roots, work):
+    _seed(roots)
+    res = train_run(_spec(roots, work))  # weights/*.pt and weights/best.pt: same volume as cwd
+    assert [v.roles for v in res.disk.volumes] == [["run", "cwd", "checkpoints"]]
+
+
+def test_a_glob_prefix_on_another_volume_is_its_own_entry_and_the_lowest_counts(
+    roots, work, monkeypatch
+):
+    _seed(roots)
+    (work / "ckpt").mkdir()
+    _two_devices(monkeypatch, work)
+    res = train_run(_spec(roots, work, checkpoints=["ckpt/*.pt"], final=None, min_free_gib=1.0))
+    assert len(res.disk.volumes) == 2 and free_gib(res.disk) == 5.0
+    assert [v.roles for v in res.disk.volumes] == [["run", "cwd"], ["checkpoints"]]
+
+
+def test_a_low_checkpoint_volume_aborts_even_when_the_run_volume_has_room(roots, work, monkeypatch):
+    _seed(roots)
+    (work / "ckpt").mkdir()
+    _two_devices(monkeypatch, work)
+    with pytest.raises(VcpError, match="^low_disk:") as ei:
+        train_run(_spec(roots, work, checkpoints=["ckpt/*.pt"], final=None))
+    assert ei.value.fields["free_gib"] == 5.0
+    assert ei.value.fields["disk_path"] == (work / "ckpt").resolve().as_posix()
+    assert not run_dir(roots.data, "r1").exists()
+
+
+def test_an_unreadable_disk_warns_and_does_not_abort(roots, work, monkeypatch):
+    _seed(roots)
+
+    def broken(path):
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(disk, "usage", broken)
+    res = train_run(_spec(roots, work))
+    assert res.attempt.status == "finished" and "disk_check=unavailable" in res.warnings
+    assert free_gib(res.disk) == "unknown"
+    env = json.loads(
+        (run_dir(roots.data, "r1") / "train" / "env.1.json").read_text(encoding="utf-8")
+    )
+    assert env["disk"]["volumes"][0]["free_bytes"] is None
+
+
+def test_a_readable_disk_has_no_disk_warning(roots, work):
+    _seed(roots)
+    res = train_run(_spec(roots, work))
+    assert "disk_check=unavailable" not in res.warnings

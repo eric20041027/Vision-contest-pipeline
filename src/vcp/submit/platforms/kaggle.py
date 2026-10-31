@@ -349,19 +349,25 @@ class KagglePlatform:
         out: list[PlatformSubmission] = []
         warnings: tuple[str, ...] = ()
         token: str | None = None
-        for _ in range(MAX_PAGES):
-            try:
-                proc = run(cmd + (["--page-token", token] if token else []))
-            except subprocess.TimeoutExpired:
-                raise PlatformTimeout(
-                    "kaggle CLI timed out: no answer to `competitions submissions` within "
-                    f"{LIST_TIMEOUT:g} s"
-                ) from None
-            if proc.returncode != 0:
-                raise _failed(proc)
-            page, token, page_warnings = parse_submissions(proc.stdout)
-            out.extend(page)
-            warnings = merge_warnings(warnings, page_warnings)
-            if not token:
-                return PlatformList(out, warnings)
-        raise PlatformError(f"kaggle CLI kept paging past {MAX_PAGES} pages")
+        try:
+            for _ in range(MAX_PAGES):
+                try:
+                    proc = run(cmd + (["--page-token", token] if token else []))
+                except subprocess.TimeoutExpired:
+                    raise PlatformTimeout(
+                        "kaggle CLI timed out: no answer to `competitions submissions` within "
+                        f"{LIST_TIMEOUT:g} s"
+                    ) from None
+                if proc.returncode != 0:
+                    raise _failed(proc)
+                page, token, page_warnings = parse_submissions(proc.stdout)
+                out.extend(page)
+                warnings = merge_warnings(warnings, page_warnings)
+                if not token:
+                    return PlatformList(out, warnings)
+            raise PlatformError(f"kaggle CLI kept paging past {MAX_PAGES} pages")
+        except PlatformError as e:
+            # The warning lines of the pages already read are facts the command learned; they
+            # go with the failure instead of being lost with the half-read list.
+            e.cli_warnings = merge_warnings(warnings, e.cli_warnings)
+            raise

@@ -8,6 +8,8 @@ is never rewritten, so a machine reclaimed mid-training still leaves a readable 
 from __future__ import annotations
 
 import json
+import os
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -85,8 +87,29 @@ def append_event(data_root: Path, run_id: str, event: str, attempt: int, /, **pa
     path = events_path(data_root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": stamp(), "event": event, "attempt": attempt, **payload}
-    with path.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    _append_whole_line(path, json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
+
+def _append_whole_line(path: Path, line: str) -> None:
+    """Append ``line`` (which ends in ``\\n``) to ``path``, or leave the file as it was.
+
+    A write that dies partway -- a full disk is the usual cause -- would leave half a line, the
+    next append would join onto it, and ``backup verify`` would then report ``bad_stamps:`` for
+    this file for ever (only the submissions ledger has a ``partial_tail`` allowance). So the
+    position before the write is remembered and any exception, including one that only shows
+    when the file is closed, truncates back to it. The truncate is best effort: if it fails too,
+    the caller still gets the exception that started it, unchanged.
+    """
+    start: int | None = None
+    try:
+        with path.open("ab") as f:
+            start = f.tell()
+            f.write(line.encode("utf-8"))
+    except BaseException:
+        if start is not None:
+            with suppress(OSError):
+                os.truncate(path, start)
+        raise
 
 
 def read_events(data_root: Path, run_id: str) -> list[dict[str, Any]]:

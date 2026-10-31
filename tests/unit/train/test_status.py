@@ -417,6 +417,41 @@ def test_status_collects_the_patterns_of_every_attempt(roots):
     ]
 
 
+def test_status_resolves_each_attempts_globs_against_that_attempts_own_cwd(roots, tmp_path):
+    """`--resume` may run from another directory; the second attempt's relative patterns point
+    under the cwd its `started` event recorded, not under the cwd of the first attempt."""
+    second = tmp_path / "second"
+    (second / "ckpt").mkdir(parents=True)
+    (second / "ckpt" / "m.pt.tmp").write_bytes(b"22")
+    first = roots.data / "work" / "ckpt"
+    first.mkdir(parents=True)
+    (first / "m.pt.tmp").write_bytes(b"1")
+    _unregistered(roots)  # the record's cwd is "work": the first attempt's
+    _started(roots, attempt=1, cwd=str(roots.data / "work"), checkpoints=["ckpt/*.pt"], final=None)
+    _started(roots, attempt=2, cwd=str(second), checkpoints=["ckpt/*.pt"], final=None)
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile((second / "ckpt" / "m.pt.tmp").resolve().as_posix(), 2),
+        TmpFile("work/ckpt/m.pt.tmp", 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    "cwd",
+    [None, "", 5, ["x"]],
+    ids=["no-key", "empty", "not-a-string", "not-a-string-list"],
+)
+def test_status_falls_back_to_the_records_cwd_when_the_event_has_no_usable_cwd(roots, cwd):
+    _unregistered(roots)
+    extra = {} if cwd is None else {"cwd": cwd}
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None, **extra)
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "m.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/ckpt/m.pt.tmp", 2)]
+
+
 def test_status_lists_a_tmp_once_when_a_glob_directory_is_also_a_checkpoint_directory(roots):
     _, w = _seeded(roots)
     _started(roots, checkpoints=["weights/*.pt"], final="weights/best.pt")

@@ -413,6 +413,31 @@ def test_a_first_save_that_failed_is_found_by_train_status(roots, work):
     assert [(t.path.rsplit("/", 1)[-1], t.bytes) for t in leftovers] == [("best.pt.tmp", 4)]
 
 
+def test_a_resume_from_another_cwd_is_scanned_where_that_attempt_wrote(roots, work, tmp_path):
+    """`--resume` does not insist on the first attempt's `--cwd`; the `.tmp` its second attempt
+    left in its own checkpoint directory is found, as well as the first attempt's."""
+    _seed(roots)
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path('weights').mkdir(exist_ok=True)\n"
+        "Path('weights/best.pt.tmp').write_bytes(b'half')\n"
+        "sys.exit(1)\n"
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    for d in (work, other):
+        (d / "dies_saving.py").write_text(script, encoding="utf-8")
+    command = [sys.executable, "dies_saving.py"]
+    train_run(_spec(roots, work, command=command))
+    train_run(_spec(roots, other, command=command, resume=True))
+    paths = {t.path for t in status_view(roots.data, "r1").tmp}
+    assert paths == {
+        (work / "weights" / "best.pt.tmp").resolve().as_posix(),
+        (other / "weights" / "best.pt.tmp").resolve().as_posix(),
+    }
+
+
 def test_each_attempt_records_its_own_globs(roots, work):
     _seed(roots)
     train_run(_spec(roots, work, checkpoints=["weights/*.pt"], final=None))

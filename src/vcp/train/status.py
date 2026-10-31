@@ -47,15 +47,17 @@ def _tmp_in(directory: Path, *, recursive: bool) -> list[Path]:
     return [p for p in entries if p.name.lower().endswith(TMP_SUFFIX) and p.is_file()]
 
 
-def _started_globs(data_root: Path, run_id: str) -> list[str]:
+def _started_globs(data_root: Path, run_id: str) -> list[tuple[str, str | None]]:
     """Every ``--checkpoints`` / ``--final`` pattern named by a ``started`` event of the run
-    (spec 2026-10-30 §12). Read tolerantly: a line that does not parse (a torn last line, a
-    half-written character), a row that is not an object, a ``started`` event from a vcp that
-    wrote no patterns, a value of the wrong type -- each adds nothing and none stops the read."""
+    (spec 2026-10-30 §12), each with the ``cwd`` that event recorded, or ``None`` when it has no
+    usable one (the caller then falls back to the record's). Read tolerantly: a line that does
+    not parse (a torn last line, a half-written character), a row that is not an object, a
+    ``started`` event from a vcp that wrote no patterns, a value of the wrong type -- each adds
+    nothing and none stops the read."""
     path = events_path(data_root, run_id)
     if not path.is_file():
         return []
-    globs: list[str] = []
+    globs: list[tuple[str, str | None]] = []
     for raw in path.read_bytes().split(b"\n"):
         try:
             row = json.loads(raw)
@@ -63,21 +65,29 @@ def _started_globs(data_root: Path, run_id: str) -> list[str]:
             continue
         if not isinstance(row, dict) or row.get("event") != "started":
             continue
+        cwd = row.get("cwd")
+        own_cwd = cwd if isinstance(cwd, str) and cwd else None
         patterns = row.get("checkpoints")
-        globs += [p for p in patterns if isinstance(p, str)] if isinstance(patterns, list) else []
+        patterns = [p for p in patterns if isinstance(p, str)] if isinstance(patterns, list) else []
         if isinstance(row.get("final"), str):
-            globs.append(row["final"])
+            patterns.append(row["final"])
+        globs += [(pattern, own_cwd) for pattern in patterns]
     return globs
 
 
 def _glob_dirs(data_root: Path, record: TrainRecord) -> set[Path]:
-    """Where the child writes checkpoints: the nearest existing directory of the record's cwd plus
-    each pattern's fixed prefix -- the same reading the disk check uses -- so a directory that
-    never had a checkpoint registered is still looked at."""
-    cwd = resolve_stored_path(record.cwd, data_root)
+    """Where the child writes checkpoints: the nearest existing directory of the attempt's cwd
+    plus each pattern's fixed prefix -- the same reading the disk check uses -- so a directory
+    that never had a checkpoint registered is still looked at. The cwd is the one the attempt's
+    own ``started`` event recorded (``--resume`` may run from another directory); the record's
+    only when the event has none."""
+    fallback = resolve_stored_path(record.cwd, data_root)
     return {
-        nearest_dir(cwd / glob_prefix(pattern))
-        for pattern in _started_globs(data_root, record.run_id)
+        nearest_dir(
+            (fallback if cwd is None else resolve_stored_path(cwd, data_root))
+            / glob_prefix(pattern)
+        )
+        for pattern, cwd in _started_globs(data_root, record.run_id)
     }
 
 

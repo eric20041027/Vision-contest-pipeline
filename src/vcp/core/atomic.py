@@ -47,7 +47,7 @@ def _exists_error(target: Path) -> ValidationFailed:
 
 def _fsync_dir(directory: Path) -> None:
     """Persist the rename itself. Windows cannot open a directory for fsync: skipped there."""
-    if os.name == "nt":
+    if IS_WINDOWS:
         return
     try:
         fd = os.open(directory, os.O_RDONLY)

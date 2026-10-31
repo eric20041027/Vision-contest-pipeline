@@ -402,6 +402,53 @@ def test_status_reads_the_event_log_tolerantly(roots):
     assert status(roots.data, "r1").tmp == [TmpFile("work/ckpt/epoch-1.pt.tmp", 2)]
 
 
+def test_status_survives_a_log_line_too_deeply_nested_to_parse(roots):
+    """`json.loads` answers a runaway `[[[[...` with RecursionError, not ValueError; a corrupt
+    line of that shape is skipped like any other."""
+    _unregistered(roots)
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None)
+    with events_path(roots.data, "r1").open("ab") as f:
+        f.write(b"[" * 200_000 + b"\n")
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "epoch-1.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/ckpt/epoch-1.pt.tmp", 2)]
+
+
+def test_status_does_not_scan_the_parents_of_a_cwd_that_is_gone(roots, tmp_path):
+    """A stale absolute `cwd` in an old event: climbing from it to the nearest existing
+    directory would list an unrelated ancestor's `.tmp` files."""
+    _unregistered(roots)
+    (tmp_path / "stray.tmp").write_bytes(b"s")  # an ancestor of the stale cwd
+    gone = tmp_path / "gone" / "run"  # never created
+    _started(roots, cwd=str(gone), checkpoints=["ckpt/*.pt"], final="out/best.pt")
+
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_status_skips_a_relative_pattern_when_the_records_cwd_is_gone(roots):
+    """The same bound for an event without a `cwd`: the record's is used, and if it is gone the
+    pattern says nothing (the data root above it is nobody's checkpoint directory)."""
+    _unregistered(roots)  # cwd "work", never created
+    (roots.data / "junk.tmp").write_bytes(b"j")
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None)
+
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_status_lets_a_relative_pattern_reach_a_sibling_but_never_an_ancestor(roots):
+    _unregistered(roots)
+    (roots.data / "work").mkdir()
+    (roots.data / "side").mkdir()
+    (roots.data / "side" / "m.pt.tmp").write_bytes(b"m")
+    (roots.data / "junk.tmp").write_bytes(b"j")  # in the parent of the cwd
+    _started(roots, checkpoints=["../side/*.pt", "../not-there/*.pt"], final=None)
+
+    # `../not-there` does not exist: its nearest directory is the cwd's parent, an ancestor
+    assert status(roots.data, "r1").tmp == [TmpFile("side/m.pt.tmp", 1)]
+
+
 def test_status_collects_the_patterns_of_every_attempt(roots):
     _unregistered(roots)
     _started(roots, attempt=1, checkpoints=["a/*.pt"], final=None)

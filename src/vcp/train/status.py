@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from vcp.core.paths import resolve_stored_path, store_path
 from vcp.data.evidence import broken_refs
@@ -61,7 +61,7 @@ def _started_globs(data_root: Path, run_id: str) -> list[tuple[str, str | None]]
     for raw in path.read_bytes().split(b"\n"):
         try:
             row = json.loads(raw)
-        except ValueError:  # includes UnicodeDecodeError
+        except (ValueError, RecursionError):  # ValueError includes UnicodeDecodeError
             continue
         if not isinstance(row, dict) or row.get("event") != "started":
             continue
@@ -75,20 +75,30 @@ def _started_globs(data_root: Path, run_id: str) -> list[tuple[str, str | None]]
     return globs
 
 
+def _glob_dir(pattern: str, cwd: Path) -> Path | None:
+    """The directory a pattern writes into: the nearest existing directory of ``cwd`` plus the
+    pattern's fixed prefix -- the same reading the disk check uses. An absolute pattern points
+    wherever it says. A relative one is bound to its ``cwd``: with the ``cwd`` gone (a stale
+    one in an old event) or the nearest directory an ancestor of it (``../not-yet/*.pt``), the
+    walk up would end in a directory that is nobody's checkpoint directory, so it says nothing."""
+    target = nearest_dir(cwd / glob_prefix(pattern))
+    if PurePath(pattern).anchor:
+        return target
+    if not cwd.is_dir() or target.resolve() in cwd.resolve().parents:
+        return None
+    return target
+
+
 def _glob_dirs(data_root: Path, record: TrainRecord) -> set[Path]:
-    """Where the child writes checkpoints: the nearest existing directory of the attempt's cwd
-    plus each pattern's fixed prefix -- the same reading the disk check uses -- so a directory
-    that never had a checkpoint registered is still looked at. The cwd is the one the attempt's
-    own ``started`` event recorded (``--resume`` may run from another directory); the record's
-    only when the event has none."""
+    """Where the child writes checkpoints, so a directory that never had a checkpoint registered
+    is still looked at. The cwd is the one the attempt's own ``started`` event recorded
+    (``--resume`` may run from another directory); the record's only when the event has none."""
     fallback = resolve_stored_path(record.cwd, data_root)
-    return {
-        nearest_dir(
-            (fallback if cwd is None else resolve_stored_path(cwd, data_root))
-            / glob_prefix(pattern)
-        )
+    dirs = (
+        _glob_dir(pattern, fallback if cwd is None else resolve_stored_path(cwd, data_root))
         for pattern, cwd in _started_globs(data_root, record.run_id)
-    }
+    )
+    return {d for d in dirs if d is not None}
 
 
 def tmp_files(data_root: Path, record: TrainRecord) -> list[TmpFile]:

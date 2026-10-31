@@ -99,16 +99,23 @@ def _append_whole_line(path: Path, line: str) -> None:
     position before the write is remembered and any exception, including one that only shows
     when the file is closed, truncates back to it. The truncate is best effort: if it fails too,
     the caller still gets the exception that started it, unchanged.
+
+    The line is encoded before the file is opened, so a payload that cannot be written as UTF-8
+    fails with nothing touched. The truncate takes no lock, so it is skipped when the file has
+    grown past where this row would have ended: another writer appended after us, and cutting
+    back would take their whole row with ours.
     """
+    data = line.encode("utf-8")
     start: int | None = None
     try:
         with path.open("ab") as f:
             start = f.tell()
-            f.write(line.encode("utf-8"))
+            f.write(data)
     except BaseException:
         if start is not None:
             with suppress(OSError):
-                os.truncate(path, start)
+                if path.stat().st_size <= start + len(data):
+                    os.truncate(path, start)
         raise
 
 

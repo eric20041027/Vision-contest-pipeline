@@ -67,9 +67,25 @@ class GuardrailError(VcpError):
 
 
 class PlatformError(VcpError):
-    """An external tool's CLI (kaggle, rclone) ran and failed. The message is already redacted."""
+    """An external tool's CLI (kaggle, rclone) ran and failed. The message is already redacted.
+
+    ``cli_warnings`` are the warning lines the CLI printed in the answers read after the failure
+    (a Kaggle upload's read-back, spec 2026-10-30 §4.1): redacted, for the VERDICT's count --
+    ``fields`` stay what the failure itself says.
+    """
 
     status = "FAIL"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        location: str | None = None,
+        fields: dict[str, FieldValue] | None = None,
+        cli_warnings: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message, location=location, fields=fields)
+        self.cli_warnings = cli_warnings
 
 
 class PlatformTimeout(PlatformError):

@@ -35,6 +35,12 @@ from vcp.submit.schema import Gate, LedgerRow, PlatformProfile
 EVAL = "beach"
 TEST = "beach-test"
 STAMP = "2026-09-05T00:00:00.000Z"
+# What CLI 2.2.4 printed on stdout ahead of its JSON in RSNA's last week (2026-10), once the
+# server knew a newer CLI; the wording is approximate, the version numbers made up.
+OUTDATED_WARNING = (
+    "Warning: Looks like you're using an outdated `kaggle` version (installed: 2.2.4), "
+    "please consider upgrading to the latest version (2.2.5)"
+)
 
 
 def random_scores(samples, *, seed: int) -> list[Prediction]:

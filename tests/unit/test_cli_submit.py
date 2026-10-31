@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from submit_fixtures import (
     EVAL,
+    OUTDATED_WARNING,
     STAMP,
     final_row,
     make_pair,
@@ -478,6 +479,67 @@ def test_upload_cli_passes_force_and_no_sync_and_renders_the_new_fields(roots, m
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v and "sync=skipped" in v and "bound=0" in v
     assert "forced" not in v and "--no-sync" in r.output
+
+
+def test_upload_cli_prints_cli_warnings_and_the_upgrade_hint(roots, monkeypatch):
+    """spec 2026-10-30 §4.2: ``cli_warnings=`` always; > 0 WARNs; a line that says outdated adds
+    the upgrade hint; the warning lines are printed as ``cli_warning:``."""
+    from vcp import cli_submit
+    from vcp.cli_submit import OUTDATED_HINT
+    from vcp.submit.actions import UploadOutcome
+    from vcp.submit.platforms import UploadResult
+
+    warnings: list[tuple[str, ...]] = [(OUTDATED_WARNING,)]
+
+    def fake_upload(dataset, submission_id, **_):
+        row = LedgerRow(
+            event="uploaded",
+            ts="2026-10-30T08:00:00.000Z",
+            submission_id=submission_id,
+            at="2026-10-30T08:00:00.000Z",
+            source="vcp",
+            platform_ref="7",
+            message=submission_id,
+            confirmed=True,
+            profile_sha256="p" * 64,
+        )
+        return UploadOutcome(row, UploadResult(True, "7", "ok"), None, cli_warnings=warnings[0])
+
+    monkeypatch.setattr(cli_submit, "upload", fake_upload)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
+    base = ["submit", "upload", "--dataset", "beach-test", "--id", "S1"]
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "cli_warnings=1" in v, r.output
+    assert f"cli_warning: {OUTDATED_WARNING}" in r.output and OUTDATED_HINT in r.output
+    warnings[0] = ("Warning: maintenance tonight", "Warning: rate limited")
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "cli_warnings=2" in v, r.output
+    assert "cli_warning: Warning: rate limited" in r.output and OUTDATED_HINT not in r.output
+    warnings[0] = ()
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and "cli_warnings=0" in v, r.output
+    # the VERDICT's "cli_warnings=0" is not a human line; no line may start with "cli_warning:"
+    assert not [x for x in r.output.splitlines() if x.startswith("cli_warning:")], r.output
+    assert OUTDATED_HINT not in r.output
+
+
+def test_cli_warning_lines_name_each_line_and_hint_once_at_the_end():
+    from vcp.cli_submit import OUTDATED_HINT, cli_warning_lines
+
+    assert cli_warning_lines(()) == []
+    assert cli_warning_lines(("Warning: a",)) == ["cli_warning: Warning: a"]
+    lines = cli_warning_lines(("Warning: Outdated kaggle", "Warning: this is OUTDATED too"))
+    assert lines == [
+        "cli_warning: Warning: Outdated kaggle",
+        "cli_warning: Warning: this is OUTDATED too",
+        OUTDATED_HINT,
+    ]
+    assert OUTDATED_HINT == (
+        "the platform CLI says it is outdated; upgrade the CLI that kaggle_command runs"
+    )
 
 
 def test_upload_cli_refuses_an_empty_force_reason(roots):

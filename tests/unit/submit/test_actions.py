@@ -6,7 +6,15 @@ from datetime import timedelta
 import pytest
 from typer.testing import CliRunner
 
-from submit_fixtures import EVAL, STAMP, TEST, seed_eval_runs, seed_judgements, seed_test_runs
+from submit_fixtures import (
+    EVAL,
+    OUTDATED_WARNING,
+    STAMP,
+    TEST,
+    seed_eval_runs,
+    seed_judgements,
+    seed_test_runs,
+)
 from vcp.cli import app
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed
@@ -24,6 +32,7 @@ from vcp.submit.sync import sync
 
 SECRET = "fakesecretfakesecretfakesecret1234"
 EMPTY = (0, "No submissions found", "")  # the list upload reads first, when it is empty
+WARNED_EMPTY = (0, f"{OUTDATED_WARNING}\nNo submissions found", "")  # ... behind a CLI warning
 
 
 def _listing(*entries):
@@ -166,7 +175,13 @@ def test_upload_failures_write_no_row(pair, no_wait):
     with pytest.raises(Exception, match=r"upload_failed: kaggle CLI failed \(exit 1\)") as ei:
         upload(TEST, "S1", runner=runner, **_kw(pair))
     assert SECRET not in str(ei.value)
-    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed", "sync": "ok", "bound": 0}
+    assert ei.value.fields == {
+        "exit_code": 1,
+        "readback": "not_listed",
+        "sync": "ok",
+        "bound": 0,
+        "cli_warnings": 0,
+    }
     runner = FakeRunner([EMPTY, (0, "Could not submit to competition", "")])  # 2.2.4, exit 0
     with pytest.raises(Exception, match="upload_failed"):
         upload(TEST, "S1", runner=runner, **_kw(pair))
@@ -277,7 +292,8 @@ def test_an_upload_found_on_the_platform_is_bound_and_blocks_a_second_upload(pai
     with pytest.raises(ValidationFailed, match="already_uploaded: S1 was uploaded 1 time") as ei:
         upload(TEST, "S1", runner=runner, **_kw(pair))
     # the FAIL says what the pre-sync wrote: its binding stays in the ledger (final review M1)
-    assert ei.value.fields == {"uploads": 1, "sync": "ok", "bound": 1} and len(runner.calls) == 1
+    assert ei.value.fields == {"uploads": 1, "sync": "ok", "bound": 1, "cli_warnings": 0}
+    assert len(runner.calls) == 1
     [bound] = SubmissionLedger(pair.test_paths.submissions_log).of("uploaded")
     assert (bound.source, bound.platform_ref) == ("platform", "9")
 
@@ -316,7 +332,7 @@ def test_force_uploads_again_and_keeps_the_reason(pair):
         upload(TEST, "S1", runner=FakeRunner([EMPTY]), **_kw(pair))
     with pytest.raises(ValidationFailed, match="already_uploaded") as ei:
         upload(TEST, "S1", no_sync=True, runner=FakeRunner([]), **_kw(pair))
-    assert ei.value.fields == {"uploads": 1, "sync": "skipped", "bound": 0}
+    assert ei.value.fields == {"uploads": 1, "sync": "skipped", "bound": 0, "cli_warnings": 0}
     with pytest.raises(ValidationFailed, match="invalid: --force needs a reason") as ei:
         upload(TEST, "S1", force="  ", runner=FakeRunner([]), **_kw(pair))
     assert ei.value.fields == {}  # refused before the pre-sync
@@ -410,7 +426,13 @@ def test_a_failed_cli_the_list_does_not_show_fails_and_writes_nothing(pair, no_w
     looks = [EMPTY] * len(kaggle.READBACK_DELAYS)
     with pytest.raises(PlatformError, match="upload_failed:") as ei:
         upload(TEST, "S1", runner=FakeRunner([EMPTY, CLI_DOWN, *looks]), **_kw(pair))
-    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed", "sync": "ok", "bound": 0}
+    assert ei.value.fields == {
+        "exit_code": 1,
+        "readback": "not_listed",
+        "sync": "ok",
+        "bound": 0,
+        "cli_warnings": 0,
+    }
     assert pair.test_paths.submissions_log.read_bytes() == before
 
 
@@ -491,3 +513,75 @@ def test_a_failed_cli_reads_redacted_in_the_ledger_the_log_and_the_verdict(
     ledger = pair.test_paths.submissions_log.read_text(encoding="utf-8")
     for text in (r.output, logs, ledger):
         assert SECRET not in text
+
+
+# --- spec 2026-10-30 §4: the platform CLI's warnings, counted once per upload ------------------
+
+
+def _warned_listing(*entries):
+    code, out, err = _listing(*entries)
+    return code, f"{OUTDATED_WARNING}\n{out}", err
+
+
+def test_upload_counts_the_warnings_of_the_pre_sync_and_the_read_back_once(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    listed = {"ref": 7, "fileName": "submission.csv", "date": stamp(utc_now()), "description": "S1"}
+    runner = FakeRunner([WARNED_EMPTY, (0, "queued", ""), _warned_listing(listed)])
+    out = upload(TEST, "S1", runner=runner, **_kw(pair))
+    assert out.row.platform_ref == "7" and out.cli_warnings == (OUTDATED_WARNING,)
+    # the quota (one a day) is spent: the refusal comes after the pre-sync, and carries its count
+    with pytest.raises(ValidationFailed, match="quota_exhausted") as ei:
+        upload(TEST, "S2", runner=FakeRunner([WARNED_EMPTY]), **_kw(pair))
+    assert ei.value.fields["cli_warnings"] == 1
+
+
+def test_a_failed_upload_counts_the_warnings_its_read_back_saw(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    looks = [WARNED_EMPTY] * len(kaggle.READBACK_DELAYS)
+    with pytest.raises(PlatformError, match="upload_failed:") as ei:
+        upload(TEST, "S1", runner=FakeRunner([EMPTY, CLI_DOWN, *looks]), **_kw(pair))
+    assert ei.value.fields["cli_warnings"] == 1 and ei.value.cli_warnings == (OUTDATED_WARNING,)
+    # a different line in the pre-sync and in the read-back are two lines
+    other = (0, "Warning: maintenance tonight\nNo submissions found", "")
+    with pytest.raises(PlatformError, match="upload_failed:") as ei:
+        upload(TEST, "S1", runner=FakeRunner([other, CLI_DOWN, *looks]), **_kw(pair))
+    assert ei.value.fields["cli_warnings"] == 2
+
+
+def test_no_sync_counts_read_back_warnings_and_early_failures_carry_none(pair, no_wait):
+    quota = Quota(per_day=5, day_tz="UTC")
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best", quota=quota))
+    ok = (0, "Successfully submitted to c1", "")
+    out = upload(TEST, "S1", no_sync=True, runner=FakeRunner([ok]), **_kw(pair))
+    assert out.cli_warnings == () and out.sync == "skipped"
+    listed = {"ref": 8, "fileName": "submission.csv", "date": stamp(utc_now()), "description": "S2"}
+    runner = FakeRunner([(0, "queued", ""), _warned_listing(listed)])
+    out = upload(TEST, "S2", no_sync=True, runner=runner, **_kw(pair))
+    assert (out.sync, out.row.platform_ref, out.cli_warnings) == (
+        "skipped",
+        "8",
+        (OUTDATED_WARNING,),
+    )
+    # refused before the pre-sync could have read anything: no count to carry
+    with pytest.raises(ValidationFailed, match="not_staged") as ei:
+        upload(TEST, "S9", runner=FakeRunner([]), **_kw(pair))
+    assert "cli_warnings" not in ei.value.fields
+
+
+def test_a_list_returning_platform_still_uploads(pair, monkeypatch):
+    """The pre-sync wraps a plain list as a ``PlatformList`` with no warnings."""
+    from vcp.submit.platforms import PLATFORMS, UploadResult
+
+    class OldStyle:
+        name = "kaggle"
+
+        def upload(self, staged, artifact, message, profile, runner, *, known_refs=frozenset()):
+            return UploadResult(True, "7", "ok")
+
+        def list_submissions(self, profile, runner):
+            return []
+
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    monkeypatch.setitem(PLATFORMS, "kaggle", OldStyle())
+    out = upload(TEST, "S1", **_kw(pair))
+    assert (out.sync, out.row.platform_ref, out.cli_warnings) == ("ok", "7", ())

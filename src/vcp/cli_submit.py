@@ -44,10 +44,20 @@ PluginOpt = Annotated[
     list[str] | None, typer.Option("--plugin", help="python module to import (registers writers)")
 ]
 DETAIL_MAX = 160  # characters of the platform's reply a VERDICT carries
+OUTDATED_HINT = "the platform CLI says it is outdated; upgrade the CLI that kaggle_command runs"
 
 
 def _clip(text: str, limit: int = DETAIL_MAX) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def cli_warning_lines(lines: tuple[str, ...]) -> list[str]:
+    """The human-readable lines for the platform CLI's warnings (spec 2026-10-30 §4.2): one
+    ``cli_warning:`` line each, and the upgrade hint once if any of them says ``outdated``."""
+    out = [f"cli_warning: {line}" for line in lines]
+    if any("outdated" in line.lower() for line in lines):
+        out.append(OUTDATED_HINT)
+    return out
 
 
 def ledger_mode(dataset: str, *, data_root: Path | None, configs_root: Path | None) -> str:
@@ -311,6 +321,7 @@ def upload_cmd(
             "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
             "sync": out.sync,
             "bound": out.bound,
+            "cli_warnings": len(out.cli_warnings),
         }
         if out.row.reason:
             fields["forced"] = True
@@ -342,7 +353,13 @@ def upload_cmd(
                 f"entry near {out.row.at}: if there is one, another upload spends a submission. "
                 f"`vcp submit sync --dataset {dataset}` matches it later"
             )
-        ok = out.row.confirmed and out.sync == "ok" and not out.result.exit_code
+        human += cli_warning_lines(out.cli_warnings)
+        ok = (
+            out.row.confirmed
+            and out.sync == "ok"
+            and not out.result.exit_code
+            and not out.cli_warnings
+        )
         status: Status = "OK" if ok else "WARN"
         return status, fields, out.row.model_dump(mode="json", exclude_none=True), human
 
@@ -454,6 +471,7 @@ def sync_cmd(
             "refreshed": res.refreshed,
             "unconfirmed": len(res.unconfirmed),
             "bound": res.bound,
+            "cli_warnings": len(res.cli_warnings),
             "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
         }
         human = [f"unconfirmed: {sid}" for sid in res.unconfirmed]
@@ -461,13 +479,16 @@ def sync_cmd(
         human += [
             f"errored: {sid} (the platform finished it without a score)" for sid in res.errored_ids
         ]
-        status: Status = "WARN" if res.foreign or res.unconfirmed or res.errored else "OK"
+        human += cli_warning_lines(res.cli_warnings)  # spec 2026-10-30 §4.2: WARN every time
+        warn = res.foreign or res.unconfirmed or res.errored or res.cli_warnings
+        status: Status = "WARN" if warn else "OK"
         payload = {
             "matched": res.matched,
             "unconfirmed": res.unconfirmed,
             "refreshed": res.refreshed,
             "bound": res.bound,
             "errored": res.errored_ids,
+            "cli_warnings": list(res.cli_warnings),
         }
         return status, fields, payload, human
 

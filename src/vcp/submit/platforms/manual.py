@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
-from vcp.submit.platforms.base import PlatformSubmission, Runner, UploadResult
+from vcp.submit.platforms.base import PlatformList, Runner, UploadResult
 from vcp.submit.schema import PlatformProfile, Staged
 
 
@@ -27,7 +27,5 @@ class ManualPlatform:
             "`vcp submit record --id ... --at ...`"
         )
 
-    def list_submissions(
-        self, profile: PlatformProfile, runner: Runner | None
-    ) -> list[PlatformSubmission]:
+    def list_submissions(self, profile: PlatformProfile, runner: Runner | None) -> PlatformList:
         raise ValidationFailed("manual_platform: nothing to read back from; use `vcp submit score`")

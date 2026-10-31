@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import os
@@ -8,10 +9,18 @@ from datetime import timedelta
 
 import pytest
 
+from submit_fixtures import OUTDATED_WARNING
 from vcp.core.errors import PlatformError, PlatformTimeout, ValidationFailed, VcpError
 from vcp.core.proc import default_runner, timed_runner
 from vcp.core.time import parse_stamp, stamp
-from vcp.submit.platforms import get_platform, kaggle
+from vcp.submit.platforms import (
+    PlatformList,
+    PlatformSubmission,
+    as_platform_list,
+    get_platform,
+    kaggle,
+    merge_warnings,
+)
 from vcp.submit.platforms.base import redact
 from vcp.submit.platforms.kaggle import parse_date, parse_score, parse_submissions
 from vcp.submit.schema import Artifact, Gate, Pairing, PlatformProfile, Staged
@@ -138,6 +147,24 @@ def test_manual_platform_refuses(tmp_path):
         p.upload(_staged(), tmp_path / "s.csv", "S1", _profile(platform="manual"), None)
     with pytest.raises(ValidationFailed, match="manual_platform"):
         p.list_submissions(_profile(platform="manual"), None)
+
+
+def test_a_platform_list_holds_what_the_platform_listed_and_what_the_cli_warned():
+    sub = PlatformSubmission("1", "s.csv", STAMP, "S1", None, None, "pending", None)
+    listed = PlatformList([sub], ("Warning: a",))
+    assert (listed.submissions, listed.warnings) == ([sub], ("Warning: a",))
+    assert PlatformList([sub]).warnings == ()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        listed.warnings = ()  # type: ignore[misc]
+    assert as_platform_list(listed) is listed
+    wrapped = as_platform_list([sub])  # a platform written against the old contract
+    assert wrapped == PlatformList([sub], ())
+
+
+def test_merge_warnings_drops_repeats_and_keeps_the_order_of_first_sight():
+    assert merge_warnings() == ()
+    assert merge_warnings(("b", "a"), (), ["a", "c"], ("b",)) == ("b", "a", "c")
+    assert merge_warnings(iter(["x", "x"])) == ("x",)
 
 
 def test_kaggle_upload_commands_and_outcomes(tmp_path, no_wait):
@@ -331,19 +358,19 @@ def test_parse_submissions_shapes_and_paging():
         },
         {"fileName": "x.csv", "date": "2026-08-31 22:00:00", "publicScore": ""},
     ]
-    subs, token = parse_submissions(json.dumps(rows))
+    subs, token, _ = parse_submissions(json.dumps(rows))
     assert token is None and len(subs) == 2
     assert subs[0].platform_ref == "11" and subs[0].public == 0.79 and subs[0].private is None
     assert subs[0].at == "2026-08-31T21:28:00.000Z" and subs[0].submitted_by == "eric"
     assert subs[1].platform_ref and subs[1].public is None and subs[1].submitted_by is None
-    subs, token = parse_submissions(json.dumps({"submissions": rows[:1], "nextPageToken": "p2"}))
+    subs, token, _ = parse_submissions(json.dumps({"submissions": rows[:1], "nextPageToken": "p2"}))
     assert token == "p2" and len(subs) == 1
     with pytest.raises(ValidationFailed, match="platform_response") as ei:
         parse_submissions(json.dumps([{"date": "2026-08-31T21:28:00Z"}]))
     assert ei.value.fields == {"key": "fileName"}
     with pytest.raises(ValidationFailed, match="not JSON"):
         parse_submissions("<html>")
-    assert parse_submissions("No submissions found\n") == ([], None)  # CLI 2.2.4, no JSON
+    assert parse_submissions("No submissions found\n") == ([], None, ())  # CLI 2.2.4, no JSON
     assert parse_score("null", "publicScore") is None and parse_score(0.5, "x") == 0.5
     with pytest.raises(ValidationFailed, match="unparsable score"):
         parse_score("n/a", "publicScore")
@@ -352,25 +379,28 @@ def test_parse_submissions_shapes_and_paging():
         parse_date("yesterday")
 
 
-# What CLI 2.2.4 printed on stdout ahead of its JSON in RSNA's last week (2026-10), once the
-# server knew a newer CLI; the wording is approximate, the version numbers made up.
-OUTDATED = (
-    "Warning: Looks like you're using an outdated `kaggle` version (installed: 2.2.4), "
-    "please consider upgrading to the latest version (2.2.5)"
-)
+OUTDATED = OUTDATED_WARNING  # what CLI 2.2.4 printed ahead of its JSON (tests/submit_fixtures.py)
 
 
 def test_warning_lines_ahead_of_the_answer_are_skipped_and_logged(caplog):
     rows = [{"ref": 11, "fileName": "submission.csv", "date": "2026-08-31T21:28:00Z"}]
     with caplog.at_level(logging.WARNING, logger="vcp"):
-        subs, token = parse_submissions(f"{OUTDATED}\n{json.dumps(rows)}\n")
-    assert [s.platform_ref for s in subs] == ["11"] and token is None
+        subs, token, warnings = parse_submissions(f"{OUTDATED}\n{json.dumps(rows)}\n")
+    assert [s.platform_ref for s in subs] == ["11"] and token is None and warnings == (OUTDATED,)
     assert "outdated `kaggle` version" in caplog.text
     two = f"{OUTDATED}\n\n  Warning: {SECRET}\n" + json.dumps({"submissions": rows})
     with caplog.at_level(logging.WARNING, logger="vcp"):
         assert len(parse_submissions(two)[0]) == 1
     assert "Warning: <redacted>" in caplog.text and SECRET not in caplog.text
-    assert parse_submissions(f"{OUTDATED}\nNo submissions found\n") == ([], None)
+    assert parse_submissions(f"{OUTDATED}\nNo submissions found\n") == ([], None, (OUTDATED,))
+
+
+def test_parse_returns_the_redacted_warning_lines_it_skipped():
+    rows = [{"ref": 11, "fileName": "submission.csv", "date": "2026-08-31T21:28:00Z"}]
+    text = f"{OUTDATED}\n\n  Warning: {SECRET}\n{json.dumps(rows)}"
+    subs, token, warnings = parse_submissions(text)
+    assert len(subs) == 1 and token is None and warnings == (OUTDATED, "Warning: <redacted>")
+    assert parse_submissions(json.dumps(rows))[2] == ()
 
 
 @pytest.mark.parametrize(
@@ -401,9 +431,43 @@ def test_sync_reads_a_list_the_cli_prefixed_with_a_warning(newline):
     page2 = json.dumps([{"fileName": "b.csv", "date": "2026-09-02T00:00:00Z"}])
     runner = FakeRunner([(0, f"{OUTDATED}{newline}{page}", "") for page in (page1, page2)])
     p = get_platform("kaggle")
-    assert [s.file_name for s in p.list_submissions(_profile(), runner)] == ["a.csv", "b.csv"]
+    listed = p.list_submissions(_profile(), runner)
+    assert [s.file_name for s in listed.submissions] == ["a.csv", "b.csv"]
     runner = FakeRunner([(0, f"{OUTDATED}{newline}No submissions found{newline}", "")])
-    assert p.list_submissions(_profile(), runner) == []
+    assert p.list_submissions(_profile(), runner).submissions == []
+
+
+def _two_pages():
+    page1 = json.dumps(
+        {
+            "submissions": [{"fileName": "a.csv", "date": "2026-09-01T00:00:00Z"}],
+            "nextPageToken": "t2",
+        }
+    )
+    page2 = json.dumps([{"fileName": "b.csv", "date": "2026-09-02T00:00:00Z"}])
+    return page1, page2
+
+
+def test_a_warning_printed_on_every_page_is_one_line():
+    page1, page2 = _two_pages()
+    runner = FakeRunner([(0, f"{OUTDATED}\n{page}", "") for page in (page1, page2)])
+    listed = get_platform("kaggle").list_submissions(_profile(), runner)
+    assert isinstance(listed, PlatformList) and listed.warnings == (OUTDATED,)
+    assert [s.file_name for s in listed.submissions] == ["a.csv", "b.csv"]
+
+
+def test_warnings_of_different_pages_keep_the_order_they_first_appeared_in():
+    page1, page2 = _two_pages()
+    runner = FakeRunner(
+        [
+            (0, f"Warning: maintenance tonight\n{OUTDATED}\n{page1}", ""),
+            (0, f"{OUTDATED}\nWarning: maintenance tonight\nWarning: rate limited\n{page2}", ""),
+        ]
+    )
+    listed = get_platform("kaggle").list_submissions(_profile(), runner)
+    assert listed.warnings == ("Warning: maintenance tonight", OUTDATED, "Warning: rate limited")
+    clean = FakeRunner([(0, page, "") for page in _two_pages()])
+    assert get_platform("kaggle").list_submissions(_profile(), clean).warnings == ()
 
 
 def test_parse_submissions_redacts_platform_strings():
@@ -416,7 +480,7 @@ def test_parse_submissions_redacts_platform_strings():
             "submittedBy": SECRET,
         }
     ]
-    subs, _ = parse_submissions(json.dumps(rows))
+    subs, _, _ = parse_submissions(json.dumps(rows))
     sub = subs[0]
     assert SECRET not in sub.file_name and "<redacted>" in sub.file_name
     assert SECRET not in sub.status and "<redacted>" in sub.status
@@ -436,7 +500,7 @@ def test_an_errored_code_submission_as_cli_2_2_4_lists_it():
         "publicScore": "",
         "privateScore": "",
     }
-    [sub], _ = parse_submissions(json.dumps([row]))
+    [sub], _, _ = parse_submissions(json.dumps([row]))
     assert (sub.platform_ref, sub.at) == ("90000001", "2026-01-02T03:04:05.678Z")
     assert (sub.public, sub.private, sub.status) == (None, None, "SubmissionStatus.COMPLETE")
     assert sub.errored is True
@@ -467,22 +531,20 @@ def test_errored_is_set_only_for_error_or_complete_without_a_score(
     for key, value in (("status", status), ("publicScore", public), ("privateScore", private)):
         if value is not None:
             row[key] = value
-    [sub], _ = parse_submissions(json.dumps([row]))
+    [sub], _, _ = parse_submissions(json.dumps([row]))
     assert sub.errored is errored
     if errored:
         assert sub.public is None and sub.private is None
 
 
 def test_a_platform_submission_is_not_errored_unless_a_platform_says_so():
-    from vcp.submit.platforms.base import PlatformSubmission
-
     sub = PlatformSubmission("1", "s.csv", STAMP, "S1", None, None, "complete", None)
     assert sub.errored is False
 
 
 def test_parse_submissions_ref_zero_is_not_the_sha_fallback():
     rows = [{"ref": 0, "fileName": "x.csv", "date": "2026-08-31T21:28:00Z"}]
-    subs, _ = parse_submissions(json.dumps(rows))
+    subs, _, _ = parse_submissions(json.dumps(rows))
     assert subs[0].platform_ref == "0"
 
 
@@ -496,7 +558,7 @@ def test_kaggle_list_pages_to_the_end():
     )
     page2 = json.dumps([{"fileName": "b.csv", "date": "2026-09-02T00:00:00Z"}])
     runner = FakeRunner([(0, page1, ""), (0, page2, "")])
-    subs = p.list_submissions(_profile(), runner)
+    subs = p.list_submissions(_profile(), runner).submissions
     assert [s.file_name for s in subs] == ["a.csv", "b.csv"]
     assert runner.calls[1][-2:] == ["--page-token", "t2"]
     assert runner.calls[0][:6] == [
@@ -593,6 +655,58 @@ def test_a_read_back_looks_past_the_refs_the_ledger_holds(no_wait):
     res = _upload(FakeRunner([(0, KERNEL_REPLY, ""), earlier, both]), known=frozenset({"51230"}))
     assert res.confirmed and res.exit_code == 0
     assert (res.platform_ref, res.readback) == ("51234", "matched")
+
+
+# --- spec 2026-10-30 §4: the warnings the CLI printed while the upload was read back ----------
+
+
+def _warned(answer):
+    """A list answer the CLI printed behind its outdated warning."""
+    code, out, err = answer
+    return code, f"{OUTDATED}\n{out}", err
+
+
+def test_read_back_warnings_ride_the_upload_result(no_wait):
+    runner = FakeRunner([(0, KERNEL_REPLY, ""), _warned(_listing((51234, "S1", 0)))])
+    res = _kernel_upload(runner)
+    assert res.confirmed and res.cli_warnings == (OUTDATED,)
+    clean = _kernel_upload(FakeRunner([(0, KERNEL_REPLY, ""), _listing((51234, "S1", 0))]))
+    assert clean.confirmed and clean.cli_warnings == ()
+    printed = _kernel_upload(FakeRunner([(0, f"Submission ref: 51234\n{KERNEL_REPLY}", "")]))
+    assert printed.confirmed and printed.cli_warnings == ()  # nothing was read back
+
+
+def test_a_warning_on_every_look_of_a_read_back_is_one_line(no_wait):
+    answers = [(0, KERNEL_REPLY, ""), _warned(_listing()), _warned(_listing((51234, "S1", 0)))]
+    res = _kernel_upload(FakeRunner(answers))
+    assert (res.platform_ref, res.cli_warnings) == ("51234", (OUTDATED,))
+
+
+def test_a_failed_cli_the_list_shows_returns_the_warnings_it_read(no_wait):
+    res = _upload(FakeRunner([CLI_DOWN, _warned(_listing((51234, "S1", 0)))]))
+    assert (res.confirmed, res.exit_code, res.cli_warnings) == (True, 1, (OUTDATED,))
+
+
+def test_a_failed_upload_carries_its_read_back_warnings(no_wait):
+    runner = FakeRunner([CLI_DOWN, *[(0, f"{OUTDATED}\nNo submissions found", "")] * LOOKS])
+    with pytest.raises(PlatformError, match="upload_failed:") as ei:
+        _upload(runner)
+    assert ei.value.cli_warnings == (OUTDATED,)
+    assert ei.value.fields == {"exit_code": 1, "readback": "not_listed"}
+
+
+def test_a_read_back_cut_short_keeps_the_warnings_of_the_looks_before_it(no_wait):
+    runner = FakeRunner([CLI_DOWN, _warned(_listing()), (2, "", "503 Service Unavailable")])
+    with pytest.raises(PlatformError, match="upload_unconfirmed:") as ei:
+        _upload(runner)
+    assert ei.value.fields["readback"] == "failed" and ei.value.cli_warnings == (OUTDATED,)
+
+
+def test_a_platform_error_carries_no_warnings_unless_given_some():
+    assert PlatformError("x").cli_warnings == ()
+    err = PlatformError("x", location="y", fields={"a": 1}, cli_warnings=(OUTDATED,))
+    assert (err.cli_warnings, err.fields, err.location) == ((OUTDATED,), {"a": 1}, "y")
+    assert PlatformTimeout("t").cli_warnings == ()
 
 
 def test_a_list_that_hangs_is_cut_off_after_the_timeout(monkeypatch):

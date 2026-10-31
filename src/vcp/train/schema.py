@@ -125,6 +125,29 @@ class GitInfo(_Strict):
     patch: str | None = None
 
 
+DiskRole = Literal["run", "cwd", "checkpoints"]
+
+
+class DiskVolume(_Strict):
+    """One volume ``vcp train run`` measured: ``path`` is the first directory found on it (stored
+    like a card path), ``roles`` the writes that land there. Both sizes are None when the probe
+    could not read the volume (spec 2026-10-30 §5.1)."""
+
+    path: str
+    roles: list[DiskRole]
+    free_bytes: int | None
+    total_bytes: int | None
+
+
+class DiskCheck(_Strict):
+    """The free-space measurement a ``train run`` attempt made before its first write and the bar
+    it was held to; the env snapshot keeps it so the record shows what the decision rested on."""
+
+    min_free_gib: float
+    checked_at: str
+    volumes: list[DiskVolume]
+
+
 class EnvSnapshot(_Strict):
     """``runs/<run_id>/train/env.<n>.json`` (spec 4.4): what the framework venv reported."""
 
@@ -141,3 +164,4 @@ class EnvSnapshot(_Strict):
     vcp_version: str
     git: GitInfo | None = None
     taken_at: str
+    disk: DiskCheck | None = None  # 0.16.0: an older env.json has none

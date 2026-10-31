@@ -67,7 +67,7 @@ flowchart TD
 | 訓練 | `train run/upload/status` | 訓練程式、config、venv、seed | run card、train snapshot/log、checkpoint SHA | 訓練 attempt 可追蹤，final checkpoint 已登記 |
 | 量測 | `eval ingest/measure/anchor/sigma/preregister/judge` | 預測、metric、主張 | readings、anchors、prereg、judgements | candidate 的 `verdict=PASS` |
 | 融合 | `fuse recipe/ablate/build` | 多個已量測 run | 不可變 recipe、消融 run、`fuse.json` | 每位融合成員均有 PASS 準入 |
-| 提交 | `submit init/stage/verify/upload/record/sync/score/final` | eval/test 身分或 kernel version | submission、stage card、只增台帳、final/lock | 平台事實已回讀，最終選擇有 sealed 讀數 |
+| 提交 | `submit init/stage/verify/upload/record/sync/score/final/select` | eval/test 身分或 kernel version | submission、stage card、只增台帳、final/lock | 平台事實已回讀，最終選擇有 sealed 讀數 |
 | 備份 | `backup manifest/push/verify/pull/status` | run、judgement 或 submission 結論 | 不可變 manifest、逐檔 SHA、副本台帳 | 所需 tier 在真正目的地驗證成功 |
 | 產物 | `artifact create/show/verify/lineage/status/relink/clean` | 任何要寫一次不改的檔案（收據、source audit、dataset diff、policy、自訂 kind） | `artifacts/<kind>/<id>/manifest.json`（有它才是產物）、supersession 台帳 | `verify` 無 mismatch / missing |
 | provenance | `data diff`、`provenance rebuild/sync/ingest/impact/stale/explain/status/verify-index` | 兩個資料集版本、既有 run | `dataset_diff` artifact、可刪除的衍生索引（SQLite 預設、PostgreSQL optional） | `stale --head` 的 VALID/STALE/REVIEW/BROKEN 已讀過，重跑清單由它決定 |

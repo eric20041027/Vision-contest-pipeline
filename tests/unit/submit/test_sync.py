@@ -4,7 +4,15 @@ from datetime import timedelta
 
 import pytest
 
-from submit_fixtures import EVAL, STAMP, TEST, seed_eval_runs, seed_judgements, seed_test_runs
+from submit_fixtures import (
+    EVAL,
+    OUTDATED_WARNING,
+    STAMP,
+    TEST,
+    seed_eval_runs,
+    seed_judgements,
+    seed_test_runs,
+)
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
@@ -796,6 +804,91 @@ def test_sync_verdict_carries_errored_and_warns_only_when_it_wrote_one(pair, mon
     verdict = r.stderr.strip().splitlines()[-1]
     assert "status=WARN" in verdict and "errored=1" in verdict, r.output
     assert json.loads(r.stdout)["result"]["errored"] == ["S1"]
+
+
+def _v_of(r) -> str:
+    """The VERDICT line of a CliRunner result."""
+    return [line for line in r.output.splitlines() if line.startswith("VERDICT ")][-1]
+
+
+def test_sync_verdict_counts_cli_warnings_and_warns_every_time(pair, monkeypatch):
+    """spec 2026-10-30 §4.2: ``cli_warnings=`` always; > 0 WARNs on every sync that sees the
+    warning (nothing remembers the last one); the warning is never written to the ledger."""
+    import sys
+
+    from typer.testing import CliRunner
+
+    from vcp.cli import app
+    from vcp.cli_submit import OUTDATED_HINT
+    from vcp.submit.platforms import kaggle
+
+    _only_s1(pair, kaggle_command=[sys.executable])
+    reply = [f"{OUTDATED_WARNING}\n[]"]
+    monkeypatch.setattr(
+        kaggle,
+        "timed_runner",
+        lambda seconds: lambda args: subprocess.CompletedProcess(args, 0, reply[0], ""),
+    )
+    before = _ledger(pair).path.read_bytes()
+    cli = CliRunner()
+    first = cli.invoke(app, ["submit", "sync", "--dataset", TEST])
+    again = cli.invoke(app, ["submit", "sync", "--dataset", TEST, "--json"])
+    for r in (first, again):  # not upgraded: every sync WARNs
+        assert r.exit_code == 0 and "status=WARN" in _v_of(r), r.output
+        assert "cli_warnings=1" in _v_of(r), r.output
+    assert json.loads(again.stdout)["result"]["cli_warnings"] == [OUTDATED_WARNING]
+    assert f"cli_warning: {OUTDATED_WARNING}" in first.output and OUTDATED_HINT in first.output
+    assert _ledger(pair).path.read_bytes() == before  # no row, no note
+    reply[0] = "Warning: maintenance tonight\n[]"
+    r = cli.invoke(app, ["submit", "sync", "--dataset", TEST])
+    assert r.exit_code == 0 and "status=WARN" in _v_of(r) and "cli_warnings=1" in _v_of(r)
+    assert "cli_warning: Warning: maintenance tonight" in r.output
+    assert OUTDATED_HINT not in r.output  # only a CLI that says outdated gets the hint
+    reply[0] = "[]"
+    r = cli.invoke(app, ["submit", "sync", "--dataset", TEST, "--json"])
+    assert r.exit_code == 0 and "status=OK" in _v_of(r) and "cli_warnings=0" in _v_of(r)
+    assert json.loads(r.stdout)["result"]["cli_warnings"] == []
+    assert _ledger(pair).path.read_bytes() == before
+
+
+def test_the_outdated_hint_is_judged_without_regard_to_case(pair, monkeypatch):
+    import sys
+
+    from typer.testing import CliRunner
+
+    from vcp.cli import app
+    from vcp.cli_submit import OUTDATED_HINT
+    from vcp.submit.platforms import kaggle
+
+    _only_s1(pair, kaggle_command=[sys.executable])
+    reply = "Warning: this kaggle is OUTDATED\n[]"
+    monkeypatch.setattr(
+        kaggle,
+        "timed_runner",
+        lambda seconds: lambda args: subprocess.CompletedProcess(args, 0, reply, ""),
+    )
+    r = CliRunner().invoke(app, ["submit", "sync", "--dataset", TEST])
+    assert "cli_warnings=1" in _v_of(r) and OUTDATED_HINT in r.output
+
+
+def test_a_list_returning_platform_still_syncs(pair, monkeypatch):
+    """A platform registered against the old contract returns a plain list: sync wraps it, with
+    no warnings."""
+    from vcp.submit.platforms import PLATFORMS
+
+    class OldStyle:
+        name = "kaggle"
+
+        def upload(self, *args, **kwargs):
+            raise AssertionError("sync never uploads")
+
+        def list_submissions(self, profile, runner):
+            return []
+
+    _only_s1(pair)
+    monkeypatch.setitem(PLATFORMS, "kaggle", OldStyle())
+    res = sync(TEST, **_kw(pair))
+    assert res.cli_warnings == () and res.platform_rows == 0
 
 
 def test_sync_writes_the_shared_ledger_when_submit_yaml_says_so(pair):

@@ -17,7 +17,7 @@ from vcp.core.build import build_string
 from vcp.core.errors import VcpError
 from vcp.core.time import stamp
 from vcp.train.gitstate import record as git_record
-from vcp.train.schema import EnvSnapshot, GitInfo
+from vcp.train.schema import DiskCheck, EnvSnapshot, GitInfo
 
 PROBE = """
 import importlib.metadata as m, json, platform, socket, sys
@@ -100,9 +100,14 @@ def git_info(cwd: Path, *, patch: tuple[Path, str] | None = None) -> GitInfo | N
 
 
 def snapshot(
-    python: Path | None, cwd: Path, *, patch: tuple[Path, str] | None = None
+    python: Path | None,
+    cwd: Path,
+    *,
+    patch: tuple[Path, str] | None = None,
+    disk: DiskCheck | None = None,
 ) -> EnvSnapshot:
-    """spec 4.4: the venv's report plus what vcp sees from outside."""
+    """spec 4.4: the venv's report plus what vcp sees from outside. ``disk`` is the free-space
+    check the attempt made before its first write (spec 2026-10-30 §5.2), kept as measured."""
     data = _probe(python or Path(sys.executable))
     names, driver = gpus()
     return EnvSnapshot(
@@ -112,4 +117,5 @@ def snapshot(
         vcp_version=build_string(),
         git=git_info(cwd, patch=patch),
         taken_at=stamp(),
+        disk=disk,
     )

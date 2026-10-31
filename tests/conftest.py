@@ -23,6 +23,17 @@ def _isolated_roots(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _roomy_disk(monkeypatch):
+    """`vcp train run` measures free space before its first write; the runner's own disk must not
+    decide a test. Every volume reports ROOMY_BYTES free, so the tests that care about disk space
+    swap the probe again (``monkeypatch.setattr(disk, "usage", ...)``)."""
+    from helpers import ROOMY_BYTES
+    from vcp.train import disk
+
+    monkeypatch.setattr(disk, "usage", lambda path: (ROOMY_BYTES, ROOMY_BYTES))
+
+
+@pytest.fixture(autouse=True)
 def _plain_help_output(monkeypatch):
     """Keep help output unstyled even if typer was imported before this conftest ran.
 

@@ -30,9 +30,20 @@ Admission = Literal["PASS", "waived"]
 PairingMode = Literal["single", "fusion", "kernel"]
 LedgerMode = Literal["configs", "shared"]  # where submissions.jsonl lives (spec 2026-09-28 §3.1)
 Event = Literal[
-    "staged", "uploaded", "scored", "errored", "foreign", "final", "lock", "unlock", "note"
+    "staged",
+    "uploaded",
+    "scored",
+    "errored",
+    "foreign",
+    "final",
+    "selected",
+    "lock",
+    "unlock",
+    "note",
 ]
 EVENTS = get_args(Event)
+# Hours before the deadline at which a missing selection starts to warn (spec 2026-10-30 §3.3).
+DEFAULT_SELECTION_WARN_HOURS: float = 48.0
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _REQUIRED: dict[str, tuple[str, ...]] = {
     "staged": ("submission_id", "kind", "eval_run", "gate", "profile_sha256"),
@@ -51,6 +62,8 @@ _REQUIRED: dict[str, tuple[str, ...]] = {
         "holdout_unseals",
         "profile_sha256",
     ),
+    # the labels ticked on the platform: an id, or ``foreign:<ref>`` (spec 2026-10-30 §3.1)
+    "selected": ("chosen", "source"),
     "lock": ("reason",),
     "unlock": ("reason",),
     "note": ("text",),
@@ -121,6 +134,7 @@ class PlatformProfile(_Strict):
     kaggle_command: list[str] = Field(default_factory=lambda: ["kaggle"])
     require_provenance: Grade = "declared"
     ledger: LedgerMode = "configs"
+    selection_warn_hours: float | None = DEFAULT_SELECTION_WARN_HOURS
     created_at: str
 
     @field_validator("display_tz")
@@ -133,6 +147,13 @@ class PlatformProfile(_Strict):
     def _stamp(cls, v: str | None) -> str | None:
         if v is not None:
             parse_stamp(v)
+        return v
+
+    @field_validator("selection_warn_hours")
+    @classmethod
+    def _warn_hours(cls, v: float | None) -> float | None:
+        if v is not None and not (math.isfinite(v) and v >= 0):
+            raise ValueError(f"selection_warn_hours must be a finite number >= 0, got {v!r}")
         return v
 
     @model_validator(mode="after")
@@ -154,13 +175,19 @@ class PlatformProfile(_Strict):
         return "UTC"
 
     @model_serializer(mode="wrap")
-    def _omit_the_default_ledger(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """``ledger: configs`` is never written, so ``vcp submit init`` still writes what 0.11
-        reads. An older vcp refuses ``ledger:`` (``extra_forbidden``), which is what should
-        stop it once a profile says ``shared`` (spec 2026-09-28 §7)."""
+    def _omit_what_older_vcp_cannot_read(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        """``ledger: configs`` and the default ``selection_warn_hours`` are never written, so
+        ``vcp submit init`` still writes what 0.11 (0.15 for the hours) reads. An older vcp
+        refuses either key (``extra_forbidden``), which is what should stop it once a profile
+        says ``shared`` or a changed warning window (spec 2026-09-28 §7, spec 2026-10-30
+        §3.3)."""
         data: dict[str, Any] = handler(self)
         if self.ledger == "configs":
             data.pop("ledger", None)
+        if self.selection_warn_hours == DEFAULT_SELECTION_WARN_HOURS:
+            data.pop("selection_warn_hours", None)
         return data
 
 
@@ -313,6 +340,11 @@ class LedgerRow(_Strict):
         missing = [f for f in _REQUIRED[self.event] if getattr(self, f) is None]
         if missing:
             raise ValueError(f"{self.event} needs {missing}")
+        if self.event == "selected" and self.chosen is not None:
+            if not self.chosen:
+                raise ValueError("selected needs at least one entry")
+            if len(set(self.chosen)) != len(self.chosen):
+                raise ValueError("selected has duplicate entries")
         if self.event == "scored" and self.public is None and self.private is None:
             raise ValueError("scored needs a public or private score")
         if self.event == "errored" and (self.public is not None or self.private is not None):

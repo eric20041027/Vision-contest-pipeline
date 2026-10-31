@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 
-from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
+from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp, utc_now
@@ -27,7 +27,13 @@ from vcp.submit.guards import (
 )
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.location import transaction
-from vcp.submit.platforms import Runner, UploadResult, get_platform
+from vcp.submit.platforms import (
+    Runner,
+    UploadResult,
+    as_platform_list,
+    get_platform,
+    merge_warnings,
+)
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile, Staged
 from vcp.submit.stage import load_staged
@@ -93,6 +99,9 @@ class UploadOutcome:
     quota: QuotaState | None
     sync: SyncState = "ok"  # "skipped" under --no-sync, a WARN (spec 2026-09-28 §4.3)
     bound: int = 0  # uploaded rows of source=platform the pre-upload sync wrote (§4.4)
+    # the platform CLI's warning lines the pre-upload sync and the read-back saw, each once (spec
+    # 2026-10-30 §4.2): for the VERDICT; no ledger row carries them
+    cli_warnings: tuple[str, ...] = ()
 
 
 def _known_refs(ledger: SubmissionLedger) -> frozenset[str]:
@@ -126,8 +135,11 @@ def _pre_sync(p: Prepared, runner: Runner | None) -> SyncResult:
     before the quota is counted, so an upload the platform lists and the ledger lacks counts. A
     list vcp cannot read -- or cannot store -- stops the upload before anything is sent."""
     try:
-        subs = get_platform(p.profile.platform).list_submissions(p.profile, runner)
-        return reconcile(p.paths, p.profile_sha, p.ledger, subs)
+        listed = as_platform_list(
+            get_platform(p.profile.platform).list_submissions(p.profile, runner)
+        )
+        res = reconcile(p.paths, p.profile_sha, p.ledger, listed.submissions)
+        return replace(res, cli_warnings=listed.warnings)
     except (VcpError, OSError) as e:
         raise ValidationFailed(f"sync_failed: {e}") from e
 
@@ -146,7 +158,8 @@ def upload(
     """One upload, one transaction (spec 2026-09-28 §4.2): every check that needs no platform,
     then the platform's list read into the ledger, the quota, the re-upload guard, the upload
     and its row. The rows the pre-sync wrote stay even when a later step refuses, so that
-    refusal carries ``sync=`` and ``bound=`` like the upload's own VERDICT would."""
+    refusal carries ``sync=``, ``bound=`` and ``cli_warnings=`` like the upload's own VERDICT
+    would (one raised before the pre-sync could have run carries none of them)."""
     reason = _force_reason(force)
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, profile_sha = load_profile(paths)
@@ -155,13 +168,17 @@ def upload(
         synced = None if no_sync else _pre_sync(p, runner)
         state: SyncState = "skipped" if synced is None else "ok"
         bound = 0 if synced is None else synced.bound
+        pre = () if synced is None else synced.cli_warnings
         try:
             row, result, quota = _send(p, submission_id, message, reason, runner)
         except VcpError as e:
+            seen = e.cli_warnings if isinstance(e, PlatformError) else ()
             e.fields.setdefault("sync", state)
             e.fields.setdefault("bound", bound)
+            e.fields.setdefault("cli_warnings", len(merge_warnings(pre, seen)))
             raise
-    return UploadOutcome(row, result, quota, sync=state, bound=bound)
+    warned = merge_warnings(pre, result.cli_warnings)
+    return UploadOutcome(row, result, quota, sync=state, bound=bound, cli_warnings=warned)
 
 
 def _send(

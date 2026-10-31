@@ -21,6 +21,7 @@ from vcp.submit.ledger import SubmissionLedger, assign_scores
 from vcp.submit.location import read_only
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
+from vcp.submit.select import SelectionState, label, selection_state
 from vcp.submit.stage import load_staged
 
 # assign_scores moved to vcp.submit.ledger (final needs it too); still importable from here
@@ -39,10 +40,7 @@ class StatusView:
     unscored: list[str]
     provenance: dict[str, str]
     errored: list[str]  # ids whose newest upload ended without a score (spec 2026-10-09 §4.3)
-
-
-def _label(r: LedgerRow) -> str:
-    return r.submission_id if r.submission_id else f"foreign:{r.platform_ref}"
+    selection: SelectionState  # what was ticked on the platform (spec 2026-10-30 §3.5)
 
 
 def _outcome(ledger: SubmissionLedger, r: LedgerRow) -> LedgerRow | None:
@@ -88,13 +86,13 @@ def status(
     arrivals = ledger.arrivals()
     current: str | None = None
     if profile.board_rule == "last":
-        current = _label(arrivals[-1]) if arrivals else None
+        current = label(arrivals[-1]) if arrivals else None
     else:
         best: float | None = None
         for r in arrivals:
             public = _public(ledger, r)
             if public is not None and (best is None or public > best):
-                best, current = public, _label(r)
+                best, current = public, label(r)
     unscored: list[str] = []
     errored: list[str] = []  # a finished state: listed, never a WARN (spec 2026-10-09 §4.3)
     for sid in ledger.ids():
@@ -117,6 +115,7 @@ def status(
         unscored=unscored,
         provenance=grades,
         errored=errored,
+        selection=selection_state(ledger, profile, now),
     )
 
 
@@ -132,6 +131,9 @@ class ReportRow:
     shift: float | None
     # our upload whose outcome is an errored row; a foreign row never is (spec 2026-10-09 §4.4)
     errored: bool = False
+    # the label is in the newest ``selected`` row: every upload of a selected id is marked,
+    # whatever the board rule (spec 2026-10-30 §3.5)
+    selected: bool = False
 
 
 def report(
@@ -146,6 +148,8 @@ def report(
     sealed_size = len(load_plan(eval_paths, profile.plan_id).ids_in(profile.sealed_subset))
     params_hash = params_key(effective_params(get_metric(profile.metric), profile.metric_params))
     readings = ReadingsLedger(eval_paths.measure_dir / READINGS_LEDGER)
+    latest_selected = ledger.latest_selected()
+    chosen = set(latest_selected.chosen or ()) if latest_selected is not None else set()
     rows: list[ReportRow] = []
     prev_public: float | None = None
     for r in ledger.arrivals():
@@ -167,8 +171,20 @@ def report(
                 sealed = reading.value if reading is not None and why == "" else None
         delta = None if public is None or prev_public is None else public - prev_public
         shift = None if public is None or private is None else private - public
+        name = label(r)
         rows.append(
-            ReportRow(_label(r), str(r.at), kind, public, delta, sealed, private, shift, errored)
+            ReportRow(
+                name,
+                str(r.at),
+                kind,
+                public,
+                delta,
+                sealed,
+                private,
+                shift,
+                errored,
+                name in chosen,
+            )
         )
         prev_public = public
     return rows

@@ -35,11 +35,13 @@ from vcp.core.proc import last_line, timed_runner
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.matching import leads
 from vcp.submit.platforms.base import (
+    PlatformList,
     PlatformSubmission,
     Readback,
     Runner,
     UploadResult,
     default_runner,
+    merge_warnings,
     redact,
 )
 from vcp.submit.schema import PlatformProfile, Staged
@@ -133,27 +135,32 @@ def is_errored(status: str, public: float | None, private: float | None) -> bool
     return status.rsplit(".", 1)[-1].lower() in ("error", "complete")
 
 
-def _past_warnings(text: str) -> str:
-    """The CLI's answer past the ``Warning:`` lines (and blank lines) it printed first, each
-    logged redacted. Nothing else is dropped, so an error the CLI printed is still not JSON."""
+def _past_warnings(text: str) -> tuple[str, tuple[str, ...]]:
+    """The CLI's answer past the ``Warning:`` lines (and blank lines) it printed first, and those
+    lines: each redacted, logged, and returned for the command's VERDICT (spec 2026-10-30 §4.1).
+    Nothing else is dropped, so an error the CLI printed is still not JSON."""
     lines = text.splitlines(keepends=True)
     start = 0
+    warnings: list[str] = []
     while start < len(lines) and (
         not lines[start].strip() or lines[start].lstrip().startswith(WARNING_PREFIX)
     ):
         if lines[start].strip():
-            log.warning("kaggle CLI: %s", redact(lines[start].strip()))
+            warning = redact(lines[start].strip())
+            log.warning("kaggle CLI: %s", warning)
+            warnings.append(warning)
         start += 1
-    return "".join(lines[start:])
+    return "".join(lines[start:]), tuple(warnings)
 
 
-def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None]:
+def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None, tuple[str, ...]]:
     """One page of ``competitions submissions --format json``: a bare list, or an object holding
     the list plus a ``nextPageToken`` -- or the CLI's plain-text word that there are none --
-    after any warning lines the CLI printed ahead of it."""
-    text = _past_warnings(text)
+    after any warning lines the CLI printed ahead of it, which come back (redacted) as the
+    third item."""
+    text, warnings = _past_warnings(text)
     if text.strip() == NO_SUBMISSIONS:
-        return [], None
+        return [], None, warnings
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
@@ -197,7 +204,7 @@ def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None]:
                 errored=is_errored(status, public, private),
             )
         )
-    return out, token
+    return out, token, warnings
 
 
 class KagglePlatform:
@@ -240,8 +247,10 @@ class KagglePlatform:
             return UploadResult(confirmed=True, platform_ref=printed.group(1), detail=detail)
         if SUCCESS in proc.stdout.lower():
             return UploadResult(confirmed=True, platform_ref=None, detail=detail)
-        ref, outcome = self._read_back(staged.submission_id, started, profile, runner, known_refs)
-        return UploadResult(ref is not None, ref, detail, readback=outcome)
+        ref, outcome, seen = self._read_back(
+            staged.submission_id, started, profile, runner, known_refs
+        )
+        return UploadResult(ref is not None, ref, detail, readback=outcome, cli_warnings=seen)
 
     def _after_failure(
         self,
@@ -258,10 +267,15 @@ class KagglePlatform:
         fails without a row: ``upload_failed:`` when nothing for the id was listed,
         ``upload_unconfirmed:`` when vcp cannot tell."""
         head = f"kaggle CLI failed (exit {proc.returncode}): {_cli_error(proc)}"
-        ref, outcome = self._read_back(submission_id, started, profile, runner, known)
+        ref, outcome, seen = self._read_back(submission_id, started, profile, runner, known)
         if ref is not None:
             return UploadResult(
-                True, ref, _cli_error(proc), readback=outcome, exit_code=proc.returncode
+                True,
+                ref,
+                _cli_error(proc),
+                readback=outcome,
+                exit_code=proc.returncode,
+                cli_warnings=seen,
             )
         fields = {"exit_code": proc.returncode, "readback": outcome}
         if outcome == "not_listed":
@@ -271,6 +285,7 @@ class KagglePlatform:
                 "again: the next upload reads the list first and stops at already_uploaded: if "
                 "it shows up late -- under --no-sync, look at the platform first",
                 fields=fields,
+                cli_warnings=seen,
             )
         raise PlatformError(
             f"upload_unconfirmed: {head}; read-back {outcome}: vcp cannot tell whether the "
@@ -278,6 +293,7 @@ class KagglePlatform:
             f"{submission_id} submission near {stamp(started)}; if one is there, "
             "`vcp submit sync` records it",
             fields=fields,
+            cli_warnings=seen,
         )
 
     def _read_back(
@@ -287,47 +303,51 @@ class KagglePlatform:
         profile: PlatformProfile,
         runner: Runner | None,
         known: frozenset[str] = frozenset(),
-    ) -> tuple[str | None, Readback]:
-        """The ref of the submission this upload just made, and how the looks went:
-        ``matched`` (one listed entry opens with the id, is stamped between the moment the CLI
-        started and the moment it returned, give or take ``READBACK_SKEW``, and is not a ref
-        the ledger holds -- an earlier upload of the id, still listed, is looked past: spec
-        2026-10-04 §6.1), ``ambiguous`` (two), ``known_ref`` (only refs the ledger holds),
-        ``not_listed``, ``failed`` or ``interrupted``. Nothing here raises: a look that breaks
-        only ends the wait."""
+    ) -> tuple[str | None, Readback, tuple[str, ...]]:
+        """The ref of the submission this upload just made, how the looks went, and the warning
+        lines the CLI printed in them (each once, those of the looks before one that broke
+        included; spec 2026-10-30 §4.1). The outcome is ``matched`` (one listed entry opens with
+        the id, is stamped between the moment the CLI started and the moment it returned, give
+        or take ``READBACK_SKEW``, and is not a ref the ledger holds -- an earlier upload of the
+        id, still listed, is looked past: spec 2026-10-04 §6.1), ``ambiguous`` (two),
+        ``known_ref`` (only refs the ledger holds), ``not_listed``, ``failed`` or
+        ``interrupted``. Nothing here raises: a look that breaks only ends the wait."""
         earliest, latest = started - READBACK_SKEW, utc_now() + READBACK_SKEW
         seen_known = False
+        warnings: tuple[str, ...] = ()
         for delay in READBACK_DELAYS:
             try:
                 time.sleep(delay)
+                listed = self.list_submissions(profile, runner)
+                warnings = merge_warnings(warnings, listed.warnings)
                 refs = {
                     s.platform_ref
-                    for s in self.list_submissions(profile, runner)
+                    for s in listed.submissions
                     if leads(s.description, submission_id)
                     and earliest <= parse_stamp(s.at) <= latest
                 }
             except KeyboardInterrupt:
-                return None, "interrupted"  # Ctrl+C stops the wait; the row is still written
+                return None, "interrupted", warnings  # Ctrl+C stops the wait; the row is written
             except Exception as e:  # anything at all: the upload happened, its row must follow
                 log.warning("kaggle read-back failed: %s", redact(f"{type(e).__name__}: {e}"))
-                return None, "failed"
+                return None, "failed", warnings
             fresh = refs - known
             seen_known = seen_known or len(fresh) < len(refs)
             if len(fresh) == 1:
-                return next(iter(fresh)), "matched"
+                return next(iter(fresh)), "matched", warnings
             if fresh:
-                return None, "ambiguous"  # two uploads of this id in the window: which is it?
-        return None, "known_ref" if seen_known else "not_listed"
+                return None, "ambiguous", warnings  # two uploads of this id: which is it?
+        return None, "known_ref" if seen_known else "not_listed", warnings
 
-    def list_submissions(
-        self, profile: PlatformProfile, runner: Runner | None
-    ) -> list[PlatformSubmission]:
-        """Every page of the list; each call of the real CLI gets ``LIST_TIMEOUT`` seconds (spec
-        2026-10-04 §6.3), then ``PlatformTimeout``."""
+    def list_submissions(self, profile: PlatformProfile, runner: Runner | None) -> PlatformList:
+        """Every page of the list, with the warning lines the CLI printed ahead of the pages (each
+        line once; spec 2026-10-30 §4.1); each call of the real CLI gets ``LIST_TIMEOUT`` seconds
+        (spec 2026-10-04 §6.3), then ``PlatformTimeout``."""
         base, run = _command(profile, runner, timeout=LIST_TIMEOUT)
         cmd = [*base, "competitions", "submissions", "--format", "json", "--page-size", PAGE_SIZE]
         cmd.append(str(profile.competition))
         out: list[PlatformSubmission] = []
+        warnings: tuple[str, ...] = ()
         token: str | None = None
         for _ in range(MAX_PAGES):
             try:
@@ -339,8 +359,9 @@ class KagglePlatform:
                 ) from None
             if proc.returncode != 0:
                 raise _failed(proc)
-            page, token = parse_submissions(proc.stdout)
+            page, token, page_warnings = parse_submissions(proc.stdout)
             out.extend(page)
+            warnings = merge_warnings(warnings, page_warnings)
             if not token:
-                return out
+                return PlatformList(out, warnings)
         raise PlatformError(f"kaggle CLI kept paging past {MAX_PAGES} pages")

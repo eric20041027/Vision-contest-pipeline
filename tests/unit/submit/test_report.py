@@ -4,7 +4,16 @@ from datetime import timedelta
 
 import pytest
 
-from submit_fixtures import EVAL, STAMP, TEST, seed_eval_runs, seed_judgements, seed_test_runs
+from submit_fixtures import (
+    EVAL,
+    STAMP,
+    TEST,
+    foreign_row,
+    seed_eval_runs,
+    seed_judgements,
+    seed_test_runs,
+    selected_row,
+)
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.submit.actions import record, score
@@ -342,3 +351,36 @@ def test_status_survives_a_missing_stage_json(pair):
     shutil.rmtree(pair.test_paths.submission_dir("S1"))
     st = status(TEST, **_kw(pair))
     assert st.provenance == {"S1": "-", "S2": "declared"}
+
+
+# --- 0.16.0: the recorded final selection (spec 2026-10-30 §3.5) -----------------------------
+
+
+def test_status_carries_the_selection_state(pair):
+    _seed(pair, _profile(board_rule="best", deadline=stamp(utc_now() + timedelta(hours=10))))
+    assert status(TEST, **_kw(pair)).selection.words == "missing"
+    SubmissionLedger(pair.test_paths.submissions_log).append(selected_row(["S1"]))
+    st = status(TEST, **_kw(pair))
+    assert st.selection.words == "ok" and st.selection.chosen == ["S1"]
+
+
+def test_status_selection_is_none_on_a_last_board(pair):
+    _seed(pair, _profile(deadline=stamp(utc_now() + timedelta(hours=10))))
+    st = status(TEST, **_kw(pair))
+    assert st.selection.words == "none" and st.selection.chosen is None  # C1: nothing to tick
+    SubmissionLedger(pair.test_paths.submissions_log).append(selected_row(["S1"]))
+    st = status(TEST, **_kw(pair))
+    assert st.selection.words == "none" and st.selection.chosen == ["S1"]
+
+
+def test_report_marks_every_upload_of_a_selected_id_and_foreign_too(pair):
+    _seed(pair, _profile())
+    assert not any(r.selected for r in report(TEST, **_kw(pair)))
+    later = utc_now().strftime("%Y-%m-%d %H:%M:%S")
+    record(TEST, "S1", later, tz="utc", **_kw(pair))
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    led.append(foreign_row("f1", stamp(utc_now() + timedelta(minutes=5))))
+    led.append(selected_row(["S1", "foreign:f1"]))
+    rows = report(TEST, **_kw(pair))
+    assert all(r.selected == (r.submission_id in {"S1", "foreign:f1"}) for r in rows)
+    assert sum(r.selected for r in rows) == 3

@@ -29,6 +29,9 @@ CATS = [Category(id=0, name="cat"), Category(id=1, name="dog"), Category(id=2, n
 ML_CATS = [Category(id=0, name="acl"), Category(id=1, name="mcl"), Category(id=2, name="effusion")]
 REG_CATS = [Category(id=0, name="age")]
 STAMP = "2026-09-02T00:00:00.000Z"
+# What conftest's autouse `_roomy_disk` reports as free (and total) space on every volume: far
+# above any `--min-free-gib`, so the runner's own disk never decides a test.
+ROOMY_BYTES = 1 << 40
 
 
 def make_source() -> SourceInfo:

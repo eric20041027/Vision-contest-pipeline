@@ -446,6 +446,40 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "selection and disk (0.16.0)",
+        "submit: select --record writes one selected row per distinct set and status says "
+        "missing / slots / differs; sync and upload count the platform CLI's warning lines; "
+        "train: low_disk: before the first write and after a failed attempt, disk_full: from "
+        "the console and from vcp's own writes, tmp= in train status; a yaml rewrite keeps the "
+        "old file whole and retries a shared target on Windows",
+        {
+            "tests/unit/submit/test_select.py": [
+                "test_select_records_the_ticked_ids_once",
+                "test_missing_starts_selection_warn_hours_before_the_deadline",
+                "test_count_and_set_both_wrong_say_slots_then_differs",
+            ],
+            "tests/unit/submit/test_sync.py": [
+                "test_sync_verdict_counts_cli_warnings_and_warns_every_time",
+            ],
+            "tests/unit/submit/test_actions.py": [
+                "test_upload_counts_the_warnings_of_the_pre_sync_and_the_read_back_once",
+            ],
+            "tests/unit/train/test_run.py": [
+                "test_train_run_aborts_before_any_write_when_a_run_disk_is_low",
+                "test_a_badbit_child_on_a_low_disk_fails_with_low_disk",
+                "test_a_child_that_ran_out_of_disk_fails_with_disk_full",
+                "test_vcp_that_cannot_write_its_console_stops_the_child_and_aborts",
+            ],
+            "tests/unit/train/test_status.py": [
+                "test_status_lists_leftover_tmp_files_in_the_run_and_beside_checkpoints",
+            ],
+            "tests/unit/core/test_atomic.py": [
+                "test_a_failed_replace_keeps_the_old_file_whole_and_no_temp",
+                "test_windows_retries_a_shared_target_then_replaces",
+            ],
+        },
+    ),
 ]
 
 

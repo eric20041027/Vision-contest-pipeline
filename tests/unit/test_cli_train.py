@@ -209,6 +209,38 @@ def test_train_upload_and_status_cli(roots, tmp_path):
     assert r.exit_code == 1 and "run=ghost" in _verdict(r.output)
 
 
+def test_train_status_cli_prints_tmp(roots, tmp_path):
+    """5.5: a leftover `.tmp` beside a checkpoint is a WARN with its path and size, in the human
+    lines and in --json; the field is always printed, so `tmp=0` is a statement, not a silence."""
+    seed_det(roots)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_text(FAKE, encoding="utf-8")
+    assert _run(work, "--seed", "1", "--upload", str(tmp_path / "vault")).exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    assert r.exit_code == 0, r.output
+    assert "tmp=0" in _verdict(r.output) and "status=OK" in _verdict(r.output)
+
+    leftover = work / "weights" / "resume.pth.tmp"
+    leftover.write_bytes(b"x" * 10)
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "tmp=1" in v and "status=WARN" in v
+    assert "tmp: " in r.output and "(10 bytes)" in r.output
+
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--json"])
+    assert r.exit_code == 0, r.output
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert doc["fields"]["tmp"] == 1 and doc["result"]["tmp"][0]["bytes"] == 10
+    assert doc["result"]["tmp"][0]["path"].endswith("weights/resume.pth.tmp")
+    assert leftover.is_file()  # read-only: listing a leftover never deletes it
+
+    leftover.unlink()
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    assert "tmp=0" in _verdict(r.output) and "status=OK" in _verdict(r.output)
+
+
 def test_upload_and_status_have_no_configs_root_option(roots, tmp_path):
     """5-8: both declared `--configs-root` and never read it -- they take a run id and a data
     root, nothing that lives under configs/. An option that does nothing is worse than absent."""

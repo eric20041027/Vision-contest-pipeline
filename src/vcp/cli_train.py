@@ -249,6 +249,8 @@ def status_cmd(
             "running": st.running,
             "evidence": len(current(st.record.evidence)),
             "labels": labels_field(st.record.evidence),
+            # 5.5: leftover `*.tmp` files; always reported, > 0 is a WARN (also while running).
+            "tmp": len(st.tmp),
         }
         if verify:
             fields["drift"] = len(st.drift)
@@ -264,13 +266,15 @@ def status_cmd(
         human += [f"superseded: {p}" for p in st.superseded]
         human += [f"missing: {p}" for p in st.missing]
         human += [f"drift: {p}" for p in st.drift]
-        warn = bool(st.unbacked or st.missing or st.drift or st.running)
+        human += [f"tmp: {t.path} ({t.bytes} bytes)" for t in st.tmp]
+        warn = bool(st.unbacked or st.missing or st.drift or st.running or st.tmp)
         payload = {
             **st.record.model_dump(mode="json"),
             "drift": st.drift,
             "missing": st.missing,
             "unbacked": st.unbacked,
             "superseded": st.superseded,
+            "tmp": [{"path": t.path, "bytes": t.bytes} for t in st.tmp],
         }
         return ("WARN" if warn else "OK"), fields, payload, human
 

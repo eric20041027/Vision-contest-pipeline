@@ -27,7 +27,7 @@ from vcp.submit.actions import record, score, upload
 from vcp.submit.adopt import adopt
 from vcp.submit.final import final, lock, unlock
 from vcp.submit.profile import init_profile, load_profile
-from vcp.submit.report import report
+from vcp.submit.report import StatusView, report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
 from vcp.submit.select import differs_line, select, selection_lines
@@ -633,6 +633,66 @@ def unlock_cmd(
     run_command("submit.unlock", json_mode, data_root, fn, context={"dataset": dataset})
 
 
+def _status_fields(dataset: str, ledger: str, st: StatusView) -> dict[str, FieldValue]:
+    """The VERDICT fields of ``submit status``, in the order they are printed."""
+    fields: dict[str, FieldValue] = {
+        "dataset": dataset,
+        "staged": st.staged,
+        "uploaded": st.uploaded,
+        "foreign": st.foreign,
+        "ledger": ledger,
+    }
+    if st.quota is None:
+        fields["quota"] = "none"
+    else:
+        fields.update(st.quota.fields())
+    if st.deadline_in_hours is not None:
+        fields["deadline_in"] = round(st.deadline_in_hours, 1)
+    fields["locked"] = st.locked is not None
+    fields["current"] = st.current or "none"
+    fields["unscored"] = len(st.unscored)
+    fields["errored"] = len(st.errored)
+    fields["selected"] = "none" if st.selection.chosen is None else len(st.selection.chosen)
+    fields["selection"] = st.selection.words
+    return fields
+
+
+def _status_warns(st: StatusView) -> bool:
+    """Whether ``submit status`` is a WARN: no quota, none left, a deadline under a day away, a
+    lock, an unscored upload, or a selection that is not as it should be. Spec 2026-10-09 §4.3:
+    errored is a finished state, so it never WARNs here."""
+    return (
+        st.quota is None
+        or st.quota.remaining == 0
+        or (st.deadline_in_hours is not None and st.deadline_in_hours < 24)
+        or st.locked is not None
+        or bool(st.unscored)
+        or st.selection.warns
+    )
+
+
+def _status_lines(st: StatusView) -> list[str]:
+    human = [f"unscored: {sid}" for sid in st.unscored]
+    human += [f"errored: {sid}" for sid in st.errored]
+    human += selection_lines(st.selection)
+    human += [f"provenance: {sid}={g}" for sid, g in st.provenance.items()]
+    return human
+
+
+def _status_payload(st: StatusView) -> dict[str, object]:
+    return {
+        "quota": None if st.quota is None else st.quota.fields(),
+        "current": st.current,
+        "unscored": st.unscored,
+        "errored": st.errored,
+        "selection": st.selection.to_json(),
+        "provenance": st.provenance,
+        "locked": None
+        if st.locked is None
+        else st.locked.model_dump(mode="json", exclude_none=True),
+    }
+
+
 @submit_app.command("status")
 def status_cmd(
     dataset: DatasetOpt,
@@ -644,47 +704,13 @@ def status_cmd(
 
     def fn() -> CmdResult:
         st = status_view(dataset, data_root=data_root, configs_root=configs_root)
-        fields: dict[str, FieldValue] = {
-            "dataset": dataset,
-            "staged": st.staged,
-            "uploaded": st.uploaded,
-            "foreign": st.foreign,
-            "ledger": ledger_mode(dataset, data_root=data_root, configs_root=configs_root),
-        }
-        warn = False
-        if st.quota is None:
-            fields["quota"] = "none"
-            warn = True
-        else:
-            fields.update(st.quota.fields())
-            warn = warn or st.quota.remaining == 0
-        if st.deadline_in_hours is not None:
-            fields["deadline_in"] = round(st.deadline_in_hours, 1)
-            warn = warn or st.deadline_in_hours < 24
-        fields["locked"] = st.locked is not None
-        fields["current"] = st.current or "none"
-        fields["unscored"] = len(st.unscored)
-        fields["errored"] = len(st.errored)
-        fields["selected"] = "none" if st.selection.chosen is None else len(st.selection.chosen)
-        fields["selection"] = st.selection.words
-        # spec 2026-10-09 §4.3: errored is a finished state, so it never WARNs here
-        warn = warn or st.locked is not None or bool(st.unscored) or st.selection.warns
-        human = [f"unscored: {sid}" for sid in st.unscored]
-        human += [f"errored: {sid}" for sid in st.errored]
-        human += selection_lines(st.selection)
-        human += [f"provenance: {sid}={g}" for sid, g in st.provenance.items()]
-        payload = {
-            "quota": None if st.quota is None else st.quota.fields(),
-            "current": st.current,
-            "unscored": st.unscored,
-            "errored": st.errored,
-            "selection": st.selection.to_json(),
-            "provenance": st.provenance,
-            "locked": None
-            if st.locked is None
-            else st.locked.model_dump(mode="json", exclude_none=True),
-        }
-        return ("WARN" if warn else "OK"), fields, payload, human
+        ledger = ledger_mode(dataset, data_root=data_root, configs_root=configs_root)
+        return (
+            ("WARN" if _status_warns(st) else "OK"),
+            _status_fields(dataset, ledger, st),
+            _status_payload(st),
+            _status_lines(st),
+        )
 
     run_command("submit.status", json_mode, data_root, fn, context={"dataset": dataset})
 

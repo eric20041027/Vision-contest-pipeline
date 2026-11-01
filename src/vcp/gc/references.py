@@ -3,10 +3,11 @@ reference, read from the records themselves and never from the provenance index.
 
 The walk is backup's: ``vcp.backup.evidence.Collector`` with a ``ReferenceRecorder`` in place of
 the hashing one, so a reference is the path, the role, the conclusion it serves and whatever sha
-and size a record already vouches for -- nothing is hashed. Each walk unit (a run, a dataset, a
-backup manifest, an artifact) is a transaction: a unit that cannot be read is taken back whole,
-named in ``skipped``, and the files it would have referenced may then be reported as
-unreferenced -- which is why ``skipped`` makes a scan WARN.
+and size a record already vouches for -- nothing is hashed. Each walk unit (a run, a judgement,
+a submission, a dataset's own files, an image root, a backup manifest, an artifact) is a
+transaction: a unit that cannot be read is taken back alone, named in ``skipped``, and the files
+it would have referenced may then be reported as unreferenced -- which is why ``skipped`` makes
+a scan WARN.
 """
 
 from __future__ import annotations
@@ -249,13 +250,28 @@ def _dataset_paths(col: Collector, name: str) -> DatasetPaths:
     return DatasetPaths.resolve(name, data_root=col.data_root, configs_root=col.configs_root)
 
 
-def _walk_dataset(col: Collector, recorder: ReferenceRecorder, name: str) -> None:
-    """The dataset's own files, its judgements and submissions, and its image root: one unit, so
-    a card that does not load leaves none of them behind."""
-    dpaths = _dataset_paths(col, name)
-    col.walk_all(dpaths, split=True)
+def _walk_dataset(col: Collector, recorder: ReferenceRecorder, name: str) -> bool:
+    """The dataset's runs, judgements, submissions and own files, each a unit of
+    ``Collector.walk_all`` that is taken back alone when it fails. Nothing is taken back here:
+    what escapes ``walk_all`` comes from the code between its units (listing the runs and
+    preregs, looking for ``submit.yaml``), so every reference already recorded belongs to a
+    unit that completed. Returns whether the dataset was read whole."""
+    before = len(col.skipped)
+    try:
+        col.walk_all(_dataset_paths(col, name), split=True)
+    except recorder.tolerates as e:
+        col.skipped.append(f"datasets:{name}: {e}")
+        return False
+    own_files = f"dataset:{name}: "
+    return not any(entry.startswith(own_files) for entry in col.skipped[before:])
+
+
+def _walk_image_root(col: Collector, recorder: ReferenceRecorder, name: str) -> None:
+    """The one thing the dataset card is read for. A card that does not load costs this
+    directory and nothing else."""
     card = Dataset.load_card(name, data_root=col.data_root, configs_root=col.configs_root)
-    recorder.add_dir(dpaths.resolve_image_root(card), "image_root", f"dataset:{name}")
+    image_root = _dataset_paths(col, name).resolve_image_root(card)
+    recorder.add_dir(image_root, "image_root", f"dataset:{name}")
 
 
 def _walk_manifest(col: Collector, name: str, manifest_id: str) -> None:
@@ -307,7 +323,7 @@ def collect_references(data_root: Path, configs_root: Path) -> References:
     col = Collector(data_root, configs_root, recorder=recorder)
     counts = dict.fromkeys(COUNTED, 0)
 
-    def unit(label: str, counter: str | None, walk: Callable[..., None], *args: object) -> None:
+    def unit(label: str, counter: str | None, walk: Callable[..., None], *args: object) -> bool:
         done = False
 
         def body() -> None:
@@ -318,6 +334,7 @@ def collect_references(data_root: Path, configs_root: Path) -> References:
         col.attempt(label, body)
         if done and counter is not None:
             counts[counter] += 1
+        return done
 
     run_dirs = _read_run_dirs(data_root)
     for card in sorted(runs_root(data_root).glob("*/run.yaml"), key=_parent_name):
@@ -325,7 +342,10 @@ def collect_references(data_root: Path, configs_root: Path) -> References:
         unit(f"run:{run_id}", "runs", _walk_run, col, recorder, run_id)
     for card in sorted((configs_root / "datasets").glob("*/dataset.yaml"), key=_parent_name):
         name = card.parent.name
-        unit(f"dataset:{name}", "datasets", _walk_dataset, col, recorder, name)
+        walked = _walk_dataset(col, recorder, name)
+        rooted = unit(f"image_root:{name}", None, _walk_image_root, col, recorder, name)
+        if walked and rooted:
+            counts["datasets"] += 1
         for manifest in sorted((card.parent / "backup").glob("*.json"), key=lambda p: p.stem):
             label = f"backup:{name}/{manifest.stem}"
             unit(label, "backup_manifests", _walk_manifest, col, name, manifest.stem)

@@ -19,7 +19,7 @@ from vcp.backup.push import push
 from vcp.backup.schema import RemoteCopy
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import VcpError
-from vcp.core.paths import artifact_dir
+from vcp.core.paths import DatasetPaths, artifact_dir
 from vcp.data.dataset import Dataset
 from vcp.gc.references import Reference, ReferenceRecorder, collect_references, path_key
 from vcp.measure.runs import run_dir, save_run
@@ -207,25 +207,72 @@ def test_a_failed_submission_unit_leaves_no_referrer_behind(world, monkeypatch):
     assert refs.skipped == ["submission:beach-test/S1: boom"]
 
 
-def test_a_broken_dataset_card_skips_its_dataset_whole(world):
-    """The dataset is one unit: its own files, its judgements and submissions, and its image
-    root. A card that does not load takes all of them back and says which dataset it was."""
-    paths = world.pair.test_paths
+@pytest.mark.parametrize(
+    ("dataset", "kept"),
+    [
+        (TEST, "submission:beach-test/S1#stage"),
+        (EVAL, "judgement:beach/p-good#prereg"),
+    ],
+)
+def test_a_broken_dataset_card_keeps_what_its_submissions_and_judgements_referenced(
+    world, dataset, kept
+):
+    """The card is read for the image root alone, in a unit of its own: when it does not load,
+    only the image root is lost. What the dataset's submissions and judgements already
+    referenced stays, and `skipped` names the unit and the dataset."""
+    paths = world.pair.test_paths if dataset == TEST else world.pair.eval_paths
     paths.card_yaml.write_bytes(b"name: [unclosed\n")
+    path = stage_json(paths, "S1") if dataset == TEST else paths.prereg_dir / "p-good.yaml"
 
     refs = _collect(world)
 
-    assert [s for s in _labels(refs) if s.startswith("dataset:")] == ["dataset:beach-test"]
+    assert kept in _referrers(refs, path)
+    assert [s for s in _labels(refs) if dataset in s] == [f"image_root:{dataset}"]
+    assert not any(path_key(d).endswith("raw" + os.sep + dataset) for d in refs.dirs)
     assert refs.counts["datasets"] == 1
+
+
+def test_a_walk_that_escapes_keeps_what_its_completed_units_recorded(world, monkeypatch):
+    """Only code outside every unit can escape `walk_all`; what the units before it recorded
+    is a finished fact, so it is named in `skipped` and nothing is taken back."""
+    real = DatasetPaths.submit_yaml
+
+    def submit_yaml(self):
+        if self.name == EVAL:
+            raise PermissionError(13, "denied")
+        return real.fget(self)
+
+    monkeypatch.setattr(DatasetPaths, "submit_yaml", property(submit_yaml))
+
+    refs = _collect(world)
+
+    assert refs.skipped == [f"datasets:{EVAL}: [Errno 13] denied"]
+    prereg = world.pair.eval_paths.prereg_dir / "p-good.yaml"
+    assert "judgement:beach/p-good#prereg" in _referrers(refs, prereg)
     assert not any(
-        r.startswith(("dataset:beach-test#", "submission:beach-test/"))
-        for f in refs.files.values()
-        for r in f.referrers
+        r.startswith(f"dataset:{EVAL}#") for f in refs.files.values() for r in f.referrers
     )
-    assert path_key(stage_json(paths, "S1")) not in refs.files
-    assert "run:good.test#run_card" in _referrers(
-        refs, run_dir(world.roots.data, "good.test") / "run.yaml"
+    assert "dataset:beach-test#samples" in _referrers(refs, world.pair.test_paths.samples_jsonl)
+    assert refs.counts["datasets"] == 1
+
+
+def test_the_own_files_of_a_dataset_are_a_unit_that_does_not_cost_the_rest(world, monkeypatch):
+    real = Collector.dataset_basics
+
+    def dataset_basics(self, dpaths, plan_id, conclusion):
+        if plan_id is None:  # the dataset's own files; a run or submission names its plan
+            raise OSError("boom")
+        real(self, dpaths, plan_id, conclusion)
+
+    monkeypatch.setattr(Collector, "dataset_basics", dataset_basics)
+
+    refs = _collect(world)
+
+    assert sorted(_labels(refs)) == ["dataset:beach", "dataset:beach-test"]
+    assert "submission:beach-test/S1#stage" in _referrers(
+        refs, stage_json(world.pair.test_paths, "S1")
     )
+    assert refs.counts["datasets"] == 0
 
 
 def test_unreadable_run_cards_are_skipped_once(world, monkeypatch):

@@ -279,3 +279,55 @@ def test_without_a_recorder_backup_still_stops_on_what_it_never_tolerated(world,
     col = Collector(world.roots.data, world.roots.configs)
     with pytest.raises(OSError, match="disk went away"):
         col.walk_all(_paths(world, TEST))
+
+
+def _dataset_files_fail(monkeypatch):
+    """``Collector.dataset_basics`` raises for the dataset's own files (they name no plan) and
+    does its work for a run or a submission that names the dataset."""
+    real = Collector.dataset_basics
+
+    def dataset_basics(self, dpaths, plan_id, conclusion):
+        if plan_id is None:  # the dataset's own files; a run or submission names its plan
+            raise OSError("boom")
+        real(self, dpaths, plan_id, conclusion)
+
+    monkeypatch.setattr(Collector, "dataset_basics", dataset_basics)
+
+
+def test_split_makes_the_dataset_own_files_a_unit_that_keeps_the_units_before_it(
+    world, monkeypatch
+):
+    _dataset_files_fail(monkeypatch)
+    col = Collector(world.roots.data, world.roots.configs, recorder=(book := _Book()))
+
+    col.walk_all(_paths(world, TEST), split=True)
+
+    assert col.skipped == ["dataset:beach-test: boom"]
+    assert "submission:beach-test/S1" in book.conclusions()
+    assert "run:good.test" in book.conclusions()
+    assert not any(c.startswith("dataset:") for c in book.conclusions())
+
+
+@pytest.mark.parametrize("recorder", [True, False])
+def test_without_split_the_dataset_own_files_stay_outside_any_attempt(world, monkeypatch, recorder):
+    _dataset_files_fail(monkeypatch)
+    col = Collector(world.roots.data, world.roots.configs, recorder=_Book() if recorder else None)
+    with pytest.raises(OSError, match="boom"):
+        col.walk_all(_paths(world, TEST))
+
+
+@pytest.mark.parametrize(("conclusion", "dataset"), [("all", EVAL), ("all", TEST)])
+def test_a_card_that_does_not_parse_is_still_just_a_file_to_backup(world, conclusion, dataset):
+    """Backup lists ``dataset.yaml`` as bytes and never parses it: a broken card changes
+    nothing about the manifest or what it skips (locked before the dataset's own files became
+    a unit of their own under ``split``)."""
+    card = _paths(world, dataset).card_yaml
+    card.write_bytes(b"name: [unclosed\n")
+
+    res = build_manifest(dataset, conclusion, manifest_id="broken", **_kw(world))
+
+    assert res.skipped == [] and res.unlisted == []
+    cards = [f for f in res.manifest.files if f.role == "dataset_card"]
+    assert [f.sha256 for f in cards if f.path.endswith(f"{dataset}/dataset.yaml")] == [
+        sha256_file(card)
+    ]

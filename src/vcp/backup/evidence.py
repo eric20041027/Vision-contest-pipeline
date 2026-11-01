@@ -374,8 +374,9 @@ class Collector:
     def walk_all(self, dpaths: DatasetPaths, *, split: bool = False) -> None:
         """Every conclusion this dataset still has. Backup lists them all under ``all``. With
         ``split`` each walk unit is its own conclusion -- ``run:<id>``, ``judgement:<name>/<pid>``,
-        ``submission:<name>/<sid>`` and ``dataset:<name>`` for the dataset's own files -- so a
-        recorder can tell which unit a file belongs to; the machine-wide logs are left out."""
+        ``submission:<name>/<sid>`` and ``dataset:<name>`` for the dataset's own files, which
+        are an attempt of their own -- so a recorder can tell which unit a file belongs to; the
+        machine-wide logs are left out."""
         name = dpaths.name
 
         def conclusion_of(label: str) -> str:
@@ -397,6 +398,18 @@ class Collector:
             label = f"submissions:{name}" if split else "submissions"
             self.attempt(label, self._walk_submissions, dpaths, None if split else "all")
         own = conclusion_of(f"dataset:{name}")
+        if split:
+            # a unit of its own, so a failure here is told apart from the units above and takes
+            # back none of them; backup keeps the block outside any attempt, as it always has
+            self.attempt(f"dataset:{name}", self._own_files, dpaths, own)
+        else:
+            self._own_files(dpaths, own)
+            for p in sorted(logs_dir(self.data_root).glob("vcp-*.jsonl")):
+                self.add(p, "logs", own)
+
+    def _own_files(self, dpaths: DatasetPaths, own: str) -> None:
+        """The dataset's own files: card, plans, unseal logs, measure ledgers, samples and the
+        raw manifest."""
         self.dataset_basics(dpaths, None, own)
         if dpaths.splits_dir.is_dir():
             for p in sorted(dpaths.splits_dir.glob("*.json")):
@@ -408,9 +421,6 @@ class Collector:
             self.add(dpaths.samples_jsonl, "samples", own)
         if dpaths.raw_manifest.is_file():
             self.add(dpaths.raw_manifest, "raw_manifest", own)
-        if not split:
-            for p in sorted(logs_dir(self.data_root).glob("vcp-*.jsonl")):
-                self.add(p, "logs", own)
 
     def _walk_submissions(self, dpaths: DatasetPaths, conclusion: str | None) -> None:
         """Every staged id of the ledger submit.yaml names, read without its lock (spec

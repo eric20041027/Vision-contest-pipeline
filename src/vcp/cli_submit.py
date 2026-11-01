@@ -30,7 +30,7 @@ from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import StatusView, report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
-from vcp.submit.select import differs_line, select, selection_lines
+from vcp.submit.select import differs_line, select, selection_lines, unticked_line
 from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
 
@@ -537,7 +537,10 @@ def final_cmd(
                 f"{res.needs_reupload}; {res.resend}"
             )
         if res.selection is not None:
-            human.append(differs_line(res.chosen, res.recorded or []))
+            if res.recorded == []:  # nothing ticked: no two sides to set against each other
+                human.append(unticked_line(res.chosen, res.recorded_at or ""))
+            else:
+                human.append(differs_line(res.chosen, res.recorded or [], res.resolved))
         if res.next_step is not None:
             human.append(f"next: {res.next_step}")
         warn = bool(res.unranked or res.needs_reupload or res.warnings or res.selection)

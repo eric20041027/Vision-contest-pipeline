@@ -742,6 +742,28 @@ def test_status_cli_prints_selected_and_selection_and_warns(roots):
     assert "selection:" not in r.output
 
 
+def test_status_cli_after_none_prints_selected_0_and_unticked(roots):
+    """spec 2026-11-01 §3.5: an empty selection counts as 0 entries, says ``unticked`` and does
+    not WARN by itself; ``--json`` carries ``resolved: []``."""
+    _best_board(
+        roots,
+        staged_row("S1"),
+        uploaded_row("S1", stamp()),
+        _scored_row("S1", 0.5),
+        selected_row([]),
+        final_slots=1,
+        quota=Quota(per_day=5),
+    )
+    base = ["submit", "status", "--dataset", "beach-test"]
+    r = runner.invoke(app, base)
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selected=0" in v and "selection=unticked" in v
+    r = runner.invoke(app, [*base, "--json"])
+    doc = _json(r)
+    assert doc["result"]["selection"]["resolved"] == []
+
+
 def test_status_cli_on_a_last_board_never_warns_about_the_selection(roots):
     _best_board(
         roots,
@@ -804,6 +826,64 @@ def test_final_and_report_cli_render_the_selection(roots, monkeypatch):
     )
     r_report = runner.invoke(app, ["submit", "report", "--dataset", "beach-test", "--json"])
     assert _json(r_report)["result"]["rows"][0]["selected"] is True
+
+
+def test_final_cli_says_nothing_ticked(roots, monkeypatch):
+    from vcp import cli_submit
+    from vcp.submit.final import FinalResult, next_step_hint
+
+    profile, _ = _best_board(roots)
+    result = FinalResult(
+        final_row(["S1"], 1),
+        ["S1"],
+        [],
+        None,
+        [],
+        True,
+        selection="differs",
+        recorded=[],
+        resolved=[],
+        recorded_at=STAMP,
+        next_step=next_step_hint(profile, ["S1"]),
+    )
+    monkeypatch.setattr(cli_submit, "final", lambda *a, **k: result)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=WARN" in v and "selection=differs" in v
+    assert (
+        f"selection: final chose S1; nothing ticked (recorded {STAMP}): "
+        "the platform picks by its own rule"
+    ) in r.output
+    assert "recorded -" not in r.output  # not the two-sided sentence
+
+
+def test_final_cli_diffs_the_resolved_labels_and_prints_the_recorded_entries(roots, monkeypatch):
+    from vcp import cli_submit
+    from vcp.submit.final import FinalResult
+
+    _best_board(roots)
+    result = FinalResult(
+        final_row(["S1", "S3"], 2),
+        ["S1", "S3"],
+        [],
+        None,
+        [],
+        True,
+        selection="differs",
+        recorded=["S1@7", "S2"],
+        resolved=["S1", "S2"],
+        recorded_at=STAMP,
+    )
+    monkeypatch.setattr(cli_submit, "final", lambda *a, **k: result)
+    monkeypatch.setattr(cli_submit, "ledger_mode", lambda *a, **k: "configs")
+    r = runner.invoke(app, ["submit", "final", "--dataset", "beach-test"])
+    assert r.exit_code == 0, r.output
+    assert (
+        "selection: final chose S1,S3; recorded S1@7,S2 "
+        "(not selected: S3; selected, not final: S2)" in r.output
+    )
 
 
 def test_final_cli_without_a_differing_selection_has_no_selection_field(roots, monkeypatch):

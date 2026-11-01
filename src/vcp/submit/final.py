@@ -26,6 +26,7 @@ from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.location import transaction
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
+from vcp.submit.select import resolve
 from vcp.submit.stage import load_staged
 
 NOT_RANKED = ("probe", "not_uploaded")
@@ -91,10 +92,15 @@ class FinalResult:
     written: bool
     resend: str | None = None  # how to send needs_reupload again (resend_hint)
     # board_rule=best only (spec 2026-10-30 §3.5): "differs" when a recorded selection is not
-    # this choice, with that selection's labels; the next step to take on the platform
+    # this choice, with that selection's entries as recorded (``[]``: nothing ticked); the next
+    # step to take on the platform
     selection: str | None = None
     recorded: list[str] | None = None
     next_step: str | None = None
+    # with "differs" (spec 2026-11-01 §3.5): the labels of ``recorded``, same order, and the
+    # moment it was recorded
+    resolved: list[str] | None = None
+    recorded_at: str | None = None
 
 
 def resend_hint(profile: PlatformProfile, submission_id: str) -> str:
@@ -119,13 +125,17 @@ def next_step_hint(profile: PlatformProfile, chosen: list[str]) -> str:
     return f"select {c} on the platform, then: {record}"
 
 
-def _differing_selection(ledger: SubmissionLedger, chosen: list[str]) -> list[str] | None:
-    """The labels of the newest ``selected`` row when they are not ``chosen`` (as sets: the
+def _differing_selection(ledger: SubmissionLedger, chosen: list[str]) -> LedgerRow | None:
+    """The newest ``selected`` row when it is not ``chosen``: it ticked nothing, or the labels of
+    its entries (``S1@7`` is S1, spec 2026-11-01 §3.1) are not the chosen ones (as sets: the
     platform's selection has no order); None when there is no such row or it is the same."""
     selected = ledger.latest_selected()
-    if selected is None or set(selected.chosen or ()) == set(chosen):
+    if selected is None:
         return None
-    return list(selected.chosen or ())
+    entries = selected.chosen or []
+    if entries and {resolve(ledger, e).label for e in entries} == set(chosen):
+        return None
+    return selected
 
 
 @contextmanager
@@ -304,17 +314,39 @@ def _reupload_target(
     return chosen[0] if last is None or last.submission_id != chosen[0] else None
 
 
+@dataclass(frozen=True)
+class _BoardSelection:
+    """What ``final`` says about the selection: all None under any board but ``best``."""
+
+    selection: str | None = None
+    recorded: list[str] | None = None
+    resolved: list[str] | None = None
+    recorded_at: str | None = None
+    next_step: str | None = None
+
+
 def _board_selection(
     profile: PlatformProfile, ledger: SubmissionLedger, chosen: list[str]
-) -> tuple[str | None, list[str] | None, str | None]:
-    """``board_rule=best`` only: ``("differs", recorded, next step)`` or ``(None, None, next
-    step)`` (spec 2026-10-30 §3.5); all None under any other rule."""
+) -> _BoardSelection:
+    """``board_rule=best`` only: the next step, and ``selection="differs"`` with the recorded
+    entries, their labels and when they were recorded if the newest ``selected`` row is not this
+    choice (spec 2026-10-30 §3.5, 2026-11-01 §3.5)."""
     if profile.board_rule != "best":
-        return None, None, None
+        return _BoardSelection()
     # read before the rows below; a recorded selection that is not this choice is only said,
     # never acted on, and the ``final`` row does not depend on it
-    recorded = _differing_selection(ledger, chosen)
-    return (None if recorded is None else "differs"), recorded, next_step_hint(profile, chosen)
+    row = _differing_selection(ledger, chosen)
+    next_step = next_step_hint(profile, chosen)
+    if row is None:
+        return _BoardSelection(next_step=next_step)
+    recorded = list(row.chosen or [])
+    return _BoardSelection(
+        selection="differs",
+        recorded=recorded,
+        resolved=[resolve(ledger, e).label for e in recorded],
+        recorded_at=row.ts,
+        next_step=next_step,
+    )
 
 
 def _final_row(
@@ -365,7 +397,7 @@ def _final_locked(
     entries, params, chosen = _rank_candidates(paths, profile, ledger, eval_paths, n, configs_root)
     unranked = [e.submission_id for e in entries if not e.eligible and e.why not in NOT_RANKED]
     needs_reupload = _reupload_target(profile, ledger, chosen)
-    selection, recorded, next_step = _board_selection(profile, ledger, chosen)
+    board = _board_selection(profile, ledger, chosen)
     row = _final_row(profile, profile_sha, eval_paths, entries, params, chosen, n)
     if not dry_run:
         ledger.append(row)
@@ -379,9 +411,11 @@ def _final_locked(
         warnings=warnings,
         written=not dry_run,
         resend=resend,
-        selection=selection,
-        recorded=recorded,
-        next_step=next_step,
+        selection=board.selection,
+        recorded=board.recorded,
+        next_step=board.next_step,
+        resolved=board.resolved,
+        recorded_at=board.recorded_at,
     )
 
 

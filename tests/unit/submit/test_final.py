@@ -413,6 +413,36 @@ def test_final_on_best_prints_next_and_warns_only_when_the_recorded_selection_di
     assert done.row.model_dump_json(exclude={"ts"}) == dry.row.model_dump_json(exclude={"ts"})
 
 
+def test_final_compares_labels_and_an_empty_selection_differs(uploaded):
+    _best(uploaded)
+    plain = final(TEST, dry_run=True, **_kw(uploaded))
+    led = SubmissionLedger(uploaded.test_paths.submissions_log)
+    led.append(selected_row(["S1@7"]))  # the same label as the choice: one shot of S1
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert res.selection is None and res.recorded is None
+    other = selected_row(["S2@9"])  # recorded as said; compared as the label S2
+    led.append(other)
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert (res.selection, res.recorded, res.resolved, res.recorded_at) == (
+        "differs",
+        ["S2@9"],
+        ["S2"],
+        other.ts,
+    )
+    sel = selected_row([])  # nothing ticked is a selection that is not the choice
+    led.append(sel)
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert (res.selection, res.recorded, res.resolved, res.recorded_at) == (
+        "differs",
+        [],
+        [],
+        sel.ts,
+    )
+    assert res.row.model_dump_json(exclude={"ts"}) == plain.row.model_dump_json(
+        exclude={"ts"}
+    )  # golden
+
+
 def test_final_on_last_has_no_next_step_and_no_selection(uploaded):
     _measure_holdout(uploaded, "good")
     _measure_holdout(uploaded, "bad")

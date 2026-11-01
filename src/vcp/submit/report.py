@@ -21,7 +21,7 @@ from vcp.submit.ledger import SubmissionLedger, assign_scores
 from vcp.submit.location import read_only
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
-from vcp.submit.select import SelectionState, label, selection_state
+from vcp.submit.select import Resolved, SelectionState, label, resolve, selection_state
 from vcp.submit.stage import load_staged
 
 # assign_scores moved to vcp.submit.ledger (final needs it too); still importable from here
@@ -119,6 +119,12 @@ def status(
     )
 
 
+def _is_marked(marks: list[Resolved], name: str, ref: str | None) -> bool:
+    """Whether an entry names this arrival: its label, and when the entry says which shot, the
+    platform ref of this one."""
+    return any(m.label == name and (m.ref is None or m.ref == ref) for m in marks)
+
+
 @dataclass(frozen=True)
 class ReportRow:
     submission_id: str
@@ -131,8 +137,9 @@ class ReportRow:
     shift: float | None
     # our upload whose outcome is an errored row; a foreign row never is (spec 2026-10-09 §4.4)
     errored: bool = False
-    # the label is in the newest ``selected`` row: every upload of a selected id is marked,
-    # whatever the board rule (spec 2026-10-30 §3.5)
+    # an entry of the newest ``selected`` row names this shot: ``<id>`` marks every upload of the
+    # id, ``<id>@<ref>`` (or a bound ``foreign:<ref>``) only the one carrying that ref, and an
+    # empty selection marks none; whatever the board rule (spec 2026-11-01 §3.5)
     selected: bool = False
 
 
@@ -149,17 +156,19 @@ def report(
     params_hash = params_key(effective_params(get_metric(profile.metric), profile.metric_params))
     readings = ReadingsLedger(eval_paths.measure_dir / READINGS_LEDGER)
     latest_selected = ledger.latest_selected()
-    chosen = set(latest_selected.chosen or ()) if latest_selected is not None else set()
+    marks = [resolve(ledger, e) for e in (latest_selected.chosen or ())] if latest_selected else []
     rows: list[ReportRow] = []
     prev_public: float | None = None
     for r in ledger.arrivals():
         errored = False
         if r.event == "foreign":
             kind, public, private, sealed = "foreign", r.public, r.private, None
+            ref = r.platform_ref
         else:
             st = ledger.staged(str(r.submission_id))
             kind = str(st.kind) if st is not None else "?"
             outcome = _outcome(ledger, r)
+            ref = r.platform_ref or (outcome.platform_ref if outcome is not None else None)
             errored = outcome is not None and outcome.event == "errored"
             scored = _score(outcome)
             public = scored.public if scored is not None else None
@@ -183,7 +192,7 @@ def report(
                 private,
                 shift,
                 errored,
-                name in chosen,
+                _is_marked(marks, name, ref),
             )
         )
         prev_public = public

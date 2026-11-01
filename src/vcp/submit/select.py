@@ -1,9 +1,9 @@
 """What was ticked as the final submissions on the platform, and whether the record can be
 trusted (spec 2026-10-30 §3.4). ``selection_state`` is the one judgement ``status`` and ``select``
-read (``report`` and ``final`` read the newest ``selected`` row themselves); ``selection_lines``
-and ``differs_line`` are the sentences that say it. Only a ``best`` board has a selection to
-check: a ``last`` board takes the final submission by itself, so its ``words`` are always
-``none`` (controller ruling C1)."""
+read (``report`` and ``final`` read the newest ``selected`` row themselves); ``selection_lines``,
+``differs_line`` and ``unticked_line`` are the sentences that say it. Only a ``best`` board has a
+selection to check: a ``last`` board takes the final submission by itself, so its ``words`` are
+always ``none`` (controller ruling C1)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from vcp.submit.location import transaction
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile
 
-NO_WARNING = ("none", "ok")  # the ``words`` that need nothing said
+NO_WARNING = ("none", "ok", "unticked")  # the ``words`` that need nothing said
 # ``selection_warn_hours`` only has to be finite and >= 0, but a deadline minus 1e10 hours is out
 # of range for ``datetime``; a hundred years before the deadline is "always" for any contest.
 MAX_SELECTION_WARN_HOURS = 24 * 365 * 100
@@ -73,14 +73,17 @@ def resolve(ledger: SubmissionLedger, entry: str) -> Resolved:
 
 @dataclass(frozen=True)
 class SelectionState:
-    chosen: list[str] | None  # the newest ``selected`` row's labels
+    chosen: list[str] | None  # the newest ``selected`` row's entries, as recorded
     recorded_at: str | None  # that row's ``ts``
-    words: str  # none | ok | missing | slots | differs, the last three joined by commas
+    # none | ok | missing | unticked | slots | differs; unticked, slots and differs may be joined
+    # by commas (``unticked,differs``, ``slots,differs``)
+    words: str
     expected: int  # how many labels the platform takes of the entries there are
     final: list[str] | None  # the newest ``final`` row's choice
     due_at: str | None  # from when a missing selection warns
     slots: int  # the final slots in force
     deadline: str | None
+    resolved: list[str] | None = None  # ``chosen``'s labels, same order; None without a row
 
     @property
     def warns(self) -> bool:
@@ -95,6 +98,7 @@ class SelectionState:
             "expected": self.expected,
             "final": self.final,
             "due_at": self.due_at,
+            "resolved": self.resolved,
         }
 
 
@@ -122,19 +126,24 @@ def _due(
 
 def _words(
     profile: PlatformProfile,
-    chosen: list[str] | None,
+    resolved: list[str] | None,
     final: list[str] | None,
     expected: int,
     due: bool,
 ) -> str:
+    """``resolved`` is the newest ``selected`` row's labels (None: no row). Several shots of one
+    upload are one submission, so ``slots`` counts distinct labels; an empty selection is a
+    decision (the platform picks by its own rule), so it is never ``slots``."""
     if profile.board_rule != "best":
         return "none"
-    if chosen is None:
+    if resolved is None:
         return "missing" if due else "none"
+    if not resolved:
+        return "unticked,differs" if final is not None else "unticked"
     words: list[str] = []
-    if len(chosen) != expected:
+    if len(set(resolved)) != expected:
         words.append("slots")
-    if final is not None and set(chosen) != set(final):
+    if final is not None and set(resolved) != set(final):
         words.append("differs")
     return ",".join(words) or "ok"
 
@@ -144,6 +153,7 @@ def selection_state(
 ) -> SelectionState:
     selected, final_row = ledger.latest_selected(), ledger.latest_final()
     chosen, final = _labels(selected), _labels(final_row)
+    resolved = None if chosen is None else [resolve(ledger, e).label for e in chosen]
     slots = final_row.slots if final_row and final_row.slots is not None else profile.final_slots
     entries = len({label(r) for r in ledger.arrivals()})
     expected = max(1, min(slots, entries))
@@ -151,12 +161,13 @@ def selection_state(
     return SelectionState(
         chosen=chosen,
         recorded_at=selected.ts if selected else None,
-        words=_words(profile, chosen, final, expected, due),
+        words=_words(profile, resolved, final, expected, due),
         expected=expected,
         final=final,
         due_at=due_at,
         slots=slots,
         deadline=profile.deadline,
+        resolved=resolved,
     )
 
 
@@ -164,32 +175,53 @@ def _join(labels: list[str]) -> str:
     return ",".join(labels) or "-"
 
 
-def differs_line(final: list[str], recorded: list[str]) -> str:
-    """The two sides of a selection that is not what ``final`` chose; an empty side is ``-``."""
-    left_out = [x for x in final if x not in recorded]
-    extra = [x for x in recorded if x not in final]
+def _distinct(labels: list[str]) -> list[str]:
+    return list(dict.fromkeys(labels))
+
+
+def differs_line(final: list[str], recorded: list[str], resolved: list[str] | None = None) -> str:
+    """The two sides of a selection that is not what ``final`` chose; an empty side is ``-``.
+    The sides are compared as labels (``resolved``, the labels of ``recorded`` in the same
+    order; ``recorded`` itself when not given), each listed once; ``recorded`` is printed as the
+    ledger holds it."""
+    labels = recorded if resolved is None else resolved
+    left_out = [x for x in _distinct(final) if x not in labels]
+    extra = [x for x in _distinct(labels) if x not in final]
     return (
         f"selection: final chose {_join(final)}; recorded {_join(recorded)} "
         f"(not selected: {_join(left_out)}; selected, not final: {_join(extra)})"
     )
 
 
+def unticked_line(final: list[str], recorded_at: str) -> str:
+    """What ``final`` chose against a selection that ticked nothing."""
+    return (
+        f"selection: final chose {_join(final)}; nothing ticked (recorded {recorded_at}): "
+        "the platform picks by its own rule"
+    )
+
+
 def selection_lines(state: SelectionState) -> list[str]:
     """One line per word of a state that warns, in the order of ``words``; none for a state that
-    needs nothing said."""
+    needs nothing said. ``unticked,differs`` is one line: with nothing ticked there is no set to
+    take apart."""
     lines: list[str] = []
     for word in state.words.split(",") if state.warns else ():
         if word == "missing":
             since = f"warning since {state.due_at}"
             when = f"deadline {state.deadline}" if state.deadline else "no deadline"
             lines.append(f"selection: missing ({when}, {since})")
+        elif word == "unticked":
+            lines.append(unticked_line(state.final or [], state.recorded_at or ""))
         elif word == "slots":
-            lines.append(
-                f"selection: {len(state.chosen or [])} recorded, {state.expected} expected "
-                f"(slots={state.slots})"
+            chosen = state.chosen or []
+            distinct = len(set(chosen if state.resolved is None else state.resolved))
+            count = f"{len(chosen)} recorded" + (
+                f" ({distinct} distinct)" if distinct != len(chosen) else ""
             )
-        elif word == "differs":
-            lines.append(differs_line(state.final or [], state.chosen or []))
+            lines.append(f"selection: {count}, {state.expected} expected (slots={state.slots})")
+        elif word == "differs" and state.chosen:
+            lines.append(differs_line(state.final or [], state.chosen, state.resolved))
     return lines
 
 

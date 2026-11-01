@@ -25,6 +25,7 @@ from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile
 from vcp.submit.select import (
     Resolved,
+    SelectionState,
     differs_line,
     label,
     parse_entry,
@@ -32,6 +33,7 @@ from vcp.submit.select import (
     select,
     selection_lines,
     selection_state,
+    unticked_line,
 )
 
 NOW = parse_stamp("2026-10-20T00:00:00.000Z")
@@ -61,6 +63,11 @@ def _profile(**over) -> PlatformProfile:
 def up(*sids):
     """Our uploads, one an hour apart, the last five hours before NOW at the earliest."""
     return [uploaded_row(sid, _at(-5 + i)) for i, sid in enumerate(sids)]
+
+
+def up_refs(*pairs):
+    """Our uploads with a platform ref, ``(id, ref)`` pairs, timed as ``up`` times them."""
+    return [uploaded_row(sid, _at(-5 + i), ref=ref) for i, (sid, ref) in enumerate(pairs)]
 
 
 @pytest.mark.parametrize(
@@ -115,6 +122,7 @@ def test_a_selection_equal_to_final_with_the_right_count_is_ok(tmp_path):
         "expected": 2,
         "final": ["S1", "S2"],
         "due_at": fin.ts,
+        "resolved": ["S2", "S1"],
     }
     assert not st.warns
 
@@ -430,3 +438,90 @@ def test_select_survives_a_huge_warn_window(roots):
     out = select(TEST, ["S1", "S2"], **_kw(roots))
     assert out.written and out.state.due_at is not None
     assert _events(paths).count("selected") == 1
+
+
+def test_nothing_ticked_is_unticked_and_warns_only_against_a_final(tmp_path):
+    rows = [*up("S1", "S2"), sel := selected_row([])]
+    st = selection_state(ledger_of(tmp_path / "a", *rows), _profile(deadline=_at(-1)), NOW)
+    assert (st.words, st.warns, st.chosen, st.resolved) == ("unticked", False, [], [])
+    assert selection_lines(st) == []
+    st2 = selection_state(
+        ledger_of(tmp_path / "b", *rows, final_row(["S1", "S2"], 2)), _profile(), NOW
+    )
+    assert st2.words == "unticked,differs" and st2.warns
+    assert selection_lines(st2) == [
+        f"selection: final chose S1,S2; nothing ticked (recorded {sel.ts}): "
+        "the platform picks by its own rule"
+    ]
+    last = selection_state(
+        ledger_of(tmp_path / "c", *rows, final_row(["S1", "S2"], 2)),
+        _profile(board_rule="last"),
+        NOW,
+    )
+    assert last.words == "none" and last.chosen == [] and last.resolved == []
+
+
+def test_ticking_two_shots_of_one_id_counts_one_submission(tmp_path):
+    base = [*up_refs(("S1", "1"), ("S1", "2"), ("S3", "3")), final_row(["S1", "S3"], 2)]
+    ok = selection_state(
+        ledger_of(tmp_path / "a", *base, selected_row(["S3@3", "S1@1"])), _profile(), NOW
+    )
+    assert ok.words == "ok" and ok.resolved == ["S3", "S1"] and ok.chosen == ["S3@3", "S1@1"]
+    assert selection_lines(ok) == []
+    st = selection_state(
+        ledger_of(tmp_path / "b", *base, selected_row(["S1@1", "S1@2"])), _profile(), NOW
+    )
+    assert st.words == "slots,differs" and selection_lines(st) == [
+        "selection: 2 recorded (1 distinct), 2 expected (slots=2)",
+        "selection: final chose S1,S3; recorded S1@1,S1@2 "
+        "(not selected: S3; selected, not final: -)",
+    ]
+
+
+def test_a_foreign_ref_later_bound_to_our_upload_is_read_as_that_id(tmp_path):
+    t = _at(-5)
+    ledger = ledger_of(
+        tmp_path,
+        uploaded_row("S1", t),
+        foreign_row("k9", _at(-5 + 1 / 60)),
+        scored_row("S1", at=_at(-5 + 1 / 60), ref="k9"),
+        final_row(["S1"], 1),
+        selected_row(["foreign:k9"]),
+    )
+    st = selection_state(ledger, _profile(), NOW)  # 0.16.0 said differs
+    assert st.words == "ok" and st.resolved == ["S1"] and st.to_json()["resolved"] == ["S1"]
+
+
+def test_a_state_without_resolved_reads_as_its_chosen_labels():
+    st = SelectionState(
+        chosen=["S1", "S2"], recorded_at=STAMP, words="slots", expected=1,
+        final=None, due_at=None, slots=1, deadline=None,
+    )  # fmt: skip
+    assert st.resolved is None and selection_lines(st) == [
+        "selection: 2 recorded, 1 expected (slots=1)"
+    ]
+
+
+def test_differs_line_compares_labels_and_prints_the_recorded_entries():
+    assert differs_line(["S1", "S3"], ["S1@1", "S1@2"], ["S1", "S1"]) == (
+        "selection: final chose S1,S3; recorded S1@1,S1@2 "
+        "(not selected: S3; selected, not final: -)"
+    )
+    assert differs_line(["S1"], ["S2@4", "S2@5", "foreign:x7"], ["S2", "S2", "foreign:x7"]) == (
+        "selection: final chose S1; recorded S2@4,S2@5,foreign:x7 "
+        "(not selected: S1; selected, not final: S2,foreign:x7)"
+    )
+    assert differs_line(["S1"], ["foreign:k9"]) == (  # no labels given: the entries themselves
+        "selection: final chose S1; recorded foreign:k9 "
+        "(not selected: S1; selected, not final: foreign:k9)"
+    )
+
+
+def test_unticked_line_names_the_final_choice_and_the_record_time():
+    assert unticked_line(["S1", "S2"], "2026-10-20T00:00:00.000Z") == (
+        "selection: final chose S1,S2; nothing ticked (recorded 2026-10-20T00:00:00.000Z): "
+        "the platform picks by its own rule"
+    )
+    assert unticked_line([], "T") == (
+        "selection: final chose -; nothing ticked (recorded T): the platform picks by its own rule"
+    )

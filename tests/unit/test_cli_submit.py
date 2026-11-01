@@ -614,6 +614,7 @@ def test_select_cli_verdict_json_and_blanks(roots):
         "expected",
         "final",
         "due_at",
+        "resolved",
     }
     r = runner.invoke(app, [*base, "--record", "S1", "--message", "web"])
     v = _verdict(r.output)
@@ -673,6 +674,7 @@ def test_status_cli_prints_selected_and_selection_and_warns(roots):
         "expected",
         "final",
         "due_at",
+        "resolved",
     }
     assert doc["result"]["selection"]["words"] == "missing"
     SubmissionLedger(paths.submissions_log).append(selected_row(["S1"]))

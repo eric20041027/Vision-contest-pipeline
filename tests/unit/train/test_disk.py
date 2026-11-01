@@ -340,9 +340,13 @@ def test_console_marker_answers_none_and_warns_when_the_console_cannot_be_read(
 def test_console_marker_answers_none_without_a_warning_for_a_console_that_is_not_there(
     tmp_path, vcp_log
 ):
-    """No console is nothing to diagnose, not a failure to read one."""
-    assert console_marker(tmp_path / "missing.log") is None
-    assert [r for r in vcp_log.records if r.levelno >= logging.WARNING] == []
+    """No console is nothing to diagnose, not a failure to read one: a DEBUG line, no more."""
+    missing = tmp_path / "missing.log"
+
+    assert console_marker(missing) is None
+
+    (record,) = [r for r in vcp_log.records if r.name == "vcp.train.disk"]
+    assert record.levelno == logging.DEBUG and missing.as_posix() in record.getMessage()
 
 
 def test_a_tail_that_starts_inside_a_multibyte_character_still_reads(tmp_path):

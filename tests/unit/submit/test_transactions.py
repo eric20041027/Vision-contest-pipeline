@@ -235,6 +235,25 @@ def test_select_aborts_while_another_process_holds_the_ledger(roots, monkeypatch
     assert not paths.submissions_log.exists()
 
 
+def test_select_with_bad_input_still_waits_for_the_lock(roots, monkeypatch):
+    """spec 2026-11-01 §3.2: every check runs inside the transaction, so input that is wrong
+    on its face (both --record and --none) is an ABORT ``locked:`` while another process holds
+    the ledger, not a FAIL ``invalid:`` from before the lock."""
+    paths = _paths(roots)
+    dump_yaml_model(_profile(), paths.submit_yaml)
+    monkeypatch.setattr(lockmod, "WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(lockmod, "RETRY_SECONDS", 0.05)
+    proc, pid = _hold(ledger_lock_file(paths, paths.submissions_log), paths.submissions_log)
+    try:
+        r = runner.invoke(app, ["submit", "select", "--dataset", TEST, "--record", "S1", "--none"])
+    finally:
+        _release(proc)
+    v = _verdict(r.output)
+    assert r.exit_code == 2 and "status=ABORT" in v and "locked:" in v, r.output
+    assert "invalid:" not in v and f"held by test.holder (pid {pid} on " in v
+    assert not paths.submissions_log.exists()
+
+
 def test_a_sync_that_cannot_take_the_lock_carries_no_cli_warnings(roots, monkeypatch):
     """spec 2026-11-01 §4.2: the lock is taken before the list is read, so a sync that never got
     it has no warning count to report (it starts green: it locks the 0.16.0 VERDICT)."""

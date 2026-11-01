@@ -225,69 +225,167 @@ def selection_lines(state: SelectionState) -> list[str]:
     return lines
 
 
+def owned_note(entry: str, submission_id: str) -> str:
+    """The sentence for a ``foreign:<ref>`` entry whose ref is one of our own uploads: recorded
+    as said, read as the id (spec 2026-11-01 §3.2)."""
+    return f"note: {entry} is {submission_id}'s upload; it is read as {submission_id}"
+
+
 @dataclass(frozen=True)
 class SelectOutcome:
     row: LedgerRow  # the newest ``selected`` row: the one written, or the one already there
     written: bool
     state: SelectionState
+    notes: tuple[str, ...] = ()  # ``owned_note`` for each foreign entry of ``row`` that is ours
 
 
-def _check_entries(ledger: SubmissionLedger, entries: list[str]) -> None:
-    """Refuse the first thing the platform could not have been asked to select: nothing, an
-    entry twice, an id vcp never staged or never uploaded, a foreign ref the ledger never saw.
-    Nothing is written before every entry has passed."""
-    if not entries:
+def _normal(entry: str) -> str:
+    """One ``--record`` item as it is compared and written: outer spaces gone and, for
+    ``<id>@<ref>``, the spaces around the ``@``. A bare id and a ``foreign:`` ref are left as
+    they are (``parse_entry`` strips neither), so the CLI split and this agree."""
+    entry = entry.strip()
+    submission_id, ref = parse_entry(entry)
+    if submission_id is None or ref is None:
+        return entry
+    return f"{submission_id}{REF_SEPARATOR}{ref}"
+
+
+def _is_ref_entry(entry: str) -> bool:
+    """An ``<id>@<ref>`` entry: a ``foreign:`` ref may hold an ``@``, an id never does."""
+    return not entry.startswith(FOREIGN_PREFIX) and REF_SEPARATOR in entry
+
+
+def _check_shape(entries: list[str], *, none: bool) -> None:
+    """The ``invalid:`` checks that read nothing but the text, in the order the person meets
+    them: nothing given, an ``@`` with an empty side, an entry twice, an id both alone and with
+    a ref, a platform ref named twice (spec 2026-11-01 §3.2)."""
+    if not none and not entries:
         raise ValidationFailed("invalid: --record needs at least one id or foreign:<ref>")
+    for entry in entries:
+        submission_id, ref = parse_entry(entry)
+        if _is_ref_entry(entry) and not (submission_id and ref):
+            raise ValidationFailed(
+                f"invalid: --record entry '{entry}' needs an id before @ and a platform ref "
+                "after it"
+            )
     seen: set[str] = set()
     for entry in entries:
         if entry in seen:
             raise ValidationFailed(f"invalid: --record names {entry} twice")
         seen.add(entry)
-    foreign = ledger.foreign_refs()
+    alone = {e for e in entries if not e.startswith(FOREIGN_PREFIX) and not _is_ref_entry(e)}
     for entry in entries:
-        fields = {"id": entry}
-        if entry.startswith(FOREIGN_PREFIX):
-            if entry.removeprefix(FOREIGN_PREFIX) not in foreign:
-                raise ValidationFailed(
-                    f"not_found: {entry} is not a foreign upload in the ledger", fields=fields
-                )
-        elif ledger.staged(entry) is None:
-            raise ValidationFailed(f"not_staged: '{entry}' has no staged row", fields=fields)
-        elif not ledger.uploads(entry):
+        submission_id, _ = parse_entry(entry)
+        if _is_ref_entry(entry) and submission_id in alone:
             raise ValidationFailed(
-                f"not_uploaded: '{entry}' has no uploaded row; the platform cannot select it",
-                fields=fields,
+                f"invalid: --record names {submission_id} both alone and as "
+                f"{submission_id}{REF_SEPARATOR}<ref>: record the id, or each of its uploads"
             )
+    refs: set[str] = set()
+    for entry in entries:
+        ref = parse_entry(entry)[1]
+        if ref is None:
+            continue
+        if ref in refs:
+            raise ValidationFailed(f"invalid: --record names the platform ref {ref} twice")
+        refs.add(ref)
+
+
+def _first_owner(
+    ledger: SubmissionLedger, ref: str, *, other_than: str | None = None
+) -> str | None:
+    """The first id, in sorted order, with an upload carrying ``ref``; None if none does."""
+    ids = {
+        r.submission_id for r in ledger.rows if r.submission_id and r.submission_id != other_than
+    }
+    return next((i for i in sorted(ids) if ref in ledger.refs_of(i)), None)
+
+
+def _check_foreign(ledger: SubmissionLedger, entry: str, ref: str) -> None:
+    if ref in ledger.foreign_refs():
+        return
+    said = f"not_found: {entry} is not a foreign upload in the ledger"
+    owner = _first_owner(ledger, ref)
+    if owner is not None:
+        said += f"; it is {owner}'s upload: record it as {owner}{REF_SEPARATOR}{ref}"
+    raise ValidationFailed(said, fields={"id": entry})
+
+
+def _check_ours(ledger: SubmissionLedger, entry: str, submission_id: str, ref: str | None) -> None:
+    fields = {"id": entry}
+    if ledger.staged(submission_id) is None:
+        raise ValidationFailed(f"not_staged: '{submission_id}' has no staged row", fields=fields)
+    if not ledger.uploads(submission_id):
+        raise ValidationFailed(
+            f"not_uploaded: '{submission_id}' has no uploaded row; the platform cannot select it",
+            fields=fields,
+        )
+    if ref is None or ref in ledger.refs_of(submission_id):
+        return
+    said = f"not_found: {entry}: no upload of {submission_id} carries the platform ref {ref}"
+    other = _first_owner(ledger, ref, other_than=submission_id)
+    if other is not None:
+        said += f"; {ref} is {other}'s upload"
+    raise ValidationFailed(said, fields=fields)
+
+
+def _check_entries(ledger: SubmissionLedger, entries: list[str], *, none: bool) -> None:
+    """Refuse the first thing the platform could not have been asked to select: nothing, an
+    entry twice, an id vcp never staged or never uploaded, a ref that is not that id's upload,
+    a foreign ref the ledger never saw. Nothing is written before every entry has passed."""
+    _check_shape(entries, none=none)
+    for entry in entries:
+        submission_id, ref = parse_entry(entry)
+        if submission_id is None:
+            _check_foreign(ledger, entry, ref or "")
+        else:
+            _check_ours(ledger, entry, submission_id, ref)
+
+
+def _owned_notes(ledger: SubmissionLedger, row: LedgerRow) -> tuple[str, ...]:
+    """A ``note:`` for each ``foreign:<ref>`` entry of ``row`` whose ref is one of our own
+    uploads, in the row's order."""
+    owners = ledger.owners()
+    notes = []
+    for entry in row.chosen or ():
+        submission_id, ref = parse_entry(entry)
+        if submission_id is None and ref in owners:
+            notes.append(owned_note(entry, owners[ref or ""]))
+    return tuple(notes)
 
 
 def select(
     dataset: str,
-    entries: list[str],
+    entries: list[str] | None,
     *,
+    none: bool = False,
     message: str | None = None,
     data_root: Path | None = None,
     configs_root: Path | None = None,
 ) -> SelectOutcome:
     """Write down what was ticked on the platform (spec 2026-10-30 §3.2): one ``selected`` row,
-    unless the newest one already names the same set. It records a fact about the platform, as
+    unless the newest one already names the same set. ``entries`` is ``--record`` (``None``:
+    not given) and ``none`` is ``--none``: exactly one of them (spec 2026-11-01 §3.2, §3.3);
+    ``none`` writes the empty set, nothing ticked. It records a fact about the platform, as
     ``sync`` and ``score`` do: it is not stopped by ``lock`` or by the deadline, never calls the
     platform, and a count or a choice that looks wrong is written and then warned about, because
-    the ledger must say what the platform holds even when that is a mistake."""
+    the ledger must say what the platform holds even when that is a mistake. Every check runs
+    inside the transaction, after the lock is taken and the ledger read."""
     paths = DatasetPaths.resolve(dataset, data_root=data_root, configs_root=configs_root)
     profile, _ = load_profile(paths)
     with transaction(paths, profile, command="submit.select") as ledger:
-        _check_entries(ledger, entries)
+        if (entries is None) == (not none):
+            raise ValidationFailed("invalid: give exactly one of --record and --none")
+        chosen = [] if entries is None else [_normal(e) for e in entries]
+        _check_entries(ledger, chosen, none=none)
         latest = ledger.latest_selected()
-        if latest is not None and set(latest.chosen or ()) == set(entries):
+        if latest is not None and set(latest.chosen or ()) == set(chosen):
             row, written = latest, False
         else:
             row = LedgerRow(
-                event="selected",
-                ts=stamp(),
-                source="manual",
-                chosen=list(entries),
-                message=message,
+                event="selected", ts=stamp(), source="manual", chosen=chosen, message=message
             )
             ledger.append(row)
             written = True
-        return SelectOutcome(row, written, selection_state(ledger, profile, utc_now()))
+        state = selection_state(ledger, profile, utc_now())
+        return SelectOutcome(row, written, state, _owned_notes(ledger, row))

@@ -28,6 +28,7 @@ from vcp.submit.select import (
     SelectionState,
     differs_line,
     label,
+    owned_note,
     parse_entry,
     resolve,
     select,
@@ -525,3 +526,201 @@ def test_unticked_line_names_the_final_choice_and_the_record_time():
     assert unticked_line([], "T") == (
         "selection: final chose -; nothing ticked (recorded T): the platform picks by its own rule"
     )
+
+
+# --- select --none and --record <id>@<ref> (spec 2026-11-01 §3.2, §3.3) ---
+
+T0, T1, T2, T3 = _at(-5), _at(-4), _at(-3), _at(-1)
+T2_PLUS = stamp(parse_stamp(T2) + timedelta(minutes=1))
+
+
+def _shots(roots, *extra: LedgerRow, **over):
+    """S1 S2 S3 staged; S1 uploaded twice (refs 11 and 12), S2 once with no ref on the upload
+    row, its platform copy k9 foreign and tied to S2 only by a score; 77 is a teammate's."""
+    return seed_ledger(
+        roots,
+        _profile(**over),
+        staged_row("S1"),
+        staged_row("S2"),
+        staged_row("S3"),
+        uploaded_row("S1", T0, ref="11"),
+        uploaded_row("S1", T1, ref="12"),
+        uploaded_row("S2", T2),
+        foreign_row("k9", T2_PLUS),
+        scored_row("S2", at=T2_PLUS, ref="k9"),
+        foreign_row("77", T3),
+        *extra,
+    )
+
+
+def test_select_none_writes_an_empty_selection_once_even_after_the_lock(roots):
+    _shots(roots, final_row(["S1"], 1), LedgerRow(event="lock", ts=stamp(), reason="final"))
+    out = select(TEST, None, none=True, message="let the platform pick", **_kw(roots))
+    assert out.written and out.row.chosen == [] and out.row.message == "let the platform pick"
+    assert (out.row.event, out.row.source) == ("selected", "manual")
+    assert out.state.words == "unticked,differs"
+    assert not select(TEST, None, none=True, **_kw(roots)).written
+    later = select(TEST, ["S1@11"], **_kw(roots))  # the newest row is the selection again
+    assert later.written and later.state.chosen == ["S1@11"] and later.state.words == "ok"
+
+
+def test_select_none_without_a_final_is_unticked_and_does_not_warn(roots):
+    _shots(roots)
+    out = select(TEST, None, none=True, **_kw(roots))
+    assert out.written and out.state.words == "unticked" and not out.state.warns
+
+
+@pytest.mark.parametrize(("entries", "none"), [(["S1"], True), ([], True), (None, False)])
+def test_record_and_none_are_exactly_one(roots, entries, none):
+    paths = _shots(roots)
+    before = paths.submissions_log.read_bytes()
+    with pytest.raises(ValidationFailed, match="^invalid: give exactly one") as ei:
+        select(TEST, entries, none=none, **_kw(roots))
+    assert "--record and --none" in str(ei.value)
+    assert paths.submissions_log.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        ["S1@"],
+        ["@11"],
+        ["S1 @ "],
+        ["S1", "S1@11"],
+        ["S1@11", "S1"],
+        ["S1@11", "foreign:11"],
+        ["foreign:k9", "S2@k9"],
+        ["S1@11", "S2@11"],
+        ["S1@11", "S1@ 11"],
+    ],
+)
+def test_select_refuses_a_malformed_ref_entry(roots, entries):
+    paths = _shots(roots)
+    before = paths.submissions_log.read_bytes()
+    with pytest.raises(ValidationFailed, match="^invalid:"):
+        select(TEST, entries, **_kw(roots))
+    assert paths.submissions_log.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("entries", "says"),
+    [
+        (["S1@"], "entry 'S1@' needs an id before @ and a platform ref after it"),
+        (["@11"], "entry '@11' needs an id before @ and a platform ref after it"),
+        (["S1@11", "S1@ 11"], "names S1@11 twice"),
+        (["S1", "S1@11"], "names S1 both alone and as S1@<ref>: record the id, or each of its"),
+        (["S1@11", "foreign:11"], "names the platform ref 11 twice"),
+        (["S1@11", "S2@11"], "names the platform ref 11 twice"),
+    ],
+)
+def test_the_invalid_checks_say_which_rule_the_input_broke(roots, entries, says):
+    _shots(roots)
+    with pytest.raises(ValidationFailed, match="^invalid:") as ei:
+        select(TEST, entries, **_kw(roots))
+    assert says in str(ei.value)
+
+
+def test_the_invalid_checks_run_in_the_documented_order(roots):
+    _shots(roots)
+    with pytest.raises(ValidationFailed, match="needs an id before @"):
+        select(TEST, ["S1", "S1", "S2@"], **_kw(roots))
+    with pytest.raises(ValidationFailed, match="names S1 twice"):
+        select(TEST, ["S1", "S1", "S1@11"], **_kw(roots))
+    with pytest.raises(ValidationFailed, match="both alone and as"):
+        select(TEST, ["S1", "S1@11", "S2@11"], **_kw(roots))
+    with pytest.raises(ValidationFailed, match="^invalid: --record needs at least one"):
+        select(TEST, [], **_kw(roots))
+
+
+def test_a_ref_entry_names_one_shot_of_its_id(roots):
+    paths = _shots(roots)
+    out = select(TEST, ["S1@12", "S2@k9"], **_kw(roots))  # k9 is only on a scored row
+    assert out.row.chosen == ["S1@12", "S2@k9"] and out.state.resolved == ["S1", "S2"]
+    assert select(TEST, ["S1"], **_kw(roots)).written  # more precise: written
+    assert select(TEST, ["S1@11"], **_kw(roots)).written
+    assert _events(paths).count("selected") == 3
+
+
+@pytest.mark.parametrize(
+    ("entry", "word", "says"),
+    [
+        ("S1@k9", "not_found:", "S1@k9: no upload of S1 carries the platform ref k9; k9 is S2's"),
+        ("S1@zz", "not_found:", "S1@zz: no upload of S1 carries the platform ref zz"),
+        ("S3@1", "not_uploaded:", None),
+        ("S9@1", "not_staged:", None),
+        ("foreign:11", "not_found:", "it is S1's upload: record it as S1@11"),
+        ("foreign:zz", "not_found:", "foreign:zz is not a foreign upload in the ledger"),
+    ],
+)
+def test_a_ref_entry_that_is_not_that_ids_upload_fails(roots, entry, word, says):
+    paths = _shots(roots)
+    before = paths.submissions_log.read_bytes()
+    with pytest.raises(ValidationFailed, match=f"^{word}") as ei:
+        select(TEST, [entry], **_kw(roots))
+    assert ei.value.fields["id"] == entry and (says is None or says in str(ei.value))
+    if entry == "foreign:zz":
+        assert "record it as" not in str(ei.value)
+    assert paths.submissions_log.read_bytes() == before
+
+
+def test_a_ref_that_two_ids_carry_is_named_with_the_first_id_in_sorted_order(roots):
+    seed_ledger(
+        roots,
+        _profile(),
+        staged_row("S1"),
+        staged_row("S2"),
+        staged_row("S3"),
+        uploaded_row("S3", T0, ref="dup"),
+        uploaded_row("S2", T1, ref="dup"),
+        uploaded_row("S1", T2),
+    )
+    with pytest.raises(ValidationFailed, match="^not_found:") as ei:
+        select(TEST, ["S1@dup"], **_kw(roots))
+    assert "dup is S2's upload" in str(ei.value)
+
+
+def test_the_first_failing_ref_entry_in_input_order_is_named(roots):
+    _shots(roots)
+    with pytest.raises(ValidationFailed, match="^not_found:") as ei:
+        select(TEST, ["S1@11", "S2@zz", "S1@yy"], **_kw(roots))
+    assert ei.value.fields["id"] == "S2@zz"
+
+
+def test_spaces_around_at_are_dropped_before_anything_is_compared(roots):
+    paths = _shots(roots)
+    assert select(TEST, ["S1 @ 11"], **_kw(roots)).row.chosen == ["S1@11"]
+    assert not select(TEST, ["S1@11"], **_kw(roots)).written
+    assert not select(TEST, ["  S1@11  "], **_kw(roots)).written
+    assert _events(paths).count("selected") == 1
+
+
+def test_a_foreign_ref_that_is_our_upload_is_recorded_with_a_note(roots):
+    _shots(roots)
+    out = select(TEST, ["foreign:k9"], **_kw(roots))
+    assert out.written and out.row.chosen == ["foreign:k9"] and out.state.resolved == ["S2"]
+    assert out.notes == ("note: foreign:k9 is S2's upload; it is read as S2",)
+    again = select(TEST, ["foreign:k9"], **_kw(roots))
+    assert not again.written and again.notes == out.notes  # not written, still said
+
+
+def test_a_teammates_foreign_ref_has_no_note_and_a_mixed_row_notes_in_row_order(roots):
+    _shots(roots, foreign_row("11", T0))  # S1's own upload 11, also written as a foreign row
+    out = select(TEST, ["foreign:77", "S1@11"], **_kw(roots))
+    assert out.written and out.notes == ()
+    out = select(TEST, ["foreign:k9", "foreign:77", "foreign:11"], **_kw(roots))
+    assert out.notes == (
+        "note: foreign:k9 is S2's upload; it is read as S2",
+        "note: foreign:11 is S1's upload; it is read as S1",
+    )
+    assert owned_note("foreign:k9", "S2") == "note: foreign:k9 is S2's upload; it is read as S2"
+
+
+def test_select_none_leaves_notes_empty(roots):
+    _shots(roots)
+    assert select(TEST, None, none=True, **_kw(roots)).notes == ()
+
+
+def test_two_shots_of_one_id_are_one_slot_and_the_same_set_final_chose(roots):
+    _shots(roots, final_row(["S1"], 1))
+    out = select(TEST, ["S1@11", "S1@12"], **_kw(roots))
+    assert out.state.resolved == ["S1", "S1"] and out.state.words == "ok"

@@ -12,7 +12,9 @@ from submit_fixtures import (
     OUTDATED_WARNING,
     STAMP,
     final_row,
+    foreign_row,
     make_pair,
+    scored_row,
     seed_ledger,
     selected_row,
     staged_row,
@@ -21,7 +23,7 @@ from submit_fixtures import (
 from vcp.cli import app
 from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.paths import DatasetPaths
-from vcp.core.time import stamp, utc_now
+from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.schema import LedgerRow, PlatformProfile, Quota
 
@@ -639,7 +641,62 @@ def test_select_cli_failure_keeps_the_dataset_and_writes_nothing(roots):
     r = runner.invoke(app, [*base, "--record", " , ,"])
     v = _verdict(r.output)
     assert r.exit_code == 1 and "invalid: --record needs at least one id" in v, r.output
+    r = runner.invoke(app, [*base, "--record", ""])  # given, and empty: not the same as absent
+    assert r.exit_code == 1 and "invalid: --record needs at least one id" in _verdict(r.output)
     assert paths.submissions_log.read_bytes() == before
+
+
+def test_select_cli_none_and_ref_entries(roots):
+    _, paths = _best_board(
+        roots, staged_row("S1"), uploaded_row("S1", stamp(), ref="11"), final_slots=1
+    )
+    base = ["submit", "select", "--dataset", "beach-test"]
+    r = runner.invoke(app, [*base, "--none"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "selected=0" in v and "selection=unticked" in v
+    assert "written=true" in v and "dataset=beach-test" in v
+    r = runner.invoke(app, [*base, "--none", "--json"])
+    doc = _json(r)
+    assert doc["fields"]["written"] is False and doc["result"]["chosen"] == []
+    assert doc["result"]["selection"]["resolved"] == [] and doc["result"]["event"] == "selected"
+    r = runner.invoke(app, [*base, "--record", "S1 @ 11", "--json"])
+    doc, v = _json(r), _verdict(r.output)
+    assert r.exit_code == 0 and doc["status"] == "OK", r.output
+    assert doc["result"]["chosen"] == ["S1@11"] and doc["result"]["selection"]["resolved"] == ["S1"]
+    assert "selected=1" in v and "selection=ok" in v and "written=true" in v
+    size = paths.submissions_log.stat().st_size
+    for args in (["--record", "S1", "--none"], []):
+        r = runner.invoke(app, [*base, *args])
+        v = _verdict(r.output)
+        assert r.exit_code == 1 and "status=FAIL" in v, r.output
+        assert "invalid: give exactly one of --record and --none" in v and "dataset=beach-test" in v
+    r = runner.invoke(app, [*base, "--record", "S1@12"])
+    assert r.exit_code == 1 and "not_found:" in _verdict(r.output), r.output
+    assert paths.submissions_log.stat().st_size == size
+
+
+def test_select_cli_prints_the_note_for_an_owned_foreign_ref(roots):
+    at = stamp()
+    near = stamp(parse_stamp(at) + timedelta(minutes=1))
+    _best_board(
+        roots,
+        staged_row("S1"),
+        uploaded_row("S1", at),
+        foreign_row("k9", near),
+        scored_row("S1", at=near, ref="k9"),
+        final_slots=1,
+    )
+    base = ["submit", "select", "--dataset", "beach-test"]
+    r = runner.invoke(app, [*base, "--record", "foreign:k9"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "note: foreign:k9 is S1's upload; it is read as S1" in r.output
+    assert "selection=ok" in v and "selected=1" in v and "note:" not in v
+    r = runner.invoke(app, [*base, "--record", "foreign:k9", "--json"])  # the note is a human line
+    doc = _json(r)
+    assert doc["result"]["chosen"] == ["foreign:k9"] and "note:" not in r.output
+    assert doc["result"]["selection"]["resolved"] == ["S1"] and doc["fields"]["written"] is False
 
 
 def _scored_row(sid: str, public: float) -> LedgerRow:

@@ -20,6 +20,7 @@ cannot write its own record inside ``train run``, ``own_writes`` turns that into
 from __future__ import annotations
 
 import errno
+import logging
 import math
 import os
 import shutil
@@ -33,6 +34,8 @@ from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.paths import store_path
 from vcp.core.time import stamp
 from vcp.train.schema import DiskCheck, DiskRole, DiskVolume
+
+log = logging.getLogger(__name__)
 
 GIB = 1024**3
 DEFAULT_MIN_FREE_GIB = 10.0
@@ -199,15 +202,26 @@ class DiskFailure:
 
 def console_marker(console: Path) -> str | None:
     """The first of ``DISK_FULL_MARKERS`` found in the last ``DISK_FULL_TAIL`` bytes of the
-    console, as the list writes it; None when none is there or the file is not. A tail that
-    starts inside a multi-byte character decodes with a replacement character, not an error."""
+    console, as the list writes it; None when none is there, or when the file could not be read
+    (the diagnosis is a best effort, so that is not an error: it is a WARNING naming the path and
+    the exception class; a console that does not exist is only a DEBUG line). A tail that starts
+    inside a multi-byte character decodes with a replacement character, not an error."""
     try:
         with console.open("rb") as f:
             size = f.seek(0, os.SEEK_END)
             f.seek(max(0, size - DISK_FULL_TAIL))
             tail = f.read()
-    except OSError:
-        return None  # nothing to read is no evidence; the diagnosis is a best effort
+    except FileNotFoundError:
+        log.debug("disk diagnosis: no console at %s", console.as_posix())
+        return None  # no console, nothing to diagnose
+    except OSError as e:
+        log.warning(
+            "disk diagnosis: could not read the console %s (%s); it is not checked for a "
+            "disk-full word",
+            console.as_posix(),
+            type(e).__name__,
+        )
+        return None  # unreadable is no evidence; the diagnosis is a best effort
     text = tail.decode("utf-8", errors="replace").casefold()
     return next((m for m in DISK_FULL_MARKERS if m.casefold() in text), None)
 

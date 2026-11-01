@@ -1,4 +1,5 @@
 import errno
+import logging
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,46 @@ def test_console_marker_reads_only_the_last_64_kib(tmp_path):
     assert console_marker(_log_bytes(tmp_path, word + b"x" * DISK_FULL_TAIL + b"\n" + word)) == (
         "No space left on device"
     )
+
+
+@pytest.fixture
+def vcp_log(caplog, monkeypatch):
+    """``setup_logging`` (any CLI test before this one) turns propagation off on the ``vcp``
+    logger; turn it back on so caplog sees the records."""
+    monkeypatch.setattr(logging.getLogger("vcp"), "propagate", True)
+    caplog.set_level(logging.DEBUG, logger="vcp")
+    return caplog
+
+
+def test_console_marker_answers_none_and_warns_when_the_console_cannot_be_read(
+    tmp_path, monkeypatch, vcp_log
+):
+    """The diagnosis stays a best effort (None), but a console that exists and could not be read
+    is said once, with its path and the exception class: 'no word found' and 'could not look'
+    are different findings."""
+    console = _log(tmp_path, "[Errno 28] No space left on device\n")
+    real = Path.open
+
+    def deny(self, *args, **kwargs):
+        if self == console:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny)
+
+    assert console_marker(console) is None
+
+    (record,) = [r for r in vcp_log.records if r.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING and record.name == "vcp.train.disk"
+    assert console.as_posix() in record.getMessage() and "PermissionError" in record.getMessage()
+
+
+def test_console_marker_answers_none_without_a_warning_for_a_console_that_is_not_there(
+    tmp_path, vcp_log
+):
+    """No console is nothing to diagnose, not a failure to read one."""
+    assert console_marker(tmp_path / "missing.log") is None
+    assert [r for r in vcp_log.records if r.levelno >= logging.WARNING] == []
 
 
 def test_a_tail_that_starts_inside_a_multibyte_character_still_reads(tmp_path):

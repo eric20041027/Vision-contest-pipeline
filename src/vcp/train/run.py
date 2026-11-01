@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,8 @@ from vcp.train.schema import (
     CheckpointRecord,
     ConfigRef,
     DiskCheck,
+    DiskRole,
+    EnvSnapshot,
     ExportRef,
     GitInfo,
     TrainRecord,
@@ -493,16 +496,52 @@ def _upload_all(
     return record, uploaded, verified, skipped
 
 
-def train_run(spec: RunSpec) -> RunResult:
-    paths = DatasetPaths.resolve(
-        spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
-    )
-    data_root, configs_root = paths.data_root, paths.configs_root
-    dataset_card = Dataset.load_card(
-        spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
-    )
-    plan = load_plan(paths, spec.plan_id)
-    assert_plan_matches(plan, dataset_card)
+@dataclass(frozen=True)
+class _Prepared:
+    """What ``train_run`` has checked and measured before its first write."""
+
+    data_root: Path
+    configs_root: Path
+    cwd: Path
+    run_root: Path
+    trained_on: list[str]
+    chash: str
+    python: Path | None
+    env: dict[str, str]
+    scope: RunScope
+    evidence: list[tuple[str, Path]]
+    card: RunCard
+    record: TrainRecord
+    created: bool  # a new run: its card is not on disk yet
+    disk_targets: list[tuple[DiskRole, Path]]
+    disk_check: DiskCheck
+
+
+@dataclass(frozen=True)
+class _Attempted:
+    """What one attempt left behind: the records after it, what it registered, and what is
+    worth a warning. ``uploaded``, ``verified`` and ``skipped`` are filled in by the uploads that
+    follow a finished attempt."""
+
+    record: TrainRecord
+    card: RunCard
+    attempt: Attempt
+    n: int
+    final: CheckpointRecord | None
+    registered: int
+    warnings: list[str]
+    git: GitInfo | None
+    git_changed: list[str]
+    changed: list[str]
+    disk_failure: DiskFailure | None
+    uploaded: int = 0
+    verified: int = 0
+    skipped: int = 0
+
+
+def _checked_cwd(spec: RunSpec) -> Path:
+    """The directory the command runs in, after the checks that need nothing else: there is a
+    command, ``--cwd`` is a directory, ``--min-free-gib`` is a number."""
     if not spec.command or spec.command[0].startswith("-"):
         raise ValidationFailed("a training command is required after -- (e.g. -- python train.py)")
     cwd = (spec.cwd or Path.cwd()).resolve()
@@ -512,24 +551,29 @@ def train_run(spec: RunSpec) -> RunResult:
     if not cwd.is_dir():
         raise ValidationFailed(f"not_found: --cwd {cwd} is not a directory")
     check_min_free_gib(spec.min_free_gib)
-    trained_on, refs = derive_trained_on(
-        spec.exports, spec.trained_on, card=dataset_card, plan=plan, data_root=data_root
-    )
-    chash = config_hash(spec.config, spec.command)
-    python = venv_python(spec.venv) if spec.venv is not None else None
-    env = child_env(spec, data_root=data_root, configs_root=configs_root, python=python)
-    if not command_found(spec.command[0], cwd, env.get("PATH")):
-        raise ValidationFailed(f"command not found: {spec.command[0]!r}")
-    scope = RunScope(
+    return cwd
+
+
+def _run_scope(spec: RunSpec, dataset_card: DatasetCard, trained_on: list[str]) -> RunScope:
+    return RunScope(
         run_id=spec.run_id,
         dataset=dataset_card.name,
         samples_hash=dataset_card.samples_hash,
         plan_id=spec.plan_id,
         trained_on=tuple(trained_on),
     )
-    evidence = preflight(data_root, scope, spec.evidence, spec.labels)
-    if spec.require_clean:
-        require_clean(cwd)  # VCP-041 (spec 2026-09-27 §4.1): still before the first write
+
+
+def _existing_or_new(
+    spec: RunSpec,
+    data_root: Path,
+    dataset_card: DatasetCard,
+    trained_on: list[str],
+    refs: list[ExportRef],
+    chash: str,
+    cwd: Path,
+) -> tuple[RunCard, TrainRecord, bool]:
+    """The card and record of the run being resumed, or of the new one (``created``)."""
     card, record = _existing(spec, data_root, dataset_card, trained_on, chash)
     created = card is None
     if card is None or record is None:
@@ -542,204 +586,338 @@ def train_run(spec: RunSpec) -> RunResult:
             chash=chash,
             cwd=cwd,
         )
-    # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
-    check_names([*record.evidence, *card.evidence], evidence, spec.labels)
-    # spec 2026-10-30 §5.1: the free space of every volume the run writes to, measured after the
-    # last input check and before vcp's first write -- `_close_running` below appends to
-    # train.log.jsonl, so an ABORT here leaves the record exactly as it was, `--resume` included.
-    run_root = run_dir(data_root, spec.run_id)
-    disk_targets = targets(run_root, cwd, _patterns(spec))
+    return card, record, created
+
+
+def _check_disk(
+    spec: RunSpec, data_root: Path, cwd: Path
+) -> tuple[list[tuple[DiskRole, Path]], DiskCheck]:
+    """spec 2026-10-30 §5.1: the free space of every volume the run writes to, measured after the
+    last input check and before vcp's first write -- ``_close_running`` appends to
+    train.log.jsonl, so an ABORT here leaves the record exactly as it was, ``--resume``
+    included. Returns what was measured, for the second look after a failed attempt."""
+    disk_targets = targets(run_dir(data_root, spec.run_id), cwd, _patterns(spec))
     disk_check = measure(disk_targets, min_free_gib=spec.min_free_gib, data_root=data_root)
     assert_room(disk_check)
+    return disk_targets, disk_check
+
+
+def _prepare(spec: RunSpec) -> _Prepared:
+    """Every check and measurement that comes before vcp's first write (module docstring)."""
+    paths = DatasetPaths.resolve(
+        spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
+    )
+    data_root, configs_root = paths.data_root, paths.configs_root
+    dataset_card = Dataset.load_card(
+        spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
+    )
+    plan = load_plan(paths, spec.plan_id)
+    assert_plan_matches(plan, dataset_card)
+    cwd = _checked_cwd(spec)
+    trained_on, refs = derive_trained_on(
+        spec.exports, spec.trained_on, card=dataset_card, plan=plan, data_root=data_root
+    )
+    chash = config_hash(spec.config, spec.command)
+    python = venv_python(spec.venv) if spec.venv is not None else None
+    env = child_env(spec, data_root=data_root, configs_root=configs_root, python=python)
+    if not command_found(spec.command[0], cwd, env.get("PATH")):
+        raise ValidationFailed(f"command not found: {spec.command[0]!r}")
+    scope = _run_scope(spec, dataset_card, trained_on)
+    evidence = preflight(data_root, scope, spec.evidence, spec.labels)
+    if spec.require_clean:
+        require_clean(cwd)  # VCP-041 (spec 2026-09-27 §4.1): still before the first write
+    card, record, created = _existing_or_new(
+        spec, data_root, dataset_card, trained_on, refs, chash, cwd
+    )
+    # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
+    check_names([*record.evidence, *card.evidence], evidence, spec.labels)
+    disk_targets, disk_check = _check_disk(spec, data_root, cwd)
+    return _Prepared(
+        data_root=data_root,
+        configs_root=configs_root,
+        cwd=cwd,
+        run_root=run_dir(data_root, spec.run_id),
+        trained_on=trained_on,
+        chash=chash,
+        python=python,
+        env=env,
+        scope=scope,
+        evidence=evidence,
+        card=card,
+        record=record,
+        created=created,
+        disk_targets=disk_targets,
+        disk_check=disk_check,
+    )
+
+
+def _start_attempt(
+    spec: RunSpec, p: _Prepared, record: TrainRecord, n: int
+) -> tuple[TrainRecord, Attempt]:
+    """spec 6.1 step 5: the first writes -- the config copy, the ``running`` attempt, the run card
+    of a new run, the record and the ``started`` event."""
+    train_dir(p.data_root, spec.run_id).mkdir(parents=True, exist_ok=True)
+    if spec.config is not None:
+        copy_rel = f"{TRAIN_DIR}/config.{n}{spec.config.suffix}"
+        shutil.copy2(spec.config, p.run_root / copy_rel)
+        config_ref = ConfigRef(
+            path=store_path(spec.config, p.data_root), sha256=p.chash, copied_to=copy_rel
+        )
+        record = record.model_copy(update={"config": config_ref})
+    attempt = Attempt(
+        n=n,
+        started_at=stamp(),
+        console=f"{TRAIN_DIR}/console.{n}.log",
+        command=list(spec.command),
+        seed=spec.seed,
+        venv=store_path(spec.venv, p.data_root) if spec.venv is not None else None,
+    )
+    record = record.model_copy(update={"attempts": [*record.attempts, attempt]})
+    if p.created:
+        save_run(p.data_root, p.card)
+    save_record(p.data_root, record)
+    # The patterns as given: `train status` scans their directories for leftover `.tmp`
+    # files even where no checkpoint was ever registered (spec 2026-10-30 §12). An event's
+    # payload is free-form, so an older vcp reads this row unchanged.
+    append_event(
+        p.data_root,
+        spec.run_id,
+        "started",
+        n,
+        command=spec.command,
+        cwd=str(p.cwd),
+        seed=spec.seed,
+        checkpoints=list(spec.checkpoints),
+        final=spec.final,
+    )
+    return record, attempt
+
+
+def _snapshot_env(
+    spec: RunSpec, p: _Prepared, record: TrainRecord, attempt: Attempt, n: int
+) -> tuple[TrainRecord, Attempt, EnvSnapshot]:
+    """step 6: the environment snapshot, with the tracked diff beside it, named on the attempt."""
+    patch_rel = f"{TRAIN_DIR}/git.{n}.patch"
+    snap = snapshot(p.python, p.cwd, patch=(p.run_root / patch_rel, patch_rel), disk=p.disk_check)
+    env_rel = f"{TRAIN_DIR}/env.{n}.json"
+    with (p.run_root / env_rel).open("w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(snap.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n")
+    attempt = attempt.model_copy(update={"env": env_rel})
+    record = _replace_attempt(record, attempt)
+    save_record(p.data_root, record)
+    append_event(
+        p.data_root, spec.run_id, "env", n, python=snap.python, gpus=snap.gpus, torch=snap.torch
+    )
+    return record, attempt, snap
+
+
+def _execute_attempt(
+    spec: RunSpec, p: _Prepared, attempt: Attempt, n: int
+) -> tuple[TrainRecord, Attempt, int]:
+    """step 7: the command, then the attempt's end in the record and the event log. Returns the
+    exit code too."""
+    env = {**p.env, "VCP_ATTEMPT": str(n)}  # VCP-043: the child's own attempt number
+    started = utc_now()
+    code, status = execute(
+        spec.command, cwd=p.cwd, env=env, console=p.run_root / attempt.console, on_line=spec.on_line
+    )
+    attempt = attempt.model_copy(
+        update={
+            "finished_at": stamp(),
+            "duration_s": round((utc_now() - started).total_seconds(), 3),
+            "exit_code": code,
+            "status": status,
+        }
+    )
+    # spec 8.2: only Session writes train.yaml while the command runs (registering checkpoints,
+    # marking the final one) -- the in-memory snapshot from before execute() missed all of that,
+    # so re-read from disk before layering the attempt update on top.
+    record = _replace_attempt(load_record(p.data_root, spec.run_id), attempt)
+    save_record(p.data_root, record)
+    append_event(
+        p.data_root,
+        spec.run_id,
+        "finished",
+        n,
+        exit_code=code,
+        status=status,
+        duration_s=attempt.duration_s,
+    )
+    return record, attempt, code
+
+
+def _diagnose_disk(
+    spec: RunSpec, p: _Prepared, attempt: Attempt, n: int, code: int
+) -> DiskFailure | None:
+    """spec 2026-10-30 §5.3: a failed attempt only -- measure the same volumes again and read
+    the console's tail, so the record can say the disk was the likely cause."""
+    if attempt.status != "failed":
+        return None
+    after = measure(p.disk_targets, min_free_gib=spec.min_free_gib, data_root=p.data_root)
+    failure = diagnose(code, p.run_root / attempt.console, after)
+    if failure is not None:
+        append_event(
+            p.data_root,
+            spec.run_id,
+            "note",
+            n,
+            key=failure.key,
+            marker=failure.marker,
+            free_bytes=failure.free_bytes,
+        )
+    return failure
+
+
+def _note_changes(
+    spec: RunSpec, p: _Prepared, n: int, digests: dict[str, str], git: GitInfo | None
+) -> tuple[list[str], list[str]]:
+    """What the command changed under its own feet, each a ``note`` event: the evidence files
+    that moved, and (VCP-041, spec 2026-09-27 §4.3) HEAD and the tracked diff. Returns the names
+    and the paths."""
+    changed = moved(p.evidence, digests)
+    if changed:
+        append_event(
+            p.data_root, spec.run_id, "note", n, key="evidence_changed", value=",".join(changed)
+        )
+    delta = changed_since(p.cwd, git) if git is not None else None
+    git_changed = list(delta.changed) if delta is not None else []
+    if delta is not None and git_changed:
+        append_event(
+            p.data_root,
+            spec.run_id,
+            "note",
+            n,
+            key="git_changed",
+            value=",".join(git_changed),
+            commit=delta.commit,
+            diff_sha256=delta.diff_sha256,
+        )
+    return changed, git_changed
+
+
+def _merge_receipts(p: _Prepared, record: TrainRecord) -> RunCard:
+    """spec 7.1: the receipts the child bound to this attempt become the run's access record.
+    F5: merged by artifact_id rather than replaced outright -- train.yaml's refs first (in
+    their own order), then any ref already on the card (e.g. a manual `ingest --receipt`
+    attached between attempts) that train.yaml does not already know about, so --resume can
+    no longer make a manually attached receipt vanish from run.yaml."""
+    train_ids = {r.artifact_id for r in record.access}
+    merged_access = [
+        *record.access,
+        *(r for r in p.card.access if r.artifact_id not in train_ids),
+    ]
+    card = p.card.model_copy(
+        update={
+            "access": merged_access,
+            "evidence": merge_refs(record.evidence, p.card.evidence),
+        }
+    )
+    save_run(p.data_root, card)
+    return card
+
+
+def _run_attempt(spec: RunSpec, p: _Prepared) -> _Attempted:
+    """Steps 5-9: everything vcp writes around the command, in the order it writes it."""
+    # no-op for a new run
+    record = _close_running(p.record, data_root=p.data_root, run_id=spec.run_id)
+    n = len(record.attempts) + 1
+    record, attempt = _start_attempt(spec, p, record, n)
+    record, attempt, snap = _snapshot_env(spec, p, record, attempt, n)
+    # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything.
+    # (The record it returns is superseded by the re-read after the command.)
+    _, digests = attach_cli_evidence(
+        p.data_root, p.scope, record, p.evidence, spec.labels, attempt=n
+    )
+    record, attempt, code = _execute_attempt(spec, p, attempt, n)
+    disk_failure = _diagnose_disk(spec, p, attempt, n, code)
+    changed, git_changed = _note_changes(spec, p, n, digests, snap.git)
+    card = _merge_receipts(p, record)
+    # steps 8-9
+    record, card, final, registered, warnings = _finish_checkpoints(
+        spec, record, card, data_root=p.data_root, cwd=p.cwd, n=n, status=attempt.status
+    )
+    return _Attempted(
+        record=record,
+        card=card,
+        attempt=attempt,
+        n=n,
+        final=final,
+        registered=registered,
+        warnings=warnings,
+        git=snap.git,
+        git_changed=git_changed,
+        changed=changed,
+        disk_failure=disk_failure,
+    )
+
+
+def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
+    """What is worth a WARN about the run itself, before what its receipts say."""
+    warnings = list(a.warnings)
+    if spec.seed is None:
+        warnings.append("seed=none")
+    if spec.venv is None:
+        warnings.append("venv=inherited")
+    if a.changed:
+        warnings.append(f"evidence_changed={','.join(a.changed)}")
+    git_line = git_warning(a.git) if a.git is not None else None
+    if git_line is not None:
+        warnings.append(git_line)
+    if a.git_changed:
+        warnings.append(f"git_changed={','.join(a.git_changed)}")
+    if unavailable(p.disk_check):
+        warnings.append("disk_check=unavailable")
+    return warnings
+
+
+def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
+    warnings = _run_warnings(spec, p, a)
+    info = provenance(a.card, data_root=p.data_root, configs_root=p.configs_root)
+    observed_beyond = sorted(set(info.observed) - set(p.trained_on))
+    if observed_beyond:
+        warnings.append(f"observed_beyond_trained_on={','.join(observed_beyond)}")
+    if info.invalid:
+        warnings.append(f"receipt_invalid={len(info.invalid)}")
+    source_audit_missing = sum(1 for r in a.card.access if r.identity == "full_hash")
+    if source_audit_missing:
+        warnings.append("source_audit=missing")
+    return RunResult(
+        record=a.record,
+        card=a.card,
+        attempt=a.attempt,
+        final=a.final,
+        registered=a.registered,
+        uploaded=a.uploaded,
+        verified=a.verified,
+        skipped=a.skipped,
+        warnings=warnings,
+        receipts=len(a.card.access),
+        denied=sum(r.denied for r in a.card.access),
+        provenance=info.grade,
+        observed_beyond=observed_beyond,
+        receipt_invalid=len(info.invalid),
+        source_audit_missing=source_audit_missing,
+        evidence=len(current(a.card.evidence)),
+        labels=labels_field(a.card.evidence),
+        evidence_changed=a.changed,
+        git=a.git,
+        git_changed=a.git_changed,
+        disk=p.disk_check,
+        disk_failure=a.disk_failure,
+    )
+
+
+def train_run(spec: RunSpec) -> RunResult:
+    p = _prepare(spec)
     # §5.3: from here on every write is vcp's own record. A full disk under it is an ABORT
     # `disk_full:` (the child is already stopped by execute() when its console write is the one
     # that fails). The upload destination is not vcp's record, so `_upload_all` guards only its own
     # bookkeeping writes, not the `upload(...)` call.
     with own_writes():
-        # no-op for a new run
-        record = _close_running(record, data_root=data_root, run_id=spec.run_id)
-        n = len(record.attempts) + 1
-        env = {**env, "VCP_ATTEMPT": str(n)}  # VCP-043: the child's own attempt number
-        # spec 6.1 step 5: the first writes.
-        train_dir(data_root, spec.run_id).mkdir(parents=True, exist_ok=True)
-        if spec.config is not None:
-            copy_rel = f"{TRAIN_DIR}/config.{n}{spec.config.suffix}"
-            shutil.copy2(spec.config, run_root / copy_rel)
-            record = record.model_copy(
-                update={
-                    "config": ConfigRef(
-                        path=store_path(spec.config, data_root), sha256=chash, copied_to=copy_rel
-                    )
-                }
-            )
-        attempt = Attempt(
-            n=n,
-            started_at=stamp(),
-            console=f"{TRAIN_DIR}/console.{n}.log",
-            command=list(spec.command),
-            seed=spec.seed,
-            venv=store_path(spec.venv, data_root) if spec.venv is not None else None,
+        a = _run_attempt(spec, p)
+    if a.attempt.status == "finished" and spec.uploads:
+        record, uploaded, verified, skipped = _upload_all(
+            spec, a.record, data_root=p.data_root, n=a.n
         )
-        record = record.model_copy(update={"attempts": [*record.attempts, attempt]})
-        if created:
-            save_run(data_root, card)
-        save_record(data_root, record)
-        # The patterns as given: `train status` scans their directories for leftover `.tmp`
-        # files even where no checkpoint was ever registered (spec 2026-10-30 §12). An event's
-        # payload is free-form, so an older vcp reads this row unchanged.
-        append_event(
-            data_root,
-            spec.run_id,
-            "started",
-            n,
-            command=spec.command,
-            cwd=str(cwd),
-            seed=spec.seed,
-            checkpoints=list(spec.checkpoints),
-            final=spec.final,
-        )
-        # step 6: environment snapshot
-        patch_rel = f"{TRAIN_DIR}/git.{n}.patch"
-        snap = snapshot(python, cwd, patch=(run_root / patch_rel, patch_rel), disk=disk_check)
-        env_rel = f"{TRAIN_DIR}/env.{n}.json"
-        with (run_root / env_rel).open("w", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps(snap.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n")
-        attempt = attempt.model_copy(update={"env": env_rel})
-        record = _replace_attempt(record, attempt)
-        save_record(data_root, record)
-        append_event(
-            data_root, spec.run_id, "env", n, python=snap.python, gpus=snap.gpus, torch=snap.torch
-        )
-        # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything.
-        record, digests = attach_cli_evidence(
-            data_root, scope, record, evidence, spec.labels, attempt=n
-        )
-        # step 7: the command
-        started = utc_now()
-        code, status = execute(
-            spec.command, cwd=cwd, env=env, console=run_root / attempt.console, on_line=spec.on_line
-        )
-        attempt = attempt.model_copy(
-            update={
-                "finished_at": stamp(),
-                "duration_s": round((utc_now() - started).total_seconds(), 3),
-                "exit_code": code,
-                "status": status,
-            }
-        )
-        # spec 8.2: only Session writes train.yaml while the command runs (registering checkpoints,
-        # marking the final one) -- the in-memory snapshot from before execute() missed all of that,
-        # so re-read from disk before layering the attempt update on top.
-        record = _replace_attempt(load_record(data_root, spec.run_id), attempt)
-        save_record(data_root, record)
-        append_event(
-            data_root,
-            spec.run_id,
-            "finished",
-            n,
-            exit_code=code,
-            status=status,
-            duration_s=attempt.duration_s,
-        )
-        # spec 2026-10-30 §5.3: a failed attempt only -- measure the same volumes again and read
-        # the console's tail, so the record can say the disk was the likely cause.
-        disk_failure: DiskFailure | None = None
-        if status == "failed":
-            after = measure(disk_targets, min_free_gib=spec.min_free_gib, data_root=data_root)
-            disk_failure = diagnose(code, run_root / attempt.console, after)
-            if disk_failure is not None:
-                append_event(
-                    data_root,
-                    spec.run_id,
-                    "note",
-                    n,
-                    key=disk_failure.key,
-                    marker=disk_failure.marker,
-                    free_bytes=disk_failure.free_bytes,
-                )
-        changed = moved(evidence, digests)
-        if changed:
-            append_event(
-                data_root, spec.run_id, "note", n, key="evidence_changed", value=",".join(changed)
-            )
-        # VCP-041 (spec 2026-09-27 §4.3): HEAD and the tracked diff again, after the command.
-        delta = changed_since(cwd, snap.git) if snap.git is not None else None
-        git_changed = list(delta.changed) if delta is not None else []
-        if delta is not None and git_changed:
-            append_event(
-                data_root,
-                spec.run_id,
-                "note",
-                n,
-                key="git_changed",
-                value=",".join(git_changed),
-                commit=delta.commit,
-                diff_sha256=delta.diff_sha256,
-            )
-        # spec 7.1: the receipts the child bound to this attempt become the run's access record.
-        # F5: merged by artifact_id rather than replaced outright -- train.yaml's refs first (in
-        # their own order), then any ref already on the card (e.g. a manual `ingest --receipt`
-        # attached between attempts) that train.yaml does not already know about, so --resume can
-        # no longer make a manually attached receipt vanish from run.yaml.
-        train_ids = {r.artifact_id for r in record.access}
-        merged_access = [
-            *record.access,
-            *(r for r in card.access if r.artifact_id not in train_ids),
-        ]
-        card = card.model_copy(
-            update={"access": merged_access, "evidence": merge_refs(record.evidence, card.evidence)}
-        )
-        save_run(data_root, card)
-        # steps 8-9
-        record, card, final, registered, warnings = _finish_checkpoints(
-            spec, record, card, data_root=data_root, cwd=cwd, n=n, status=status
-        )
-    uploaded = verified = skipped = 0
-    if status == "finished" and spec.uploads:
-        record, uploaded, verified, skipped = _upload_all(spec, record, data_root=data_root, n=n)
-    if spec.seed is None:
-        warnings.append("seed=none")
-    if spec.venv is None:
-        warnings.append("venv=inherited")
-    if changed:
-        warnings.append(f"evidence_changed={','.join(changed)}")
-    git_line = git_warning(snap.git) if snap.git is not None else None
-    if git_line is not None:
-        warnings.append(git_line)
-    if git_changed:
-        warnings.append(f"git_changed={','.join(git_changed)}")
-    if unavailable(disk_check):
-        warnings.append("disk_check=unavailable")
-    info = provenance(card, data_root=data_root, configs_root=configs_root)
-    observed_beyond = sorted(set(info.observed) - set(trained_on))
-    if observed_beyond:
-        warnings.append(f"observed_beyond_trained_on={','.join(observed_beyond)}")
-    if info.invalid:
-        warnings.append(f"receipt_invalid={len(info.invalid)}")
-    source_audit_missing = sum(1 for r in card.access if r.identity == "full_hash")
-    if source_audit_missing:
-        warnings.append("source_audit=missing")
-    return RunResult(
-        record=record,
-        card=card,
-        attempt=attempt,
-        final=final,
-        registered=registered,
-        uploaded=uploaded,
-        verified=verified,
-        skipped=skipped,
-        warnings=warnings,
-        receipts=len(card.access),
-        denied=sum(r.denied for r in card.access),
-        provenance=info.grade,
-        observed_beyond=observed_beyond,
-        receipt_invalid=len(info.invalid),
-        source_audit_missing=source_audit_missing,
-        evidence=len(current(card.evidence)),
-        labels=labels_field(card.evidence),
-        evidence_changed=changed,
-        git=snap.git,
-        git_changed=git_changed,
-        disk=disk_check,
-        disk_failure=disk_failure,
-    )
+        a = replace(a, record=record, uploaded=uploaded, verified=verified, skipped=skipped)
+    return _result(spec, p, a)

@@ -1,4 +1,5 @@
 import errno
+import logging
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,41 @@ def test_console_marker_reads_only_the_last_64_kib(tmp_path):
     assert console_marker(_log_bytes(tmp_path, word + b"x" * DISK_FULL_TAIL + b"\n" + word)) == (
         "No space left on device"
     )
+
+
+def test_console_marker_answers_none_and_warns_when_the_console_cannot_be_read(
+    tmp_path, monkeypatch, vcp_log
+):
+    """The diagnosis stays a best effort (None), but a console that exists and could not be read
+    is said once, with its path and the exception class: 'no word found' and 'could not look'
+    are different findings."""
+    console = _log(tmp_path, "[Errno 28] No space left on device\n")
+    real = Path.open
+
+    def deny(self, *args, **kwargs):
+        if self == console:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny)
+
+    assert console_marker(console) is None
+
+    (record,) = [r for r in vcp_log.records if r.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING and record.name == "vcp.train.disk"
+    assert console.as_posix() in record.getMessage() and "PermissionError" in record.getMessage()
+
+
+def test_console_marker_answers_none_without_a_warning_for_a_console_that_is_not_there(
+    tmp_path, vcp_log
+):
+    """No console is nothing to diagnose, not a failure to read one: a DEBUG line, no more."""
+    missing = tmp_path / "missing.log"
+
+    assert console_marker(missing) is None
+
+    (record,) = [r for r in vcp_log.records if r.name == "vcp.train.disk"]
+    assert record.levelno == logging.DEBUG and missing.as_posix() in record.getMessage()
 
 
 def test_a_tail_that_starts_inside_a_multibyte_character_still_reads(tmp_path):

@@ -267,6 +267,8 @@ def status_cmd(
         human += [f"missing: {p}" for p in st.missing]
         human += [f"drift: {p}" for p in st.drift]
         human += [f"tmp: {t.path} ({t.bytes} bytes)" for t in st.tmp]
+        # What the scan could not read: said, never a status of its own (the VERDICT is as it was).
+        human += [f"tmp_scan: skipped {s.path} ({s.error})" for s in st.tmp_skipped]
         warn = bool(st.unbacked or st.missing or st.drift or st.running or st.tmp)
         payload = {
             **st.record.model_dump(mode="json"),

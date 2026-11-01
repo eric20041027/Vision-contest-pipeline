@@ -1,4 +1,7 @@
+import logging
+import os
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +20,7 @@ from vcp.train.records import (
     save_record,
 )
 from vcp.train.schema import Attempt, TrainRecord, UploadRecord
-from vcp.train.status import TmpFile, status, upload_run
+from vcp.train.status import TmpFile, TmpSkip, status, upload_run
 
 STAMP = "2026-09-05T00:00:00.000Z"
 
@@ -505,6 +508,424 @@ def test_status_lists_a_tmp_once_when_a_glob_directory_is_also_a_checkpoint_dire
     (w / "resume.pth.tmp").write_bytes(b"r")
 
     assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]
+
+
+def _warnings(caplog):
+    return [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+class _Unreadable:
+    """A ``DirEntry`` whose type checks fail: a stat the account may not make."""
+
+    def __init__(self, entry):
+        self._entry = entry
+
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def _deny(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", self._entry.path)
+
+    is_symlink = is_junction = is_dir = is_file = _deny
+
+
+class _DanglingLink:
+    """A ``DirEntry`` that is a symlink and not a file, whatever is on disk: the stand-in for a
+    link whose target is gone, where the machine cannot make symlinks."""
+
+    def __init__(self, entry):
+        self._entry = entry
+
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def is_symlink(self):
+        return True
+
+    def is_junction(self):
+        return False
+
+    def is_dir(self, **kwargs):
+        return False
+
+    def is_file(self, **kwargs):
+        return False
+
+
+class _Rewrapped:
+    """What ``os.scandir`` returns, with every entry passed through ``wrap``."""
+
+    def __init__(self, listing, wrap):
+        self._listing = listing
+        self._wrap = wrap
+
+    def __enter__(self):
+        self._listing.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._listing.__exit__(*exc)
+
+    def __iter__(self):
+        return (self._wrap(entry) for entry in self._listing)
+
+
+def _break_scandir(monkeypatch, *, cannot_list=(), vanishes=(), rewrap=None):
+    """``os.scandir`` for the directories called ``cannot_list`` raises PermissionError, for
+    those called ``vanishes`` FileNotFoundError (gone since its parent was listed); ``rewrap``
+    maps a directory name to a function that replaces each entry of its listing. Returns the
+    list of directories listed, as posix strings."""
+    real = os.scandir
+    listed: list[str] = []
+
+    def scandir(path):
+        here = Path(path)
+        listed.append(here.as_posix())
+        if here.name in cannot_list:
+            raise PermissionError(13, "Permission denied", str(path))
+        if here.name in vanishes:
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        wrap = (rewrap or {}).get(here.name)
+        return real(path) if wrap is None else _Rewrapped(real(path), wrap)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    return listed
+
+
+def test_status_skips_a_run_subdirectory_it_cannot_list_and_keeps_going(
+    roots, monkeypatch, vcp_log
+):
+    """An unreadable run subdirectory is left out, said once (a WARNING and `tmp_skipped`), and
+    the rest is still read. (In 0.16.0 the recursive walk left such a directory out without a
+    word; an unreadable checkpoint or glob directory, or an entry that could not be stat-ed,
+    aborted `train status`.)"""
+    _, w = _seeded(roots)
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / ".train.yaml.0a1b2c3d.tmp").write_bytes(b"12345")
+    locked = roots.data / "runs" / "r1" / "locked"
+    locked.mkdir()
+    (locked / "hidden.tmp").write_bytes(b"h")
+    (w / "resume.pth.tmp").write_bytes(b"x" * 266)
+    _break_scandir(monkeypatch, cannot_list={"locked"})
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [
+        TmpFile("runs/r1/train/.train.yaml.0a1b2c3d.tmp", 5),
+        TmpFile("work/weights/resume.pth.tmp", 266),
+    ]
+    assert st.tmp_skipped == [TmpSkip("runs/r1/locked", "PermissionError")]
+    (record,) = _warnings(vcp_log)
+    assert record.name == "vcp.train.status"
+    assert record.getMessage() == (
+        "train status: the .tmp scan could not read runs/r1/locked (PermissionError) and skipped it"
+    )
+
+
+def test_status_skips_a_checkpoint_directory_it_cannot_list_and_keeps_going(
+    roots, monkeypatch, vcp_log
+):
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / "a.tmp").write_bytes(b"aa")
+    _break_scandir(monkeypatch, cannot_list={"weights"})
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("runs/r1/train/a.tmp", 2)]
+    assert st.tmp_skipped == [TmpSkip("work/weights", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
+
+
+def test_status_stops_at_the_first_entry_that_raises_and_names_the_directory_once(
+    roots, monkeypatch, vcp_log
+):
+    """An entry whose type cannot be read costs its directory one skip, one WARNING and one
+    human line -- not one per entry."""
+    _, w = _seeded(roots)
+    for name in ("a.tmp", "b.tmp", "c.tmp"):
+        (w / name).write_bytes(b"t")
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / "kept.tmp").write_bytes(b"kk")
+    _break_scandir(monkeypatch, rewrap={"weights": _Unreadable})
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("runs/r1/train/kept.tmp", 2)]
+    assert st.tmp_skipped == [TmpSkip("work/weights", "PermissionError")]
+    (record,) = _warnings(vcp_log)
+    assert record.getMessage() == (
+        "train status: the .tmp scan could not read work/weights (PermissionError) and skipped it"
+    )
+
+
+def test_status_skips_a_cwd_it_cannot_stat_and_keeps_going(roots, monkeypatch, vcp_log):
+    """`_glob_dir` asks whether the cwd is a directory; a PermissionError there used to abort
+    `train status`. Two patterns, one cwd: said once."""
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    _started(roots, checkpoints=["ckpt/*.pt"], final="ckpt/best.pt")
+    real = Path.is_dir
+
+    def is_dir(self):
+        if self.name == "work":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]  # beside the checkpoints
+    assert st.tmp_skipped == [TmpSkip("work", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
+
+
+def test_status_without_anything_unreadable_skips_nothing_and_says_nothing(roots, vcp_log):
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    assert status(roots.data, "r1").tmp_skipped == []
+    assert _warnings(vcp_log) == []
+
+
+def _link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError as e:  # Windows without developer mode or the privilege
+        pytest.skip(f"cannot create symlinks here: {e}")
+
+
+def _junction(link: Path, target: Path) -> None:
+    """``link`` becomes a junction to ``target`` (Windows; no privilege needed)."""
+    try:
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    except (ImportError, AttributeError, OSError) as e:
+        pytest.skip(f"cannot create a junction here: {e}")
+
+
+def test_status_lists_a_symlinked_tmp_by_its_own_path(roots, tmp_path):
+    """A link is the leftover (the framework wrote the link); its target may be anywhere. It is
+    listed as itself, sized by `lstat`, not by the file it points to."""
+    _, w = _seeded(roots)
+    target = tmp_path / "elsewhere" / "payload.bin"
+    target.parent.mkdir()
+    target.write_bytes(b"x" * 1000)
+    _link(w / "resume.pth.tmp", target)
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile("work/weights/resume.pth.tmp", (w / "resume.pth.tmp").lstat().st_size)
+    ]
+
+
+def test_status_lists_a_link_and_the_file_it_points_to_as_two_entries(roots):
+    _, w = _seeded(roots)
+    (w / "real.tmp").write_bytes(b"12345")
+    _link(w / "link.tmp", w / "real.tmp")
+
+    assert [t.path for t in status(roots.data, "r1").tmp] == [
+        "work/weights/link.tmp",
+        "work/weights/real.tmp",
+    ]
+
+
+def test_status_lists_a_dangling_symlinked_tmp(roots):
+    """A link to nothing is still a leftover: the framework wrote it."""
+    _, w = _seeded(roots)
+    _link(w / "resume.pth.tmp", w / "no-such-target")
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile("work/weights/resume.pth.tmp", (w / "resume.pth.tmp").lstat().st_size)
+    ]
+
+
+def test_status_lists_an_entry_that_is_a_symlink_and_not_a_file(roots, monkeypatch):
+    """The same finding where the machine cannot make symlinks: the entry says it is a link and
+    no file, and `lstat` still answers."""
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"abc")
+    _break_scandir(
+        monkeypatch,
+        rewrap={"weights": lambda e: _DanglingLink(e) if e.name.endswith(".tmp") else e},
+    )
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 3)]
+
+
+def test_status_does_not_follow_a_junction_out_of_the_run_directory(roots, tmp_path):
+    """`is_symlink()` is False for a junction, so a walk that only checks it follows one."""
+    _seeded(roots)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leak.tmp").write_bytes(b"leak")
+    sub = roots.data / "runs" / "r1" / "sub"
+    sub.mkdir(parents=True)
+    (sub / "kept.tmp").write_bytes(b"k")
+    link = sub / "out"
+    _junction(link, outside)
+    try:
+        st = status(roots.data, "r1")
+    finally:
+        os.rmdir(link)  # the junction only, never what it points to
+
+    assert st.tmp == [TmpFile("runs/r1/sub/kept.tmp", 1)]
+    assert st.tmp_skipped == []
+
+
+def test_status_never_lists_a_junction_that_points_at_its_own_ancestor(roots, monkeypatch):
+    _seeded(roots)
+    run = roots.data / "runs" / "r1"
+    sub = run / "sub"
+    sub.mkdir(parents=True)
+    (sub / "x.tmp").write_bytes(b"x")
+    link = sub / "loop"
+    _junction(link, run)
+    listed = _break_scandir(monkeypatch)
+    try:
+        st = status(roots.data, "r1")
+    finally:
+        os.rmdir(link)
+
+    assert st.tmp == [TmpFile("runs/r1/sub/x.tmp", 1)]
+    assert [d for d in listed if "loop" in d] == []
+
+
+def _ckpt_in_run(roots):
+    """A run whose checkpoint sits inside its own run directory: the recursive walk of
+    ``runs/r1`` and the scan beside the checkpoint both reach ``runs/r1/ckpt`` -- two real
+    scans of one directory, which `_seeded` (checkpoints under ``work/``) never produces."""
+    ckpt = roots.data / "runs" / "r1" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "x.pt").write_bytes(b"model")
+    rec, _ = register(_unregistered(roots), [ckpt / "x.pt"], data_root=roots.data, attempt=1)
+    save_record(roots.data, rec)
+    return ckpt
+
+
+def _scans_of(listed, directory):
+    return [d for d in listed if d == directory.as_posix()]
+
+
+def test_status_lists_a_tmp_once_when_the_run_walk_and_the_beside_scan_both_reach_its_directory(
+    roots, monkeypatch
+):
+    ckpt = _ckpt_in_run(roots)
+    (ckpt / "m.pt.tmp").write_bytes(b"tt")
+    listed = _break_scandir(monkeypatch)
+
+    assert status(roots.data, "r1").tmp == [TmpFile("runs/r1/ckpt/m.pt.tmp", 2)]
+    assert len(_scans_of(listed, ckpt)) == 2  # the overlap is real: two scans, one finding
+
+
+def test_status_lists_a_symlinked_tmp_once_when_two_scans_reach_its_directory(roots, tmp_path):
+    ckpt = _ckpt_in_run(roots)
+    target = tmp_path / "elsewhere" / "payload.bin"
+    target.parent.mkdir()
+    target.write_bytes(b"x")
+    _link(ckpt / "resume.pth.tmp", target)
+
+    assert [t.path for t in status(roots.data, "r1").tmp] == ["runs/r1/ckpt/resume.pth.tmp"]
+
+
+def test_status_names_a_directory_it_cannot_list_once_however_many_scans_reach_it(
+    roots, monkeypatch, vcp_log
+):
+    """Two scans try `runs/r1/ckpt` and both fail: one skip, one WARNING."""
+    ckpt = _ckpt_in_run(roots)
+    (ckpt / "m.pt.tmp").write_bytes(b"tt")
+    listed = _break_scandir(monkeypatch, cannot_list={"ckpt"})
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == []
+    assert st.tmp_skipped == [TmpSkip("runs/r1/ckpt", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
+    assert len(_scans_of(listed, ckpt)) == 2
+
+
+def test_status_names_a_directory_whose_entries_raise_once_however_many_scans_reach_it(
+    roots, monkeypatch, vcp_log
+):
+    ckpt = _ckpt_in_run(roots)
+    (ckpt / "m.pt.tmp").write_bytes(b"tt")
+    listed = _break_scandir(monkeypatch, rewrap={"ckpt": _Unreadable})
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp_skipped == [TmpSkip("runs/r1/ckpt", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
+    assert len(_scans_of(listed, ckpt)) == 2
+
+
+def test_status_skips_a_file_it_cannot_lstat_once_however_many_scans_find_it(
+    roots, monkeypatch, vcp_log
+):
+    ckpt = _ckpt_in_run(roots)
+    (ckpt / "bad.tmp").write_bytes(b"b")
+    (ckpt / "good.tmp").write_bytes(b"gg")
+    real = Path.lstat
+
+    def lstat(self, *args, **kwargs):
+        if self.name == "bad.tmp":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("runs/r1/ckpt/good.tmp", 2)]
+    assert st.tmp_skipped == [TmpSkip("runs/r1/ckpt/bad.tmp", "PermissionError")]
+    (record,) = _warnings(vcp_log)
+    assert record.getMessage() == (
+        "train status: the .tmp scan could not read runs/r1/ckpt/bad.tmp (PermissionError) "
+        "and skipped it"
+    )
+
+
+def test_status_says_nothing_of_a_file_that_vanished_between_the_listing_and_the_stat(
+    roots, monkeypatch, vcp_log
+):
+    _, w = _seeded(roots)
+    (w / "gone.tmp").write_bytes(b"g")
+    (w / "here.tmp").write_bytes(b"hh")
+    real = Path.lstat
+
+    def lstat(self, *args, **kwargs):
+        if self.name == "gone.tmp":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("work/weights/here.tmp", 2)]
+    assert st.tmp_skipped == []
+    assert _warnings(vcp_log) == []
+
+
+def test_status_says_nothing_of_a_directory_that_vanished_since_its_parent_was_listed(
+    roots, monkeypatch, vcp_log
+):
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    gone = roots.data / "runs" / "r1" / "gone"
+    gone.mkdir(parents=True)
+    (gone / "hidden.tmp").write_bytes(b"h")
+    listed = _break_scandir(monkeypatch, vanishes={"gone"})
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]
+    assert st.tmp_skipped == []
+    assert _warnings(vcp_log) == []
+    assert len(_scans_of(listed, gone)) == 1  # it was tried, and that is all
 
 
 def test_status_verify_reports_a_broken_evidence_artifact(roots, tmp_path):

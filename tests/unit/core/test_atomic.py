@@ -1,7 +1,7 @@
+import ast
 import errno
 import hashlib
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -421,22 +421,115 @@ def test_an_interrupt_halfway_through_a_line_also_truncates_back(tmp_path, monke
 
 
 SRC = Path(__file__).resolve().parents[3] / "src" / "vcp"
-# open("a" / "ab" / "at" / "a+" ...), open(mode="a..."), logging.FileHandler( (append by default)
-APPEND_OPEN = re.compile(
-    r"""open\([^)]*["'](?:a|ab|at|a\+|ab\+)["']|mode=["'](?:a|ab|at|a\+)["']|logging\.FileHandler\("""
+MODE_CHARS = frozenset("rwxabt+")
+# Every stdlib handler that opens its file in append mode (the default of all of them).
+FILE_HANDLERS = frozenset(
+    {"FileHandler", "RotatingFileHandler", "TimedRotatingFileHandler", "WatchedFileHandler"}
 )
+# The one module allowed to open a file for appending, by path under src/vcp.
+APPEND_PRIMITIVE = "core/atomic.py"
+
+
+def _name_of(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else None
+
+
+def _is_append_mode(node: ast.expr) -> bool:
+    """A string constant made of file-mode letters that includes ``a``: "a", "ab", "ba", "a+b"."""
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "a" in node.value
+        and set(node.value) <= MODE_CHARS
+    )
+
+
+def append_idioms(source: str) -> list[str]:
+    """What in ``source`` opens a file for appending, read from the syntax tree so that nested
+    calls (``open(str(p), "a")``) and keyword modes are seen the same as the plain form.
+
+    Found: ``open(...)`` / ``x.open(...)`` / ``fdopen(...)`` with an append mode as the mode
+    argument (second for ``open()``, first for ``x.open()``) or as ``mode=``; a call of any
+    stdlib file handler (they all append); and ``O_APPEND``. A mode held in a variable cannot be
+    seen."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            name = _name_of(node.func)
+            if name in ("open", "fdopen"):
+                # open(file, mode): the mode is second; x.open(mode) (Path) has it first
+                positional = node.args[1:2] if isinstance(node.func, ast.Name) else node.args[:2]
+                modes = [*positional, *(k.value for k in node.keywords if k.arg == "mode")]
+                if any(_is_append_mode(m) for m in modes):
+                    found.append(f"{name}(... append mode ...) at line {node.lineno}")
+            elif name in FILE_HANDLERS:
+                found.append(f"{name}(...) at line {node.lineno}")
+        elif isinstance(node, (ast.Name, ast.Attribute)) and _name_of(node) == "O_APPEND":
+            found.append(f"O_APPEND at line {node.lineno}")
+    return found
 
 
 def test_no_module_but_atomic_opens_a_file_for_appending():
     """Every append-only file is written through ``append_whole_line``: a plain ``open("a")``
     plus one ``write`` is the half-line bug the primitive exists to end (the daily log has its
     own handler for the same reason: ``logging.FileHandler`` swallows a failed write)."""
-    offenders = [
-        path.relative_to(SRC).as_posix()
+    offenders = {
+        rel: idioms
         for path in sorted(SRC.rglob("*.py"))
-        if path.name != "atomic.py" and APPEND_OPEN.search(path.read_text(encoding="utf-8"))
-    ]
-    assert offenders == []
+        if (rel := path.relative_to(SRC).as_posix()) != APPEND_PRIMITIVE
+        and (idioms := append_idioms(path.read_text(encoding="utf-8")))
+    }
+    assert offenders == {}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'open(p, "a")',
+        'open(str(p), "a")',  # a nested call before the mode
+        'open(Path(base) / "x.jsonl", "ab")',
+        'open(p, "ba")',
+        'open(p, "a+b")',
+        'open(p, mode="a")',
+        'p.open("a")',
+        'Path(x).open("ab")',
+        'p.open(mode="ab+")',
+        'io.open(p, "at")',
+        'os.fdopen(fd, "a")',
+        "logging.FileHandler(p)",
+        "FileHandler(p, encoding='utf-8')",
+        "RotatingFileHandler(p, maxBytes=1)",
+        "handlers.TimedRotatingFileHandler(p)",
+        "handlers.WatchedFileHandler(p)",
+        "os.open(p, os.O_WRONLY | os.O_APPEND)",
+        "flags = O_APPEND",
+    ],
+)
+def test_the_append_guard_fires_on_every_append_idiom(source):
+    assert append_idioms(source) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "open(p)",
+        'open(p, "r")',
+        'open(str(p), "rb")',
+        'open(p, "w")',
+        'p.open("wb")',
+        'p.open(mode="r+b")',
+        'x = dict(mode="after")',
+        'open("a")',  # a file named a, read: the first argument is the name, not the mode
+        "class WholeLineFileHandler(logging.Handler): ...",
+        "WholeLineFileHandler(p)",
+        "isinstance(h, logging.FileHandler)",
+        "logging.getLogger('vcp')",
+    ],
+)
+def test_the_append_guard_leaves_other_code_alone(source):
+    assert append_idioms(source) == []
 
 
 WRITE_ONCE_SITES = (

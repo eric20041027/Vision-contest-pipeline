@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import pytest
 
@@ -111,6 +112,42 @@ def test_the_days_file_exists_as_soon_as_logging_is_set_up(tmp_path, monkeypatch
     monkeypatch.setattr("vcp.core.log.stamp", lambda: STAMP)
     setup_logging(tmp_path / "logs")
     assert (tmp_path / "logs" / f"vcp-{DAY}.jsonl").read_bytes() == b""
+
+
+def test_setting_up_logging_again_does_not_touch_the_existing_day_file(tmp_path, monkeypatch):
+    """Every command sets logging up: the day file is created if it is missing and otherwise
+    left exactly as it is, mtime included (the log's mtime says when something last logged)."""
+    monkeypatch.setattr("vcp.core.log.stamp", lambda: STAMP)
+    logger = setup_logging(tmp_path / "logs")
+    logger.info("earlier command")
+    path = tmp_path / "logs" / f"vcp-{DAY}.jsonl"
+    long_ago = 1_000_000_000
+    os.utime(path, (long_ago, long_ago))
+    before = path.read_bytes()
+
+    setup_logging(tmp_path / "logs")
+
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime == pytest.approx(long_ago, abs=2)
+
+
+def test_a_recursion_error_is_not_swallowed_like_any_other_error(tmp_path, monkeypatch):
+    """As in the stdlib handlers: a logging call that recurses into itself must surface, not be
+    reported to ``handleError`` and carried on with."""
+    monkeypatch.setattr("vcp.core.log.stamp", lambda: STAMP)
+    logger = setup_logging(tmp_path / "logs")
+    handled = []
+    monkeypatch.setattr(_handler(logger), "handleError", handled.append)
+
+    def recurse(*_args):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr("vcp.core.log.append_whole_line", recurse)
+
+    with pytest.raises(RecursionError):
+        logger.info("loops")
+
+    assert handled == []
 
 
 def test_a_new_day_is_a_new_file_chosen_when_logging_is_set_up(tmp_path, monkeypatch):

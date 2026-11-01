@@ -78,18 +78,22 @@ class WholeLineFileHandler(logging.Handler):
     so nothing is held open between records either.
 
     Like ``FileHandler`` the file is created when the handler is built, so a command that logs
-    nothing still leaves the (empty) day file for ``backup manifest`` to list. Lines end in a
-    bare ``\\n`` on every platform, as in every other vcp jsonl.
+    nothing still leaves the (empty) day file for ``backup manifest`` to list; an existing file
+    is not touched (an empty append opens it without bumping its mtime). Lines end in a bare
+    ``\\n`` on every platform, as in every other vcp jsonl. As in the stdlib handlers, a
+    ``RecursionError`` is not swallowed.
     """
 
     def __init__(self, path: Path, level: int = logging.NOTSET) -> None:
         super().__init__(level)
         self.path = path
-        path.touch()
+        append_whole_line(path, "")
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             append_whole_line(self.path, self.format(record) + "\n")
+        except RecursionError:
+            raise
         except Exception:
             self.handleError(record)
 

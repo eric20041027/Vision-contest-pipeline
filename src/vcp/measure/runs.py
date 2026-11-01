@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from vcp.core.atomic import append_whole_line
 from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
@@ -81,5 +82,4 @@ def verify_prediction(data_root: Path, card: RunCard, subset: str) -> Path:
 def append_history(data_root: Path, run_id: str, row: dict[str, Any]) -> None:
     path = run_dir(data_root, run_id) / "history.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps({**row, "ts": stamp()}, ensure_ascii=False) + "\n")
+    append_whole_line(path, json.dumps({**row, "ts": stamp()}, ensure_ascii=False) + "\n")

@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from vcp.backup.schema import BackupRow
+from vcp.core.atomic import append_whole_line
 from vcp.measure.ledger import read_rows
 
 
@@ -16,8 +17,7 @@ class BackupLedger:
 
     def append(self, row: BackupRow) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8", newline="\n") as f:
-            f.write(row.model_dump_json(exclude_none=True) + "\n")
+        append_whole_line(self.path, row.model_dump_json(exclude_none=True) + "\n")
         self.rows.append(row)
 
     def of(self, event: str, manifest_id: str | None = None) -> list[BackupRow]:

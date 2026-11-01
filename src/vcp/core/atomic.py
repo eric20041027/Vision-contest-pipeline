@@ -16,6 +16,7 @@ import os
 import re
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
@@ -124,6 +125,95 @@ def replace_text(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
         raise
     _fsync_dir(target.parent)
+
+
+_NEWLINE = 0x0A
+
+
+def _truncate_retrying(path: Path, size: int) -> None:
+    """``os.truncate``; on Windows a ``PermissionError`` (a reader, an indexer or antivirus has
+    the file open) is retried after each of ``REPLACE_RETRY_DELAYS``, as ``_replace_retrying``
+    does. On POSIX it is a real permission problem."""
+    for delay in REPLACE_RETRY_DELAYS:
+        try:
+            os.truncate(path, size)
+            return
+        except PermissionError:
+            if not IS_WINDOWS:
+                raise
+            time.sleep(delay)
+    os.truncate(path, size)
+
+
+def _own_bytes_start(path: Path, start: int, data: bytes) -> int | None:
+    """Where to cut ``path`` after a failed append of ``data`` that was opened at ``start``,
+    judged by the bytes that are there now; ``None`` when there is nothing of ours to cut or
+    cutting could take another writer's row with it. The rules are in ``append_whole_line``."""
+    with path.open("rb") as f:
+        size = f.seek(0, os.SEEK_END)
+        if size < start:
+            return None  # the file shrank under us: not ours to second-guess
+        window = max(start, size - len(data) - 1)
+        f.seek(window)
+        tail = f.read()  # [start, EOF) when that is short enough to be (a prefix of) ours
+    end = window + len(tail)
+    if window == start and data.startswith(tail):
+        return start if tail else None
+    for k in range(min(len(data), len(tail) - 1), 0, -1):
+        if tail.endswith(data[:k]) and tail[-k - 1] == _NEWLINE:
+            return end - k
+    return None
+
+
+def append_whole_line(path: Path, line: str) -> None:
+    """Append ``line`` (which ends in ``\\n``) to ``path``, or leave no part of it behind.
+
+    The one way vcp appends to an append-only jsonl (a ledger, an event log, the daily log). A
+    write that dies partway -- a full disk is the usual cause -- would leave half a line, the
+    next append would join onto it, every strict reader would then fail on that file for ever
+    (``bad ledger row``) and ``backup verify`` would report ``bad_stamps:`` (only the
+    submissions ledger has a ``partial_tail`` allowance). So any exception, including one that
+    only shows when the file is closed, cuts our own bytes back out. The cleanup is best effort
+    (an ``OSError`` while reading or truncating is swallowed): the caller always gets the
+    exception that started it, unchanged.
+
+    The file is in append mode, so our bytes land at the end of the file *when they are written*,
+    which may be after rows another writer appended since we opened it. The cut is therefore
+    decided by content, not by the offset ``start`` taken at open. Let ``tail`` be what is in the
+    file from ``start`` to its end:
+
+    - ``tail`` is a prefix of ``line`` (empty, partial, or all of it when only closing failed):
+      cut back to ``start``;
+    - otherwise, if ``tail`` ends with a non-empty prefix ``p`` of ``line`` and the byte just
+      before ``p`` is ``\\n`` (whole rows of another writer landed before our bytes): cut ``p``
+      only, those rows stay;
+    - otherwise (another writer's row landed after our partial bytes): leave the file alone.
+      Cutting would take their complete row with ours; the torn bytes stay, the next strict
+      read fails loudly at them, and the file is repaired by hand.
+
+    There is no lock, so a short window remains between reading ``tail`` and truncating: a row
+    another writer appends inside it is cut with ours. Writers that must never lose a row
+    serialise on a lock (the submissions ledger does). On Windows a ``PermissionError`` from the
+    truncate is retried like the one from ``replace_text``.
+
+    The line is encoded before the file is opened, so a payload that cannot be written as UTF-8
+    fails with nothing touched. The file is opened in binary append mode, so the bytes are
+    exactly ``line`` encoded (no newline translation) on every platform. Nothing is created
+    above ``path``: the caller makes the directory.
+    """
+    data = line.encode("utf-8")
+    start: int | None = None
+    try:
+        with path.open("ab") as f:
+            start = f.tell()
+            f.write(data)
+    except BaseException:
+        if start is not None:
+            with suppress(OSError):
+                cut = _own_bytes_start(path, start, data)
+                if cut is not None:
+                    _truncate_retrying(path, cut)
+        raise
 
 
 def write_once(path: Path, data: bytes) -> str:

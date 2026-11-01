@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from vcp.core.atomic import append_whole_line
 from vcp.core.time import stamp
 
 Status = Literal["OK", "WARN", "FAIL", "ABORT"]
@@ -65,17 +66,49 @@ class JsonLinesFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+class WholeLineFileHandler(logging.Handler):
+    """Appends each record to ``path`` as one whole line, through ``append_whole_line``.
+
+    ``logging.FileHandler`` keeps the file open, writes through a buffer and, when a write
+    fails, hands the error to ``handleError`` -- which swallows it and leaves whatever part of
+    the line reached the disk. The next record then joins onto that half line, and the daily
+    log (``backup verify`` role ``logs``) is reported as ``bad_stamps:`` for ever. Here a record
+    that does not fit leaves the file as it was and goes to ``handleError``: logging never
+    raises into a command. The file is opened and closed once per record (log volume is small),
+    so nothing is held open between records either.
+
+    Like ``FileHandler`` the file is created when the handler is built, so a command that logs
+    nothing still leaves the (empty) day file for ``backup manifest`` to list; an existing file
+    is not touched (an empty append opens it without bumping its mtime). Lines end in a bare
+    ``\\n`` on every platform, as in every other vcp jsonl. As in the stdlib handlers, a
+    ``RecursionError`` is not swallowed.
+    """
+
+    def __init__(self, path: Path, level: int = logging.NOTSET) -> None:
+        super().__init__(level)
+        self.path = path
+        append_whole_line(path, "")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            append_whole_line(self.path, self.format(record) + "\n")
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
+
+
 def setup_logging(log_dir: Path, *, level: int = logging.INFO) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("vcp")
     logger.setLevel(level)
     logger.propagate = False
     for handler in list(logger.handlers):
-        if isinstance(handler, logging.FileHandler):
+        if isinstance(handler, WholeLineFileHandler):
             logger.removeHandler(handler)
             handler.close()
     path = log_dir / f"vcp-{stamp()[:10]}.jsonl"
-    fh = logging.FileHandler(path, encoding="utf-8")
+    fh = WholeLineFileHandler(path)
     fh.setFormatter(JsonLinesFormatter())
     logger.addHandler(fh)
     return logger

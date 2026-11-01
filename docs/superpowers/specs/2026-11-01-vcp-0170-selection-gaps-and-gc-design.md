@@ -139,10 +139,10 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 ```
 
 - 新命令群組 `vcp gc`，目前只有 `scan`：名字本身說明它只看。後記與賽後報告寫的 `vcp gc --dry-run` 不採用：一個永遠必填的旗標暗示有一天會有不帶它的刪除模式，反目標（§2）說不會有。
-- 不刪、不改任何既有檔；唯一的寫入是 §5.7 的稽核產物（`--no-record` 時一個檔都不寫）。不上鎖：台帳以唯讀方式讀（`read_only`，略過寫到一半的最後一列）。
+- 不刪、不改任何既有檔。寫入只有兩處：每個命令都寫的每日 log（`run_command` 在命令本體之前就建 `logs/`、寫 VERDICT，gc 不例外）與 §5.7 的稽核產物（`--no-record` 時只剩 log）。不上鎖：台帳以唯讀方式讀（`read_only`，略過寫到一半的最後一列）。
 - `--root DIR`（可重複）：另外遞迴掃的目錄。不存在或不是目錄 → FAIL `not_found:`。
 - `--min-mib M`：列出的項目門檻，預設 `100`（MiB = 1024² bytes）。不是有限數或 `< 0` → FAIL `invalid:`；`0` 列出每個項目。門檻只影響列出哪些項目，各類別的總量一律算全部。
-- data root 不存在 → FAIL `not_found:`；找不到 configs root → 既有的錯誤（`resolve_configs_root`）。
+- data root 不另外檢查是否存在：`run_command` 已經先建了 `logs/`，跟其他命令一樣。打錯的 `--data-root` 掃出來只有 `logs/` 的一項 `record`，人一眼看得出來。找不到 configs root → 既有的錯誤（`resolve_configs_root`）。
 - 永遠讀整個 data root 與這個 configs root 的所有引用，沒有 `--dataset`：只讀一部分的引用，會把別的 dataset 用的檔說成沒被引用。
 
 ### 5.2 掃哪裡
@@ -151,9 +151,9 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 2. **檢查點目錄**，不遞迴：每個有 `train.yaml` 的 run，其已登記 checkpoint 所在的目錄，加上 `started` 事件裡 `--checkpoints` / `--final` glob 所在的目錄。規則與 `train status` 找 `.tmp` 的相同（0.16.0 後記 §2.1 第 19 條）：從 `vcp.train.status` 抽出公開的 `checkpoint_dirs(data_root, record) -> set[Path]`，`tmp_files` 與 gc 共用。未登記的中間 checkpoint、半途的 `.tmp` 通常就在這裡。
 3. **`--root`**，遞迴。
 
-- 根目錄先 `resolve()`；落在別的遞迴根底下的根略過（只掃一次）。
+- 根目錄先 `resolve()`。**規則跟著路徑走，不跟著根走**：data root 底下的檔一律套 data root 的分類與單位（§5.4、§5.5），即使是從 `--root ~` 走進來的；檢查點目錄直接底下的檔一律逐檔為單位；其餘 `--root` 底下的檔才以「根的直接子項」為單位。走 `--root` 時遇到 data root 就不往下走（它自己是一個根）；每個檔只算一次（以 `resolve()` 後的路徑去重）。`scan.json` 的 `roots` 照列每個根，被別的根包住的也列。
 - 不跟隨符號連結與 junction（不往下走、也不計大小）：避免繞圈與把根以外的東西算進來。
-- 讀不了的目錄（`PermissionError` 等 `OSError`）記進 `unreadable`、跳過、不 ABORT（0.16.0 後記 §2.2 第 10 條說 `train status` 會 ABORT；gc 不學它）。
+- 讀不了的目錄（`PermissionError` 等 `OSError`）記進 `unreadable`、跳過、不 ABORT（跟 0.17.0 起的 `train status` 一樣，見 §6 的第 10 條）。
 - 依目錄彙總，不把每個檔留在記憶體：`raw/` 可能有幾十萬個檔。
 - 預設不掃各 run 的 `--cwd`：那常是整個 repo 加上 venv，要看就用 `--root`。
 
@@ -172,7 +172,9 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 - configs root 沒有 card 的 run（別的 checkout 或別的專案共用這個 data root）仍以 `walk_run` 走過，所以它的 checkpoint 不會被說成沒有引用。
 - 引用者字串是 `<結論>#<role>`，例如 `run:r7#checkpoint_final`、`submission:t/S3#artifact`。目錄引用（export、venv、`image_root`、`backup_dest`）涵蓋底下每個檔。路徑一律 `resolve()`、在 Windows 上 `normcase` 之後比對。
 - **不讀 provenance 索引**：它是衍生、可刪、可能過期或不存在的索引，而且記的是 entity，沒有 checkpoint 或上傳包的檔案路徑。依賴它，錯的方向正好是把有用的檔說成沒被引用。索引檔本身歸 `rebuildable`（§5.4）。
-- 走法失敗（run 卡讀不動、`not_adopted:` 等 `ValidationFailed`）沿用 Collector 的 `_try`：記進 `skipped`、跳過，WARN（§5.8）。
+- 走法失敗記進 `skipped`、跳過，WARN（§5.8）。gc 的容忍比 backup 寬：每個走法單位（一個 run、一個 dataset、一個預登記、一個 submission、一份 backup 清單、一個產物）各自包一層，接 `VcpError`、`OSError`、`ValueError`（含 `UnicodeDecodeError` 與 pydantic 的驗證錯誤）；其他例外是程式錯誤，照舊 ABORT。backup 的 `_try` 不變。
+- gc 的記錄端以走法單位為交易：一個單位的引用先暫存，走完才併入；單位失敗就整批丟掉，不會留下「已被 skip 的 submission 仍掛在別的檔上當引用者」（Collector 的 `add` 對已存在的路徑是附加 `for_`，backup 的回滾不撤這一筆）。
+- 只記 sha、沒有路徑的權重（`eval ingest --weights` 的 `source.weights_hash`、kernel 提交的 `WeightRef`）不算引用：沒有路徑可對（§12）。
 - 記錄說有、磁碟上沒有的路徑記進 `missing`（只計數，不 WARN：刪掉本機副本、只留遠端是正常的）。
 
 ### 5.4 分類
@@ -184,12 +186,12 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 | 1 | `protected` | data root 的 `raw/`、`locks/` 底下；任何根裡的 `.git` 目錄底下 |
 | 2 | `debris` | 檔名以 `.tmp` 結尾（不分大小寫）；有 `spec.json` 沒有 `manifest.json` 的半途產物目錄裡的檔 |
 | 3 | `referenced` | 這個檔或它的上層目錄被 §5.3 的任一來源引用 |
-| 4 | `rebuildable` | `datasets/<name>/cache/` 底下（`vcp data materialize` 重建）、`indexes/` 底下（`vcp provenance rebuild` 重建） |
-| 5 | `record` | vcp 自己的版面、但沒有任何引用走到：走法失敗（`skipped`）的 run 的 `runs/<id>/`；有 `manifest.json` 的產物目錄與 `artifacts/<kind>/supersession.jsonl`；`measure/`、`submit/`、`logs/`；`datasets/<name>/` 的 `samples.jsonl`、`raw_manifest.txt`；`--root` 涵蓋到的 configs root |
+| 4 | `rebuildable` | `datasets/<name>/cache/materialize/` 底下（`vcp data materialize` 重建）；`datasets/<name>/cache/audit/` 與 `cache/dhash.jsonl`（`vcp data audit` 重建）；`indexes/` 底下（`vcp provenance rebuild` 重建） |
+| 5 | `record` | vcp 自己的版面、但沒有任何引用走到：走法失敗（`skipped`）的 run 的 `runs/<id>/`；`runs/<id>/inputs/`（`eval ingest --keep-input` 留的來源副本，run 卡沒有欄位記它）；有 `manifest.json` 的產物目錄與 `artifacts/<kind>/supersession.jsonl`；`measure/`、`submit/`、`logs/`；`datasets/<name>/` 的 `samples.jsonl`、`raw_manifest.txt`，與 `cache/` 底下其他的檔（例如 `import_skipped.jsonl`，只有重新匯入才會重寫）；`--root` 涵蓋到的 configs root |
 | 6 | `unreferenced` | 其他（含 `artifacts/<kind>/` 底下兩個檔都沒有的外來目錄） |
 
 - `protected` 排第一：`raw/` 照鐵則永不動，即使裡面有 `.tmp`。
-- 走得到的 run 目錄裡、沒有任何紀錄提到的檔（例如有人丟進去的大檔）是 `unreferenced`，不是 `record`：vcp 自己寫的 run 檔都在走法裡。沒有 `run.yaml` 的 `runs/<x>/` 也是 `unreferenced`。
+- 走得到的 run 目錄裡、沒有任何紀錄提到的檔（例如有人丟進去的大檔）是 `unreferenced`，不是 `record`：vcp 自己寫的 run 檔，除了上表點名的 `inputs/`，都在走法裡。沒有 `run.yaml` 的 `runs/<x>/` 也是 `unreferenced`。
 - `record` 不是垃圾：那是 vcp 的紀錄，只是沒有結論再依賴它（例如別的 checkout 的 dataset、被放棄的 run）。要不要整批放棄是人的決定，vcp 不說它可以刪。
 - `unreferenced` 只表示「vcp 的紀錄沒有提到」，不表示沒有別的東西需要它（筆記、notebook、別的工具）。RSNA 那次人工也看了文件；這句寫進每次輸出的最後一行。
 
@@ -200,7 +202,8 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 | 位置 | 單位 |
 |---|---|
 | `raw/<name>/…` | `raw/<name>` |
-| `datasets/<name>/cache/<mode>/…` | `datasets/<name>/cache/<mode>` |
+| `datasets/<name>/cache/materialize/<mode>[-r<長邊>]/…` | 那一個模式目錄 |
+| `datasets/<name>/cache/` 底下的其他項目（`audit/`、`dhash.jsonl`、`import_skipped.jsonl`…） | `cache/` 的直接子項 |
 | `datasets/<name>/` 的其他 | `datasets/<name>` |
 | `runs/<id>/…`、`measure/<name>/…`、`submit/<test>/<id>/…` | 那一層 |
 | `artifacts/<kind>/<id>/…` | `artifacts/<kind>/<id>` |
@@ -223,7 +226,7 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 
 - 掃完之後才用 `ArtifactWriter` 開一個產物 `artifacts/gc_scan/<id>/`；掃描中途失敗不留半途目錄。id 是 `gc-<YYYYMMDDTHHMMSSZ>-<8 位十六進位 nonce>`。
 - 這是 CLAUDE.md 裡最合適的不可變等級：寫一次、逐檔 sha、`manifest.json` 是 commit 點；之後人刪了某個項目，這份紀錄就是「當時 vcp 找不到任何引用」的證據。比照 access receipt 與 source audit 的做法。
-- `spec`：`kind=gc_scan`、`params={"min_bytes": …, "roots": <根數>}`，沒有 `inputs`（為了 input 雜湊整個 data root 不划算）。
+- `spec`：`kind=gc_scan`、`params={"min_bytes": …, "root_options": <--root 的個數>}`，沒有 `inputs`（為了 input 雜湊整個 data root 不划算）。實際掃了哪些根在 `scan.json` 的 `roots`。
 - 檔案：
   - `scan.json`：`scanned_at`、`finished_at`、`data_root`、`configs_root`、`roots`（每項 `path`、`recursive`、`source=data_root|checkpoint_dir|option`）、`min_bytes`、`totals`（每類 `bytes`、`files`）、`duplicates`（`bytes`、`files`）、`items`（列出的項目數）、`references`（讀了幾個 run、dataset、backup 清單、產物）、`missing`、`skipped`、`unreadable`、`running`；
   - `items.jsonl`：每個列出的項目一行：`path`、`kind=file|dir`、`bytes`、`files`、`class`、`referrers`、`copy`、`duplicate_of`、`duplicate_bytes`、`mtime`（最新的 mtime，`stamp` 格式）。
@@ -246,7 +249,7 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 - 後記 §2.2 第 11 條：其他 append-only jsonl（量測台帳、`prereg.log.jsonl`、`supersession.jsonl`、`history.jsonl`、`anchors.log.jsonl`、`unseal.jsonl`、`backup.log.jsonl`、每日 log、`submissions.jsonl`）改用整列 append，寫到一半失敗不留半列。
 - 後記 §2.2 第 10 條：審查留下的小項，與 `status_cmd`、`_final_locked`、`train_run` 等長函式的拆分。
 
-本 spec 會碰到 `cli_submit.status_cmd`、`final._final_locked`、`train.status.tmp_files`、`append_ledger_row` 的呼叫者：兩邊先合併的那一邊之後，另一邊 rebase；不改行為的拆分不影響本 spec 的測試。
+本 spec 會碰到 `cli_submit.status_cmd`、`final._final_locked`、`train.status.tmp_files`、`append_ledger_row` 的呼叫者，所以**實作從這兩項都合併進 `main` 之後開始**。第 10 條已讓 `train status` 略過讀不了的目錄、不跟隨符號連結，`tmp_files` 改回傳帶略過紀錄的結果；`checkpoint_dirs`（§5.2）在那之上抽出。
 
 ## 7. VERDICT 與字彙
 
@@ -258,10 +261,10 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 | `submit final` | `selection=differs` 也在已記空選取時出現；比對以標籤為準 |
 | `submit sync` | 失敗（FAIL，與 `kaggle_not_found:` 的 ABORT）也帶 `cli_warnings=`（§4.2 的範圍） |
 | `submit upload` | `sync_failed:` 帶 `cli_warnings=` |
-| `gc scan`（新） | `scan=<id>\|none` `roots=` `items=` `min_mib=` `referenced_gib=` `record_gib=` `rebuildable_gib=` `debris_gib=` `unreferenced_gib=` `protected_gib=` `duplicate_gib=` `missing=` `skipped=` `unreadable=` `running=`；後三項任一 `> 0` → WARN；FAIL `invalid:`、`not_found:`；寫產物失敗 → ABORT（原例外） |
+| `gc scan`（新） | `scan=<id>\|none` `roots=`（實際掃的根數：data root、檢查點目錄、`--root`，`resolve()` 後去重） `root_options=`（`--root` 的個數） `items=` `min_mib=` `referenced_gib=` `record_gib=` `rebuildable_gib=` `debris_gib=` `unreferenced_gib=` `protected_gib=` `duplicate_gib=` `missing=` `skipped=` `unreadable=` `running=`；後三項任一 `> 0` → WARN；FAIL `invalid:`、`not_found:`；寫產物失敗 → ABORT（原例外） |
 
 - exit code 照鐵則 2：OK / WARN 0、FAIL 1、ABORT 2。`--json` 時結果到 stdout、VERDICT 到 stderr。
-- `gc scan` 的 `run_command(context=)` 帶 `min_mib=`（有給時）與 `roots=`（`--root` 的個數）。
+- `gc scan` 的 `run_command(context=)` 帶 `min_mib=`（有給時）與 `root_options=`（有給 `--root` 時）；`roots=` 只在掃描完成後出現，同一個鍵在成功與失敗時意思不變。
 - **沒有新的 `reason=` 字彙。** 新的 VERDICT 欄位與字：`selection=unticked`、`resolved`（JSON）、`gc scan` 的各欄位、FAIL 時的 `cli_warnings=`。
 
 ## 8. 相容性與升級
@@ -314,7 +317,10 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 
 ### 10.3 gc 掃描（合成的 data root 與 `--root`）
 
-- 分類：`raw/` 的檔 → `protected`（含裡面的 `.tmp`）；`.tmp` 與半途產物 → `debris`；`cache/`、`indexes/` → `rebuildable`；沒有引用的 run 目錄、產物、`samples.jsonl` → `record`；data root 頂層的不明大檔與 `--root` 裡的 → `unreferenced`；`.git` → `protected`。
+- 分類：`raw/` 的檔 → `protected`（含裡面的 `.tmp`）；`.tmp` 與半途產物 → `debris`；`cache/materialize/`、`cache/audit/`、`cache/dhash.jsonl`、`indexes/` → `rebuildable`；`cache/import_skipped.jsonl`、`runs/<id>/inputs/`、沒有引用的 run 目錄、產物、`samples.jsonl` → `record`；data root 頂層的不明大檔與 `--root` 裡的 → `unreferenced`；`.git` → `protected`。
+- 單位：兩個 materialize 模式（`png`、`npy-r256`）是兩項，不併成 `cache/materialize`。
+- 根互相包含：`--root` 是 data root 的上層時，data root 底下的檔仍套 data root 的類別與單位（`raw/<name>` 仍是一項），每個檔只算一次。
+- 走法容忍：run 卡不是 UTF-8（`UnicodeDecodeError`）、讀 run 卡時 `PermissionError` → `skipped=1`、不 ABORT；一個 submission 的走法在中途失敗時，它已經走到的檔不帶 `submission:` 引用者（記錄端的交易）。
 - 引用：被 submission 用的 checkpoint 同時有 `run:` 與 `submission:` 引用者；`train upload` 驗過的 → `copy`；export 目錄、venv、本機上傳副本、外部 `image_root`、本機 backup 目的地、產物 input → `referenced`；backup 清單列的舊 checkpoint 版本 → `backup:` 引用者。
 - 別的 dataset（configs 沒有 card）的 run 的外部 checkpoint → `referenced`，不是 `unreferenced`。
 - 走得到的 run 目錄裡多放的大檔、沒有 `run.yaml` 的 `runs/<x>/` → `unreferenced`；走法失敗的 run 目錄 → `record`。
@@ -323,12 +329,12 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 - 不讀索引：刪掉或弄壞 `indexes/` 的檔，結果除了那些檔本身以外不變。
 - WARN：run 卡壞掉 → `skipped=1`、它的 run 目錄是 `record`；`os.scandir` 丟 `PermissionError`（monkeypatch）→ `unreadable=1`、不 ABORT；最新 attempt 是 `running` → `running=1`。
 - 符號連結不跟隨（沒有建立權限的 Windows 跳過）。
-- 輸入：`--min-mib -1`、`nan` → `invalid:`；不存在的 `--root`、data root → `not_found:`。
+- 輸入：`--min-mib -1`、`nan` → `invalid:`；不存在的 `--root` → `not_found:`；不存在的 data root → 照常掃（只有 `run_command` 建的 `logs/`），OK。
 
 ### 10.4 稽核紀錄與不刪
 
 - 產物：`artifacts/gc_scan/<id>/` 有 `manifest.json`、`scan.json`、`items.jsonl`，`vcp artifact verify` 通過；`items.jsonl` 等於 `--json` 的 `items`。
-- 不刪不改：掃描前後 data root 與每個 `--root` 的檔案清單、大小、mtime 相同，只多了那個產物目錄；`--no-record` 時完全相同、`scan=none`。
+- 不刪不改：掃描前後 data root 與每個 `--root` 的檔案清單、大小、mtime 相同，只多了那個產物目錄與 `logs/` 的當日 log；`--no-record` 時只多 `logs/`、`scan=none`。
 - Collector：backup 的既有測試全過；`backup manifest` 的位元組 golden（`all`、`run:`、`submission:` 各一）在重構前後相同；gc 模式下 `sha256_file` 從未被呼叫（除了 §5.5 的候選）。
 - `checkpoint_dirs` 抽出之後，`train status` 的 `tmp=` 測試全過。
 
@@ -380,6 +386,8 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
   - 不知道平台上的副本（例如 Kaggle dataset）；backup 推過的副本不逐檔判斷，只有 `train upload` 驗過的 checkpoint 有 `copy`。
   - 不跟隨符號連結與 junction；硬連結會被算兩次；經由連結路徑寫下的引用可能對不到掃到的檔。
   - 重複檔只認位元組完全相同、而且被引用的那一份有記錄 sha 的；壓縮或重新打包過的認不出來。
+  - 只以 sha 記的權重（`eval ingest --weights`、kernel 提交的 `WeightRef`）沒有路徑，不算引用、也不參與重複檔比對：不經 `vcp train run` 登記的權重會出現在 `unreferenced`。
+  - `--no-record` 也會寫每日 log（所有命令共用的 `run_command`）；真正唯讀的 data root 上，log 寫不了就跟其他命令一樣。
   - 快照不上鎖：正在訓練時新寫的 checkpoint 還沒登記，會出現在 `unreferenced`（所以 `running > 0` 時 WARN）。
   - 很大的 `--root` 會掃很久；沒有進度輸出。
   - 每次掃描留一個小產物，它們本身會在之後的掃描裡算成 `record`。
@@ -403,3 +411,15 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 13. **重複檔只在大小相符時才雜湊，只比有記錄 sha 的被引用檔**。— 雜湊每個大檔、或完全不比。— 雜湊全部在大的 `--root` 上可能幾十分鐘；完全不比就認不出逐位元相同的權重複本。代價是改過格式的複本認不出來。
 14. **引用來源包含 backup 清單、本機 backup 目的地與產物的 input**。— 只看 run 與台帳。— 掃到備份目的地時會把整份備份說成沒被引用。代價是 backup 清單裡的舊版本檔也算被引用，人得看引用者才知道只剩 backup 在記它。
 15. **gc 沒有 `--dataset`，永遠讀全部引用**。— 允許只看一個 dataset。— 只讀一部分引用會把別的 dataset 用的檔說成沒被引用。代價是大 data root 每次都走全部紀錄。
+
+### 13.1 builder check 之後的裁決（2026-11-01，controller）
+
+審查者讀完 spec、對過程式碼後，有幾處 spec 的說法與現有程式不符，或留下要猜的地方；處置如下，正文已照改。
+
+16. **每日 log 照寫**（§5.1）：`run_command` 在命令本體之前就建 `logs/`、寫 VERDICT，`--no-record` 也一樣；data root 不另外判斷「不存在」。— 讓 gc 不寫 log。— 要動所有命令共用的失敗與 log 路徑，超出這一版。
+17. **快取的實際版面是 `cache/materialize/<mode>[-r<長邊>]/`**（§5.4、§5.5）：每個模式目錄一項；`cache/audit/`、`dhash.jsonl` 由 `vcp data audit` 重建，歸 `rebuildable`；`import_skipped.jsonl` 只有重新匯入才重寫，歸 `record`。
+18. **`runs/<id>/inputs/` 歸 `record`**（§5.4）：`eval ingest --keep-input` 的來源副本是 vcp 寫的，但 run 卡沒有欄位記它；只在 gc 這邊認，backup 清單不變。— 加進 backup 的走法。— 會改 backup 清單的位元組，是另一件事。
+19. **規則跟著路徑走**（§5.2）：被 `--root` 包住的 data root 仍套 data root 的規則。— 依根套規則。— `--root ~` 會讓 `raw/` 失去單位與保護的語意。
+20. **gc 的走法容忍較寬、以單位為交易**（§5.3）：接 `VcpError`、`OSError`、`ValueError`，其他例外 ABORT；backup 不變。
+21. **只記 sha 的權重不算引用**（§5.3、§12）。— 對每個大檔算 sha 去比。— 大的 `--root` 上會花幾十分鐘。
+22. **`roots=` 是實際掃的根數，`--root` 的個數另叫 `root_options=`**（§7）。

@@ -452,7 +452,9 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
         "missing / slots / differs; sync and upload count the platform CLI's warning lines; "
         "train: low_disk: before the first write and after a failed attempt, disk_full: from "
         "the console and from vcp's own writes, tmp= in train status; a yaml rewrite keeps the "
-        "old file whole and retries a shared target on Windows",
+        "old file whole and retries a shared target on Windows; an interrupted "
+        "train.log.jsonl append leaves no half line; a first checkpoint save that failed in a "
+        "directory where nothing was registered is still found by train status",
         {
             "tests/unit/submit/test_select.py": [
                 "test_select_records_the_ticked_ids_once",
@@ -471,6 +473,10 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
                 "test_a_child_that_ran_out_of_disk_fails_with_disk_full",
                 "test_vcp_that_cannot_write_its_console_stops_the_child_and_aborts",
                 "test_a_train_yaml_that_cannot_be_saved_after_an_upload_aborts_with_disk_full",
+                "test_a_first_save_that_failed_is_found_by_train_status",
+            ],
+            "tests/unit/train/test_schema_records.py": [
+                "test_a_failed_append_leaves_train_log_as_it_was_and_the_error_unchanged",
             ],
             "tests/unit/train/test_status.py": [
                 "test_status_lists_leftover_tmp_files_in_the_run_and_beside_checkpoints",

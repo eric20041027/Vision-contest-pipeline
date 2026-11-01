@@ -306,16 +306,16 @@ def _final_locked(
         ledger.append(LedgerRow(event="lock", ts=stamp(), reason="final"))
     resend = None if needs_reupload is None else resend_hint(profile, needs_reupload)
     return FinalResult(
-        row,
-        chosen,
-        unranked,
-        needs_reupload,
-        warnings,
-        not dry_run,
-        resend,
-        selection,
-        recorded,
-        next_step,
+        row=row,
+        chosen=chosen,
+        unranked=unranked,
+        needs_reupload=needs_reupload,
+        warnings=warnings,
+        written=not dry_run,
+        resend=resend,
+        selection=selection,
+        recorded=recorded,
+        next_step=next_step,
     )
 
 

@@ -470,6 +470,74 @@ def test_warnings_of_different_pages_keep_the_order_they_first_appeared_in():
     assert get_platform("kaggle").list_submissions(_profile(), clean).warnings == ()
 
 
+def test_a_later_page_that_fails_keeps_the_warnings_of_the_pages_before_it():
+    """Page one printed a warning and was read; page two fails. The warning is a fact about the
+    CLI the command already learned, so it rides on the error for the VERDICT's count."""
+    page1, _ = _two_pages()
+    runner = FakeRunner([(0, f"{OUTDATED}\n{page1}", ""), (2, "", f"boom {SECRET}")])
+    with pytest.raises(PlatformError, match="kaggle CLI failed") as ei:
+        get_platform("kaggle").list_submissions(_profile(), runner)
+    assert ei.value.cli_warnings == (OUTDATED,)
+    assert ei.value.fields == {"exit_code": 2} and SECRET not in str(ei.value)
+
+
+def test_a_later_page_that_times_out_keeps_the_warnings_of_the_pages_before_it():
+    page1, _ = _two_pages()
+    pages = iter([f"{OUTDATED}\n{page1}", None])
+
+    def runner(args):
+        page = next(pages)
+        if page is None:
+            raise subprocess.TimeoutExpired(args, 120.0)
+        return subprocess.CompletedProcess(args, 0, page, "")
+
+    with pytest.raises(PlatformTimeout) as ei:
+        get_platform("kaggle").list_submissions(_profile(), runner)
+    assert ei.value.cli_warnings == (OUTDATED,)
+
+
+def test_the_warnings_an_error_already_carries_follow_the_earlier_pages_each_line_once():
+    page1, _ = _two_pages()
+    pages = iter([f"Warning: maintenance tonight\n{OUTDATED}\n{page1}"])
+
+    def runner(args):
+        try:
+            return subprocess.CompletedProcess(args, 0, next(pages), "")
+        except StopIteration:
+            raise PlatformError(
+                "wrapper failed", cli_warnings=(OUTDATED, "Warning: rate limited")
+            ) from None
+
+    with pytest.raises(PlatformError, match="wrapper failed") as ei:
+        get_platform("kaggle").list_submissions(_profile(), runner)
+    assert ei.value.cli_warnings == (
+        "Warning: maintenance tonight",
+        OUTDATED,
+        "Warning: rate limited",
+    )
+
+
+def test_a_first_page_that_fails_carries_no_warnings():
+    runner = FakeRunner([(2, "", "boom")])
+    with pytest.raises(PlatformError) as ei:
+        get_platform("kaggle").list_submissions(_profile(), runner)
+    assert ei.value.cli_warnings == ()
+
+
+def test_a_list_that_never_ends_keeps_the_warnings_it_collected(monkeypatch):
+    monkeypatch.setattr(kaggle, "MAX_PAGES", 2)
+    endless = json.dumps(
+        {
+            "submissions": [{"fileName": "a.csv", "date": "2026-09-01T00:00:00Z"}],
+            "nextPageToken": "again",
+        }
+    )
+    runner = FakeRunner([(0, f"{OUTDATED}\n{endless}", "")] * 2)
+    with pytest.raises(PlatformError, match="kept paging") as ei:
+        get_platform("kaggle").list_submissions(_profile(), runner)
+    assert ei.value.cli_warnings == (OUTDATED,)
+
+
 def test_parse_submissions_redacts_platform_strings():
     rows = [
         {
@@ -700,6 +768,17 @@ def test_a_read_back_cut_short_keeps_the_warnings_of_the_looks_before_it(no_wait
     with pytest.raises(PlatformError, match="upload_unconfirmed:") as ei:
         _upload(runner)
     assert ei.value.fields["readback"] == "failed" and ei.value.cli_warnings == (OUTDATED,)
+
+
+def test_a_look_whose_later_page_fails_keeps_the_warnings_of_its_earlier_pages(no_wait):
+    """The look reads page one (a warning, a next-page token), page two fails: the upload is
+    left unconfirmed, and the warning page one printed is not dropped with the half-read look."""
+    page1, _ = _two_pages()
+    runner = FakeRunner(
+        [(0, KERNEL_REPLY, ""), (0, f"{OUTDATED}\n{page1}", ""), (2, "", "503 Service Unavailable")]
+    )
+    res = _kernel_upload(runner)
+    assert (res.confirmed, res.readback, res.cli_warnings) == (False, "failed", (OUTDATED,))
 
 
 def test_a_platform_error_carries_no_warnings_unless_given_some():

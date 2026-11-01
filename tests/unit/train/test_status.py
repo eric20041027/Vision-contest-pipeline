@@ -8,7 +8,14 @@ from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir
 from vcp.data.evidence import RunScope, attach_evidence
 from vcp.train.checkpoints import mark_final, register
-from vcp.train.records import bind_ref, load_record, read_events, save_record
+from vcp.train.records import (
+    append_event,
+    bind_ref,
+    events_path,
+    load_record,
+    read_events,
+    save_record,
+)
 from vcp.train.schema import Attempt, TrainRecord, UploadRecord
 from vcp.train.status import TmpFile, status, upload_run
 
@@ -271,6 +278,232 @@ def test_status_lists_a_tmp_file_once_when_two_checkpoints_share_a_directory(roo
     not one per checkpoint."""
     _, w = _seeded(roots)
     (w / "resume.pth.tmp").write_bytes(b"r")
+    assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]
+
+
+def _unregistered(roots, *, cwd="work"):
+    """A run whose first checkpoint save failed: a record with no checkpoint registered, so
+    nothing but the `started` event says where the child was writing."""
+    rec = TrainRecord(
+        run_id="r1",
+        dataset="tiny",
+        plan_id="fixed-v1",
+        trained_on=["train"],
+        config_hash="ab" * 32,
+        cwd=cwd,
+        command=["python"],
+        attempts=[
+            Attempt(
+                n=1, started_at=STAMP, console="train/console.1.log", status="failed", exit_code=1
+            )
+        ],
+    )
+    save_record(roots.data, rec)
+    return rec
+
+
+def _started(roots, attempt=1, **payload):
+    append_event(roots.data, "r1", "started", attempt, command=["python"], seed=None, **payload)
+
+
+def test_status_scans_the_glob_directories_of_the_started_event(roots):
+    """The RSNA failure mode: the first checkpoint save died, nothing was ever registered, and
+    the `.tmp` it left in the checkpoint directory was invisible. The `started` event's
+    patterns say where to look: the nearest existing directory of cwd + the pattern's fixed
+    prefix, for `--checkpoints` and for `--final`."""
+    _unregistered(roots)
+    _started(roots, checkpoints=["ckpt/epoch-*.pt"], final="out/best.pt")
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "epoch-1.pt.tmp").write_bytes(b"tt")
+    (ckpt / "sub").mkdir()
+    (ckpt / "sub" / "deep.tmp").write_bytes(b"deep")  # not recursive
+    out = roots.data / "work" / "out"
+    out.mkdir()
+    (out / "best.pt.tmp").write_bytes(b"b")  # `--final` is a pattern too
+    (roots.data / "work" / "elsewhere.tmp").write_bytes(b"e")  # not on any pattern's path
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile("work/ckpt/epoch-1.pt.tmp", 2),
+        TmpFile("work/out/best.pt.tmp", 1),
+    ]
+
+
+def test_status_measures_a_glob_directory_the_child_never_created_where_it_would_be(roots):
+    _unregistered(roots)
+    _started(roots, checkpoints=["not/yet/there/*.pt"], final=None)
+    (roots.data / "work").mkdir()
+    (roots.data / "work" / "stray.tmp").write_bytes(b"s")  # the nearest existing directory
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/stray.tmp", 1)]
+
+
+def test_status_lists_the_tmp_of_an_absolute_pattern_outside_the_data_root_by_absolute_path(
+    roots, tmp_path
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "m.pt.tmp").write_bytes(b"tt")
+    _unregistered(roots)
+    _started(roots, checkpoints=[(outside / "*.pt").as_posix()], final=None)
+
+    assert status(roots.data, "r1").tmp == [TmpFile((outside / "m.pt.tmp").resolve().as_posix(), 2)]
+
+
+def test_status_does_not_recurse_for_a_double_star_pattern(roots):
+    """`**/x.pt` has no fixed prefix, so its directory is the cwd itself; walking under it would
+    walk venvs. Only files directly in the cwd count."""
+    _unregistered(roots)
+    _started(roots, checkpoints=["**/x.pt"], final=None)
+    work = roots.data / "work"
+    (work / ".venv" / "lib").mkdir(parents=True)
+    (work / ".venv" / "lib" / "cache.tmp").write_bytes(b"c")
+    (work / "x.pt.tmp").write_bytes(b"x")
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/x.pt.tmp", 1)]
+
+
+def test_status_adds_nothing_for_a_started_event_without_the_keys(roots):
+    """An older vcp wrote no patterns; its runs read exactly as before."""
+    _unregistered(roots)
+    _started(roots)
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "epoch-1.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_status_adds_nothing_when_there_is_no_event_log_at_all(roots):
+    _unregistered(roots)
+    (roots.data / "work").mkdir()
+    (roots.data / "work" / "x.tmp").write_bytes(b"x")
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_status_reads_the_event_log_tolerantly(roots):
+    """A line that does not parse -- a torn last line from a crash, a half-written multi-byte
+    character, a row that is not an object -- is skipped; it must not make `train status`
+    ABORT, and the readable `started` rows still count."""
+    _unregistered(roots)
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None)
+    log = events_path(roots.data, "r1")
+    with log.open("ab") as f:
+        f.write(b"this is not json\n")
+        f.write(b"[1, 2]\n")
+        f.write(b'{"event": "started", "checkpoints": "ckpt/*.pt"}\n')  # not a list
+        f.write(b'{"event": "started", "checkpoints": [5, null, ["x"]], "final": 3}\n')
+        f.write(b'{"event": "note", "checkpoints": ["ignored/*.pt"]}\n')  # not a started event
+        f.write('{"ts": "2026-10-30T00:00:00.000Z", "event": "started", "cwd": "é'.encode()[:-1])
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "epoch-1.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/ckpt/epoch-1.pt.tmp", 2)]
+
+
+def test_status_survives_a_log_line_too_deeply_nested_to_parse(roots):
+    """`json.loads` answers a runaway `[[[[...` with RecursionError, not ValueError; a corrupt
+    line of that shape is skipped like any other."""
+    _unregistered(roots)
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None)
+    with events_path(roots.data, "r1").open("ab") as f:
+        f.write(b"[" * 200_000 + b"\n")
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "epoch-1.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/ckpt/epoch-1.pt.tmp", 2)]
+
+
+def test_status_does_not_scan_the_parents_of_a_cwd_that_is_gone(roots, tmp_path):
+    """A stale absolute `cwd` in an old event: climbing from it to the nearest existing
+    directory would list an unrelated ancestor's `.tmp` files."""
+    _unregistered(roots)
+    (tmp_path / "stray.tmp").write_bytes(b"s")  # an ancestor of the stale cwd
+    gone = tmp_path / "gone" / "run"  # never created
+    _started(roots, cwd=str(gone), checkpoints=["ckpt/*.pt"], final="out/best.pt")
+
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_status_skips_a_relative_pattern_when_the_records_cwd_is_gone(roots):
+    """The same bound for an event without a `cwd`: the record's is used, and if it is gone the
+    pattern says nothing (the data root above it is nobody's checkpoint directory)."""
+    _unregistered(roots)  # cwd "work", never created
+    (roots.data / "junk.tmp").write_bytes(b"j")
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None)
+
+    assert status(roots.data, "r1").tmp == []
+
+
+def test_status_lets_a_relative_pattern_reach_a_sibling_but_never_an_ancestor(roots):
+    _unregistered(roots)
+    (roots.data / "work").mkdir()
+    (roots.data / "side").mkdir()
+    (roots.data / "side" / "m.pt.tmp").write_bytes(b"m")
+    (roots.data / "junk.tmp").write_bytes(b"j")  # in the parent of the cwd
+    _started(roots, checkpoints=["../side/*.pt", "../not-there/*.pt"], final=None)
+
+    # `../not-there` does not exist: its nearest directory is the cwd's parent, an ancestor
+    assert status(roots.data, "r1").tmp == [TmpFile("side/m.pt.tmp", 1)]
+
+
+def test_status_collects_the_patterns_of_every_attempt(roots):
+    _unregistered(roots)
+    _started(roots, attempt=1, checkpoints=["a/*.pt"], final=None)
+    _started(roots, attempt=2, checkpoints=["b/*.pt"], final="c/best.pt")
+    for d in ("a", "b", "c"):
+        (roots.data / "work" / d).mkdir(parents=True)
+        (roots.data / "work" / d / "m.tmp").write_bytes(d.encode())
+
+    assert [t.path for t in status(roots.data, "r1").tmp] == [
+        "work/a/m.tmp",
+        "work/b/m.tmp",
+        "work/c/m.tmp",
+    ]
+
+
+def test_status_resolves_each_attempts_globs_against_that_attempts_own_cwd(roots, tmp_path):
+    """`--resume` may run from another directory; the second attempt's relative patterns point
+    under the cwd its `started` event recorded, not under the cwd of the first attempt."""
+    second = tmp_path / "second"
+    (second / "ckpt").mkdir(parents=True)
+    (second / "ckpt" / "m.pt.tmp").write_bytes(b"22")
+    first = roots.data / "work" / "ckpt"
+    first.mkdir(parents=True)
+    (first / "m.pt.tmp").write_bytes(b"1")
+    _unregistered(roots)  # the record's cwd is "work": the first attempt's
+    _started(roots, attempt=1, cwd=str(roots.data / "work"), checkpoints=["ckpt/*.pt"], final=None)
+    _started(roots, attempt=2, cwd=str(second), checkpoints=["ckpt/*.pt"], final=None)
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile((second / "ckpt" / "m.pt.tmp").resolve().as_posix(), 2),
+        TmpFile("work/ckpt/m.pt.tmp", 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    "cwd",
+    [None, "", 5, ["x"]],
+    ids=["no-key", "empty", "not-a-string", "not-a-string-list"],
+)
+def test_status_falls_back_to_the_records_cwd_when_the_event_has_no_usable_cwd(roots, cwd):
+    _unregistered(roots)
+    extra = {} if cwd is None else {"cwd": cwd}
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None, **extra)
+    ckpt = roots.data / "work" / "ckpt"
+    ckpt.mkdir(parents=True)
+    (ckpt / "m.pt.tmp").write_bytes(b"tt")
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/ckpt/m.pt.tmp", 2)]
+
+
+def test_status_lists_a_tmp_once_when_a_glob_directory_is_also_a_checkpoint_directory(roots):
+    _, w = _seeded(roots)
+    _started(roots, checkpoints=["weights/*.pt"], final="weights/best.pt")
+    (w / "resume.pth.tmp").write_bytes(b"r")
+
     assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]
 
 

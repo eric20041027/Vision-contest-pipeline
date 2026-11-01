@@ -375,6 +375,78 @@ def test_train_run_config_file_is_copied_and_hashed(roots, work, tmp_path):
     ) == "epochs: 1\n"
 
 
+def test_started_event_records_the_checkpoint_globs_as_given(roots, work):
+    """spec 2026-10-30 §12: `train status` has to know where the child writes even when nothing
+    was ever registered, so the patterns ride on the existing `started` event (free-form, so an
+    older vcp still reads it; `train.yaml` is strict and does not change)."""
+    _seed(roots)
+    train_run(_spec(roots, work, checkpoints=["weights/*.pt", "extra/**/*.ckpt"]))
+    started = read_events(roots.data, "r1")[0]
+    assert started["event"] == "started"
+    assert started["checkpoints"] == ["weights/*.pt", "extra/**/*.ckpt"]
+    assert started["final"] == "weights/best.pt"
+
+
+def test_started_event_carries_a_null_final_when_none_was_given(roots, work):
+    _seed(roots)
+    train_run(_spec(roots, work, final=None))
+    started = read_events(roots.data, "r1")[0]
+    assert started["checkpoints"] == ["weights/*.pt"]
+    assert "final" in started and started["final"] is None
+
+
+def test_a_first_save_that_failed_is_found_by_train_status(roots, work):
+    """The RSNA failure mode end to end: the child died in its first checkpoint save, leaving a
+    `.tmp` in a directory where nothing was ever registered."""
+    _seed(roots)
+    (work / "dies_saving.py").write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path('weights').mkdir(exist_ok=True)\n"
+        "Path('weights/best.pt.tmp').write_bytes(b'half')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    res = train_run(_spec(roots, work, command=[sys.executable, "dies_saving.py"]))
+    assert res.attempt.status == "failed" and res.record.checkpoints == []
+    leftovers = status_view(roots.data, "r1").tmp
+    assert [(t.path.rsplit("/", 1)[-1], t.bytes) for t in leftovers] == [("best.pt.tmp", 4)]
+
+
+def test_a_resume_from_another_cwd_is_scanned_where_that_attempt_wrote(roots, work, tmp_path):
+    """`--resume` does not insist on the first attempt's `--cwd`; the `.tmp` its second attempt
+    left in its own checkpoint directory is found, as well as the first attempt's."""
+    _seed(roots)
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path('weights').mkdir(exist_ok=True)\n"
+        "Path('weights/best.pt.tmp').write_bytes(b'half')\n"
+        "sys.exit(1)\n"
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    for d in (work, other):
+        (d / "dies_saving.py").write_text(script, encoding="utf-8")
+    command = [sys.executable, "dies_saving.py"]
+    train_run(_spec(roots, work, command=command))
+    train_run(_spec(roots, other, command=command, resume=True))
+    paths = {t.path for t in status_view(roots.data, "r1").tmp}
+    assert paths == {
+        (work / "weights" / "best.pt.tmp").resolve().as_posix(),
+        (other / "weights" / "best.pt.tmp").resolve().as_posix(),
+    }
+
+
+def test_each_attempt_records_its_own_globs(roots, work):
+    _seed(roots)
+    train_run(_spec(roots, work, checkpoints=["weights/*.pt"], final=None))
+    train_run(_spec(roots, work, resume=True, checkpoints=["weights/*.pt", "more/*.pt"]))
+    started = [e for e in read_events(roots.data, "r1") if e["event"] == "started"]
+    assert [e["attempt"] for e in started] == [1, 2]
+    assert started[1]["checkpoints"] == ["weights/*.pt", "more/*.pt"]
+
+
 def test_train_run_failed_command_registers_but_does_not_upload(roots, work, tmp_path):
     _seed(roots)
     res = train_run(

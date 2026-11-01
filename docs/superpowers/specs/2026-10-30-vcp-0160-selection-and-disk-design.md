@@ -217,6 +217,7 @@ uv run vcp submit select --dataset T --record S5,S3 [--message "勾選時的備�
   - 人看的行：`tmp: <path> (<bytes> bytes)`；
   - `--json` 的 `tmp`：`[{path, bytes}]`，`path` 是 `store_path`。
 - 唯讀、不刪。`--checkpoints` 的 glob 沒有存進 `train.yaml`，所以從沒登記過 checkpoint 的目錄看不到（§12）。
+  - 2026-10-31 註：現在會掃 glob 所在的目錄——`train run` 把 `--checkpoints` / `--final` 的 glob 寫進 `started` 事件，`train status` 據此多看那些目錄；見後記 `docs/superpowers/plans/2026-10-30-vcp-0160-selection-and-disk-followups.md` §2.1 第 19 條。
 
 ### 5.6 vcp 自己的 yaml 改成原子替換（裁決 R3）
 
@@ -389,6 +390,7 @@ uv run vcp submit select --dataset T --record S5,S3 [--message "勾選時的備�
 - **Windows 的重試只等約 1.55 秒。** 更久的佔用（例如防毒掃描大檔）仍會讓替換失敗：那次寫入原樣丟出、舊檔完整，`train run` 照既有規則 ABORT。
 - **`status` 看不到 CLI 過舊**（裁決 R1）：要等下一次 `sync` 或 `upload` 才 WARN。
 - **`.tmp` 的掃描範圍**：從沒登記過 checkpoint 的目錄看不到。補法之一是把 `--checkpoints` / `--final` 的 glob 寫進 `started` 事件（`train.log.jsonl` 不驗欄位，不破舊版），`train status` 再掃它們的前綴。本版不做，待使用者決定。
+  - 2026-10-31 註：已做——`started` 事件帶著 glob，`train status` 掃它們所在的目錄；見後記 `docs/superpowers/plans/2026-10-30-vcp-0160-selection-and-disk-followups.md` §2.1 第 19 條。
 - **選取以 id 為單位。** 同一個 id 傳過兩次時，vcp 不知道勾的是哪一發。要分到每一發，得讓 `--record` 收 `<id>@<ref>`；目前沒有需要。
 - **不能記「什麼都沒勾」。** 空的選取被拒（Kaggle 這時會自動用 public 最好的兩發）。要支援的話另加 `--none`。
 - **`foreign:<ref>` 的 ref 若後來被 `_ours` 認成我們自己的一發**，標籤不會自動換成 id，`differs` 可能誤報。

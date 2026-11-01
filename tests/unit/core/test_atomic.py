@@ -150,6 +150,22 @@ def test_posix_does_not_retry_a_permission_error(tmp_path, monkeypatch):
     assert len(calls) == 1 and sleeps == []
 
 
+@pytest.mark.parametrize("windows", [True, False])
+def test_the_directory_fsync_asks_the_same_question_as_the_replace_retry(
+    tmp_path, monkeypatch, windows
+):
+    """One Windows test for both: `IS_WINDOWS` decides whether the rename's directory is fsynced
+    (a directory cannot be opened for it on Windows) exactly as it decides the retry."""
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(atomic, "IS_WINDOWS", windows)
+    monkeypatch.setattr(atomic.os, "open", lambda path, flags: calls.append(("open", path)) or 7)
+    monkeypatch.setattr(atomic.os, "fsync", lambda fd: calls.append(("fsync", fd)))
+    monkeypatch.setattr(atomic.os, "close", lambda fd: calls.append(("close", fd)))
+    atomic._fsync_dir(tmp_path)
+    expected = [] if windows else [("open", tmp_path), ("fsync", 7), ("close", 7)]
+    assert calls == expected
+
+
 def test_the_replace_temp_name_is_one_is_tmp_name_knows(tmp_path, monkeypatch):
     target = tmp_path / "t.yaml"
     target.write_bytes(b"old\n")

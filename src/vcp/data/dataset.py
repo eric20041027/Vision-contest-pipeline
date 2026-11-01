@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from vcp.core.atomic import append_whole_line
 from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.core.errors import IntegrityError, SealedSubsetError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
@@ -66,8 +67,7 @@ def append_unseal(
     line = json.dumps(record, ensure_ascii=False) + "\n"
     target = paths.unseal_jsonl(plan.plan_id)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(line)
+    append_whole_line(target, line)
     return sha256_text(line)
 
 

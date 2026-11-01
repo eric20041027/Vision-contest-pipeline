@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
 
+from vcp.core.atomic import append_whole_line
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
@@ -51,11 +52,14 @@ def set_anchor(paths: DatasetPaths, key: str, anchor: Anchor, *, replace: bool =
     anchors[key] = anchor
     paths.measure_dir.mkdir(parents=True, exist_ok=True)
     row = {"action": action, "key": key, **anchor.model_dump(mode="json")}
-    with (paths.measure_dir / "anchors.log.jsonl").open("a", encoding="utf-8", newline="\n") as f:
-        # Logged before it is applied: a crash between this write and the one below leaves a row
-        # here with no matching change in anchors.json below -- detectable -- never the reverse
-        # (an applied change with no audit trail at all).
-        f.write(json.dumps({**row, "ts": stamp()}, ensure_ascii=False) + "\n")
+    # Logged before it is applied: a crash between this write and the one below leaves a row
+    # here with no matching change in anchors.json below -- detectable -- never the reverse
+    # (an applied change with no audit trail at all). A row that does not fit leaves the log as
+    # it was and raises here, before anchors.json is touched.
+    append_whole_line(
+        paths.measure_dir / "anchors.log.jsonl",
+        json.dumps({**row, "ts": stamp()}, ensure_ascii=False) + "\n",
+    )
     payload = (
         json.dumps(
             {k: a.model_dump(mode="json") for k, a in sorted(anchors.items())},

@@ -3,8 +3,8 @@
 **Traceable training records for image-recognition competitions.**
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.15.1](https://img.shields.io/badge/version-0.15.1-informational.svg)](CHANGELOG.md)
-[![Tests 2320](https://img.shields.io/badge/tests-2320%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.16.0](https://img.shields.io/badge/version-0.16.0-informational.svg)](CHANGELOG.md)
+[![Tests 2549](https://img.shields.io/badge/tests-2549%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -155,7 +155,7 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 
 ## Roadmap
 
-`0.15.1`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
+`0.16.0`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
 
 1. **Lessons from RSNA (0.16.0).** Record the final selection you actually made on the platform and warn when it differs from vcp's pick; warn when the Kaggle CLI is out of date; check free disk space before training and name a full disk in the verdict.
 2. **A safe clean-up report.** `vcp gc --dry-run` lists large files and what references each one; it never deletes.

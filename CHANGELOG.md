@@ -16,6 +16,74 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`，再以本檔該版的段落建 GitHub Release：`gh release create vx.y.z --verify-tag --title "vcp x.y.z" --notes-file <該版段落>`（repo 首頁的 Releases 欄才會跟上；0.15.1 以前的 tag 在 2026-10-24 一次補齊）。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.16.0] - 2026-11-01
+
+RSNA Knee 收尾後記（`docs/superpowers/plans/2026-10-23-rsna-wrapup-followups.md`）§1 的 1b、§2、§3（#58、#61；
+spec `docs/superpowers/specs/2026-10-30-vcp-0160-selection-and-disk-design.md`，後記
+`docs/superpowers/plans/2026-10-30-vcp-0160-selection-and-disk-followups.md`）；tag `v0.16.0` 打在發版 PR 的
+合併 commit 上。
+MINOR 的理由：
+- 台帳與產物的新內容：提交台帳的事件 `selected`；`submit.yaml` 的鍵 `selection_warn_hours`；`env.<n>.json` 的
+  `disk`；`train.log.jsonl` 的 `disk_full`／`low_disk` note，以及 `started` 事件的 `checkpoints`、`final`。
+- CLI 契約：新命令 `vcp submit select`、新選項 `train run --min-free-gib`；新 VERDICT 欄位 `selected=`
+  `written=` `selection=`（`select`、`status`、`final`）、`cli_warnings=`（`sync`、`upload`）、`free_gib=`
+  `min_free_gib=` `disk_path=` `disk_evidence=` `disk_check=`（`train run`）、`tmp=`（`train status`）；新
+  `reason=` 字彙 `low_disk:`、`disk_full:`（只在 `train run`）；`status`、`final`、`sync`、`upload`、`train run`、
+  `train status` 可能從 OK 變成 WARN。
+- API：`Platform.list_submissions` 回傳 `PlatformList`（舊的 list 回傳仍被接受）。
+
+### Added
+- `vcp submit select --dataset T --record A,B [--message M]`：記下在平台上實際勾選的最終提交，一組選取記一列
+  （同一組再記不寫）；`final` 封槍之後也能記；不看截止、不呼叫平台。
+- `submit status` 的 `selected=<n>|none`、`selection=none|ok|missing|slots|differs`：截止前
+  `selection_warn_hours`（預設 48，`null` 關掉 `missing`）還沒記、數量不對、或與 `final` 不同時 WARN；只在
+  `board_rule: best` 核對。`report` 標出被選的列；`final` 印 `next:`，已記的選取與這次不同時 WARN
+  `selection=differs`。
+- `sync`、`upload` 的 `cli_warnings=<n>`：每行印 `cli_warning: <行>`，提到 outdated 時提示升級 CLI；警告不寫台帳；
+  `status` 不提示（spec 裁決 R1）。`upload` 以 `upload_failed:`、`upload_unconfirmed:` 收場時，回讀看到的警告
+  也算進去，包括後面的頁失敗之前已經讀到的頁。
+- `train run --min-free-gib G`（預設 10，`0` 只記錄）：第一次寫入前量每個會寫的磁碟區（run 目錄、`--cwd`、
+  checkpoint glob 的前綴），最低的低於門檻就 ABORT `low_disk:`；讀數寫進 `env.<n>.json` 的 `disk`；讀不到 WARN
+  `disk_check=unavailable`。
+- attempt 失敗後：console 最後 64 KiB 有磁碟滿的字樣 → FAIL `disk_full:`（`disk_evidence=console`）；可用空間
+  掉到門檻下 → FAIL `low_disk:`（the disk may have filled）；兩者都寫一筆 `note` 事件。vcp 自己在 `train run`
+  裡寫不下紀錄（ENOSPC、EDQUOT、WinError 112／39）→ 停掉 child、ABORT `disk_full:`（`disk_evidence=vcp`）；上傳
+  步驟的記帳寫不下時，建議改成 `vcp train upload`，不是 `--resume`。
+- `train status` 的 `tmp=<n>`：列出 run 目錄（遞迴）、登記過的 checkpoint 旁邊、以及 `started` 事件記下的
+  `--checkpoints`／`--final` glob 所在目錄（不遞迴；相對的 glob 不往 cwd 的上層掃）裡殘留的 `.tmp`；有就 WARN。
+  唯讀、不刪。
+
+### Changed
+- `run.yaml`、`train.yaml`、`submit.yaml`、`dataset.yaml` 的整份重寫改成「同目錄暫存檔 → fsync →
+  `os.replace`」，讀者只看得到完整的舊檔或新檔；Windows 上目標被暫時占用時重試 5 次（約 1.55 秒）。位元組不變。
+
+### Fixed
+- `train.log.jsonl` 寫到一半失敗（例如磁碟滿）不再留下半列：截斷回寫之前的位置，再把原本的錯誤丟出。
+- 效能：provenance 狀態計算先建一次切分查表（#56），大圖的 FULL 重建不再每筆讀數都掃整張圖；算出的狀態完全
+  相同。這是 E5 量測的殘差查出來的（`docs/benchmarks/postgres-provenance-break-even-v1.md` 最後一節）。
+
+### 相容性與升級
+- 0.15.1 以前的 vcp 讀到 `selected` 列會 FAIL `bad ledger row`（每個 submit 寫入命令、`status`、`report`、
+  `backup manifest`、`backup verify`）。讀寫同一份台帳的每個 checkout 或 worktree 先升到 0.16.0，才第一次
+  `select --record`；在那之前 0.15 與 0.16 可以共用台帳。
+- `submit.yaml` 寫了非預設的 `selection_warn_hours` 之後，讀它的 vcp 都要 0.16.0（舊版 `extra_forbidden`）。
+- 訓練端：`env.<n>.json` 多 `disk`、`started` 與 `note` 事件多幾個 key，舊 vcp 照讀；`train.yaml`、`run.yaml`
+  的內容不變。不需要遷移。
+- `train run` 的可用空間低於 10 GiB 時，第一次寫入前就 ABORT `low_disk:`；小磁碟或測試機用 `--min-free-gib 0`
+  只記錄不擋。
+
+### 已知限制
+- 見 spec §5.4、§12 與後記 §1。主要是：
+  - 只認得固定的幾種磁碟滿字樣；
+  - 可用空間不反映 Windows 的配額；
+  - `foreign:<ref>` 之後被認成自己的上傳時，仍以 `foreign:` 標示；
+  - 其他只增的 jsonl 寫到一半仍可能留下半列（後記待辦 11）；
+  - `train.log.jsonl` 的截斷不上鎖；
+  - `sync` 失敗時的 VERDICT 還沒有 `cli_warnings=`（後記待辦 12）。
+
+### 0.15.1 之後在 main 上、本身不需要發版的內容
+- README 改版（#54）；E5 打平點實驗的結果與量測後的發現（#55、#59）；RSNA Knee 賽後報告（#57）。
+
 ## [0.15.1] - 2026-10-24
 
 Kaggle CLI 的版本警告不再讓讀提交列表失敗（#52，RSNA 收尾後記

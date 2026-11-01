@@ -3,8 +3,8 @@
 **影像辨識比賽的可回溯訓練紀錄。**
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.15.1](https://img.shields.io/badge/version-0.15.1-informational.svg)](CHANGELOG.md)
-[![Tests 2320](https://img.shields.io/badge/tests-2320%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.16.0](https://img.shields.io/badge/version-0.16.0-informational.svg)](CHANGELOG.md)
+[![Tests 2549](https://img.shields.io/badge/tests-2549%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -155,7 +155,7 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 
 ## 路線圖
 
-`0.15.1`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
+`0.16.0`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
 
 1. **RSNA 的教訓（0.16.0）。** 記錄你在平台上實際勾選的最終提交，和 vcp 的決選不同時警告；Kaggle CLI 過舊時警告；訓練前檢查磁碟空間，磁碟滿時在判決裡寫明原因。
 2. **安全的清理報告。** `vcp gc --dry-run` 列出大型檔案與每一個被誰引用；只列不刪。

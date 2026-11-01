@@ -239,15 +239,45 @@ def staged_row(sid: str) -> LedgerRow:
     )
 
 
-def uploaded_row(sid: str, at: str) -> LedgerRow:
+def uploaded_row(sid: str, at: str, *, ref: str | None = None) -> LedgerRow:
     return LedgerRow(
         event="uploaded",
         ts=stamp(),
         submission_id=sid,
         at=at,
         source="manual",
+        platform_ref=ref,
         confirmed=True,
         profile_sha256=PROFILE_SHA,
+    )
+
+
+def scored_row(
+    sid: str, *, at: str | None = None, ref: str | None = None, public: float = 0.5
+) -> LedgerRow:
+    """A score the platform gave (what ``sync`` writes); ``at`` and ``ref`` are left out unless
+    given, as a ``vcp submit score`` row would leave them."""
+    return LedgerRow(
+        event="scored",
+        ts=stamp(),
+        submission_id=sid,
+        source="platform",
+        at=at,
+        platform_ref=ref,
+        public=public,
+    )
+
+
+def errored_row(sid: str, *, at: str, ref: str) -> LedgerRow:
+    """An entry the platform finished without a score (spec 2026-10-09 §3.2)."""
+    return LedgerRow(
+        event="errored",
+        ts=stamp(),
+        submission_id=sid,
+        source="platform",
+        at=at,
+        platform_ref=ref,
+        platform_status="SubmissionStatus.ERROR",
     )
 
 

@@ -24,12 +24,51 @@ NO_WARNING = ("none", "ok")  # the ``words`` that need nothing said
 # ``selection_warn_hours`` only has to be finite and >= 0, but a deadline minus 1e10 hours is out
 # of range for ``datetime``; a hundred years before the deadline is "always" for any contest.
 MAX_SELECTION_WARN_HOURS = 24 * 365 * 100
+FOREIGN_PREFIX = "foreign:"
+REF_SEPARATOR = "@"  # ``<id>@<ref>``; an id never holds one (``validate_name``)
 
 
 def label(row: LedgerRow) -> str:
     """What an arrival is called in ``chosen``: our submission id, or ``foreign:<platform_ref>``
     for an upload someone else (or the web page) made."""
-    return row.submission_id if row.submission_id else f"foreign:{row.platform_ref}"
+    return row.submission_id if row.submission_id else f"{FOREIGN_PREFIX}{row.platform_ref}"
+
+
+def parse_entry(entry: str) -> tuple[str | None, str | None]:
+    """Split one ``chosen`` entry (spec 2026-11-01 §3.1) into ``(submission_id, ref)``:
+    ``<id>`` -> ``(id, None)``; ``<id>@<ref>`` -> split at the first ``@``, both sides stripped;
+    ``foreign:<ref>`` -> ``(None, ref)``, the prefix judged first so such a ref may hold an
+    ``@``. A side left empty (``S3@``, ``@123``) comes back as ``""``: refusing it is the
+    caller's check."""
+    if entry.startswith(FOREIGN_PREFIX):
+        return None, entry.removeprefix(FOREIGN_PREFIX)
+    submission_id, at, ref = entry.partition(REF_SEPARATOR)
+    return (submission_id.strip(), ref.strip()) if at else (submission_id, None)
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """An entry read against the ledger: ``label`` is the unit compared with ``final`` and
+    ``arrivals()``; ``submission_id`` is the id it names (None for a teammate's upload); ``ref``
+    is the platform entry it points at, when it says which shot."""
+
+    label: str
+    submission_id: str | None
+    ref: str | None
+
+
+def resolve(ledger: SubmissionLedger, entry: str) -> Resolved:
+    """What an entry means in the ledger as it is now (spec 2026-11-01 §3.1). Read-time only,
+    never written back: a later ``sync`` can change who owns a ref, and the ledger keeps what
+    the person said. It checks nothing -- an id that was never staged or a ref nobody saw
+    resolves like any other; the caller refuses those."""
+    submission_id, ref = parse_entry(entry)
+    if submission_id is not None:
+        return Resolved(submission_id, submission_id, ref)
+    owner = ledger.owners().get(ref or "")
+    if owner is not None:
+        return Resolved(owner, owner, ref)
+    return Resolved(f"{FOREIGN_PREFIX}{ref}", None, ref)
 
 
 @dataclass(frozen=True)
@@ -159,9 +198,6 @@ class SelectOutcome:
     row: LedgerRow  # the newest ``selected`` row: the one written, or the one already there
     written: bool
     state: SelectionState
-
-
-FOREIGN_PREFIX = "foreign:"
 
 
 def _check_entries(ledger: SubmissionLedger, entries: list[str]) -> None:

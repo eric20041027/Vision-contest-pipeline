@@ -12,6 +12,7 @@ from submit_fixtures import (
     final_row,
     foreign_row,
     ledger_of,
+    scored_row,
     seed_ledger,
     selected_row,
     staged_row,
@@ -22,7 +23,16 @@ from vcp.core.time import parse_stamp, stamp
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile
-from vcp.submit.select import differs_line, label, select, selection_lines, selection_state
+from vcp.submit.select import (
+    Resolved,
+    differs_line,
+    label,
+    parse_entry,
+    resolve,
+    select,
+    selection_lines,
+    selection_state,
+)
 
 NOW = parse_stamp("2026-10-20T00:00:00.000Z")
 
@@ -227,6 +237,74 @@ def test_nothing_to_say_when_none_or_ok(tmp_path, selected):
     rows = [*up("S1", "S2")] + ([selected_row(["S1", "S2"])] if selected else [])
     st = selection_state(ledger_of(tmp_path, *rows), _profile(), NOW)
     assert st.words == ("ok" if selected else "none") and selection_lines(st) == []
+
+
+@pytest.mark.parametrize(
+    ("entry", "parsed"),
+    [
+        ("S3", ("S3", None)),
+        ("S3@123", ("S3", "123")),
+        (" S3 @ 123 ", ("S3", "123")),
+        ("S3@1@2", ("S3", "1@2")),
+        ("foreign:a@b", (None, "a@b")),
+        ("foreign:123", (None, "123")),
+    ],
+)
+def test_parse_entry_splits_at_the_first_at_after_the_prefix(entry, parsed):
+    assert parse_entry(entry) == parsed
+
+
+@pytest.mark.parametrize(
+    ("entry", "parsed"), [("S3@", ("S3", "")), ("@123", ("", "123")), ("S3 @ ", ("S3", ""))]
+)
+def test_parse_entry_leaves_an_empty_side_for_the_caller_to_refuse(entry, parsed):
+    assert parse_entry(entry) == parsed
+
+
+def _ledger_with_ours_and_a_teammates(tmp_path):
+    """S1 uploaded with ref k1 (also written as foreign); S2 uploaded without a ref, its
+    platform copy k9 foreign and tied to S2 by a score; x7 is a teammate's."""
+    return ledger_of(
+        tmp_path,
+        staged_row("S1"),
+        staged_row("S2"),
+        uploaded_row("S1", "2026-09-05T00:00:00.000Z", ref="k1"),
+        foreign_row("k1", "2026-09-05T00:00:00.000Z"),
+        uploaded_row("S2", "2026-09-05T01:00:00.000Z"),
+        foreign_row("k9", "2026-09-05T01:01:00.000Z"),
+        scored_row("S2", at="2026-09-05T01:01:00.000Z", ref="k9"),
+        foreign_row("x7", "2026-09-05T02:00:00.000Z"),
+    )
+
+
+def test_resolve_names_the_label_and_the_shot(tmp_path):
+    led = _ledger_with_ours_and_a_teammates(tmp_path)
+    assert resolve(led, "S1") == Resolved("S1", "S1", None)
+    assert resolve(led, "S1@k1") == Resolved("S1", "S1", "k1")
+    assert resolve(led, "foreign:k9") == Resolved("S2", "S2", "k9")  # read as S2
+    assert resolve(led, "foreign:x7") == Resolved("foreign:x7", None, "x7")
+
+
+def test_resolve_does_not_check_the_entry_and_does_not_write(tmp_path):
+    led = _ledger_with_ours_and_a_teammates(tmp_path)
+    size = led.path.stat().st_size
+    # not_found / not_staged are the caller's checks: resolve only names what it is given
+    assert resolve(led, "S9@nope") == Resolved("S9", "S9", "nope")
+    assert resolve(led, "foreign:nope") == Resolved("foreign:nope", None, "nope")
+    assert led.path.stat().st_size == size
+
+
+def test_resolve_reads_the_ledger_it_is_given_at_the_time_of_asking(tmp_path):
+    # the ref's owner can change with a later sync: the label follows, the stored entry does not
+    led = ledger_of(
+        tmp_path,
+        staged_row("S2"),
+        uploaded_row("S2", "2026-09-05T01:00:00.000Z"),
+        foreign_row("k9", "2026-09-05T01:01:00.000Z"),
+    )
+    assert resolve(led, "foreign:k9") == Resolved("foreign:k9", None, "k9")
+    led.append(scored_row("S2", at="2026-09-05T01:01:00.000Z", ref="k9"))
+    assert resolve(led, "foreign:k9") == Resolved("S2", "S2", "k9")
 
 
 def test_seed_ledger_writes_the_profile_and_the_configs_ledger(roots):

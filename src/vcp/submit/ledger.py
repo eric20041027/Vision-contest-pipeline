@@ -101,15 +101,19 @@ def _complete_rows(path: Path) -> list[LedgerRow]:
 
 def _ours(
     uploads: list[LedgerRow], foreign: dict[str, LedgerRow], outcomes: list[LedgerRow]
-) -> set[str]:
+) -> dict[str, str]:
     """Foreign refs that are one of our own uploads, written by a ledger that did not know it
-    yet -- another worktree's, or one where the upload was recorded later (VCP-038). An upload
-    carrying the ref is that submission. Otherwise a ``scored`` or ``errored`` row (spec
-    2026-10-09 §4.6) that ties the ref to an id lets a ref-less upload of that id absorb it:
-    closest pairs first, one ref per upload, and only within ``TWIN_WINDOW``. A ref left over
-    (say, a web upload never recorded) stays an arrival -- the count errs toward too many,
-    never too few."""
-    ours = {u.platform_ref for u in uploads if u.platform_ref} & foreign.keys()
+    yet -- another worktree's, or one where the upload was recorded later (VCP-038) -- each
+    mapped to the id of that upload. An upload carrying the ref is that submission. Otherwise a
+    ``scored`` or ``errored`` row (spec 2026-10-09 §4.6) that ties the ref to an id lets a
+    ref-less upload of that id absorb it: closest pairs first, one ref per upload, and only
+    within ``TWIN_WINDOW``. A ref left over (say, a web upload never recorded) stays an
+    arrival -- the count errs toward too many, never too few."""
+    ours = {
+        u.platform_ref: u.submission_id
+        for u in uploads
+        if u.platform_ref and u.submission_id and u.platform_ref in foreign
+    }
     ties: dict[str, set[str]] = {}
     for s in outcomes:
         if s.platform_ref and s.submission_id:
@@ -119,19 +123,19 @@ def _ours(
         if u.submission_id and not u.platform_ref:
             free.setdefault(u.submission_id, []).append((parse_stamp(str(u.at)), i))
     pairs = sorted(
-        (abs(upload_at - parse_stamp(str(row.at))), i, ref)
+        (abs(upload_at - parse_stamp(str(row.at))), i, ref, sid)
         for ref, row in foreign.items()
         if ref not in ours
         for sid in ties.get(ref, ())
         for upload_at, i in free.get(sid, ())
     )
     absorbed: set[int] = set()
-    for gap, i, ref in pairs:
+    for gap, i, ref, sid in pairs:
         if gap > TWIN_WINDOW:
             break
         if i not in absorbed and ref not in ours:
             absorbed.add(i)
-            ours.add(ref)
+            ours[ref] = sid
     return ours
 
 
@@ -208,15 +212,31 @@ class SubmissionLedger:
         rows = [r for r in self.outcomes(submission_id) if r.platform_ref == platform_ref]
         return rows[-1] if rows else None
 
-    def arrivals(self) -> list[LedgerRow]:
-        """Every upload the platform saw -- ours (``uploaded``) and others' (``foreign``) -- in
-        platform-time order. A foreign upload may have multiple append-only snapshots while its
-        platform status changes; only its newest snapshot is an arrival, and a foreign ref that
-        is one of our own uploads is none (``_ours``). Two ``uploaded`` rows carrying one ref
-        are one platform entry (adopt can merge a ``record --platform-ref`` from one checkout
-        with another's sync binding): the first in ledger order is its arrival. Stamps share one
-        format, so string order is time order; at the same stamp our uploads come before
-        others', each in ledger order."""
+    def refs_of(self, submission_id: str) -> set[str]:
+        """The platform refs the id's ``uploaded``, ``scored`` and ``errored`` rows carry. A
+        ``sync`` that meets a vcp upload with no ref writes no binding row: the ref is only on
+        the ``scored`` or ``errored`` row, so all three events are read (spec 2026-11-01
+        §3.1)."""
+        events = ("uploaded", *OUTCOMES)
+        return {
+            r.platform_ref
+            for r in self.rows
+            if r.event in events and r.submission_id == submission_id and r.platform_ref
+        }
+
+    def owners(self) -> dict[str, str]:
+        """Each foreign ref that is one of our own uploads (``_ours``) -> the id of that
+        upload: whose a ``foreign:<ref>`` really is, as far as the ledger knows now."""
+        return _ours(*self._arrival_inputs())
+
+    def _arrival_inputs(
+        self,
+    ) -> tuple[list[LedgerRow], dict[str, LedgerRow], list[LedgerRow]]:
+        """What ``_ours`` reads, shared by ``arrivals`` and ``owners``: our uploads, the newest
+        snapshot of each foreign ref, and the ``scored`` / ``errored`` rows. Two ``uploaded``
+        rows carrying one ref are one platform entry (adopt can merge a ``record
+        --platform-ref`` from one checkout with another's sync binding): only the first in
+        ledger order is kept."""
         latest_foreign: dict[str, LedgerRow] = {}
         uploads: list[LedgerRow] = []
         upload_refs: set[str] = set()
@@ -229,7 +249,18 @@ class SubmissionLedger:
                 uploads.append(row)
             elif row.event == "foreign" and row.platform_ref:
                 latest_foreign[row.platform_ref] = row
-        ours = _ours(uploads, latest_foreign, [r for r in self.rows if r.event in OUTCOMES])
+        return uploads, latest_foreign, [r for r in self.rows if r.event in OUTCOMES]
+
+    def arrivals(self) -> list[LedgerRow]:
+        """Every upload the platform saw -- ours (``uploaded``) and others' (``foreign``) -- in
+        platform-time order. A foreign upload may have multiple append-only snapshots while its
+        platform status changes; only its newest snapshot is an arrival, and a foreign ref that
+        is one of our own uploads is none (``_ours``). Two ``uploaded`` rows carrying one ref
+        are one platform entry: the first in ledger order is its arrival. Stamps share one
+        format, so string order is time order; at the same stamp our uploads come before
+        others', each in ledger order."""
+        uploads, latest_foreign, outcomes = self._arrival_inputs()
+        ours = _ours(uploads, latest_foreign, outcomes)
         others = [row for ref, row in latest_foreign.items() if ref not in ours]
         return sorted([*uploads, *others], key=lambda r: r.at or "")
 

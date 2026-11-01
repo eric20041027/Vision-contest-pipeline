@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import random
@@ -605,3 +606,55 @@ def git_repo(path: Path, files: dict[str, bytes] | None = None) -> Path:
     git(path, "add", "-A")
     git(path, "commit", "-q", "--no-verify", "-m", "init")
     return path
+
+
+def full_disk_on_append(monkeypatch, target, *, fraction=0.5, at="write", also_append=b""):
+    """Make appends to ``target`` die the way a full disk does and return the error they raise.
+
+    ``at="write"``: ``fraction`` of the bytes handed to ``write`` reach the file, then
+    ``OSError(ENOSPC)`` -- the OS taking part of a line before refusing the rest.
+    ``at="close"``: the whole line is written and closing the file is what fails (a buffered
+    writer only meets the full disk at its flush).
+    ``also_append``: bytes another writer appends to the file after our partial row and before
+    the error reaches the caller.
+
+    The patch is on ``Path.open`` for ``target`` in an append mode, which is how every
+    append-only writer in vcp opens its file (through ``vcp.core.atomic.append_whole_line``);
+    other paths, and reads of ``target``, are untouched."""
+    real_open = Path.open
+    error = OSError(errno.ENOSPC, "No space left on device")
+
+    class Failing:
+        def __init__(self, f):
+            self._f = f
+
+        def write(self, data):
+            if at == "close":
+                return self._f.write(data)
+            part = data[: int(len(data) * fraction)]
+            if part:
+                self._f.write(part)
+                self._f.flush()
+            if also_append:
+                with open(target, "ab") as other:  # the builtin: not the patched Path.open
+                    other.write(also_append)
+            raise error
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+            if at == "close" and exc[0] is None:
+                raise error
+            return False
+
+        def __getattr__(self, name):
+            return getattr(self._f, name)
+
+    def patched(self, mode="r", *args, **kwargs):
+        f = real_open(self, mode, *args, **kwargs)
+        return Failing(f) if self == target and "a" in mode else f
+
+    monkeypatch.setattr(Path, "open", patched)
+    return error

@@ -16,6 +16,7 @@ import os
 import re
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
@@ -124,6 +125,39 @@ def replace_text(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
         raise
     _fsync_dir(target.parent)
+
+
+def append_whole_line(path: Path, line: str) -> None:
+    """Append ``line`` (which ends in ``\\n``) to ``path``, or leave the file as it was.
+
+    The one way vcp appends to an append-only jsonl (a ledger, an event log, the daily log). A
+    write that dies partway -- a full disk is the usual cause -- would leave half a line, the
+    next append would join onto it, every strict reader would then fail on that file for ever
+    (``bad ledger row``) and ``backup verify`` would report ``bad_stamps:`` (only the
+    submissions ledger has a ``partial_tail`` allowance). So the position before the write is
+    remembered and any exception, including one that only shows when the file is closed,
+    truncates back to it. The truncate is best effort: if it fails too, the caller still gets
+    the exception that started it, unchanged.
+
+    The line is encoded before the file is opened, so a payload that cannot be written as UTF-8
+    fails with nothing touched. The truncate takes no lock, so it is skipped when the file has
+    grown past where this row would have ended: another writer appended after us, and cutting
+    back would take their whole row with ours. The file is opened in binary append mode, so the
+    bytes are exactly ``line`` encoded (no newline translation) on every platform. Nothing is
+    created above ``path``: the caller makes the directory.
+    """
+    data = line.encode("utf-8")
+    start: int | None = None
+    try:
+        with path.open("ab") as f:
+            start = f.tell()
+            f.write(data)
+    except BaseException:
+        if start is not None:
+            with suppress(OSError):
+                if path.stat().st_size <= start + len(data):
+                    os.truncate(path, start)
+        raise
 
 
 def write_once(path: Path, data: bytes) -> str:

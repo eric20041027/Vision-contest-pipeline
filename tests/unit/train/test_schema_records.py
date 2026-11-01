@@ -1,11 +1,10 @@
 import errno
 import json
-import os
-from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from helpers import full_disk_on_append
 from vcp.core.errors import ValidationFailed
 from vcp.train.records import (
     EVENTS_LOG,
@@ -155,54 +154,6 @@ def test_append_event_refuses_to_let_a_payload_overwrite_its_own_keys(roots):
     assert read_events(roots.data, "r1")[0]["attempt"] == 1
 
 
-def _full_disk_on_append(monkeypatch, target, *, fraction=0.5, at="write", also_append=b""):
-    """Make appends to ``target`` die the way a full disk does and return the error they raise.
-
-    ``at="write"``: ``fraction`` of the bytes handed to ``write`` reach the file, then
-    ``OSError(ENOSPC)`` -- the OS taking part of a line before refusing the rest.
-    ``at="close"``: the whole line is written and closing the file is what fails (a buffered
-    writer only meets the full disk at its flush).
-    ``also_append``: bytes another writer appends to the file after our partial row and before
-    the error reaches the caller."""
-    real_open = Path.open
-    error = OSError(errno.ENOSPC, "No space left on device")
-
-    class Failing:
-        def __init__(self, f):
-            self._f = f
-
-        def write(self, data):
-            if at == "close":
-                return self._f.write(data)
-            part = data[: int(len(data) * fraction)]
-            if part:
-                self._f.write(part)
-                self._f.flush()
-            if also_append:
-                with open(target, "ab") as other:  # the builtin: not the patched Path.open
-                    other.write(also_append)
-            raise error
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            self._f.close()
-            if at == "close" and exc[0] is None:
-                raise error
-            return False
-
-        def __getattr__(self, name):
-            return getattr(self._f, name)
-
-    def patched(self, mode="r", *args, **kwargs):
-        f = real_open(self, mode, *args, **kwargs)
-        return Failing(f) if self == target and "a" in mode else f
-
-    monkeypatch.setattr(Path, "open", patched)
-    return error
-
-
 def _two_rows(roots):
     append_event(roots.data, "r1", "started", 1, command=["python"], seed=None)
     append_event(roots.data, "r1", "note", 1, key="k", value="v")
@@ -223,7 +174,7 @@ def test_a_failed_append_leaves_train_log_as_it_was_and_the_error_unchanged(
     caller sees -- ``own_writes`` turns it into ``disk_full:``."""
     path = _two_rows(roots)
     before = path.read_bytes()
-    error = _full_disk_on_append(monkeypatch, path, fraction=fraction, at=at)
+    error = full_disk_on_append(monkeypatch, path, fraction=fraction, at=at)
 
     with pytest.raises(OSError) as ei:
         append_event(roots.data, "r1", "note", 1, key="lost", value="x" * 300)
@@ -235,7 +186,7 @@ def test_a_failed_append_leaves_train_log_as_it_was_and_the_error_unchanged(
 def test_an_append_after_a_failed_one_leaves_every_line_parsable(roots, monkeypatch):
     path = _two_rows(roots)
     with monkeypatch.context() as m:
-        _full_disk_on_append(m, path, fraction=0.5)
+        full_disk_on_append(m, path, fraction=0.5)
         with pytest.raises(OSError):
             append_event(roots.data, "r1", "note", 1, key="lost", value="x" * 300)
 
@@ -250,69 +201,17 @@ def test_an_append_after_a_failed_one_leaves_every_line_parsable(roots, monkeypa
 
 def test_a_failed_first_append_leaves_no_row_behind(roots, monkeypatch):
     path = events_path(roots.data, "r1")
-    _full_disk_on_append(monkeypatch, path, fraction=0.5)
+    full_disk_on_append(monkeypatch, path, fraction=0.5)
     with pytest.raises(OSError):
         append_event(roots.data, "r1", "started", 1, command=["python"], seed=None)
     assert read_events(roots.data, "r1") == []
     assert not path.exists() or path.read_bytes() == b""
 
 
-def test_a_row_that_cannot_be_encoded_fails_before_the_file_is_touched(roots, monkeypatch):
-    """A lone surrogate in a payload cannot be written as UTF-8. That is bad input, not a torn
-    write: the line is encoded before the file is opened, so there is nothing to truncate."""
-    path = _two_rows(roots)
-    before = path.read_bytes()
-    truncations = []
-    monkeypatch.setattr(os, "truncate", lambda *args: truncations.append(args))
-
-    with pytest.raises(UnicodeEncodeError):
-        append_event(roots.data, "r1", "note", 1, key="lone", value="\ud800")
-
-    assert path.read_bytes() == before and truncations == []
-
-
 def test_a_row_that_cannot_be_encoded_does_not_create_the_file(roots):
     with pytest.raises(UnicodeEncodeError):
         append_event(roots.data, "r1", "note", 1, key="lone", value="\ud800")
     assert not events_path(roots.data, "r1").exists()
-
-
-def test_a_failed_append_does_not_cut_a_row_another_writer_appended_after_it(roots, monkeypatch):
-    """The truncate takes no lock. If the file has grown past where our row would have ended,
-    somebody else wrote after us: their complete row stays, whatever it costs the torn one."""
-    path = _two_rows(roots)
-    before = path.read_bytes()
-    foreign = (
-        json.dumps({"ts": STAMP, "event": "note", "attempt": 1, "key": "other", "value": "z" * 600})
-        + "\n"
-    ).encode()
-    error = _full_disk_on_append(monkeypatch, path, fraction=0.5, also_append=foreign)
-
-    with pytest.raises(OSError) as ei:
-        append_event(roots.data, "r1", "note", 1, key="lost", value="x" * 300)
-
-    assert ei.value is error
-    raw = path.read_bytes()
-    assert raw.startswith(before) and raw.endswith(foreign)  # nothing was cut
-
-
-def test_a_failing_truncate_does_not_replace_the_original_error(roots, monkeypatch):
-    """Cleaning up is best effort: if the truncate fails too, the caller still gets the ENOSPC
-    that started it, not the cleanup's error."""
-    path = _two_rows(roots)
-    error = _full_disk_on_append(monkeypatch, path, fraction=0.5)
-
-    attempts = []
-
-    def refuse(*args, **_kwargs):
-        attempts.append(args)
-        raise PermissionError(errno.EACCES, "denied")
-
-    monkeypatch.setattr(os, "truncate", refuse)
-    with pytest.raises(OSError) as ei:
-        append_event(roots.data, "r1", "note", 1, key="lost", value="x" * 300)
-    assert ei.value is error
-    assert len(attempts) == 1  # it did try to clean up
 
 
 def test_current_attempt_of_a_record_with_no_attempts_is_one(roots):

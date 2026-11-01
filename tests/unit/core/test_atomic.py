@@ -1,9 +1,11 @@
 import errno
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+from helpers import full_disk_on_append
 from vcp.core import atomic
 from vcp.core.errors import ValidationFailed, VcpError
 
@@ -172,6 +174,156 @@ def test_the_replace_temp_name_is_one_is_tmp_name_knows(tmp_path, monkeypatch):
     calls, _ = _flaky(monkeypatch, 0, windows=False)
     atomic.replace_text(target, "new\n")
     assert atomic.is_tmp_name(Path(calls[0]).name) and Path(calls[0]).name.startswith(".t.yaml.")
+
+
+def _rows(path):
+    return [json.loads(line) for line in path.read_bytes().decode("utf-8").split("\n")[:-1]]
+
+
+def _two_lines(tmp_path):
+    target = tmp_path / "ledger.jsonl"
+    atomic.append_whole_line(target, '{"n": 1}\n')
+    atomic.append_whole_line(target, '{"n": 2}\n')
+    return target
+
+
+def test_append_whole_line_adds_the_line_as_given_and_creates_the_file(tmp_path):
+    target = tmp_path / "ledger.jsonl"
+    atomic.append_whole_line(target, '{"k": "\u4e2d\u6587"}\n')
+    atomic.append_whole_line(target, '{"k": 2}\n')
+    assert target.read_bytes() == '{"k": "\u4e2d\u6587"}\n{"k": 2}\n'.encode()
+    assert b"\r" not in target.read_bytes()  # a bare \n stays a bare \n on Windows too
+
+
+@pytest.mark.parametrize(
+    ("at", "fraction"),
+    [("write", 0.0), ("write", 0.5), ("write", 0.99), ("close", 1.0)],
+    ids=["no-byte-written", "half-a-line", "all-but-the-newline", "fails-on-close"],
+)
+def test_a_failed_append_leaves_the_file_as_it_was_and_the_error_unchanged(
+    tmp_path, monkeypatch, at, fraction
+):
+    """An ENOSPC halfway through a row must not leave half a line: the next append would join
+    onto it and every strict reader (and ``backup verify``) would fail on that file for ever."""
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    error = full_disk_on_append(monkeypatch, target, fraction=fraction, at=at)
+
+    with pytest.raises(OSError) as ei:
+        atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+
+    assert ei.value is error and error.errno == errno.ENOSPC
+    assert target.read_bytes() == before
+
+
+def test_an_append_after_a_failed_one_leaves_every_line_parsable(tmp_path, monkeypatch):
+    target = _two_lines(tmp_path)
+    with monkeypatch.context() as m:
+        full_disk_on_append(m, target, fraction=0.5)
+        with pytest.raises(OSError):
+            atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+
+    atomic.append_whole_line(target, '{"n": 4}\n')
+
+    assert target.read_bytes().endswith(b"\n")
+    assert [r["n"] for r in _rows(target)] == [1, 2, 4]
+
+
+def test_a_failed_first_append_leaves_no_row_behind(tmp_path, monkeypatch):
+    target = tmp_path / "ledger.jsonl"
+    full_disk_on_append(monkeypatch, target, fraction=0.5)
+    with pytest.raises(OSError):
+        atomic.append_whole_line(target, '{"n": 1}\n')
+    assert not target.exists() or target.read_bytes() == b""
+
+
+def test_a_line_that_cannot_be_encoded_fails_before_the_file_is_touched(tmp_path, monkeypatch):
+    """A lone surrogate cannot be written as UTF-8. That is bad input, not a torn write: the
+    line is encoded before the file is opened, so there is nothing to truncate."""
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    truncations = []
+    monkeypatch.setattr(atomic.os, "truncate", lambda *args: truncations.append(args))
+
+    with pytest.raises(UnicodeEncodeError):
+        atomic.append_whole_line(target, '{"n": "\ud800"}\n')
+
+    assert target.read_bytes() == before and truncations == []
+    fresh = tmp_path / "fresh.jsonl"
+    with pytest.raises(UnicodeEncodeError):
+        atomic.append_whole_line(fresh, '{"n": "\ud800"}\n')
+    assert not fresh.exists()
+
+
+def test_a_failed_append_does_not_cut_a_row_another_writer_appended_after_it(tmp_path, monkeypatch):
+    """The truncate takes no lock. If the file has grown past where our row would have ended,
+    somebody else wrote after us: their complete row stays, whatever it costs the torn one."""
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    foreign = (json.dumps({"n": 99, "pad": "z" * 600}) + "\n").encode()
+    error = full_disk_on_append(monkeypatch, target, fraction=0.5, also_append=foreign)
+
+    with pytest.raises(OSError) as ei:
+        atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+
+    assert ei.value is error
+    raw = target.read_bytes()
+    assert raw.startswith(before) and raw.endswith(foreign)  # nothing was cut
+
+
+def test_a_failing_truncate_does_not_replace_the_original_error(tmp_path, monkeypatch):
+    """Cleaning up is best effort: if the truncate fails too, the caller still gets the ENOSPC
+    that started it, not the cleanup's error."""
+    target = _two_lines(tmp_path)
+    error = full_disk_on_append(monkeypatch, target, fraction=0.5)
+
+    attempts = []
+
+    def refuse(*args, **_kwargs):
+        attempts.append(args)
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(atomic.os, "truncate", refuse)
+    with pytest.raises(OSError) as ei:
+        atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+    assert ei.value is error
+    assert len(attempts) == 1  # it did try to clean up
+
+
+def test_an_interrupt_halfway_through_a_line_also_truncates_back(tmp_path, monkeypatch):
+    """``BaseException``, not ``Exception``: Ctrl-C between the two halves of a write is the
+    other way a half line gets left behind."""
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    real_open = Path.open
+
+    class Interrupted:
+        def __init__(self, f):
+            self._f = f
+
+        def write(self, data):
+            self._f.write(data[: len(data) // 2])
+            self._f.flush()
+            raise KeyboardInterrupt
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+            return False
+
+        def __getattr__(self, name):
+            return getattr(self._f, name)
+
+    def patched(self, mode="r", *args, **kwargs):
+        f = real_open(self, mode, *args, **kwargs)
+        return Interrupted(f) if self == target and "a" in mode else f
+
+    monkeypatch.setattr(Path, "open", patched)
+    with pytest.raises(KeyboardInterrupt):
+        atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+    assert target.read_bytes() == before
 
 
 SRC = Path(__file__).resolve().parents[3] / "src" / "vcp"

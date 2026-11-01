@@ -158,6 +158,24 @@ def _glob_dirs(
     return {d for d in dirs if d is not None}
 
 
+def _ignore_error(_path: Path, _error: OSError) -> None:
+    """The ``on_error`` of a caller that has no use for what could not be examined."""
+
+
+def checkpoint_dirs(
+    data_root: Path,
+    record: TrainRecord,
+    on_error: Callable[[Path, OSError], None] | None = None,
+) -> set[Path]:
+    """Every directory the run's checkpoints are, or are being, written into: the parent of each
+    registered checkpoint, and the directory of every pattern a ``started`` event names, whether
+    or not anything was registered there. ``tmp_files`` looks for leftovers in them and
+    ``vcp gc scan`` lists the files directly in them. A ``cwd`` that cannot be examined goes to
+    ``on_error`` (if given) and its patterns say nothing."""
+    beside = {resolve_stored_path(c.path, data_root).parent for c in record.checkpoints}
+    return beside | _glob_dirs(data_root, record, on_error or _ignore_error)
+
+
 def _as_itself(path: Path, data_root: Path) -> str:
     """``store_path`` of a file's directory plus the file's own name: a symlink is listed as the
     link, where ``store_path(path)`` would follow it to the target."""
@@ -190,8 +208,7 @@ def tmp_files(data_root: Path, record: TrainRecord) -> TmpScan:
             )
 
     found = _tmp_in(run_dir(data_root, record.run_id), recursive=True, on_error=skip)
-    beside = {resolve_stored_path(c.path, data_root).parent for c in record.checkpoints}
-    for parent in beside | _glob_dirs(data_root, record, skip):
+    for parent in checkpoint_dirs(data_root, record, skip):
         found += _tmp_in(parent, recursive=False, on_error=skip)
     out: dict[tuple[Path, str], TmpFile] = {}
     for p in found:

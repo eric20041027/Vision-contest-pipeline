@@ -8,7 +8,7 @@ import pytest
 from helpers import seed_tiny
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
-from vcp.core.paths import artifact_dir
+from vcp.core.paths import artifact_dir, store_path
 from vcp.data.evidence import RunScope, attach_evidence
 from vcp.train.checkpoints import mark_final, register
 from vcp.train.records import (
@@ -20,7 +20,7 @@ from vcp.train.records import (
     save_record,
 )
 from vcp.train.schema import Attempt, TrainRecord, UploadRecord
-from vcp.train.status import TmpFile, TmpSkip, status, upload_run
+from vcp.train.status import TmpFile, TmpSkip, checkpoint_dirs, status, upload_run
 
 STAMP = "2026-09-05T00:00:00.000Z"
 
@@ -950,3 +950,36 @@ def test_status_verify_reports_a_broken_evidence_artifact(roots, tmp_path):
         "x", encoding="utf-8"
     )
     assert status(roots.data, "r1", verify=True).drift == ["evidence:teacher"]
+
+
+def test_checkpoint_dirs_are_the_registered_parents_and_the_started_globs(roots):
+    """`tmp_files` and `vcp gc scan` look in the same directories: beside every registered
+    checkpoint, and where a `started` event says the child writes -- registered or not."""
+    _, w = _seeded(roots)
+    work = roots.data / "work"
+    _started(roots, cwd=store_path(work, roots.data), checkpoints=["ckpt/*.pt"], final=None)
+    (work / "ckpt").mkdir()
+
+    assert checkpoint_dirs(roots.data, load_record(roots.data, "r1")) == {w, work / "ckpt"}
+
+
+def test_checkpoint_dirs_hands_a_cwd_it_cannot_examine_to_on_error(roots, monkeypatch):
+    """The reader of the directories decides what an unreadable cwd means: `tmp_files` records a
+    skip, gc records an unreadable directory, and a caller that passes nothing gets the rest."""
+    _, w = _seeded(roots)
+    _started(roots, checkpoints=["ckpt/*.pt"], final=None)
+    real = Path.is_dir
+
+    def is_dir(self):
+        if self.name == "work":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    record = load_record(roots.data, "r1")
+    seen: list[tuple[str, str]] = []
+
+    dirs = checkpoint_dirs(roots.data, record, lambda p, e: seen.append((p.name, type(e).__name__)))
+
+    assert dirs == {w} and seen == [("work", "PermissionError")]
+    assert checkpoint_dirs(roots.data, record) == {w}

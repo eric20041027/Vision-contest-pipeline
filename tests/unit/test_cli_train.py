@@ -245,6 +245,41 @@ def test_train_status_cli_prints_tmp(roots, tmp_path):
     assert "tmp=0" in _verdict(r.output) and "status=OK" in _verdict(r.output)
 
 
+def test_train_status_cli_says_what_the_tmp_scan_could_not_read(roots, tmp_path, monkeypatch):
+    """A directory the scan cannot list no longer aborts the command: one `tmp_scan: skipped`
+    line names it, the VERDICT is what it would have been, and `--json` is unchanged."""
+    seed_det(roots)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "fake_train.py").write_text(FAKE, encoding="utf-8")
+    assert _run(work, "--seed", "1", "--upload", str(tmp_path / "vault")).exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--json"])
+    assert r.exit_code == 0, r.output
+    before = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+
+    real = Path.iterdir
+
+    def iterdir(self):
+        if self.name == "weights":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    assert r.exit_code == 0, r.output
+    v = _verdict(r.output)
+    assert "status=OK" in v and "tmp=0" in v and "tmp_scan" not in v
+    assert f"tmp_scan: skipped {(work / 'weights').resolve().as_posix()} (PermissionError)" in (
+        r.output
+    )
+
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--json"])
+    assert r.exit_code == 0, r.output
+    after = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    assert after == before
+    assert "tmp_scan" not in r.stdout
+
+
 def test_upload_and_status_have_no_configs_root_option(roots, tmp_path):
     """5-8: both declared `--configs-root` and never read it -- they take a run id and a data
     root, nothing that lives under configs/. An option that does nothing is worse than absent."""

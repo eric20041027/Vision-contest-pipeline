@@ -1,4 +1,6 @@
+import logging
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +19,7 @@ from vcp.train.records import (
     save_record,
 )
 from vcp.train.schema import Attempt, TrainRecord, UploadRecord
-from vcp.train.status import TmpFile, status, upload_run
+from vcp.train.status import TmpFile, TmpSkip, status, upload_run
 
 STAMP = "2026-09-05T00:00:00.000Z"
 
@@ -505,6 +507,160 @@ def test_status_lists_a_tmp_once_when_a_glob_directory_is_also_a_checkpoint_dire
     (w / "resume.pth.tmp").write_bytes(b"r")
 
     assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]
+
+
+def _warnings(caplog):
+    return [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.fixture
+def vcp_log(caplog, monkeypatch):
+    """``setup_logging`` (any CLI test before this one) turns propagation off on the ``vcp``
+    logger; turn it back on so caplog sees the records."""
+    monkeypatch.setattr(logging.getLogger("vcp"), "propagate", True)
+    caplog.set_level(logging.DEBUG, logger="vcp")
+    return caplog
+
+
+def _deny_listing(monkeypatch, name):
+    """``Path.iterdir`` raises PermissionError for the directory called ``name``."""
+    real = Path.iterdir
+
+    def iterdir(self):
+        if self.name == name:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+
+
+def test_status_skips_a_run_subdirectory_it_cannot_list_and_keeps_going(
+    roots, monkeypatch, vcp_log
+):
+    """Today a PermissionError out of the listing aborts `train status`. The unreadable
+    directory is left out, said once (a WARNING and `tmp_skipped`), and the rest is still read."""
+    _, w = _seeded(roots)
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / ".train.yaml.0a1b2c3d.tmp").write_bytes(b"12345")
+    locked = roots.data / "runs" / "r1" / "locked"
+    locked.mkdir()
+    (locked / "hidden.tmp").write_bytes(b"h")
+    (w / "resume.pth.tmp").write_bytes(b"x" * 266)
+    _deny_listing(monkeypatch, "locked")
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [
+        TmpFile("runs/r1/train/.train.yaml.0a1b2c3d.tmp", 5),
+        TmpFile("work/weights/resume.pth.tmp", 266),
+    ]
+    assert st.tmp_skipped == [TmpSkip("runs/r1/locked", "PermissionError")]
+    (record,) = _warnings(vcp_log)
+    assert record.name == "vcp.train.status"
+    assert "runs/r1/locked" in record.getMessage() and "PermissionError" in record.getMessage()
+
+
+def test_status_skips_a_checkpoint_directory_it_cannot_list_and_keeps_going(
+    roots, monkeypatch, vcp_log
+):
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / "a.tmp").write_bytes(b"aa")
+    _deny_listing(monkeypatch, "weights")
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("runs/r1/train/a.tmp", 2)]
+    assert st.tmp_skipped == [TmpSkip("work/weights", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
+
+
+def test_status_names_a_directory_it_cannot_list_once_however_many_scans_reach_it(
+    roots, monkeypatch, vcp_log
+):
+    """The checkpoint directory is a glob directory too: two scans, one skip, one WARNING."""
+    _seeded(roots)
+    _started(roots, checkpoints=["weights/*.pt"], final="weights/best.pt")
+    _deny_listing(monkeypatch, "weights")
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp_skipped == [TmpSkip("work/weights", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
+
+
+def test_status_skips_an_entry_it_cannot_stat_and_keeps_going(roots, monkeypatch, vcp_log):
+    _, w = _seeded(roots)
+    (w / "bad.tmp").write_bytes(b"b")
+    (w / "good.tmp").write_bytes(b"gg")
+    real = Path.is_file
+
+    def is_file(self):
+        if self.name == "bad.tmp":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+
+    st = status(roots.data, "r1")
+
+    assert st.tmp == [TmpFile("work/weights/good.tmp", 2)]
+    assert st.tmp_skipped == [TmpSkip("work/weights/bad.tmp", "PermissionError")]
+    (record,) = _warnings(vcp_log)
+    assert "work/weights/bad.tmp" in record.getMessage()
+
+
+def test_status_without_anything_unreadable_skips_nothing_and_says_nothing(roots, vcp_log):
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    assert status(roots.data, "r1").tmp_skipped == []
+    assert _warnings(vcp_log) == []
+
+
+def _link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError as e:  # Windows without developer mode or the privilege
+        pytest.skip(f"cannot create symlinks here: {e}")
+
+
+def test_status_lists_a_symlinked_tmp_by_its_own_path(roots, tmp_path):
+    """A link is the leftover (the framework wrote the link); its target may be anywhere. It is
+    listed as itself, sized by `lstat`, not by the file it points to."""
+    _, w = _seeded(roots)
+    target = tmp_path / "elsewhere" / "payload.bin"
+    target.parent.mkdir()
+    target.write_bytes(b"x" * 1000)
+    _link(w / "resume.pth.tmp", target)
+
+    assert status(roots.data, "r1").tmp == [
+        TmpFile("work/weights/resume.pth.tmp", (w / "resume.pth.tmp").lstat().st_size)
+    ]
+
+
+def test_status_lists_a_link_and_the_file_it_points_to_as_two_entries(roots):
+    _, w = _seeded(roots)
+    (w / "real.tmp").write_bytes(b"12345")
+    _link(w / "link.tmp", w / "real.tmp")
+
+    assert [t.path for t in status(roots.data, "r1").tmp] == [
+        "work/weights/link.tmp",
+        "work/weights/real.tmp",
+    ]
+
+
+def test_status_lists_a_symlinked_tmp_once_when_two_scans_reach_its_directory(roots, tmp_path):
+    _, w = _seeded(roots)
+    _started(roots, checkpoints=["weights/*.pt"], final="weights/best.pt")
+    target = tmp_path / "elsewhere" / "payload.bin"
+    target.parent.mkdir()
+    target.write_bytes(b"x")
+    _link(w / "resume.pth.tmp", target)
+
+    assert [t.path for t in status(roots.data, "r1").tmp] == ["work/weights/resume.pth.tmp"]
 
 
 def test_status_verify_reports_a_broken_evidence_artifact(roots, tmp_path):

@@ -871,6 +871,85 @@ def test_the_outdated_hint_is_judged_without_regard_to_case(pair, monkeypatch):
     assert "cli_warnings=1" in _v_of(r) and OUTDATED_HINT in r.output
 
 
+PAGE1 = f"{OUTDATED_WARNING}\n" + json.dumps({"submissions": [], "nextPageToken": "t2"})
+INF = json.dumps(
+    [
+        {
+            "ref": 5,
+            "fileName": "submission.csv",
+            "date": stamp(utc_now()),
+            "description": "S1",
+            "publicScore": "inf",
+        }
+    ]
+)
+
+
+def _answers(monkeypatch, *answers):
+    """Give the Kaggle platform a CLI that answers in turn: ``(code, stdout)``, a bare string (an
+    exit-0 answer), or an exception to raise."""
+    from vcp.submit.platforms import kaggle
+
+    queue = list(answers)
+
+    def run(args):
+        answer = queue.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        code, out = (0, answer) if isinstance(answer, str) else answer
+        return subprocess.CompletedProcess(args, code, out, "")
+
+    monkeypatch.setattr(kaggle, "timed_runner", lambda seconds: run)
+
+
+@pytest.mark.parametrize(
+    ("answers", "words", "count"),
+    [
+        ([PAGE1, subprocess.TimeoutExpired([], 120)], ["sync_failed: kaggle CLI timed out"], 1),
+        ([PAGE1, (1, "boom")], ["PlatformError: kaggle CLI failed (exit 1)", "exit_code=1"], 1),
+        ([(0, f"{OUTDATED_WARNING}\nnot json")], ["platform_response: not JSON"], 1),
+        ([PAGE1, (0, "Warning: maintenance tonight\nnot json")], ["platform_response:"], 2),
+        ([(0, f"{OUTDATED_WARNING}\n{INF}")], ["platform_response:"], 1),  # reconcile's _row
+    ],
+)
+def test_a_failed_sync_still_counts_the_cli_warnings(pair, monkeypatch, answers, words, count):
+    """spec 2026-11-01 §4.2: every failure from the list call to the end of ``reconcile`` carries
+    the warning lines the CLI printed, as a count; the ledger stays as it was."""
+    import sys
+
+    from typer.testing import CliRunner
+
+    from vcp.cli import app
+
+    _only_s1(pair, kaggle_command=[sys.executable])
+    before = _ledger(pair).path.read_bytes()
+    _answers(monkeypatch, *answers)
+    r = CliRunner().invoke(app, ["submit", "sync", "--dataset", TEST])
+    v = _v_of(r)
+    assert r.exit_code == 1 and "status=FAIL" in v and f"cli_warnings={count}" in v, r.output
+    assert all(w in v for w in words), r.output
+    assert _ledger(pair).path.read_bytes() == before
+
+
+def test_failures_around_the_list_carry_cli_warnings_only_inside_its_scope(pair, roots):
+    """``kaggle_not_found:`` happens inside the scope (nothing was printed: 0); ``manual_platform:``
+    happens before it (no field at all)."""
+    from typer.testing import CliRunner
+
+    from vcp.cli import app
+
+    _only_s1(pair, kaggle_command=["vcp-no-such-kaggle"])  # the real runner, no such CLI
+    r = CliRunner().invoke(app, ["submit", "sync", "--dataset", TEST])
+    v = _v_of(r)
+    assert r.exit_code == 2 and "kaggle_not_found:" in v and "cli_warnings=0" in v, r.output
+    other = DatasetPaths.resolve("other", data_root=roots.data, configs_root=roots.configs)
+    dump_yaml_model(_profile(dataset="other", platform="manual"), other.submit_yaml)
+    r = CliRunner().invoke(app, ["submit", "sync", "--dataset", "other"])
+    v_manual = _v_of(r)
+    assert r.exit_code == 1 and "manual_platform:" in v_manual, r.output
+    assert "cli_warnings" not in v_manual
+
+
 def test_a_list_returning_platform_still_syncs(pair, monkeypatch):
     """A platform registered against the old contract returns a plain list: sync wraps it, with
     no warnings."""

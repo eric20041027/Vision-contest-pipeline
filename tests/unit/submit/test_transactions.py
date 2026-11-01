@@ -233,3 +233,22 @@ def test_select_aborts_while_another_process_holds_the_ledger(roots, monkeypatch
     assert r.exit_code == 2 and "status=ABORT" in v and "locked:" in v, r.output
     assert f"held by test.holder (pid {pid} on " in v and f"dataset={TEST}" in v
     assert not paths.submissions_log.exists()
+
+
+def test_a_sync_that_cannot_take_the_lock_carries_no_cli_warnings(roots, monkeypatch):
+    """spec 2026-11-01 §4.2: the lock is taken before the list is read, so a sync that never got
+    it has no warning count to report (it starts green: it locks the 0.16.0 VERDICT)."""
+    paths = _paths(roots)
+    profile = _profile(platform="kaggle", competition="c1", board_rule="best")
+    dump_yaml_model(profile, paths.submit_yaml)
+    monkeypatch.setattr(lockmod, "WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(lockmod, "RETRY_SECONDS", 0.05)
+    proc, pid = _hold(ledger_lock_file(paths, paths.submissions_log), paths.submissions_log)
+    try:
+        r = runner.invoke(app, ["submit", "sync", "--dataset", TEST])
+    finally:
+        _release(proc)
+    v = _verdict(r.output)
+    assert r.exit_code == 2 and "status=ABORT" in v and "locked:" in v, r.output
+    assert f"held by test.holder (pid {pid} on " in v and "cli_warnings" not in v
+    assert not paths.submissions_log.exists()

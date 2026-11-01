@@ -14,6 +14,13 @@ class VcpError(Exception):
     ``fields`` are extra VERDICT fields the failure itself wants machine-readable: the CLI
     renders them beside ``reason=``, so a caller can grep for what went wrong instead of
     parsing the message (spec 9's guardrail abort is the case this exists for).
+
+    ``cli_warnings`` are the warning lines a platform CLI printed in the answers the command read
+    before it failed (a Kaggle upload's read-back, spec 2026-10-30 §4.1; a submissions list that
+    broke on a later page or could not be parsed, spec 2026-11-01 §4.1): redacted, for the
+    VERDICT's count -- ``fields`` stay what the failure itself says. Any vcp error can carry
+    them, so a command never changes an error's class (and with it the ``reason=`` word) just to
+    report them.
     """
 
     status: str = "ABORT"
@@ -24,10 +31,12 @@ class VcpError(Exception):
         *,
         location: str | None = None,
         fields: dict[str, FieldValue] | None = None,
+        cli_warnings: tuple[str, ...] = (),
     ) -> None:
         super().__init__(message)
         self.location = location
         self.fields: dict[str, FieldValue] = dict(fields or {})
+        self.cli_warnings: tuple[str, ...] = cli_warnings
 
     def __str__(self) -> str:
         base = super().__str__()
@@ -68,25 +77,10 @@ class GuardrailError(VcpError):
 
 class PlatformError(VcpError):
     """An external tool's CLI (kaggle, rclone) ran and failed. The message is already redacted.
-
-    ``cli_warnings`` are the warning lines the CLI printed in the answers read after the failure
-    (a Kaggle upload's read-back, spec 2026-10-30 §4.1): redacted, for the VERDICT's count --
-    ``fields`` stay what the failure itself says. A failed submissions list carries the warning
-    lines of the pages it had already read before the one that failed.
-    """
+    A failed submissions list carries the warning lines (``cli_warnings``) of the pages it had
+    already read before the one that failed."""
 
     status = "FAIL"
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        location: str | None = None,
-        fields: dict[str, FieldValue] | None = None,
-        cli_warnings: tuple[str, ...] = (),
-    ) -> None:
-        super().__init__(message, location=location, fields=fields)
-        self.cli_warnings = cli_warnings
 
 
 class PlatformTimeout(PlatformError):

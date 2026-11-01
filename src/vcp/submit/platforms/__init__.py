@@ -13,6 +13,7 @@ from vcp.submit.platforms.base import (
     merge_warnings,
     redact,
     register_platform,
+    with_cli_warnings,
 )
 from vcp.submit.platforms.kaggle import KagglePlatform
 from vcp.submit.platforms.manual import ManualPlatform
@@ -35,4 +36,5 @@ __all__ = [
     "merge_warnings",
     "redact",
     "register_platform",
+    "with_cli_warnings",
 ]

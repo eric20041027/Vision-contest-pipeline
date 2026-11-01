@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-from vcp.core.errors import RegistryError
+from vcp.core.errors import RegistryError, VcpError
 from vcp.core.proc import Runner, default_runner, redact
 from vcp.submit.schema import PlatformProfile, Staged
 
@@ -26,6 +26,7 @@ __all__ = [
     "merge_warnings",
     "redact",
     "register_platform",
+    "with_cli_warnings",
 ]
 
 
@@ -81,6 +82,19 @@ def as_platform_list(value: PlatformList | list[PlatformSubmission]) -> Platform
 def merge_warnings(*groups: Iterable[str]) -> tuple[str, ...]:
     """The lines of every group, each once, in the order first seen."""
     return tuple(dict.fromkeys(line for group in groups for line in group))
+
+
+def with_cli_warnings[E: VcpError](e: E, *groups: Iterable[str]) -> E:
+    """``e`` with the lines of every group merged into its ``cli_warnings`` (each once, in the
+    order first seen) and the count in ``fields["cli_warnings"]`` -- unless the failure already
+    says one itself (spec 2026-11-01 §4.1). Returns ``e`` so the caller can ``raise`` it.
+
+    Only the commands call this (``sync``, ``upload``), once the lines of every page are known:
+    a platform only merges ``e.cli_warnings``, because a count set while the lines of the pages
+    before were still coming would stay at the first page's."""
+    e.cli_warnings = merge_warnings(e.cli_warnings, *groups)
+    e.fields.setdefault("cli_warnings", len(e.cli_warnings))
+    return e
 
 
 class Platform(Protocol):

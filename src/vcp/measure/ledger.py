@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
+from vcp.core.atomic import append_whole_line
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_text
 from vcp.measure.schema import Reading
@@ -22,8 +23,7 @@ SIGMA_LEDGER = "sigma.jsonl"
 
 def append_row(path: Path, model: BaseModel) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(model.model_dump_json() + "\n")
+    append_whole_line(path, model.model_dump_json() + "\n")
 
 
 def read_rows[T: BaseModel](path: Path, model_cls: type[T]) -> list[T]:

@@ -7,6 +7,7 @@ import yaml
 from helpers import (
     REG_CATS,
     det_with_runs,
+    full_disk_on_append,
     make_card,
     noisy_predictions,
     perfect_predictions,
@@ -267,6 +268,31 @@ def test_create_prereg_leaves_no_yaml_when_the_log_append_fails(roots, tmp_path,
     monkeypatch.undo()
     assert create_prereg(paths, _pr(), _ledger(paths)).is_file()
     assert list_preregs(paths) == ["p001"] and prereg_time(paths, "p001") is not None
+
+
+def test_a_full_disk_in_the_prereg_log_leaves_the_log_whole_and_the_id_free(
+    roots, tmp_path, monkeypatch
+):
+    """The log row of ``p002`` dies halfway (ENOSPC): the log is byte-identical to before, the
+    OSError is the caller's, the yaml goes back (3-9) -- and the retry appends a log in which
+    every line parses, so ``p001`` and ``p002`` both stay binding claims."""
+    _, _, paths = det_with_runs(roots, tmp_path, n=40)
+    ledger = _ledger(paths)
+    create_prereg(paths, _pr(), ledger)
+    before = paths.prereg_log.read_bytes()
+    error = full_disk_on_append(monkeypatch, paths.prereg_log, fraction=0.5)
+
+    with pytest.raises(OSError) as ei:
+        create_prereg(paths, _pr(prereg_id="p002"), ledger)
+
+    assert ei.value is error
+    assert paths.prereg_log.read_bytes() == before
+    assert list_preregs(paths) == ["p001"] and prereg_time(paths, "p002") is None
+    monkeypatch.undo()
+    assert create_prereg(paths, _pr(prereg_id="p002"), ledger).is_file()
+    lines = paths.prereg_log.read_bytes().decode("utf-8").splitlines()
+    assert [json.loads(line)["prereg_id"] for line in lines] == ["p001", "p002"]
+    assert prereg_time(paths, "p002") is not None
 
 
 def test_judge_fail_pass_and_sigma_rules(roots, tmp_path):

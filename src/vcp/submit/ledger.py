@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from vcp.core.atomic import append_whole_line
 from vcp.core.errors import ValidationFailed
 from vcp.core.time import parse_stamp
 from vcp.measure.ledger import read_rows
@@ -68,8 +69,7 @@ def append_ledger_row(path: Path, row: LedgerRow) -> None:
     """One JSON object per line; ``None`` fields are left out so a row carries only its event's
     fields (plan decision 10)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(row.model_dump_json(exclude_none=True) + "\n")
+    append_whole_line(path, row.model_dump_json(exclude_none=True) + "\n")
 
 
 def complete_length(path: Path) -> int:

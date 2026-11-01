@@ -1,6 +1,7 @@
 import errno
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -327,6 +328,24 @@ def test_an_interrupt_halfway_through_a_line_also_truncates_back(tmp_path, monke
 
 
 SRC = Path(__file__).resolve().parents[3] / "src" / "vcp"
+# open("a" / "ab" / "at" / "a+" ...), open(mode="a..."), logging.FileHandler( (append by default)
+APPEND_OPEN = re.compile(
+    r"""open\([^)]*["'](?:a|ab|at|a\+|ab\+)["']|mode=["'](?:a|ab|at|a\+)["']|logging\.FileHandler\("""
+)
+
+
+def test_no_module_but_atomic_opens_a_file_for_appending():
+    """Every append-only file is written through ``append_whole_line``: a plain ``open("a")``
+    plus one ``write`` is the half-line bug the primitive exists to end (the daily log has its
+    own handler for the same reason: ``logging.FileHandler`` swallows a failed write)."""
+    offenders = [
+        path.relative_to(SRC).as_posix()
+        for path in sorted(SRC.rglob("*.py"))
+        if path.name != "atomic.py" and APPEND_OPEN.search(path.read_text(encoding="utf-8"))
+    ]
+    assert offenders == []
+
+
 WRITE_ONCE_SITES = (
     "data/split.py",
     "measure/prereg.py",

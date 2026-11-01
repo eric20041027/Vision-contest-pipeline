@@ -195,34 +195,45 @@ def final(
         return _final_locked(paths, profile, sha, ledger, slots, dry_run, data_root, configs_root)
 
 
-def _final_locked(
+def _deadline_warnings(profile: PlatformProfile) -> list[str]:
+    """``past_deadline:`` once the platform's deadline has passed; ``final`` still runs."""
+    if profile.deadline is not None and utc_now() >= parse_stamp(profile.deadline):
+        return [f"past_deadline: {profile.deadline}"]
+    return []
+
+
+def _run_provenance(
+    paths: DatasetPaths, configs_root: Path | None, sid: str, eval_run: str
+) -> tuple[RunCard, Grade, set[str]]:
+    """The eval run behind a submission, with the grade of its reads and every subset it read
+    (a kernel submission re-read as ``stage`` recorded it, weights included)."""
+    card = load_run(paths.data_root, eval_run)
+    info = provenance(card, data_root=paths.data_root, configs_root=configs_root)
+    grade, observed = info.grade, set(info.observed)
+    artifact = load_staged(paths, sid).artifact
+    if artifact.kind == "kernel":  # VCP-036: the weights the notebook loads count too
+        grade, observed = kernel_provenance(
+            data_root=paths.data_root,
+            configs_root=configs_root,
+            grade=grade,
+            observed=observed,
+            weights=artifact.weights,
+        )
+    return card, grade, observed
+
+
+def _final_entries(
     paths: DatasetPaths,
     profile: PlatformProfile,
-    profile_sha: str,
     ledger: SubmissionLedger,
-    slots: int | None,
-    dry_run: bool,
-    data_root: Path | None,
+    eval_paths: DatasetPaths,
+    params: dict[str, str],
+    sealed_size: int,
     configs_root: Path | None,
-) -> FinalResult:
-    """``final``'s body, inside the ledger's transaction (spec 2026-09-28 §4.2); ``--dry-run``
-    takes the lock too."""
-    assert_unlocked(ledger)
-    if slots is not None and slots < 1:
-        raise ValidationFailed(f"slots: must be >= 1, got {slots}", fields={"slots": slots})
-    now = utc_now()
-    warnings: list[str] = []
-    if profile.deadline is not None and now >= parse_stamp(profile.deadline):
-        warnings.append(f"past_deadline: {profile.deadline}")
-    eval_paths = DatasetPaths.resolve(
-        profile.eval_dataset, data_root=data_root, configs_root=configs_root
-    )
-    eval_plan = load_plan(eval_paths, profile.plan_id)
-    sealed_size = len(eval_plan.ids_in(profile.sealed_subset))
-    metric = get_metric(profile.metric)
-    params = effective_params(metric, profile.metric_params)
+) -> list[FinalEntry]:
+    """One table row per staged submission, in ledger order: its sealed reading when it has a
+    usable one, and ``why`` it is not eligible when it has not."""
     params_hash = params_key(params)
-    sign = 1.0 if metric.higher_is_better else -1.0
     readings = ReadingsLedger(eval_paths.measure_dir / READINGS_LEDGER)
     entries: list[FinalEntry] = []
     for sid in ledger.ids():
@@ -239,18 +250,7 @@ def _final_locked(
         elif _errored(ledger, sid):
             why = "errored"  # not in NOT_RANKED: listed among the unranked (spec 2026-10-09 §4.5)
         else:
-            card = load_run(paths.data_root, str(st.eval_run))
-            info = provenance(card, data_root=paths.data_root, configs_root=configs_root)
-            grade, observed = info.grade, set(info.observed)
-            artifact = load_staged(paths, sid).artifact
-            if artifact.kind == "kernel":  # VCP-036: the weights the notebook loads count too
-                grade, observed = kernel_provenance(
-                    data_root=paths.data_root,
-                    configs_root=configs_root,
-                    grade=grade,
-                    observed=observed,
-                    weights=artifact.weights,
-                )
+            card, grade, observed = _run_provenance(paths, configs_root, sid, str(st.eval_run))
             reading, why = sealed_reading(readings, card, profile, params_hash, sealed_size)
             if why == "" and st.kind == "candidate":
                 if profile.sealed_subset in observed:
@@ -269,31 +269,70 @@ def _final_locked(
                 provenance=grade,
             )
         )
+    return entries
+
+
+def _rank_candidates(
+    paths: DatasetPaths,
+    profile: PlatformProfile,
+    ledger: SubmissionLedger,
+    eval_paths: DatasetPaths,
+    slots: int,
+    configs_root: Path | None,
+) -> tuple[list[FinalEntry], dict[str, str], list[str]]:
+    """The table, the metric's effective params, and the ids of the best ``slots`` eligible
+    submissions (spec 6.4). ``no_sealed_readings:`` when none can be ranked."""
+    sealed_size = len(load_plan(eval_paths, profile.plan_id).ids_in(profile.sealed_subset))
+    metric = get_metric(profile.metric)
+    params = effective_params(metric, profile.metric_params)
+    entries = _final_entries(paths, profile, ledger, eval_paths, params, sealed_size, configs_root)
+    sign = 1.0 if metric.higher_is_better else -1.0
     ranked = sorted((e for e in entries if e.eligible), key=rank_key(sign))
     if not ranked:
         raise _nothing_ranked(entries)
-    n = slots if slots is not None else profile.final_slots
-    chosen = [e.submission_id for e in ranked[:n]]
-    unranked = [e.submission_id for e in entries if not e.eligible and e.why not in NOT_RANKED]
-    needs_reupload: str | None = None
-    if profile.board_rule == "last":
-        last = ledger.last_uploaded()
-        if last is None or last.submission_id != chosen[0]:
-            needs_reupload = chosen[0]
-    selection: str | None = None
-    recorded: list[str] | None = None
-    next_step: str | None = None
-    if profile.board_rule == "best":
-        # read before the rows below; a recorded selection that is not this choice is only said,
-        # never acted on, and the ``final`` row does not depend on it
-        recorded = _differing_selection(ledger, chosen)
-        selection = None if recorded is None else "differs"
-        next_step = next_step_hint(profile, chosen)
-    row = LedgerRow(
+    return entries, params, [e.submission_id for e in ranked[:slots]]
+
+
+def _reupload_target(
+    profile: PlatformProfile, ledger: SubmissionLedger, chosen: list[str]
+) -> str | None:
+    """``board_rule=last`` only: the first choice when the last upload is not it, so the board
+    would count another submission."""
+    if profile.board_rule != "last":
+        return None
+    last = ledger.last_uploaded()
+    return chosen[0] if last is None or last.submission_id != chosen[0] else None
+
+
+def _board_selection(
+    profile: PlatformProfile, ledger: SubmissionLedger, chosen: list[str]
+) -> tuple[str | None, list[str] | None, str | None]:
+    """``board_rule=best`` only: ``("differs", recorded, next step)`` or ``(None, None, next
+    step)`` (spec 2026-10-30 §3.5); all None under any other rule."""
+    if profile.board_rule != "best":
+        return None, None, None
+    # read before the rows below; a recorded selection that is not this choice is only said,
+    # never acted on, and the ``final`` row does not depend on it
+    recorded = _differing_selection(ledger, chosen)
+    return (None if recorded is None else "differs"), recorded, next_step_hint(profile, chosen)
+
+
+def _final_row(
+    profile: PlatformProfile,
+    profile_sha: str,
+    eval_paths: DatasetPaths,
+    entries: list[FinalEntry],
+    params: dict[str, str],
+    chosen: list[str],
+    slots: int,
+) -> LedgerRow:
+    """The ``final`` row: the table, the choice, and what it was ranked by (the metric, its
+    params, the profile and how often the holdout has been opened)."""
+    return LedgerRow(
         event="final",
         ts=stamp(),
         rule=profile.final_rule,
-        slots=n,
+        slots=slots,
         chosen=chosen,
         table=entries,
         metric=profile.metric,
@@ -301,6 +340,33 @@ def _final_locked(
         holdout_unseals=count_unseals(eval_paths, profile.plan_id, profile.sealed_subset),
         profile_sha256=profile_sha,
     )
+
+
+def _final_locked(
+    paths: DatasetPaths,
+    profile: PlatformProfile,
+    profile_sha: str,
+    ledger: SubmissionLedger,
+    slots: int | None,
+    dry_run: bool,
+    data_root: Path | None,
+    configs_root: Path | None,
+) -> FinalResult:
+    """``final``'s body, inside the ledger's transaction (spec 2026-09-28 §4.2); ``--dry-run``
+    takes the lock too."""
+    assert_unlocked(ledger)
+    if slots is not None and slots < 1:
+        raise ValidationFailed(f"slots: must be >= 1, got {slots}", fields={"slots": slots})
+    warnings = _deadline_warnings(profile)
+    eval_paths = DatasetPaths.resolve(
+        profile.eval_dataset, data_root=data_root, configs_root=configs_root
+    )
+    n = slots if slots is not None else profile.final_slots
+    entries, params, chosen = _rank_candidates(paths, profile, ledger, eval_paths, n, configs_root)
+    unranked = [e.submission_id for e in entries if not e.eligible and e.why not in NOT_RANKED]
+    needs_reupload = _reupload_target(profile, ledger, chosen)
+    selection, recorded, next_step = _board_selection(profile, ledger, chosen)
+    row = _final_row(profile, profile_sha, eval_paths, entries, params, chosen, n)
     if not dry_run:
         ledger.append(row)
         ledger.append(LedgerRow(event="lock", ts=stamp(), reason="final"))

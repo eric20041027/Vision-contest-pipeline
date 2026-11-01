@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -513,32 +514,91 @@ def _warnings(caplog):
     return [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
-@pytest.fixture
-def vcp_log(caplog, monkeypatch):
-    """``setup_logging`` (any CLI test before this one) turns propagation off on the ``vcp``
-    logger; turn it back on so caplog sees the records."""
-    monkeypatch.setattr(logging.getLogger("vcp"), "propagate", True)
-    caplog.set_level(logging.DEBUG, logger="vcp")
-    return caplog
+class _Unreadable:
+    """A ``DirEntry`` whose type checks fail: a stat the account may not make."""
+
+    def __init__(self, entry):
+        self._entry = entry
+
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def _deny(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", self._entry.path)
+
+    is_symlink = is_junction = is_dir = is_file = _deny
 
 
-def _deny_listing(monkeypatch, name):
-    """``Path.iterdir`` raises PermissionError for the directory called ``name``."""
-    real = Path.iterdir
+class _DanglingLink:
+    """A ``DirEntry`` that is a symlink and not a file, whatever is on disk: the stand-in for a
+    link whose target is gone, where the machine cannot make symlinks."""
 
-    def iterdir(self):
-        if self.name == name:
-            raise PermissionError(13, "Permission denied", str(self))
-        return real(self)
+    def __init__(self, entry):
+        self._entry = entry
 
-    monkeypatch.setattr(Path, "iterdir", iterdir)
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def is_symlink(self):
+        return True
+
+    def is_junction(self):
+        return False
+
+    def is_dir(self, **kwargs):
+        return False
+
+    def is_file(self, **kwargs):
+        return False
+
+
+class _Rewrapped:
+    """What ``os.scandir`` returns, with every entry passed through ``wrap``."""
+
+    def __init__(self, listing, wrap):
+        self._listing = listing
+        self._wrap = wrap
+
+    def __enter__(self):
+        self._listing.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._listing.__exit__(*exc)
+
+    def __iter__(self):
+        return (self._wrap(entry) for entry in self._listing)
+
+
+def _break_scandir(monkeypatch, *, cannot_list=(), vanishes=(), rewrap=None):
+    """``os.scandir`` for the directories called ``cannot_list`` raises PermissionError, for
+    those called ``vanishes`` FileNotFoundError (gone since its parent was listed); ``rewrap``
+    maps a directory name to a function that replaces each entry of its listing. Returns the
+    list of directories listed, as posix strings."""
+    real = os.scandir
+    listed: list[str] = []
+
+    def scandir(path):
+        here = Path(path)
+        listed.append(here.as_posix())
+        if here.name in cannot_list:
+            raise PermissionError(13, "Permission denied", str(path))
+        if here.name in vanishes:
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        wrap = (rewrap or {}).get(here.name)
+        return real(path) if wrap is None else _Rewrapped(real(path), wrap)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    return listed
 
 
 def test_status_skips_a_run_subdirectory_it_cannot_list_and_keeps_going(
     roots, monkeypatch, vcp_log
 ):
-    """Today a PermissionError out of the listing aborts `train status`. The unreadable
-    directory is left out, said once (a WARNING and `tmp_skipped`), and the rest is still read."""
+    """An unreadable run subdirectory is left out, said once (a WARNING and `tmp_skipped`), and
+    the rest is still read. (In 0.16.0 the recursive walk left such a directory out without a
+    word; an unreadable checkpoint or glob directory, or an entry that could not be stat-ed,
+    aborted `train status`.)"""
     _, w = _seeded(roots)
     train_dir = roots.data / "runs" / "r1" / "train"
     train_dir.mkdir(parents=True)
@@ -547,7 +607,7 @@ def test_status_skips_a_run_subdirectory_it_cannot_list_and_keeps_going(
     locked.mkdir()
     (locked / "hidden.tmp").write_bytes(b"h")
     (w / "resume.pth.tmp").write_bytes(b"x" * 266)
-    _deny_listing(monkeypatch, "locked")
+    _break_scandir(monkeypatch, cannot_list={"locked"})
 
     st = status(roots.data, "r1")
 
@@ -558,7 +618,9 @@ def test_status_skips_a_run_subdirectory_it_cannot_list_and_keeps_going(
     assert st.tmp_skipped == [TmpSkip("runs/r1/locked", "PermissionError")]
     (record,) = _warnings(vcp_log)
     assert record.name == "vcp.train.status"
-    assert "runs/r1/locked" in record.getMessage() and "PermissionError" in record.getMessage()
+    assert record.getMessage() == (
+        "train status: the .tmp scan could not read runs/r1/locked (PermissionError) and skipped it"
+    )
 
 
 def test_status_skips_a_checkpoint_directory_it_cannot_list_and_keeps_going(
@@ -569,7 +631,7 @@ def test_status_skips_a_checkpoint_directory_it_cannot_list_and_keeps_going(
     train_dir = roots.data / "runs" / "r1" / "train"
     train_dir.mkdir(parents=True)
     (train_dir / "a.tmp").write_bytes(b"aa")
-    _deny_listing(monkeypatch, "weights")
+    _break_scandir(monkeypatch, cannot_list={"weights"})
 
     st = status(roots.data, "r1")
 
@@ -578,39 +640,49 @@ def test_status_skips_a_checkpoint_directory_it_cannot_list_and_keeps_going(
     assert len(_warnings(vcp_log)) == 1
 
 
-def test_status_names_a_directory_it_cannot_list_once_however_many_scans_reach_it(
+def test_status_stops_at_the_first_entry_that_raises_and_names_the_directory_once(
     roots, monkeypatch, vcp_log
 ):
-    """The checkpoint directory is a glob directory too: two scans, one skip, one WARNING."""
-    _seeded(roots)
-    _started(roots, checkpoints=["weights/*.pt"], final="weights/best.pt")
-    _deny_listing(monkeypatch, "weights")
+    """An entry whose type cannot be read costs its directory one skip, one WARNING and one
+    human line -- not one per entry."""
+    _, w = _seeded(roots)
+    for name in ("a.tmp", "b.tmp", "c.tmp"):
+        (w / name).write_bytes(b"t")
+    train_dir = roots.data / "runs" / "r1" / "train"
+    train_dir.mkdir(parents=True)
+    (train_dir / "kept.tmp").write_bytes(b"kk")
+    _break_scandir(monkeypatch, rewrap={"weights": _Unreadable})
 
     st = status(roots.data, "r1")
 
+    assert st.tmp == [TmpFile("runs/r1/train/kept.tmp", 2)]
     assert st.tmp_skipped == [TmpSkip("work/weights", "PermissionError")]
-    assert len(_warnings(vcp_log)) == 1
+    (record,) = _warnings(vcp_log)
+    assert record.getMessage() == (
+        "train status: the .tmp scan could not read work/weights (PermissionError) and skipped it"
+    )
 
 
-def test_status_skips_an_entry_it_cannot_stat_and_keeps_going(roots, monkeypatch, vcp_log):
+def test_status_skips_a_cwd_it_cannot_stat_and_keeps_going(roots, monkeypatch, vcp_log):
+    """`_glob_dir` asks whether the cwd is a directory; a PermissionError there used to abort
+    `train status`. Two patterns, one cwd: said once."""
     _, w = _seeded(roots)
-    (w / "bad.tmp").write_bytes(b"b")
-    (w / "good.tmp").write_bytes(b"gg")
-    real = Path.is_file
+    (w / "resume.pth.tmp").write_bytes(b"r")
+    _started(roots, checkpoints=["ckpt/*.pt"], final="ckpt/best.pt")
+    real = Path.is_dir
 
-    def is_file(self):
-        if self.name == "bad.tmp":
+    def is_dir(self):
+        if self.name == "work":
             raise PermissionError(13, "Permission denied", str(self))
         return real(self)
 
-    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr(Path, "is_dir", is_dir)
 
     st = status(roots.data, "r1")
 
-    assert st.tmp == [TmpFile("work/weights/good.tmp", 2)]
-    assert st.tmp_skipped == [TmpSkip("work/weights/bad.tmp", "PermissionError")]
-    (record,) = _warnings(vcp_log)
-    assert "work/weights/bad.tmp" in record.getMessage()
+    assert st.tmp == [TmpFile("work/weights/resume.pth.tmp", 1)]  # beside the checkpoints
+    assert st.tmp_skipped == [TmpSkip("work", "PermissionError")]
+    assert len(_warnings(vcp_log)) == 1
 
 
 def test_status_without_anything_unreadable_skips_nothing_and_says_nothing(roots, vcp_log):
@@ -625,6 +697,16 @@ def _link(link: Path, target: Path) -> None:
         link.symlink_to(target)
     except OSError as e:  # Windows without developer mode or the privilege
         pytest.skip(f"cannot create symlinks here: {e}")
+
+
+def _junction(link: Path, target: Path) -> None:
+    """``link`` becomes a junction to ``target`` (Windows; no privilege needed)."""
+    try:
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    except (ImportError, AttributeError, OSError) as e:
+        pytest.skip(f"cannot create a junction here: {e}")
 
 
 def test_status_lists_a_symlinked_tmp_by_its_own_path(roots, tmp_path):
@@ -652,15 +734,65 @@ def test_status_lists_a_link_and_the_file_it_points_to_as_two_entries(roots):
     ]
 
 
-def test_status_lists_a_symlinked_tmp_once_when_two_scans_reach_its_directory(roots, tmp_path):
+def test_status_lists_a_dangling_symlinked_tmp(roots):
+    """A link to nothing is still a leftover: the framework wrote it."""
     _, w = _seeded(roots)
-    _started(roots, checkpoints=["weights/*.pt"], final="weights/best.pt")
-    target = tmp_path / "elsewhere" / "payload.bin"
-    target.parent.mkdir()
-    target.write_bytes(b"x")
-    _link(w / "resume.pth.tmp", target)
+    _link(w / "resume.pth.tmp", w / "no-such-target")
 
-    assert [t.path for t in status(roots.data, "r1").tmp] == ["work/weights/resume.pth.tmp"]
+    assert status(roots.data, "r1").tmp == [
+        TmpFile("work/weights/resume.pth.tmp", (w / "resume.pth.tmp").lstat().st_size)
+    ]
+
+
+def test_status_lists_an_entry_that_is_a_symlink_and_not_a_file(roots, monkeypatch):
+    """The same finding where the machine cannot make symlinks: the entry says it is a link and
+    no file, and `lstat` still answers."""
+    _, w = _seeded(roots)
+    (w / "resume.pth.tmp").write_bytes(b"abc")
+    _break_scandir(
+        monkeypatch,
+        rewrap={"weights": lambda e: _DanglingLink(e) if e.name.endswith(".tmp") else e},
+    )
+
+    assert status(roots.data, "r1").tmp == [TmpFile("work/weights/resume.pth.tmp", 3)]
+
+
+def test_status_does_not_follow_a_junction_out_of_the_run_directory(roots, tmp_path):
+    """`is_symlink()` is False for a junction, so a walk that only checks it follows one."""
+    _seeded(roots)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leak.tmp").write_bytes(b"leak")
+    sub = roots.data / "runs" / "r1" / "sub"
+    sub.mkdir(parents=True)
+    (sub / "kept.tmp").write_bytes(b"k")
+    link = sub / "out"
+    _junction(link, outside)
+    try:
+        st = status(roots.data, "r1")
+    finally:
+        os.rmdir(link)  # the junction only, never what it points to
+
+    assert st.tmp == [TmpFile("runs/r1/sub/kept.tmp", 1)]
+    assert st.tmp_skipped == []
+
+
+def test_status_never_lists_a_junction_that_points_at_its_own_ancestor(roots, monkeypatch):
+    _seeded(roots)
+    run = roots.data / "runs" / "r1"
+    sub = run / "sub"
+    sub.mkdir(parents=True)
+    (sub / "x.tmp").write_bytes(b"x")
+    link = sub / "loop"
+    _junction(link, run)
+    listed = _break_scandir(monkeypatch)
+    try:
+        st = status(roots.data, "r1")
+    finally:
+        os.rmdir(link)
+
+    assert st.tmp == [TmpFile("runs/r1/sub/x.tmp", 1)]
+    assert [d for d in listed if "loop" in d] == []
 
 
 def test_status_verify_reports_a_broken_evidence_artifact(roots, tmp_path):

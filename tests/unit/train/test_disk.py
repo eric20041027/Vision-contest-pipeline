@@ -314,15 +314,6 @@ def test_console_marker_reads_only_the_last_64_kib(tmp_path):
     )
 
 
-@pytest.fixture
-def vcp_log(caplog, monkeypatch):
-    """``setup_logging`` (any CLI test before this one) turns propagation off on the ``vcp``
-    logger; turn it back on so caplog sees the records."""
-    monkeypatch.setattr(logging.getLogger("vcp"), "propagate", True)
-    caplog.set_level(logging.DEBUG, logger="vcp")
-    return caplog
-
-
 def test_console_marker_answers_none_and_warns_when_the_console_cannot_be_read(
     tmp_path, monkeypatch, vcp_log
 ):

@@ -257,14 +257,14 @@ def test_train_status_cli_says_what_the_tmp_scan_could_not_read(roots, tmp_path,
     assert r.exit_code == 0, r.output
     before = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
 
-    real = Path.iterdir
+    real = os.scandir
 
-    def iterdir(self):
-        if self.name == "weights":
-            raise PermissionError(13, "Permission denied", str(self))
-        return real(self)
+    def scandir(path):
+        if Path(path).name == "weights":
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
 
-    monkeypatch.setattr(Path, "iterdir", iterdir)
+    monkeypatch.setattr(os, "scandir", scandir)
     r = runner.invoke(app, ["train", "status", "--run", "r1"])
     assert r.exit_code == 0, r.output
     v = _verdict(r.output)

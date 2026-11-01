@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath
@@ -59,36 +60,38 @@ class StatusResult:
     tmp_skipped: list[TmpSkip]
 
 
+def _is_plain_dir(entry: os.DirEntry[str]) -> bool:
+    """A directory the walk may enter: not a symlink and not a junction (``is_symlink()`` is
+    False for one, and a junction that points at an ancestor loops to the reparse limit)."""
+    return not (entry.is_symlink() or entry.is_junction()) and entry.is_dir(follow_symlinks=False)
+
+
 def _tmp_in(
     directory: Path, *, recursive: bool, on_error: Callable[[Path, OSError], None]
 ) -> list[Path]:
-    """Files directly in (or, if ``recursive``, under) ``directory`` named ``*.tmp``, any case.
-    A directory or entry that cannot be read goes to ``on_error`` and is left out; the walk goes
-    on with the rest. One that vanished mid-scan is nothing to report. A symlink is never
-    descended into, and a link to a file is a finding of its own."""
+    """Leftovers directly in (or, if ``recursive``, under) ``directory``: entries named
+    ``*.tmp``, any case, that are files or symlinks (a link is a finding of its own, even a
+    dangling one). A symlink or junction is never entered. A directory that cannot be listed,
+    or whose first unreadable entry stops the listing, goes to ``on_error`` once and the walk
+    goes on with the rest; one that vanished mid-scan, or is no directory, is nothing to
+    report."""
     found: list[Path] = []
     pending = [directory]
     while pending:
         here = pending.pop()
         try:
-            if not here.is_dir():
-                continue
-            entries = list(here.iterdir())
-        except FileNotFoundError:  # gone between the listing of its parent and now
+            with os.scandir(here) as entries:
+                for entry in entries:
+                    if entry.name.lower().endswith(TMP_SUFFIX) and (
+                        entry.is_symlink() or entry.is_file(follow_symlinks=False)
+                    ):
+                        found.append(Path(entry.path))
+                    elif recursive and _is_plain_dir(entry):
+                        pending.append(Path(entry.path))
+        except (FileNotFoundError, NotADirectoryError):  # gone since its parent was listed
             continue
         except OSError as e:
             on_error(here, e)
-            continue
-        for entry in entries:
-            try:
-                if recursive and not entry.is_symlink() and entry.is_dir():
-                    pending.append(entry)
-                if entry.name.lower().endswith(TMP_SUFFIX) and entry.is_file():
-                    found.append(entry)
-            except FileNotFoundError:  # gone between the listing and the check
-                continue
-            except OSError as e:
-                on_error(entry, e)
     return found
 
 
@@ -120,27 +123,36 @@ def _started_globs(data_root: Path, run_id: str) -> list[tuple[str, str | None]]
     return globs
 
 
-def _glob_dir(pattern: str, cwd: Path) -> Path | None:
+def _glob_dir(pattern: str, cwd: Path, on_error: Callable[[Path, OSError], None]) -> Path | None:
     """The directory a pattern writes into: the nearest existing directory of ``cwd`` plus the
     pattern's fixed prefix -- the same reading the disk check uses. An absolute pattern points
     wherever it says. A relative one is bound to its ``cwd``: with the ``cwd`` gone (a stale
     one in an old event) or the nearest directory an ancestor of it (``../not-yet/*.pt``), the
-    walk up would end in a directory that is nobody's checkpoint directory, so it says nothing."""
+    walk up would end in a directory that is nobody's checkpoint directory, so it says nothing.
+    A ``cwd`` that cannot be examined goes to ``on_error`` and says nothing either."""
     target = nearest_dir(cwd / glob_prefix(pattern))
     if PurePath(pattern).anchor:
         return target
-    if not cwd.is_dir() or target.resolve() in cwd.resolve().parents:
+    try:
+        if not cwd.is_dir() or target.resolve() in cwd.resolve().parents:
+            return None
+    except OSError as e:
+        on_error(cwd, e)
         return None
     return target
 
 
-def _glob_dirs(data_root: Path, record: TrainRecord) -> set[Path]:
+def _glob_dirs(
+    data_root: Path, record: TrainRecord, on_error: Callable[[Path, OSError], None]
+) -> set[Path]:
     """Where the child writes checkpoints, so a directory that never had a checkpoint registered
     is still looked at. The cwd is the one the attempt's own ``started`` event recorded
     (``--resume`` may run from another directory); the record's only when the event has none."""
     fallback = resolve_stored_path(record.cwd, data_root)
     dirs = (
-        _glob_dir(pattern, fallback if cwd is None else resolve_stored_path(cwd, data_root))
+        _glob_dir(
+            pattern, fallback if cwd is None else resolve_stored_path(cwd, data_root), on_error
+        )
         for pattern, cwd in _started_globs(data_root, record.run_id)
     )
     return {d for d in dirs if d is not None}
@@ -160,10 +172,11 @@ def tmp_files(data_root: Path, record: TrainRecord) -> TmpScan:
     failed leaves a ``.tmp`` and nothing else). Never recursive below the run directory, even
     for a ``**`` pattern. Read-only; sorted by ``path``.
 
-    What cannot be read (a directory without permission to list, an entry that cannot be
-    stat-ed) is skipped, named once in ``skipped`` and in a WARNING, and the scan goes on. A
-    symlink is listed by its own path and sized by ``lstat``; one file reached by two scans
-    appears once (the same directory and the same name)."""
+    What cannot be read (a directory without permission to list or to stat, an entry whose
+    type cannot be read, a file that cannot be ``lstat``-ed) is skipped, named once in
+    ``skipped`` and in a WARNING, and the scan goes on. A symlink -- dangling or not -- is listed
+    by its own path and sized by ``lstat``; a junction is not entered; one file reached by two
+    scans appears once (the same directory and the same name)."""
     skipped: dict[str, TmpSkip] = {}
 
     def skip(path: Path, error: OSError) -> None:
@@ -171,14 +184,14 @@ def tmp_files(data_root: Path, record: TrainRecord) -> TmpScan:
         if shown not in skipped:
             skipped[shown] = TmpSkip(shown, type(error).__name__)
             log.warning(
-                "train status: skipped %s (%s); its .tmp files, if any, are not listed",
+                "train status: the .tmp scan could not read %s (%s) and skipped it",
                 shown,
                 type(error).__name__,
             )
 
     found = _tmp_in(run_dir(data_root, record.run_id), recursive=True, on_error=skip)
     beside = {resolve_stored_path(c.path, data_root).parent for c in record.checkpoints}
-    for parent in beside | _glob_dirs(data_root, record):
+    for parent in beside | _glob_dirs(data_root, record, skip):
         found += _tmp_in(parent, recursive=False, on_error=skip)
     out: dict[tuple[Path, str], TmpFile] = {}
     for p in found:

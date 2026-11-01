@@ -256,20 +256,58 @@ def test_a_line_that_cannot_be_encoded_fails_before_the_file_is_touched(tmp_path
     assert not fresh.exists()
 
 
-def test_a_failed_append_does_not_cut_a_row_another_writer_appended_after_it(tmp_path, monkeypatch):
-    """The truncate takes no lock. If the file has grown past where our row would have ended,
-    somebody else wrote after us: their complete row stays, whatever it costs the torn one."""
+OUR_LINE = json.dumps({"n": 3, "pad": "x" * 300}) + "\n"
+
+
+def _foreign_row(pad: int) -> bytes:
+    """Another writer's whole row: ~21 bytes for ``pad=0``, far more than ours for 600."""
+    return (json.dumps({"n": 99, "pad": "z" * pad}) + "\n").encode()
+
+
+@pytest.mark.parametrize("pad", [0, 600], ids=["short-foreign-row", "long-foreign-row"])
+@pytest.mark.parametrize(
+    ("at", "fraction"),
+    [("write", 0.5), ("write", 0.0), ("close", 1.0)],
+    ids=["half-a-line", "no-byte-written", "fails-on-close"],
+)
+def test_a_row_that_landed_before_our_bytes_stays_and_only_our_bytes_go(
+    tmp_path, monkeypatch, at, fraction, pad
+):
+    """The file is in append mode, so our bytes land at EOF at *write* time, behind a row another
+    writer appended after our open. Cutting back to the offset taken at open would delete that
+    row -- the old size check (``st_size <= start + len(data)``) did exactly that whenever the
+    foreign row was shorter than what we had not yet written. Only our own bytes are cut."""
     target = _two_lines(tmp_path)
     before = target.read_bytes()
-    foreign = (json.dumps({"n": 99, "pad": "z" * 600}) + "\n").encode()
+    foreign = _foreign_row(pad)
+    error = full_disk_on_append(
+        monkeypatch, target, fraction=fraction, at=at, append_before=foreign
+    )
+
+    with pytest.raises(OSError) as ei:
+        atomic.append_whole_line(target, OUR_LINE)
+
+    assert ei.value is error
+    assert target.read_bytes() == before + foreign
+    assert [row["n"] for row in _rows(target)] == [1, 2, 99]  # every line parses
+
+
+@pytest.mark.parametrize("pad", [0, 600], ids=["short-foreign-row", "long-foreign-row"])
+def test_a_row_that_landed_after_our_half_line_is_never_cut(tmp_path, monkeypatch, pad):
+    """Cutting back to our start would take the foreign row with our bytes, whatever its length
+    (a short one used to pass the old size check). So the file is left as it is: our torn bytes
+    stay, the next strict read fails loudly at them, and a person repairs the file."""
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    foreign = _foreign_row(pad)
     error = full_disk_on_append(monkeypatch, target, fraction=0.5, also_append=foreign)
 
     with pytest.raises(OSError) as ei:
-        atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+        atomic.append_whole_line(target, OUR_LINE)
 
     assert ei.value is error
-    raw = target.read_bytes()
-    assert raw.startswith(before) and raw.endswith(foreign)  # nothing was cut
+    ours = OUR_LINE.encode()
+    assert target.read_bytes() == before + ours[: len(ours) // 2] + foreign  # untouched
 
 
 def test_a_failing_truncate_does_not_replace_the_original_error(tmp_path, monkeypatch):
@@ -277,6 +315,7 @@ def test_a_failing_truncate_does_not_replace_the_original_error(tmp_path, monkey
     that started it, not the cleanup's error."""
     target = _two_lines(tmp_path)
     error = full_disk_on_append(monkeypatch, target, fraction=0.5)
+    monkeypatch.setattr(atomic, "IS_WINDOWS", False)  # a permission error is final on POSIX
 
     attempts = []
 
@@ -286,9 +325,63 @@ def test_a_failing_truncate_does_not_replace_the_original_error(tmp_path, monkey
 
     monkeypatch.setattr(atomic.os, "truncate", refuse)
     with pytest.raises(OSError) as ei:
-        atomic.append_whole_line(target, json.dumps({"n": 3, "pad": "x" * 300}) + "\n")
+        atomic.append_whole_line(target, OUR_LINE)
     assert ei.value is error
     assert len(attempts) == 1  # it did try to clean up
+
+
+def _busy_truncate(monkeypatch, times):
+    """``os.truncate`` that fails ``times`` times with a sharing violation, then really cuts.
+    Returns the list of sizes it was asked for."""
+    real = atomic.os.truncate
+    asked: list[int] = []
+
+    def truncate(path, size):
+        asked.append(size)
+        if len(asked) <= times:
+            raise PermissionError(errno.EACCES, "used by another process")
+        real(path, size)
+
+    monkeypatch.setattr(atomic.os, "truncate", truncate)
+    return asked
+
+
+def test_windows_retries_a_busy_truncate_then_cuts(tmp_path, monkeypatch):
+    """A reader, an indexer or antivirus can hold the file for a moment; the cleanup waits it
+    out the way ``replace_text`` does, and the caller still sees only the ENOSPC."""
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    error = full_disk_on_append(monkeypatch, target, fraction=0.5)
+    sleeps: list[float] = []
+    monkeypatch.setattr(atomic, "IS_WINDOWS", True)
+    monkeypatch.setattr(atomic, "REPLACE_RETRY_DELAYS", (0.0,) * 5)
+    monkeypatch.setattr(atomic.time, "sleep", sleeps.append)
+    asked = _busy_truncate(monkeypatch, 2)
+
+    with pytest.raises(OSError) as ei:
+        atomic.append_whole_line(target, OUR_LINE)
+
+    assert ei.value is error
+    assert len(asked) == 3 and sleeps == [0.0, 0.0]
+    assert target.read_bytes() == before
+
+
+def test_windows_gives_up_on_a_busy_truncate_and_raises_the_original_error(tmp_path, monkeypatch):
+    target = _two_lines(tmp_path)
+    before = target.read_bytes()
+    error = full_disk_on_append(monkeypatch, target, fraction=0.5)
+    sleeps: list[float] = []
+    monkeypatch.setattr(atomic, "IS_WINDOWS", True)
+    monkeypatch.setattr(atomic, "REPLACE_RETRY_DELAYS", (0.0,) * 5)
+    monkeypatch.setattr(atomic.time, "sleep", sleeps.append)
+    asked = _busy_truncate(monkeypatch, 99)
+
+    with pytest.raises(OSError) as ei:
+        atomic.append_whole_line(target, OUR_LINE)
+
+    assert ei.value is error  # not the PermissionError the cleanup ended on
+    assert len(asked) == 6 and len(sleeps) == 5
+    assert len(target.read_bytes()) > len(before)  # the torn bytes are still there
 
 
 def test_an_interrupt_halfway_through_a_line_also_truncates_back(tmp_path, monkeypatch):

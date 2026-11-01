@@ -608,7 +608,9 @@ def git_repo(path: Path, files: dict[str, bytes] | None = None) -> Path:
     return path
 
 
-def full_disk_on_append(monkeypatch, target, *, fraction=0.5, at="write", also_append=b""):
+def full_disk_on_append(
+    monkeypatch, target, *, fraction=0.5, at="write", also_append=b"", append_before=b""
+):
     """Make appends to ``target`` die the way a full disk does and return the error they raise.
 
     ``at="write"``: ``fraction`` of the bytes handed to ``write`` reach the file, then
@@ -616,7 +618,9 @@ def full_disk_on_append(monkeypatch, target, *, fraction=0.5, at="write", also_a
     ``at="close"``: the whole line is written and closing the file is what fails (a buffered
     writer only meets the full disk at its flush).
     ``also_append``: bytes another writer appends to the file after our partial row and before
-    the error reaches the caller.
+    the error reaches the caller (``at="write"`` only).
+    ``append_before``: bytes another writer appends between our open and our write. The file is
+    in append mode, so our bytes then land after theirs, not at the offset ``tell()`` gave.
 
     The patch is on ``Path.open`` for ``target`` in an append mode, which is how every
     append-only writer in vcp opens its file (through ``vcp.core.atomic.append_whole_line``);
@@ -629,6 +633,9 @@ def full_disk_on_append(monkeypatch, target, *, fraction=0.5, at="write", also_a
             self._f = f
 
         def write(self, data):
+            if append_before:
+                with open(target, "ab") as other:  # the builtin: not the patched Path.open
+                    other.write(append_before)
             if at == "close":
                 return self._f.write(data)
             part = data[: int(len(data) * fraction)]

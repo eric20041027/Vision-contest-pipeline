@@ -18,7 +18,7 @@
 - 每個任務各自審查（審查檔不進 repo）：沒有 Critical；只有一個 Important（Task 7 的 `_upload_all`，見 §2.1 第 3 條），修正在 `470c2ce`。整個分支的最終審查另有一個 Important（`--upload` 步驟的復原提示，§2.1 第 18 條）與幾個小項（§2.1 第 16、17 條；`train.log.jsonl` 半列的描述改正，該限制已在發版前由 `fix(train): an interrupted train.log.jsonl append leaves no half line` 修掉，見下一條），都已處置。其餘 Minor 的處置見 §1、§2.2。
 - 發版前、tag 之前又做了三件小事，在分支 `fix/v0160-followups`（base `main` 62ebe98），各自先寫失敗的測試：`fix(train): an interrupted train.log.jsonl append leaves no half line`、`feat(train): train status also scans the checkpoint glob directories for tmp files`、`refactor: review leftovers from 0.16.0`、`fix(submit): keep earlier pages' CLI warnings when a later page fails`、`fix(train): resolve each attempt's globs against that attempt's cwd`；審查之後又加 `fix(train): harden the tmp scan and the append truncate`、`fix(submit): keep a failed read-back look's warnings`；另有文件 commit `docs: 0.16.0 follow-ups done before the release`、`docs: note the glob scan in the 0.16.0 spec and the unlocked truncate` 與 `docs: review notes for the 0.16.0 follow-ups`。對應 §2.2 的第 4、5 條與第 10 條的三小項（§2.1 第 19–21 條）。
 - 每個行為變更都先寫測試、看它失敗再實作。例外是只鎖現狀的測試：yaml 位元組的 golden（Task 1 的 `TrainRecord`、`RunCard`、`PlatformProfile`）與 `ledger adopt` 合併 `selected` 列的測試（原本就合併，先就是綠的）。
-- 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json` 都沒動，發版時再做（§2.2 第 1 條）。
+- 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json` 在發版 commit `chore(release): v0.16.0` 改（§2.2 第 1 條）。
 
 ## 1. 已知限制
 
@@ -71,13 +71,13 @@
 
 ### 2.2 開放待辦（依優先順序）
 
-1. **發版 0.16.0**（使用者同意之後；發版 commit 不在功能分支）。`CHANGELOG.md` 要寫：
+1. ~~**發版 0.16.0**（使用者同意之後；發版 commit 不在功能分支）。~~ 已完成（2026-11-01，使用者同意）：`chore(release): v0.16.0`，tag `v0.16.0` 打在發版 PR 的合併 commit 上。`CHANGELOG.md` 寫了：
    - MINOR 的理由（spec §9）：台帳新事件 `selected`、`env.<n>.json` 的 `disk`、`train.log.jsonl` 的 `disk_full` / `low_disk` note；新命令 `submit select`、新選項 `--min-free-gib`、新 VERDICT 欄位、新 `reason=` 字彙 `low_disk:` `disk_full:`；`submit.yaml` 新鍵 `selection_warn_hours`；`Platform.list_submissions` 的回傳型別；
    - Added / Changed / Fixed（`dump_yaml_model` 的原子替換，位元組不變）；
    - 相容性與升級（spec §8）、已知限制（spec §5.4、§12 與本檔 §1）；
    - `src/vcp/__init__.py` 的 `__version__` 與 `.claude/.claude-plugin/plugin.json` 同步改成 0.16.0。
 2. **比賽工作區升級。** 讀寫同一份台帳的每個 checkout 一起升到 0.16.0，再讓第一個人 `select --record`；共用同一個 `submit.yaml` 的 vcp 都要先升級才能寫非預設的 `selection_warn_hours`。
-3. **交接文件。** `HANDOVER.md` 與 `CODEX_PROMPT.md` 在發版時提到新事件、升級順序與磁碟檢查。
+3. ~~**交接文件。** `HANDOVER.md` 與 `CODEX_PROMPT.md` 在發版時提到新事件、升級順序與磁碟檢查。~~ 已完成：同一個發版 commit（HANDOVER §2、§6 第 10 條、§8；CODEX_PROMPT 開頭與開放待辦）。
 4. ~~**把 glob 寫進 `started` 事件**（spec §12，待使用者決定）：`--checkpoints` / `--final` 的 glob 寫進 `train.log.jsonl` 的 `started`（不驗欄位，不破舊版），`train status` 再掃它們的前綴，從沒登記過 checkpoint 的目錄的 `.tmp` 才看得到。~~ 已完成（發版前）：`feat(train): train status also scans the checkpoint glob directories for tmp files`，裁決見 §2.1 第 19 條。
 5. ~~**`train.log.jsonl` 的 append（PATCH）。** `append_event` 在寫之前記下 `f.tell()`，任何例外就截斷回那個位置，不留半列；`backup verify` 才不會對含這個 run 的清單永遠報 `bad_stamps:`。~~ 已完成（發版前）：`fix(train): an interrupted train.log.jsonl append leaves no half line`，裁決見 §2.1 第 20 條。其他 append-only 檔還有同一個問題，見第 11 條。
 6. **`select --none`**（spec §12）：要支援「什麼都沒勾」（Kaggle 這時自動用 public 最好的兩發）就另加選項，現在空的選取被拒。

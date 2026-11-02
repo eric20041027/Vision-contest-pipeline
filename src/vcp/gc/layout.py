@@ -6,10 +6,17 @@ the root it was found under, last segment the file name, and is never empty. The
 path, not the root: a file under the data root gets the data root's rules whichever ``--root``
 the walk came in through, so the scanner decides ``where`` and the flags, and this module only
 reads them.
+
+Names are compared the way the file system sees them. ``raw`` and ``locks`` at the data root's
+top and ``.git`` anywhere are protected whatever their case, on every platform (over-protecting
+is the safe side); every other layout name matches case-insensitively where the file system
+does (``_FOLD_CASE``) and exactly where it does not. Only the comparison folds: a unit keeps the
+segments as the disk spells them.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 # data: below the data root; checkpoint: directly in a checkpoint directory; option: below a
@@ -44,6 +51,9 @@ _UNIT_DEPTH: dict[str, tuple[int, int]] = {
 }
 _TOP_LEVEL_UNIT = (2, 1)
 
+# Windows opens a hand-made ``Raw/`` through ``raw/``; a module flag so tests can patch it.
+_FOLD_CASE = os.name == "nt"
+
 
 def classify(
     parts: tuple[str, ...],
@@ -62,10 +72,11 @@ def classify(
         return "debris"
     if referenced:
         return "referenced"
-    if where == "data" and _is_rebuildable(parts):
+    keys = _layout_keys(parts)
+    if where == "data" and _is_rebuildable(keys):
         return "rebuildable"
     if in_configs or (
-        where == "data" and (committed_artifact or _is_data_record(parts, skipped_run))
+        where == "data" and (committed_artifact or _is_data_record(keys, skipped_run))
     ):
         return "record"
     return "unreferenced"
@@ -78,13 +89,30 @@ def unit_of(parts: tuple[str, ...], where: Where) -> tuple[str, ...]:
         return parts
     if where == "option":
         return parts[:1]
-    return parts[: _data_unit_length(parts)]
+    return parts[: _data_unit_length(_layout_keys(parts))]
+
+
+def _fold(parts: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(part.casefold() for part in parts)
+
+
+def _layout_keys(parts: tuple[str, ...]) -> tuple[str, ...]:
+    """The segments as the layout rules compare them: folded on a case-insensitive file system,
+    as spelled on a case-sensitive one, except that the untouchable top level is folded on both
+    (so ``Raw/x`` is the unit ``raw/x`` would be)."""
+    folded = _fold(parts)
+    if _FOLD_CASE:
+        return folded
+    if folded[0] in _UNTOUCHABLE_DATA_TOPS:
+        return (folded[0], *parts[1:])
+    return parts
 
 
 def _is_protected(parts: tuple[str, ...], where: Where) -> bool:
-    if ".git" in parts[:-1]:
+    names = _fold(parts)
+    if ".git" in names[:-1]:
         return True
-    return where == "data" and len(parts) >= 2 and parts[0] in _UNTOUCHABLE_DATA_TOPS
+    return where == "data" and len(names) >= 2 and names[0] in _UNTOUCHABLE_DATA_TOPS
 
 
 def _is_rebuildable(parts: tuple[str, ...]) -> bool:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+import vcp.gc.layout as layout
 from vcp.gc.layout import CLASSES, classify, unit_of
 
 
@@ -154,3 +155,97 @@ def test_the_classes_are_the_six_the_report_counts():
         "unreferenced",
         "protected",
     )
+
+
+@pytest.fixture(params=[True, False], ids=["folding-fs", "exact-fs"])
+def either_fs(request, monkeypatch):
+    """The layout module on a case-insensitive file system and on a case-sensitive one."""
+    monkeypatch.setattr(layout, "_FOLD_CASE", request.param)
+    return request.param
+
+
+@pytest.mark.parametrize(
+    ("rel", "where", "unit"),
+    [
+        ("Raw/x/a.bin", "data", "Raw/x"),
+        ("RAW/x/a.bin", "data", "RAW/x"),
+        ("Locks/l.lock", "data", "Locks"),
+        ("LOCKS/submissions-ab.lock", "data", "LOCKS"),
+    ],
+)
+def test_the_untouchable_top_levels_are_protected_whatever_their_case(either_fs, rel, where, unit):
+    parts = tuple(rel.split("/"))
+
+    assert classify(parts, where, referenced=False) == "protected"
+    assert classify(parts, where, referenced=True) == "protected"
+    assert "/".join(unit_of(parts, where)) == unit  # the unit keeps the on-disk spelling
+
+
+@pytest.mark.parametrize(
+    ("rel", "where"),
+    [
+        ("repo/.GIT/objects/o", "option"),
+        ("repo/.Git/HEAD", "checkpoint"),
+        ("work/proj/.gIT/config", "data"),
+    ],
+)
+def test_a_git_directory_is_protected_whatever_its_case(either_fs, rel, where):
+    assert classify(tuple(rel.split("/")), where, referenced=False) == "protected"
+
+
+@pytest.mark.parametrize(
+    ("rel", "flags", "cls", "unit"),
+    [
+        (
+            "Datasets/d/Cache/Materialize/png/a.npy",
+            {},
+            "rebuildable",
+            "Datasets/d/Cache/Materialize/png",
+        ),
+        ("Datasets/d/CACHE/Audit/g.json", {}, "rebuildable", "Datasets/d/CACHE/Audit"),
+        ("DATASETS/d/cache/DHash.jsonl", {}, "rebuildable", "DATASETS/d/cache/DHash.jsonl"),
+        ("Indexes/provenance-0123.sqlite3", {}, "rebuildable", "Indexes"),
+        ("Datasets/d/Samples.jsonl", {}, "record", "Datasets/d"),
+        ("Datasets/d/Raw_Manifest.txt", {}, "record", "Datasets/d"),
+        (
+            "Datasets/d/Cache/import_skipped.jsonl",
+            {},
+            "record",
+            "Datasets/d/Cache/import_skipped.jsonl",
+        ),
+        ("Runs/r1/Inputs/preds.csv", {}, "record", "Runs/r1"),
+        ("Runs/r1/big.bin", {"skipped_run": True}, "record", "Runs/r1"),
+        ("Artifacts/k/Supersession.jsonl", {}, "record", "Artifacts/k/Supersession.jsonl"),
+        ("Measure/d/readings.jsonl", {}, "record", "Measure/d"),
+        ("SUBMIT/t/S1/stage.json", {}, "record", "SUBMIT/t/S1"),
+        ("Logs/vcp-2026-11-01.jsonl", {}, "record", "Logs"),
+    ],
+)
+def test_the_layout_matches_names_in_any_case_on_a_case_insensitive_file_system(
+    monkeypatch, rel, flags, cls, unit
+):
+    monkeypatch.setattr(layout, "_FOLD_CASE", True)
+    parts = tuple(rel.split("/"))
+
+    assert classify(parts, "data", referenced=False, **flags) == cls
+    assert "/".join(unit_of(parts, "data")) == unit  # the on-disk spelling, never the folded one
+
+
+@pytest.mark.parametrize(
+    ("rel", "flags", "unit"),
+    [
+        ("Datasets/d/Cache/Materialize/png/a.npy", {}, "Datasets"),
+        ("Indexes/provenance-0123.sqlite3", {}, "Indexes"),
+        ("Datasets/d/Samples.jsonl", {}, "Datasets"),
+        ("Runs/r1/Inputs/preds.csv", {}, "Runs"),
+        ("Runs/r1/big.bin", {"skipped_run": True}, "Runs"),
+        ("Measure/d/readings.jsonl", {}, "Measure"),
+        ("Logs/vcp-2026-11-01.jsonl", {}, "Logs"),
+    ],
+)
+def test_the_layout_is_exact_on_a_case_sensitive_file_system(monkeypatch, rel, flags, unit):
+    monkeypatch.setattr(layout, "_FOLD_CASE", False)
+    parts = tuple(rel.split("/"))
+
+    assert classify(parts, "data", referenced=False, **flags) == "unreferenced"
+    assert "/".join(unit_of(parts, "data")) == unit  # a name it does not know is a top-level item

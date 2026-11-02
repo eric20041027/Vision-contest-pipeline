@@ -224,6 +224,21 @@ def test_a_root_above_the_data_root_keeps_the_data_root_rules(roots, tmp_path):
     assert res.roots[1] == Root(tmp_path.resolve(), True, "option")
 
 
+def test_a_raw_directory_is_protected_whatever_its_case(roots):
+    _put(roots.data, "Raw/other/a.bin")
+    _put(roots.data, "Raw/other/sub/b.bin")
+    _put(roots.data, "Locks/l.lock")
+
+    res = _scan(roots)
+
+    by = _by(res)
+    assert [(i.kind, i.cls, i.files) for i in (by["Raw/other"], by["Locks"])] == [
+        ("dir", "protected", 2),
+        ("dir", "protected", 1),
+    ]
+    assert res.totals["protected"][1] == 3 and res.totals["unreferenced"] == (0, 0)
+
+
 def test_nested_and_repeated_roots_are_walked_once(roots, tmp_path):
     proj = tmp_path / "proj"
     _put(proj, "a.bin", 3)

@@ -27,7 +27,7 @@
 | 7b. kernel 實跑 | 上傳已授權的 dataset/notebook、等實際成功版本與輸出 | 綁定成功 notebook id/version、輸出與 `--weights RUN[:sha]`；不捏造版本或 test run |
 | 8. 提交準備 | `submit init`, `stage`, `verify` | file 走 eval/test 配對；kernel 走 notebook/version/weights；四道門通過且 `stage.json` 可驗證 |
 | 9. 平台 | `upload` 或 `record`, `sync` 或 `score` | 台帳有真實 uploaded/scored，Kaggle 結果由 CLI 回讀 |
-| 10. 決選 | sealed `measure --unseal --reason`, `final --dry-run`, `final`, 平台勾選, `select --record`, `status` | 至少一個 candidate/baseline 已真實上傳或記錄；候選固定；解封後不調參；final 記錄並封槍；平台上實際勾的用 `select --record` 記下（`final` 記的只是 vcp 的建議；同一個 id 重傳過就寫 `<id>@<平台 ref>` 指明哪一發，刻意什麼都不勾用 `select --none`），`status` 沒有 `selection=missing\|slots\|differs` 的 WARN（核對只在 `board_rule: best`；`last` 的平台自己算最後一發，`selection=none`；`--none` 之後是 `selection=unticked`，單獨不 WARN，有 `final` 時 `unticked,differs` WARN） |
+| 10. 決選 | sealed `measure --unseal --reason`, `final --dry-run`, `final`, 平台勾選, `select --record`, `status` | 至少一個 candidate/baseline 已真實上傳或記錄；候選固定；解封後不調參；final 記錄並封槍；平台上實際勾的用 `select --record` 記下（`final` 記的只是 vcp 的建議；同一個 id 重傳過就寫 `<id>@<平台 ref>` 指明哪一發，刻意什麼都不勾用 `select --none`；第一次 `--none` 之前，讀寫同一份台帳的每個 checkout 都先升到 0.17.0，0.16.0 讀到空的 `chosen` 會 FAIL `bad ledger row`），`status` 沒有 `selection=missing\|slots\|differs` 的 WARN（核對只在 `board_rule: best`；`last` 的平台自己算最後一發，`selection=none`；`--none` 之後是 `selection=unticked`，單獨不 WARN，有 `final` 時 `unticked,differs` WARN） |
 | 11. 提交證據備份 | `backup manifest`, `push --tier 1/2/3`, `verify`, `status` | 從真實 submission 重建完整證據圖；異機目的地逐檔 sha 通過 |
 | 12. 收尾清磁碟（需要時） | `gc scan [--root projects/<contest>]`（只列不刪） | 備份已 verify；讀 `unreferenced` / `debris` / `duplicate of`，由人決定、人自己刪；`record` 先問自己是否放棄那個 dataset 或 run；WARN（`skipped=` `unreadable=` `running=`）先處理；掃描的 id 記進 RUNBOOK |
 

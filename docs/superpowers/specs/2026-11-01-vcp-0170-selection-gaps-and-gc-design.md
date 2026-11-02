@@ -271,7 +271,7 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 
 - **空的 `chosen`（`select --none`）**：0.16.0 讀到會 FAIL `bad ledger row`（schema 拒絕空選取；每個讀者都嚴格驗每一列）。會 FAIL 的同 0.16.0 spec §8：每個 submit 寫入命令、唯讀的 `status`、`report`，與讀台帳的 `backup manifest`、`backup verify`。
 - 升級順序：一份台帳的每個讀者與寫者都先升到 0.17.0，才第一次跑 `select --none`（`configs` 台帳：共用它的每個 checkout；`shared` 正本：同一個 data root 的每個 worktree）。跟 0.16.0 的 `selected` 一樣，這一列只由人下的命令寫，在那之前 0.16 與 0.17 可以共用台帳；誰先記 `--none`，誰負責先讓大家升級。
-- **`<id>@<ref>` 條目**：0.16.0 照常載入（`chosen` 仍是非空、不重複的字串 list），但讀錯：`status` / `select` / `final` 可能誤報 `differs`，條目數與標籤數不同時誤報 `slots`，`report` 不標這些列。只會多 WARN、不會少 WARN、不會 FAIL：建議升級，但不擋。
+- **`<id>@<ref>` 條目**：0.16.0 照常載入（`chosen` 仍是非空、不重複的字串 list），但讀錯：`status` / `select` / `final` 可能誤報 `differs`，條目數與標籤數不同時誤報 `slots`，`report` 不標這些列。多半只會多 WARN、不會 FAIL：建議升級，但不擋。（2026-11-01 最終審查更正：原文的「不會少 WARN」不完全成立，沒有 `final` 列、可選的 id 有兩個以上、記了 `A@1,A@2` 時，0.17.0 報 `slots`（不同標籤數 1 ≠ 預期 2），0.16.0 照條目數 2 報 `ok`。）
 - **`foreign:<ref>` 的解析**：只改讀法，台帳不變；同一份台帳 0.17.0 的 `differs` 比 0.16.0 少（少的都是誤報）。
 - **CLI 警告**：只在 VERDICT，台帳與產物不變。`VcpError` 多一個屬性；`PlatformError(cli_warnings=)` 照舊可用。
 - **`gc_scan` 產物**：新 kind。舊 vcp 的 `artifact status` / `verify` / `clean` 與 provenance 索引對 kind 一視同仁，照常處理。Collector 的重構不改任何 backup 清單的位元組（§10.4 的 golden）。
@@ -385,6 +385,7 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
   - 只知道 vcp 自己的紀錄。`unreferenced` 不等於可以刪：筆記、notebook、別的工具、別的 configs root（共用 data root 的別的專案）可能需要它。別的 configs root 的 backup 清單與預登記不會讀到；它們的 run 目錄有走到。
   - 不知道平台上的副本（例如 Kaggle dataset）；backup 推過的副本不逐檔判斷，只有 `train upload` 驗過的 checkpoint 有 `copy`。
   - 不跟隨符號連結與 junction；硬連結會被算兩次；經由連結路徑寫下的引用可能對不到掃到的檔。
+  - 相對的上傳 / push 目的地以 gc 的工作目錄解析，不一定是寫下它的地方；已驗證的本機副本可能因此讀成 `unreferenced`。
   - 重複檔只認位元組完全相同、而且被引用的那一份有記錄 sha 的；壓縮或重新打包過的認不出來。
   - 只以 sha 記的權重（`eval ingest --weights`、kernel 提交的 `WeightRef`）沒有路徑，不算引用、也不參與重複檔比對：不經 `vcp train run` 登記的權重會出現在 `unreferenced`。
   - `--no-record` 也會寫每日 log（所有命令共用的 `run_command`）；真正唯讀的 data root 上，log 寫不了就跟其他命令一樣。
@@ -403,7 +404,7 @@ uv run vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]
 5. **分類有 `record` 一類，vcp 自己的紀錄從不歸 `unreferenced`**。— 沒有引用就一律 `unreferenced`。— 別的 checkout 的 dataset 或共用 data root 的別的專案，整批會被說成垃圾。代價是被放棄的 run 要人自己判斷。
 6. **`--none` 寫 `chosen: []`，不另開事件**。— 新事件 `unselected`。— 舊 vcp 一樣 FAIL，多一個事件只多一個字彙。代價是 0.16.0 讀者遇到這一列就 FAIL，升級順序同 0.16.0。
 7. **`unticked` 單獨不 WARN，有 `final` 時以 `differs` WARN**。— 一律 WARN（當成 `slots`），或一律不 WARN。— 一律 WARN 讓刻意的決定到截止都在 WARN；一律不 WARN 會漏掉「vcp 選了、平台卻自己挑」的情況。代價是沒有 `final` 的比賽記了 `--none` 就不再提醒。
-8. **`@ref` 條目讓 0.16.0 照常讀（只會多報）**。— 讓舊版讀到就 FAIL（例如另開欄位）。— 強制升級；多報的 WARN 對舊版讀者是安全方向。代價是混用版本時 `status` 可能誤報 `differs`。
+8. **`@ref` 條目讓 0.16.0 照常讀（多半只會多報，例外見 §8）**。— 讓舊版讀到就 FAIL（例如另開欄位）。— 強制升級；多報的 WARN 對舊版讀者是安全方向。代價是混用版本時 `status` 可能誤報 `differs`。
 9. **比對單位仍是 submission 標籤，`slots` 數不同標籤數**。— 以平台的一發為單位（`expected` 改數 arrivals，`slots` 數條目）。— 那會改 0.16.0 的 C4，只上傳過一個 id 兩次的人會多一個 WARN。代價是兩格勾同一個 id 只算一格。
 10. **`foreign:<ref>` 在讀取時解析，寫入時照字面**。— 寫入時改寫成 `<id>@<ref>`。— 歸屬會在之後的 `sync` 才確定，寫入時改不完；台帳要記人說的話。代價是每個讀者都要做解析。
 11. **gc 的門檻預設 100 MiB，類別總量不受門檻影響**。— 10 MiB 或 1 GiB。— 太低時輸出被小檔淹沒，太高時漏掉中型的 checkpoint 與 266 MB 那種 `.tmp`。代價是要看小東西得 `--min-mib 0`。

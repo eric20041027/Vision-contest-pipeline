@@ -19,6 +19,8 @@
   - `a810627` feat(gc): vcp gc scan writes a gc_scan artifact and never deletes
   - `c2d754d` test(gate): guard the 0.17.0 selection, CLI-warning and gc scan behaviour
   - 文件一個 commit（本檔、`cli.md`、CLAUDE.md / AGENTS.md、三個 skill 與鏡射、`AGENT_SKILLS.md`、治理 spec 第 34 條、備份審計 spec 的補充決定、0.16.0 後記與 RSNA 收尾後記的處置）。
+  - `cf1091e` fix(gc): layout names match whatever case the file system keeps（最終審查的修正）
+  - 最終審查的文件更正一個 commit（`docs: 0.17.0 final-review corrections`：升級順序、「多半只會多報」、本檔的開放待辦與 spec §12）。
 - 每個行為變更都先寫測試、看它失敗再實作。例外是只鎖現狀的測試：`backup manifest` 的位元組 golden（`e562ef5`，在 Collector 重構之前就是綠的，重構後仍綠）；0.16.0 留下的 `final` 列 golden 也照舊綠（有沒有 `selected` 列，`final` 列除 `ts` 外逐位元組相同）。
 - 同版的兩項 PATCH（#63、#64）當時為了避開衝突沒有帶文件，它們的處置寫在 `2026-10-30-vcp-0160-selection-and-disk-followups.md` §2.2 的第 10、11 條。
 - 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json`、`docs/handover/` 在發版 commit 改（§2.2 第 1 條）。
@@ -67,4 +69,10 @@
 6. **拆 `train/run.py`**：現在 923 行，超過 800 行的上限（#64 抽了函式，檔案還是長）。把 `train_run` 的流程搬到 `vcp/train/attempt.py` 之類，測試裡 monkeypatch 的目標也要跟著搬，所以沒在 #64 做。
 7. **其他整份重寫不是原子的**：`import_skipped.jsonl`、materialize 的 `failed.jsonl`、audit 輸出用 `"w"` 開檔重寫，被殺時會留下半份。跟 append 的半列是不同的問題（要用「暫存檔 → fsync → replace」），可能是未來一項。
 8. **整列 append 的已知限制**（#63，`vcp.core.atomic.append_whole_line`）：不加鎖，檢查與截斷之間有一個短窗口；硬殺（`kill -9`、斷電）不涵蓋；別人的列接在我們寫了一半的位元組之後時，檔案刻意留著壞掉（大聲、位元組保留）。
-9. **審查留下的小項**（沒有急迫性）：各任務審查時記下、判斷不阻擋合併的 Minor（例如 `Path.resolve()` 在符號連結迴圈時丟 `RuntimeError`，目前不被 gc 的走法容忍；相對的上傳目的地以 gc 的 cwd 解析；保護的名稱 `raw` / `locks` / `.git` 在大小寫不分的 Windows 上以大小寫相符比對）。發版前的最終審查可以一併處理。
+9. **審查留下的小項**（沒有急迫性）：各任務審查時記下的 Minor，最終審查判斷都可以等：
+   - `Path.resolve()` 在符號連結迴圈時丟 `RuntimeError`（3.12），目前不被 gc 的走法容忍，一個迴圈連結會讓整次掃描 ABORT。可以等：失敗是封閉的，掃描停下而不是給出錯的分類，gc 也不刪任何東西。要修就把 `RuntimeError` 對應成 `OSError(ELOOP)`，只丟那一個單位。
+   - 相對的上傳 / push 目的地以 gc 的 cwd 解析，驗過的本機副本可能因此讀成 `unreferenced`。可以等：gc 只列不刪，`unreferenced` 本來就要人看過才刪，目的地通常是絕對路徑或 rclone 遠端。要修就在掃描時註明有相對目的地（WARN），不去猜 cwd。
+   - 保護的名稱 `raw` / `locks` / `.git` 與版面名稱的大小寫：已在 `cf1091e` 處理（保護名稱在每個平台都不分大小寫；其他版面名稱在 Windows 不分大小寫、其他平台精確比對；`unit_of` 保留磁碟上的拼法），不再是待辦。代價：大小寫分明的系統上，字面叫 `Datasets/` 的目錄只在 Windows 被當成 data root 的版面。
+10. **data root 裡的連結與 junction 讓整棵子樹無聲地消失**（最終審查）。不跟隨連結是設計（spec §12），但目前沒有任何輸出說「有連結沒走」，人會把沒列出的東西當成不存在。建議在 VERDICT 與 `scan.json` 加一個 `links:` 個數。
+11. **`.git` 的保護只看走的根之下**（最終審查）。`--root repo/.git/…` 讓 `.git` 落在根的上面，根之下的檔就不再有 `.git` 這一段，不被標成 `protected`。要修就讓掃描器在 `--root` 本身的路徑上也檢查 `.git`。
+12. **被略過的 run，它在 data root 之外的檢查點目錄讀成 `unreferenced`**（最終審查的建議）。run 卡壞掉時，data root 之內的檔會歸 `record`，檢查點目錄在別處的則沒有這一層；可以也歸 `record`，或至少帶 `skipped run:<id>` 的提示。

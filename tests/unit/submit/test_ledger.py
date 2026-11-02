@@ -1,11 +1,21 @@
 import pytest
 
+from submit_fixtures import (
+    errored_row,
+    foreign_row,
+    ledger_of,
+    scored_row,
+    staged_row,
+    uploaded_row,
+)
 from vcp.core.errors import ValidationFailed
 from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger, append_ledger_row, complete_length
 from vcp.submit.schema import Gate, LedgerRow
+from vcp.submit.select import label
 
 T0 = "2026-09-05T00:00:00.000Z"
 T1 = "2026-09-05T01:00:00.000Z"
+T1_PLUS = "2026-09-05T01:01:00.000Z"  # a minute after T1: the platform's copy of an upload
 T2 = "2026-09-05T02:00:00.000Z"
 
 
@@ -221,6 +231,85 @@ def test_the_twin_window_is_syncs_match_window():
     from vcp.submit.sync import MATCH_WINDOW
 
     assert TWIN_WINDOW == MATCH_WINDOW
+
+
+def test_refs_of_reads_uploaded_scored_and_errored_rows(tmp_path):
+    led = ledger_of(
+        tmp_path,
+        staged_row("S1"),
+        uploaded_row("S1", T0, ref="11"),
+        uploaded_row("S1", T1),
+        scored_row("S1", at=T1, ref="12"),
+        errored_row("S1", at=T2, ref="13"),
+        uploaded_row("S2", T0, ref="21"),
+        foreign_row("99", T0),
+    )
+    assert led.refs_of("S1") == {"11", "12", "13"} and led.refs_of("S2") == {"21"}
+    assert led.refs_of("S9") == set()
+
+
+def test_refs_of_leaves_out_rows_without_a_ref(tmp_path):
+    # a manual score carries no ref, and neither does a ref-less upload
+    led = ledger_of(tmp_path, uploaded_row("S1", T0), scored_row("S1"))
+    assert led.refs_of("S1") == set()
+
+
+def _ledger_with_ours_and_a_teammates(tmp_path):
+    """S1 uploaded with ref k1 (another ledger also wrote it as foreign); S2 uploaded without a
+    ref, its platform copy k9 a foreign row that a sync ``scored`` row ties to S2; x7 is a
+    teammate's."""
+    return ledger_of(
+        tmp_path,
+        staged_row("S1"),
+        staged_row("S2"),
+        uploaded_row("S1", T0, ref="k1"),
+        foreign_row("k1", T0),
+        uploaded_row("S2", T1),
+        foreign_row("k9", T1_PLUS),
+        scored_row("S2", at=T1_PLUS, ref="k9"),
+        foreign_row("x7", T2),
+    )
+
+
+def test_owners_maps_each_foreign_ref_we_uploaded_to_its_id(tmp_path):
+    led = _ledger_with_ours_and_a_teammates(tmp_path)
+    assert led.owners() == {"k1": "S1", "k9": "S2"}
+    assert sorted(label(r) for r in led.arrivals()) == ["S1", "S2", "foreign:x7"]
+
+
+def test_owners_leaves_out_an_uploads_ref_that_is_no_foreign_row(tmp_path):
+    # S1's upload carries ref k1 but no foreign row for it was ever written: nothing to own
+    led = ledger_of(tmp_path, uploaded_row("S1", T0, ref="k1"), foreign_row("x7", T2))
+    assert led.owners() == {}
+
+
+def test_owners_gives_a_ref_tied_to_two_ids_to_the_one_that_absorbs_it(tmp_path):
+    led = ledger_of(
+        tmp_path,
+        staged_row("S1"),
+        staged_row("S2"),
+        uploaded_row("S2", T1),
+        foreign_row("k", T1_PLUS),
+        scored_row("S2", at=T1_PLUS, ref="k"),
+        scored_row("S1", at=T1_PLUS, ref="k"),  # names an id with no upload to absorb it
+    )
+    assert led.owners() == {"k": "S2"}
+
+
+def test_owners_credits_each_absorbed_ref_to_the_upload_it_pairs_with(tmp_path):
+    # one id, two ref-less uploads: each absorbs the twin nearest to it
+    led = ledger_of(
+        tmp_path,
+        staged_row("S1"),
+        uploaded_row("S1", T2),
+        uploaded_row("S1", T0),
+        foreign_row("k0", "2026-09-05T00:01:00.000Z"),
+        foreign_row("k2", "2026-09-05T02:01:00.000Z"),
+        scored_row("S1", at="2026-09-05T02:01:00.000Z", ref="k2"),
+        scored_row("S1", at="2026-09-05T00:01:00.000Z", ref="k0"),
+    )
+    assert led.owners() == {"k0": "S1", "k2": "S1"}
+    assert [label(r) for r in led.arrivals()] == ["S1", "S1"]
 
 
 def test_lock_state_and_latest_final(tmp_path):

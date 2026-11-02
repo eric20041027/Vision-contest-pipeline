@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from itertools import islice
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from vcp.artifact import store
 from vcp.backup.completeness import manifest_gaps
@@ -75,6 +76,31 @@ def parse_conclusion(text: str) -> tuple[str, str]:
     return kind, ident
 
 
+class Recorder(Protocol):
+    """A replaceable recording end for the walk (0.17.0 spec 5.3): gc wants every file the walk
+    reaches, not a hashed manifest. With one, ``Collector.add`` forwards each file untouched --
+    nothing is hashed and ``entries`` stays empty -- and a walk unit that fails is taken back
+    with ``mark`` / ``rollback``. ``tolerates`` is what that unit may raise and be stepped over;
+    without a recorder only ``ValidationFailed`` is, as backup has always done."""
+
+    tolerates: tuple[type[Exception], ...]
+
+    def add(
+        self,
+        path: Path,
+        role: str,
+        conclusion: str,
+        *,
+        sha256: str | None = None,
+        size: int | None = None,
+        remote: RemoteCopy | None = None,
+    ) -> None: ...
+
+    def mark(self) -> int: ...
+
+    def rollback(self, mark: int) -> None: ...
+
+
 @dataclass
 class Collector:
     data_root: Path
@@ -84,6 +110,7 @@ class Collector:
     unlisted: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     _seen: set[tuple[str, str]] = field(default_factory=set)
+    recorder: Recorder | None = field(default=None, kw_only=True)
 
     def locate(self, path: Path) -> tuple[str, str, str | None]:
         """(root, relative posix path, source): ``vcp.backup.manifest.locate_file``, the one rule
@@ -101,7 +128,11 @@ class Collector:
         remote: RemoteCopy | None = None,
     ) -> None:
         """Record one file. A present file is hashed now; an absent one is listed with the sha a
-        record vouches for (so verify / pull can still act on it), or dropped as `unlisted`."""
+        record vouches for (so verify / pull can still act on it), or dropped as `unlisted`.
+        With a ``recorder`` the file is handed over as it is, and nothing here keeps it."""
+        if self.recorder is not None:
+            self.recorder.add(path, role, conclusion, sha256=sha256, size=size, remote=remote)
+            return
         root, rel, source = self.locate(path)
         key = f"{root}/{rel}"
         entry = self.entries.get(key)
@@ -304,7 +335,7 @@ class Collector:
             self.walk_judgement(epaths, pid, conclusion)
         self.dataset_basics(tpaths, profile.test_plan, conclusion)
 
-    def _try(self, label: str, walk: Callable[..., None], *args: Any) -> None:
+    def attempt(self, label: str, walk: Callable[..., None], *args: Any) -> None:
         """``all`` means "everything this dataset still has": one conclusion whose evidence has
         gone missing is recorded and stepped over, never a reason to lose all the others.
 
@@ -312,55 +343,95 @@ class Collector:
         never holds half a run -- a run.yaml without the evidence it names, which the self-check
         would take for a vcp bug. The runs it visited are unmarked too: a later conclusion that
         names one walks it again, so a run that cannot be read is stepped over by every
-        conclusion that names it, like a run that is gone, and a run that was read is listed."""
-        n_entries, n_missing, n_unlisted = len(self.entries), len(self.missing), len(self.unlisted)
+        conclusion that names it, like a run that is gone, and a run that was read is listed.
+
+        A failure is a ``ValidationFailed`` -- or, with a ``recorder``, whatever its
+        ``tolerates`` names, and the recorder takes its own rows back."""
+        take_back = self._checkpoint()
+        tolerates = ValidationFailed if self.recorder is None else self.recorder.tolerates
         seen = set(self._seen)
         try:
             walk(*args)
-        except ValidationFailed as e:
+        except tolerates as e:
+            take_back()
+            self._seen = seen
+            self.skipped.append(f"{label}: {e}")
+
+    def _checkpoint(self) -> Callable[[], None]:
+        """A function that takes back everything recorded since now."""
+        if self.recorder is not None:
+            return partial(self.recorder.rollback, self.recorder.mark())
+        n_entries, n_missing, n_unlisted = len(self.entries), len(self.missing), len(self.unlisted)
+
+        def restore() -> None:
             # a walk only adds: new keys go to the end of the dict, new names to the lists
             self.entries = dict(islice(self.entries.items(), n_entries))
             self.missing = self.missing[:n_missing]
             self.unlisted = self.unlisted[:n_unlisted]
-            self._seen = seen
-            self.skipped.append(f"{label}: {e}")
 
-    def walk_all(self, dpaths: DatasetPaths) -> None:
-        conclusion = "all"
+        return restore
+
+    def walk_all(self, dpaths: DatasetPaths, *, split: bool = False) -> None:
+        """Every conclusion this dataset still has. Backup lists them all under ``all``. With
+        ``split`` each walk unit is its own conclusion -- ``run:<id>``, ``judgement:<name>/<pid>``,
+        ``submission:<name>/<sid>`` and ``dataset:<name>`` for the dataset's own files, which
+        are an attempt of their own -- so a recorder can tell which unit a file belongs to; the
+        machine-wide logs are left out."""
+        name = dpaths.name
+
+        def conclusion_of(label: str) -> str:
+            return label if split else "all"
+
         if dpaths.runs_dir.is_dir():
             for p in sorted(dpaths.runs_dir.glob("*/run.yaml")):
                 try:
                     card = load_yaml_model(p, RunCard)
                 except (ValidationFailed, OSError, UnicodeDecodeError):
                     continue  # another project's or a half-written card is not this dataset's
-                if card.dataset == dpaths.name:
-                    self._try(f"run:{card.run_id}", self.walk_run, card.run_id, conclusion)
+                if card.dataset == name:
+                    label = f"run:{card.run_id}"
+                    self.attempt(label, self.walk_run, card.run_id, conclusion_of(label))
         for pid in list_preregs(dpaths):
-            self._try(f"judgement:{pid}", self.walk_judgement, dpaths, pid, conclusion)
+            label = f"judgement:{name}/{pid}" if split else f"judgement:{pid}"
+            self.attempt(label, self.walk_judgement, dpaths, pid, conclusion_of(label))
         if dpaths.submit_yaml.is_file():
-            self._try("submissions", self._walk_submissions, dpaths, conclusion)
-        self.dataset_basics(dpaths, None, conclusion)
+            label = f"submissions:{name}" if split else "submissions"
+            self.attempt(label, self._walk_submissions, dpaths, None if split else "all")
+        own = conclusion_of(f"dataset:{name}")
+        if split:
+            # a unit of its own, so a failure here is told apart from the units above and takes
+            # back none of them; backup keeps the block outside any attempt, as it always has
+            self.attempt(f"dataset:{name}", self._own_files, dpaths, own)
+        else:
+            self._own_files(dpaths, own)
+            for p in sorted(logs_dir(self.data_root).glob("vcp-*.jsonl")):
+                self.add(p, "logs", own)
+
+    def _own_files(self, dpaths: DatasetPaths, own: str) -> None:
+        """The dataset's own files: card, plans, unseal logs, measure ledgers, samples and the
+        raw manifest."""
+        self.dataset_basics(dpaths, None, own)
         if dpaths.splits_dir.is_dir():
             for p in sorted(dpaths.splits_dir.glob("*.json")):
-                self.add(p, "plan", conclusion)
+                self.add(p, "plan", own)
             for p in sorted(dpaths.splits_dir.glob("*.unseal.jsonl")):
-                self.add(p, "unseal_log", conclusion)
-        self.measure_ledgers(dpaths, conclusion)
+                self.add(p, "unseal_log", own)
+        self.measure_ledgers(dpaths, own)
         if dpaths.samples_jsonl.is_file():
-            self.add(dpaths.samples_jsonl, "samples", conclusion)
+            self.add(dpaths.samples_jsonl, "samples", own)
         if dpaths.raw_manifest.is_file():
-            self.add(dpaths.raw_manifest, "raw_manifest", conclusion)
-        for p in sorted(logs_dir(self.data_root).glob("vcp-*.jsonl")):
-            self.add(p, "logs", conclusion)
+            self.add(dpaths.raw_manifest, "raw_manifest", own)
 
-    def _walk_submissions(self, dpaths: DatasetPaths, conclusion: str) -> None:
+    def _walk_submissions(self, dpaths: DatasetPaths, conclusion: str | None) -> None:
         """Every staged id of the ledger submit.yaml names, read without its lock (spec
         2026-09-28 §4.2). A profile that does not load or a shared ledger not adopted yet is
-        stepped over like any other missing evidence."""
+        stepped over like any other missing evidence. ``conclusion`` None: each submission is
+        its own, ``submission:<name>/<sid>``."""
         profile, _ = load_profile(dpaths)
         for sid in read_only(dpaths, profile).ids():
             if stage_json(dpaths, sid).is_file():
-                self._try(f"submission:{sid}", self.walk_submission, dpaths, sid, conclusion)
+                label = f"submission:{sid}" if conclusion else f"submission:{dpaths.name}/{sid}"
+                self.attempt(label, self.walk_submission, dpaths, sid, conclusion or label)
 
 
 @dataclass(frozen=True)

@@ -341,9 +341,7 @@ class LedgerRow(_Strict):
         if missing:
             raise ValueError(f"{self.event} needs {missing}")
         if self.event == "selected" and self.chosen is not None:
-            if not self.chosen:
-                raise ValueError("selected needs at least one entry")
-            if len(set(self.chosen)) != len(self.chosen):
+            if len(set(self.chosen)) != len(self.chosen):  # [] is a choice: nothing ticked
                 raise ValueError("selected has duplicate entries")
         if self.event == "scored" and self.public is None and self.private is None:
             raise ValueError("scored needs a public or private score")

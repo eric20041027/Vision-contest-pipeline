@@ -30,7 +30,7 @@ from vcp.submit.profile import init_profile, load_profile
 from vcp.submit.report import StatusView, report
 from vcp.submit.report import status as status_view
 from vcp.submit.schema import PlatformProfile, Quota
-from vcp.submit.select import differs_line, select, selection_lines
+from vcp.submit.select import differs_line, select, selection_lines, unticked_line
 from vcp.submit.stage import StageSpec, stage, verify
 from vcp.submit.sync import sync
 
@@ -537,7 +537,10 @@ def final_cmd(
                 f"{res.needs_reupload}; {res.resend}"
             )
         if res.selection is not None:
-            human.append(differs_line(res.chosen, res.recorded or []))
+            if res.recorded == []:  # nothing ticked: no two sides to set against each other
+                human.append(unticked_line(res.chosen, res.recorded_at or ""))
+            else:
+                human.append(differs_line(res.chosen, res.recorded or [], res.resolved))
         if res.next_step is not None:
             human.append(f"next: {res.next_step}")
         warn = bool(res.unranked or res.needs_reupload or res.warnings or res.selection)
@@ -551,12 +554,20 @@ def final_cmd(
 def select_cmd(
     dataset: DatasetOpt,
     record: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--record",
-            help="comma-separated ids ticked on the platform (foreign:<ref> for another's upload)",
+            help=(
+                "comma-separated entries ticked on the platform: <id>, <id>@<platform ref> for "
+                "one shot of an id, foreign:<ref> for another's upload; exactly one of "
+                "--record and --none"
+            ),
         ),
-    ],
+    ] = None,
+    none: Annotated[
+        bool,
+        typer.Option("--none", help="nothing is ticked: the platform picks by its own rule"),
+    ] = False,
     message: Annotated[str | None, typer.Option("--message", help="a note on the ticking")] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
@@ -567,7 +578,8 @@ def select_cmd(
     def fn() -> CmdResult:
         out = select(
             dataset,
-            parse_csv(record),
+            None if record is None else parse_csv(record),
+            none=none,
             message=message,
             data_root=data_root,
             configs_root=configs_root,
@@ -584,7 +596,7 @@ def select_cmd(
             **out.row.model_dump(mode="json", exclude_none=True),
             "selection": out.state.to_json(),
         }
-        return status, fields, payload, selection_lines(out.state)
+        return status, fields, payload, [*out.notes, *selection_lines(out.state)]
 
     run_command("submit.select", json_mode, data_root, fn, context={"dataset": dataset})
 

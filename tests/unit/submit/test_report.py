@@ -9,10 +9,12 @@ from submit_fixtures import (
     STAMP,
     TEST,
     foreign_row,
+    scored_row,
     seed_eval_runs,
     seed_judgements,
     seed_test_runs,
     selected_row,
+    uploaded_row,
 )
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.measure.measure import MeasureSpec, measure_run
@@ -384,3 +386,35 @@ def test_report_marks_every_upload_of_a_selected_id_and_foreign_too(pair):
     rows = report(TEST, **_kw(pair))
     assert all(r.selected == (r.submission_id in {"S1", "foreign:f1"}) for r in rows)
     assert sum(r.selected for r in rows) == 3
+
+
+# --- 0.17.0: selection entries read by label and shot (spec 2026-11-01 §3.5) -----------------
+
+
+def test_status_says_unticked_and_carries_resolved(pair):
+    _seed(pair, _profile(board_rule="best"))
+    SubmissionLedger(pair.test_paths.submissions_log).append(selected_row([]))
+    st = status(TEST, **_kw(pair))
+    assert st.selection.words == "unticked" and st.selection.resolved == []
+    assert st.selection.chosen == [] and not st.selection.warns
+
+
+def test_report_marks_by_entry(pair):
+    _seed(pair, _profile())
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    first_at = led.uploads("S1")[0].at
+    # a second shot of S1 that carries its platform ref, and a foreign row for ref k9 that the
+    # platform score of S1's first shot ties to S1 (so k9 is S1's first shot, not a teammate's)
+    near = _later(first_at, 1)
+    led.append(uploaded_row("S1", _later(first_at, 30), ref="r2"))
+    led.append(foreign_row("k9", near))
+    led.append(scored_row("S1", at=near, ref="k9"))
+
+    def marks(*chosen: str) -> list[bool]:
+        led.append(selected_row(list(chosen)))
+        return [r.selected for r in report(TEST, **_kw(pair)) if r.submission_id == "S1"]
+
+    assert marks("S1@r2") == [False, True]
+    assert marks("foreign:k9") == [True, False]  # bound: marks the S1 shot whose outcome has k9
+    assert marks("S1") == [True, True]
+    assert marks() == [False, False] and not any(r.selected for r in report(TEST, **_kw(pair)))

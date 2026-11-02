@@ -301,3 +301,81 @@ def test_kaggle_platform_story(pair, tmp_path, monkeypatch):
     assert len(led.of("foreign")) == 2 and len(led.foreign_refs()) == 1  # two snapshots, one ref
     assert led.latest_score("S1").source == "platform"
     _scan(pair, outputs)
+
+
+def test_kaggle_selection_by_ref_then_gc_scan(pair, tmp_path, monkeypatch):
+    """0.17.0: a contest from stage to the disk inventory. One upload is ticked by the platform
+    ref the sync gave it (``S1@1``), every reader agrees, and ``gc scan`` then finds the upload
+    package named by its submission and changes nothing but its own record."""
+    _ready(pair)
+    monkeypatch.setattr(kaggle, "READBACK_DELAYS", tuple(0.0 for _ in kaggle.READBACK_DELAYS))
+    script = tmp_path / "fake_kaggle.py"
+    script.write_text(FAKE_KAGGLE, encoding="utf-8")
+    monkeypatch.setenv("FAKE_KAGGLE_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("FAKE_KAGGLE_NOW", utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"))
+    monkeypatch.setenv("KAGGLE_KEY", SECRET)
+    init_profile(
+        PlatformProfile(
+            dataset="beach-test",
+            eval_dataset="beach",
+            plan_id="fixed-v1",
+            sealed_subset="holdout",
+            platform="kaggle",
+            competition="c1",
+            board_rule="best",
+            final_slots=1,
+            quota=Quota(per_day=2, day_tz="UTC"),
+            metric="accuracy",
+            writer="scores_csv",
+            kaggle_command=[sys.executable, str(script)],
+            created_at=STAMP,
+        ),
+        data_root=pair.roots.data,
+        configs_root=pair.roots.configs,
+    )
+    seed_test_runs(pair)
+    r = _run(
+        "stage",
+        "--dataset",
+        "beach-test",
+        "--id",
+        "S1",
+        "--eval-run",
+        "good",
+        "--test-run",
+        "good.test",
+    )
+    assert r.exit_code == 0 and "admission=PASS" in _verdict(r.output)
+    r = _run("upload", "--dataset", "beach-test", "--id", "S1")
+    assert r.exit_code == 0 and "confirmed=true" in _verdict(r.output)
+    r = _run("sync", "--dataset", "beach-test")
+    assert r.exit_code == 0, r.output
+    led = SubmissionLedger(pair.test_paths.submissions_log)
+    assert led.refs_of("S1") == {"1"}  # the ref the platform gave this one shot
+    _measure_holdout("good")
+    r = _run("final", "--dataset", "beach-test")
+    assert r.exit_code == 0, r.output
+    assert "chosen=S1" in _verdict(r.output)
+    assert "next: select S1 on the platform" in r.output
+    r = _run("select", "--dataset", "beach-test", "--record", "S1@1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "selected=1" in v and "selection=ok" in v and "written=true" in v and "status=OK" in v
+    r = _run("status", "--dataset", "beach-test")
+    assert "selection=ok" in _verdict(r.output) and "selected=1" in _verdict(r.output)
+    r = _run("report", "--dataset", "beach-test")
+    s1_rows = [x for x in r.output.splitlines() if " S1 " in x]
+    assert r.exit_code == 0 and len(s1_rows) == 1 and s1_rows[0].endswith(" selected")
+
+    r = runner.invoke(app, ["gc", "scan", "--min-mib", "0", "--json"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in v and "skipped=0" in v and "unreadable=0" in v and "running=0" in v
+    doc = json.loads(next(x for x in r.stdout.splitlines() if x.startswith("{")))
+    by = {item["path"]: item for item in doc["result"]["items"]}
+    item = by["submit/beach-test/S1/submission.csv"]
+    assert item["class"] == "referenced"
+    assert "submission:beach-test/S1#artifact" in item["referrers"]
+    scan_id = next(t.split("=", 1)[1] for t in v.split() if t.startswith("scan="))
+    verify = runner.invoke(app, ["artifact", "verify", "--kind", "gc_scan", "--id", scan_id])
+    assert verify.exit_code == 0, verify.output

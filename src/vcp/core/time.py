@@ -21,7 +21,12 @@ def stamp(dt: datetime | None = None) -> str:
     if dt.tzinfo is None:
         raise ValueError("stamp() requires a tz-aware datetime")
     dt = dt.astimezone(UTC)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    # Spelled out rather than strftime: glibc's %Y does not zero-pad years below 1000
+    # ("1-01-01"), while Windows does ("0001-01-01").
+    return (
+        f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}T"
+        f"{dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}.{dt.microsecond // 1000:03d}Z"
+    )
 
 
 def parse_stamp(s: str) -> datetime:

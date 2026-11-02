@@ -8,7 +8,7 @@ flowchart LR
     R --> S1["vcp-contest-onboarding<br/>Day 1 checklist"]
     R --> S2["vcp-data-pipeline<br/>import / audit / split / export,<br/>any data WARN · FAIL · ABORT"]
     R --> S3["vcp-eval-and-fuse<br/>readings, claims, verdicts,<br/>fusion admission"]
-    R --> S4["vcp-train-submit-backup<br/>train run, submissions, backups,<br/>where to stop for authorisation"]
+    R --> S4["vcp-train-submit-backup<br/>train run, submissions, backups,<br/>disk inventory (gc scan),<br/>where to stop for authorisation"]
     R --> S5["vcp-provenance<br/>new dataset versions, index,<br/>PostgreSQL, benchmarks"]
     S5 --> S8["vcp-provenance-graph<br/>draw the index as one picture:<br/>what is broken or stale"]
     O --> S6["vcp-release-and-environments<br/>releases, tagged worktrees + venvs,<br/>what not to touch during a live run"]
@@ -24,7 +24,7 @@ flowchart LR
 | First day of a new contest | `vcp-contest-onboarding` | Wrong `--downloaded-at`; test set left outside the framework; running from the development checkout |
 | Importing, auditing, splitting, exporting | `vcp-data-pipeline` | Tuning options to silence a WARN; splitting without audit groups; faking labels for a test set |
 | Predictions → readings → claims → verdicts; ensembles | `vcp-eval-and-fuse` | Post-hoc pre-registration (including re-ingesting measured weights under a new run id); measuring on a contaminated base; opening the holdout casually |
-| Wrapping training, staging and uploading, backing up | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup |
+| Wrapping training, staging and uploading, backing up, listing what is on disk before freeing space (`vcp gc scan`) | `vcp-train-submit-backup` | Staging a FAILed candidate; uploading without authorisation; mistaking a local copy for an off-machine backup; deleting a file only because it shows as `unreferenced` |
 | The organiser changes the data | `vcp-provenance` | Overwriting the old version; hand-editing the index; using `auto` where the policy is known to pick wrong |
 | Someone wants to see the contest's provenance (a check, a handover, slides) | `vcp-provenance-graph` | Rebuilding and re-verifying the index "to be safe" (two full scans that replace an index another session may be using); drawing the default data root instead of the contest's; writing the picture into the data root |
 | Releasing, setting up venvs, working while a run is live | `vcp-release-and-environments` | Bumping the version for a `projects/` change; pulling `main` into a checkout a training run is using |

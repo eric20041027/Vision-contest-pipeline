@@ -271,6 +271,7 @@ def test_an_unreadable_list_stops_the_upload(pair):
         upload(TEST, "S1", runner=runner, **_kw(pair))
     assert SECRET not in str(ei.value) and len(runner.calls) == 1
     assert "sync" not in ei.value.fields  # it never ran: nothing to report
+    assert ei.value.fields == {"cli_warnings": 0}  # spec 2026-11-01 §4.2: the count, no lines
     assert pair.test_paths.submissions_log.read_bytes() == before
 
 
@@ -585,3 +586,43 @@ def test_a_list_returning_platform_still_uploads(pair, monkeypatch):
     monkeypatch.setitem(PLATFORMS, "kaggle", OldStyle())
     out = upload(TEST, "S1", **_kw(pair))
     assert (out.sync, out.row.platform_ref, out.cli_warnings) == ("ok", "7", ())
+
+
+# --- spec 2026-11-01 §4: failed lists count the platform CLI's warnings too --------------------
+
+
+def test_a_pre_sync_that_cannot_parse_counts_its_warnings_and_reports_no_sync(pair):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    before = pair.test_paths.submissions_log.read_bytes()
+    runner = FakeRunner([(0, f"{OUTDATED_WARNING}\nnot json", "")])
+    with pytest.raises(ValidationFailed, match="^sync_failed: platform_response:") as ei:
+        upload(TEST, "S1", runner=runner, **_kw(pair))
+    assert ei.value.fields == {"cli_warnings": 1}  # no sync=, no bound=: the sync did not finish
+    assert pair.test_paths.submissions_log.read_bytes() == before
+
+
+def test_a_pre_sync_whose_reconcile_fails_counts_the_listed_warnings(pair):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    before = pair.test_paths.submissions_log.read_bytes()
+    inf = {
+        "ref": 5,
+        "fileName": "submission.csv",
+        "date": stamp(utc_now()),
+        "description": "S1",
+        "publicScore": "inf",
+    }
+    runner = FakeRunner([(0, f"{OUTDATED_WARNING}\n{json.dumps([inf])}", "")])
+    with pytest.raises(ValidationFailed, match="^sync_failed: platform_response:") as ei:
+        upload(TEST, "S1", runner=runner, **_kw(pair))
+    assert ei.value.fields == {"cli_warnings": 1}
+    assert pair.test_paths.submissions_log.read_bytes() == before
+
+
+def test_a_read_back_look_that_cannot_parse_still_counts_the_looks_before_it(pair, no_wait):
+    _staged(pair, _profile(platform="kaggle", competition="c1", board_rule="best"))
+    runner = FakeRunner(
+        [EMPTY, (0, "queued", ""), WARNED_EMPTY, (0, "Warning: maintenance tonight\nnot json", "")]
+    )
+    out = upload(TEST, "S1", runner=runner, **_kw(pair))
+    assert out.result.readback == "failed" and not out.row.confirmed
+    assert out.cli_warnings == (OUTDATED_WARNING, "Warning: maintenance tonight")

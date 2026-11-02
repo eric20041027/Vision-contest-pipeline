@@ -20,6 +20,7 @@ from vcp.submit.platforms import (
     get_platform,
     kaggle,
     merge_warnings,
+    with_cli_warnings,
 )
 from vcp.submit.platforms.base import redact
 from vcp.submit.platforms.kaggle import parse_date, parse_score, parse_submissions
@@ -786,6 +787,48 @@ def test_a_platform_error_carries_no_warnings_unless_given_some():
     err = PlatformError("x", location="y", fields={"a": 1}, cli_warnings=(OUTDATED,))
     assert (err.cli_warnings, err.fields, err.location) == ((OUTDATED,), {"a": 1}, "y")
     assert PlatformTimeout("t").cli_warnings == ()
+
+
+def test_every_vcp_error_can_carry_cli_warnings_and_with_cli_warnings_never_overrides():
+    """spec 2026-11-01 §4.1: the warning lines ride on any vcp error; ``with_cli_warnings`` merges
+    lines (each once) and sets the count only when the failure has not said one itself."""
+    assert VcpError("x").cli_warnings == ()
+    assert ValidationFailed("x", cli_warnings=("a",)).cli_warnings == ("a",)
+    e = PlatformError("y", fields={"exit_code": 1}, cli_warnings=("b",))
+    assert with_cli_warnings(e, ["c", "b"]) is e and e.cli_warnings == ("b", "c")
+    assert e.fields == {"exit_code": 1, "cli_warnings": 2}
+    f = VcpError("z", fields={"cli_warnings": 7})
+    assert with_cli_warnings(f, ["d"]).fields["cli_warnings"] == 7 and f.cli_warnings == ("d",)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "not json",
+        '[{"date": "2026-09-05T00:00:00Z"}]',  # fileName missing
+        '[{"fileName": "a.csv", "date": "2026-09-05T00:00:00Z", "publicScore": "abc"}]',
+    ],
+)
+def test_a_page_that_fails_to_parse_carries_its_warning_lines(body):
+    """The page's lines ride on the error, but its count does not: only ``sync`` and ``upload``
+    write ``fields["cli_warnings"]``, after every page has had its say."""
+    with pytest.raises(ValidationFailed, match="^platform_response:") as ei:
+        parse_submissions(f"{OUTDATED}\n{body}")
+    assert ei.value.cli_warnings == (OUTDATED,) and "cli_warnings" not in ei.value.fields
+
+
+def test_a_bad_later_page_carries_the_warnings_of_every_page():
+    page1 = json.dumps({"submissions": [], "nextPageToken": "t2"})
+    runner = FakeRunner(
+        [
+            (0, f"{OUTDATED}\n{page1}", ""),
+            (0, f"{OUTDATED}\nWarning: maintenance tonight\nnot json", ""),
+        ]
+    )
+    with pytest.raises(ValidationFailed, match="not JSON") as ei:
+        get_platform("kaggle").list_submissions(_profile(), runner)
+    assert ei.value.cli_warnings == (OUTDATED, "Warning: maintenance tonight")
+    assert "cli_warnings" not in ei.value.fields
 
 
 def test_a_list_that_hangs_is_cut_off_after_the_timeout(monkeypatch):

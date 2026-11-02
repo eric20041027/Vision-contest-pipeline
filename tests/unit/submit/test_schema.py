@@ -240,13 +240,20 @@ def test_a_selected_row_carries_chosen_and_source():
     [
         ({"chosen": None}, "selected needs"),
         ({"source": None}, "selected needs"),
-        ({"chosen": []}, "selected needs at least one entry"),
         ({"chosen": ["S1", "S1"]}, "selected has duplicate entries"),
     ],
 )
 def test_a_selected_row_without_a_proper_choice_fails(over, words):
     with pytest.raises(ValidationError, match=re.escape(words)):
         LedgerRow(**{**SELECTED, **over})
+
+
+def test_an_empty_selected_row_loads_and_round_trips():
+    row = LedgerRow(**{**SELECTED, "chosen": []})
+    assert (
+        row.chosen == []
+        and LedgerRow.model_validate_json(row.model_dump_json(exclude_none=True)) == row
+    )
 
 
 def test_selection_warn_hours_defaults_to_48_and_is_written_only_when_changed(tmp_path):

@@ -487,6 +487,37 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             ],
         },
     ),
+    (
+        "selection gaps, failed-list CLI warnings and gc scan (0.17.0)",
+        "submit: select --none records an empty selection that reads as unticked; --record "
+        "<id>@<ref> names one upload and is checked against refs_of; a foreign:<ref> bound to "
+        "our upload is read as that id; failed syncs and the pre-upload sync carry "
+        "cli_warnings=; gc scan classes every file from the canonical records without the "
+        "provenance index, writes a gc_scan artifact and changes nothing; the backup walk's "
+        "manifests are unchanged by its new recording end",
+        {
+            "tests/unit/submit/test_select.py": [
+                "test_select_none_writes_an_empty_selection_once_even_after_the_lock",
+                "test_a_ref_entry_that_is_not_that_ids_upload_fails",
+                "test_a_foreign_ref_later_bound_to_our_upload_is_read_as_that_id",
+                "test_nothing_ticked_is_unticked_and_warns_only_against_a_final",
+            ],
+            "tests/unit/submit/test_report.py": ["test_report_marks_by_entry"],
+            "tests/unit/submit/test_sync.py": ["test_a_failed_sync_still_counts_the_cli_warnings"],
+            "tests/unit/submit/test_actions.py": [
+                "test_a_pre_sync_that_cannot_parse_counts_its_warnings_and_reports_no_sync",
+            ],
+            "tests/unit/backup/test_evidence_recorder.py": [
+                "test_backup_manifests_keep_their_files",
+            ],
+            "tests/unit/test_gc_layout.py": [
+                "test_the_class_of_a_file_is_the_first_rule_that_holds",
+            ],
+            "tests/unit/test_gc_scan.py": ["test_the_index_is_never_read"],
+            "tests/unit/test_cli_gc.py": ["test_gc_scan_deletes_and_changes_nothing"],
+            "tests/unit/test_e2e_submit.py": ["test_kaggle_selection_by_ref_then_gc_scan"],
+        },
+    ),
 ]
 
 

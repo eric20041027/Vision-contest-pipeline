@@ -157,10 +157,21 @@ def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None, 
     """One page of ``competitions submissions --format json``: a bare list, or an object holding
     the list plus a ``nextPageToken`` -- or the CLI's plain-text word that there are none --
     after any warning lines the CLI printed ahead of it, which come back (redacted) as the
-    third item."""
+    third item. A page that cannot be parsed raises with those lines in ``cli_warnings`` (spec
+    2026-11-01 §4.1): they are a fact the command learned before the page failed."""
     text, warnings = _past_warnings(text)
+    try:
+        out, token = _page_entries(text)
+    except VcpError as e:
+        e.cli_warnings = merge_warnings(warnings, e.cli_warnings)
+        raise
+    return out, token, warnings
+
+
+def _page_entries(text: str) -> tuple[list[PlatformSubmission], str | None]:
+    """The entries and next-page token of one page, past its warning lines."""
     if text.strip() == NO_SUBMISSIONS:
-        return [], None, warnings
+        return [], None
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
@@ -204,7 +215,7 @@ def parse_submissions(text: str) -> tuple[list[PlatformSubmission], str | None, 
                 errored=is_errored(status, public, private),
             )
         )
-    return out, token, warnings
+    return out, token
 
 
 class KagglePlatform:
@@ -368,8 +379,10 @@ class KagglePlatform:
                 if not token:
                     return PlatformList(out, warnings)
             raise PlatformError(f"kaggle CLI kept paging past {MAX_PAGES} pages")
-        except PlatformError as e:
+        except VcpError as e:
             # The warning lines of the pages already read are facts the command learned; they
-            # go with the failure instead of being lost with the half-read list.
+            # go with the failure instead of being lost with the half-read list. The count in
+            # ``fields`` is the command's to write, once every page has been heard
+            # (``with_cli_warnings``).
             e.cli_warnings = merge_warnings(warnings, e.cli_warnings)
             raise

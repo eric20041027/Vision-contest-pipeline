@@ -26,8 +26,8 @@
 
 - **讀不到平台的勾選。** kagglesdk 0.1.38 有 `SUBMISSION_GROUP_SELECTED`，kaggle CLI 2.2.5 沒有對應旗標，vcp 只呼叫 CLI，所以選取只能手動記（`select --record`），記的是人說的，vcp 無從核對平台。`status` 的 `selection=` 比的是「你記的」對「`final` 選的」與名額。
 - **選取只核對 `board_rule: best`。** `last` 的平台自己算最後一發：`selection=none`、`status` 不因選取 WARN，`select --record` 照記、`report` 照標。平台其實有勾選、profile 卻寫 `last` 的比賽完全不被核對，`board_rule` 要照平台設定。
-- **選取以 id 為單位。** 同一個 id 傳過兩次時，vcp 不知道勾的是哪一發；不能記「什麼都沒勾」（空的被拒）。
-- **`foreign:<ref>` 之後被台帳認成自己的上傳時，選取裡的標籤不會自動換成 id**，`differs` 可能誤報（spec §12）：這種上傳請改用 id 記。
+- **選取以 id 為單位。** 同一個 id 傳過兩次時，vcp 不知道勾的是哪一發；不能記「什麼都沒勾」（空的被拒）。（0.17.0 已處理：`select --record <id>@<ref>` 與 `select --none`，見 §2.2 第 6、7 條。）
+- **`foreign:<ref>` 之後被台帳認成自己的上傳時，選取裡的標籤不會自動換成 id**，`differs` 可能誤報（spec §12）：這種上傳請改用 id 記。（0.17.0 已處理：讀取時把這種 `foreign:<ref>` 解析成那個 id，台帳照寫，見 §2.2 第 7 條。）
 - **`select --message` 只在寫列時用。** 再記同一個集合什麼都不寫，舊列的 `message` 不變。
 - **`status` 看不到 CLI 過舊**（裁決 R1）：要等下一次 `sync` 或 `upload` 才 WARN。`upload --json` 只有 VERDICT 的 `cli_warnings=<n>` 與 WARN，行本身在人看的輸出與 log（`sync --json` 的 `cli_warnings` 才有那些行）。
 - **磁碟的偵測有邊界**（spec §5.4）：
@@ -67,7 +67,7 @@
 
 19. **`started` 事件帶 glob（控制者裁決，取代 spec §12「待使用者決定」）。** `train run` 把 `--checkpoints` 與 `--final` 原樣放進 `started` 事件的 payload：`checkpoints: [<pattern>…]`、`final: <pattern 或 null>`。事件的 payload 是自由格式，舊 vcp 照讀；`train.yaml` 的 schema 是嚴格的，所以不加欄位。`train status` 的 `tmp_files` 另外列出「cwd 加上 `glob_prefix(pattern)` 的最近既存目錄」直接底下（不遞迴）的 `.tmp`，每個 attempt 的每個 pattern 都算；cwd 是該 `started` 事件自己記的（`--resume` 可以從別的目錄跑；以 `resolve_stored_path` 還原），事件沒有可用的 `cwd`（不是非空字串）才退回 `train.yaml` 的 `cwd`（後來的修正 `fix(train): resolve each attempt's globs against that attempt's cwd`，控制者裁決）；`**/x.pt` 的前綴是 `--cwd` 本身，所以只看 `--cwd` 直接底下，不下去走 venv。相對的 glob 不往 cwd 之上走（審查後加的界線）：cwd 已不存在（舊事件裡過期的絕對 cwd），或最近既存目錄是 cwd 的上層（`../not-yet/*.pt` 的 `..`），這個 glob 就略過，不去掃一個不相干的上層目錄；`../side/*.pt` 這種到得了的旁邊目錄照掃；絕對的 glob 照舊，指到哪就掃哪。去重（解析後的路徑）、`store_path` 輸出、排序都跟原來一樣。讀事件檔是逐行容錯的：不能解析的行（`ValueError`，含 `UnicodeDecodeError`；巢狀太深的 `RecursionError` 也接；包含寫到一半被切在多位元組字元中間的最後一行）、不是物件的列、型別不對的值（`checkpoints` 不是 list、元素不是字串、`final` 不是字串）都略過，缺這兩個鍵的 `started`（舊 vcp）什麼都不加，不讓 `train status` ABORT。
 20. **`append_event` 的收尾。** 開檔後記下 `f.tell()`，任何例外（包含到 `close` 才出現的）都把檔案截回那個位置，然後原例外原樣重拋；截斷本身失敗（`OSError`）就吞掉，呼叫端看到的仍是原本的例外，所以 Task 7 的 `own_writes` 照樣看到 `OSError`。這一列在開檔之前就先編碼，所以編不出 UTF-8 的 payload（例如孤立的 surrogate）在碰檔案之前就失敗，不會建檔、也不截斷。已知邊界：位置是開檔時記的，不加鎖；檔案已經長過這一列原本會結束的位置（別人接在後面寫了）就不截，其餘情況兩個程序同時 append、其中一個失敗時，後面寫成功的那一列仍可能被一起截掉（別人的列比我們沒寫完的那一段短時，檢查看不出來）。這個視窗是微秒級，磁碟寫滿時另一個寫入通常也失敗，沒有另外防。
-21. **Kaggle 列表的後一頁失敗。** `list_submissions` 在任何 `PlatformError`（CLI 非 0、逾時、翻頁超過上限）離開時，把已讀頁面的警告行併進例外的 `cli_warnings`（先已讀的，再接例外原本帶的，`merge_warnings` 去重）。上傳的讀回（`_read_back`）的某一次查看讀了幾頁才壞掉時，也把例外帶的警告行併進它回傳的警告（`fix(submit): keep a failed read-back look's warnings`）。除此之外沒有呼叫端用到：`sync` 只把 `PlatformTimeout` 轉成 `ValidationFailed("sync_failed: …")`，其他 `PlatformError` 原樣往上；`upload` 的上傳前同步把任何 `VcpError` / `OSError` 轉成 `sync_failed:`。兩條路的失敗 VERDICT 都還不帶 `cli_warnings=`（§2.2 第 12 條）。
+21. **Kaggle 列表的後一頁失敗。** `list_submissions` 在任何 `PlatformError`（CLI 非 0、逾時、翻頁超過上限）離開時，把已讀頁面的警告行併進例外的 `cli_warnings`（先已讀的，再接例外原本帶的，`merge_warnings` 去重）。上傳的讀回（`_read_back`）的某一次查看讀了幾頁才壞掉時，也把例外帶的警告行併進它回傳的警告（`fix(submit): keep a failed read-back look's warnings`）。除此之外沒有呼叫端用到：`sync` 只把 `PlatformTimeout` 轉成 `ValidationFailed("sync_failed: …")`，其他 `PlatformError` 原樣往上；`upload` 的上傳前同步把任何 `VcpError` / `OSError` 轉成 `sync_failed:`。兩條路的失敗 VERDICT 都還不帶 `cli_warnings=`（§2.2 第 12 條；0.17.0 已帶）。
 
 ### 2.2 開放待辦（依優先順序）
 
@@ -76,28 +76,30 @@
    - Added / Changed / Fixed（`dump_yaml_model` 的原子替換，位元組不變）；
    - 相容性與升級（spec §8）、已知限制（spec §5.4、§12 與本檔 §1）；
    - `src/vcp/__init__.py` 的 `__version__` 與 `.claude/.claude-plugin/plugin.json` 同步改成 0.16.0。
-2. **比賽工作區升級。** 讀寫同一份台帳的每個 checkout 一起升到 0.16.0，再讓第一個人 `select --record`；共用同一個 `submit.yaml` 的 vcp 都要先升級才能寫非預設的 `selection_warn_hours`。
+2. ~~**比賽工作區升級。** 讀寫同一份台帳的每個 checkout 一起升到 0.16.0，再讓第一個人 `select --record`；共用同一個 `submit.yaml` 的 vcp 都要先升級才能寫非預設的 `selection_warn_hours`。~~ 不做（2026-11-01，使用者決定）：那場比賽已結束、台帳已鎖，釘在 v0.14.0 的工作區不動。這一條改成「下一場比賽從 Day 1 就用 0.16.0 以上」（0.17.0 發版後用 0.17.0）。
 3. ~~**交接文件。** `HANDOVER.md` 與 `CODEX_PROMPT.md` 在發版時提到新事件、升級順序與磁碟檢查。~~ 已完成：同一個發版 commit（HANDOVER §2、§6 第 10 條、§8；CODEX_PROMPT 開頭與開放待辦）。
 4. ~~**把 glob 寫進 `started` 事件**（spec §12，待使用者決定）：`--checkpoints` / `--final` 的 glob 寫進 `train.log.jsonl` 的 `started`（不驗欄位，不破舊版），`train status` 再掃它們的前綴，從沒登記過 checkpoint 的目錄的 `.tmp` 才看得到。~~ 已完成（發版前）：`feat(train): train status also scans the checkpoint glob directories for tmp files`，裁決見 §2.1 第 19 條。
 5. ~~**`train.log.jsonl` 的 append（PATCH）。** `append_event` 在寫之前記下 `f.tell()`，任何例外就截斷回那個位置，不留半列；`backup verify` 才不會對含這個 run 的清單永遠報 `bad_stamps:`。~~ 已完成（發版前）：`fix(train): an interrupted train.log.jsonl append leaves no half line`，裁決見 §2.1 第 20 條。其他 append-only 檔還有同一個問題，見第 11 條。
-6. **`select --none`**（spec §12）：要支援「什麼都沒勾」（Kaggle 這時自動用 public 最好的兩發）就另加選項，現在空的選取被拒。
-7. **`--record <id>@<ref>`**（spec §12）：要分到同一個 id 的每一發時，讓 `--record` 收 `<id>@<ref>`；目前沒有需要。
-8. **`vcp gc --dry-run`**（RSNA 收尾後記 §4，不在本版）。
-9. **自動讀回平台的勾選。** 日後 kaggle CLI 開出「只列已勾選」的旗標，`sync` 可以寫 `source=platform` 的 `selected` 列（schema 已留位置），`differs` 對 `foreign:<ref>` 的誤報也一併處理。
+6. ~~**`select --none`**（spec §12）：要支援「什麼都沒勾」（Kaggle 這時自動用 public 最好的兩發）就另加選項，現在空的選取被拒。~~ 已完成（2026-11-01，0.17.0，分支 `feat/v0170-selection-gc`）：`vcp submit select --none` 寫一列 `chosen: []`；狀態多一個字 `unticked`（單獨不 WARN，有 `final` 時 `unticked,differs` WARN，不判 `slots`）。舊 vcp 讀到空的 `chosen` 會 FAIL `bad ledger row`，升級順序同 `selected`。設計見 `../specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md` §3.3、§3.4，裁決與待辦見 `2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md`。
+7. ~~**`--record <id>@<ref>`**（spec §12）：要分到同一個 id 的每一發時，讓 `--record` 收 `<id>@<ref>`；目前沒有需要。~~ 已完成（2026-11-01，0.17.0）：`--record` 收 `<id>@<ref>`（ref 要是那個 id 的上傳，否則 `not_found:`），`report` 依條目標記哪一發；同時處理 §1 的 `foreign:<ref>` 誤報——台帳照寫人說的，讀取時把已被認成自己上傳的 `foreign:<ref>` 解析成那個 id，比對的單位仍是標籤。設計見 `../specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md` §3.1、§3.2、§3.5。
+8. ~~**`vcp gc --dry-run`**（RSNA 收尾後記 §4，不在本版）。~~ 已完成（2026-11-01，0.17.0），命令名改為 `vcp gc scan`（只列不刪，寫 `gc_scan` 產物，不讀 provenance 索引）；理由見 RSNA 收尾後記 §4 的處置與 `../specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md` §5。
+9. **自動讀回平台的勾選。** 日後 kaggle CLI 開出「只列已勾選」的旗標，`sync` 可以寫 `source=platform` 的 `selected` 列（schema 已留位置），`differs` 對 `foreign:<ref>` 的誤報也一併處理（讀取時的解析已在 0.17.0 做了，見第 7 條）。處置（2026-11-01）：仍被擋住。PyPI 上最新的 kaggle CLI 是 2.2.5（當天查），沒有「只列已勾選」的旗標；維持手動記錄，這一條照舊。
 10. **審查留下的小項**（沒有急迫性）：
     - `train status` 掃到讀不了的目錄項目時會 ABORT（`PermissionError`），符號連結的 `.tmp` 以目標路徑列出；
     - `console_marker` 讀不到 console 時靜默回傳 `None`；
     - ~~Kaggle 多頁列表的後一頁丟例外時，前一頁的警告行跟著丟掉；~~ 已完成（發版前）：`fix(submit): keep earlier pages' CLI warnings when a later page fails`（§2.1 第 21 條）；
     - ~~`_fsync_dir` 判斷 `os.name`、`replace_text` 判斷 `IS_WINDOWS`，兩處的 Windows 判斷可以收成一個；~~ 已完成（發版前）：`refactor: review leftovers from 0.16.0`；
     - ~~`final` 的 `FinalResult` 用十個位置參數建構；~~ 已完成（發版前）：同一個 commit，改成關鍵字參數；`status_cmd`、`_final_locked`、`train_run` 都超過 50 行，可以抽函式。
-11. **其他 append-only 檔的半列（PATCH）。** 寫法跟 `train.log.jsonl` 原來的一樣（`open("a")` 一次 `write`，失敗不收尾），一次寫到一半遇到 ENOSPC 或被殺，會留下半列、下一次 append 黏上去：
+
+    處置（2026-11-01，PR #64 `refactor/v0160-review-leftovers`，隨 0.17.0 發出）：前兩項與長函式都做了。`train status` 的 `.tmp` 掃描略過讀不了的目錄（每個目錄只報一次）、遇到符號連結與 junction 就停（用 `os.scandir`），連結以它自己列出，連指向不存在目標的 `.tmp` 連結也是；`console_marker` 讀不到 console 時記 WARNING（檔案不存在才是 DEBUG）；`status_cmd`、`_final_locked`、`train_run` 都拆開了。舊行為的正確描述：3.12 的 `rglob` 會靜默略過讀不了的 run 子目錄；只有以 `iterdir` 列出的 checkpoint 目錄與 glob 目錄，和逐項的 `stat`，才會 ABORT。仍開著：`train/run.py` 有 923 行，超過 800 行的上限；把 `train_run` 的流程搬到 `vcp/train/attempt.py` 之類要連測試 monkeypatch 的目標一起搬，延後（見 `2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md` §2.2 第 6 條）。
+11. ~~**其他 append-only 檔的半列（PATCH）。**~~ 已完成（2026-11-01，PR #63 `fix/append-whole-line`，隨 0.17.0 發出）：`vcp.core.atomic.append_whole_line`（以內容為準的截斷，三條規則；Windows 上截斷會重試）、每日 log 的 `WholeLineFileHandler`，與一個 ast 守衛測試（禁止其他 append 模式的 `open`，在 `tests/unit/core/test_atomic.py`）。裁決：Windows 上每日 log 的行尾現在是 LF（原本 `logging.FileHandler` 寫 CRLF），CHANGELOG 要寫一行。已知限制：不加鎖，檢查與截斷之間有短窗口；硬殺（`kill -9`、斷電）不涵蓋；別人的列接在我們寫了一半的位元組之後時，檔案刻意留著壞掉（大聲、位元組保留）。其他整份重寫（`"w"`）不是原子的——`import_skipped.jsonl`、materialize 的 `failed.jsonl`、audit 輸出——是另一個問題，可能是未來一項（見 `2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md` §2.2 第 7 條）。下面是當時的問題描述： 寫法跟 `train.log.jsonl` 原來的一樣（`open("a")` 一次 `write`，失敗不收尾），一次寫到一半遇到 ENOSPC 或被殺，會留下半列、下一次 append 黏上去：
     - `measure/ledger.py` 的 `append_row`：`readings.jsonl`、`judgements.jsonl`、`sigma.jsonl`，`measure/prereg.py` 的 `prereg.log.jsonl`，`artifact/ledger.py` 的 `artifacts/<kind>/supersession.jsonl`。讀端 `read_rows` 嚴格，黏過的壞列會讓之後每個讀它的命令 FAIL `bad ledger row`，不只 `backup verify`；
     - `measure/runs.py` 的 `append_history`（`runs/<id>/history.jsonl`）；
     - `measure/anchors.py`（`anchors.log.jsonl`，先寫它、再改 `anchors.json`）；
     - `data/dataset.py` 的 `append_unseal`（`unseal.jsonl`）；
     - `backup/ledger.py` 的 `BackupLedger.append`（`backup.log.jsonl`）；
-    - `core/log.py` 的每日 `logs/vcp-<日期>.jsonl`（`logging.FileHandler`，寫失敗由 logging 吞掉、不丟例外，半列仍會留在檔裡；角色 `logs` 在 `LEDGER_ROLES`），修法跟其他幾處不同，要換 handler 或在 `emit` 收尾；
+    - `core/log.py` 的每日 `logs/vcp-<日期>.jsonl`（當時是 `logging.FileHandler`，寫失敗由 logging 吞掉、不丟例外，半列仍會留在檔裡；現在是 `WholeLineFileHandler`；角色 `logs` 在 `LEDGER_ROLES`），修法跟其他幾處不同，要換 handler 或在 `emit` 收尾；
     - `submit/ledger.py` 的 `append_ledger_row`（`submissions.jsonl`）：寫入者持鎖、嚴格讀，半列會讓之後每個寫入命令停在 `bad ledger row`，要手動修；無鎖的讀者與 `backup verify` 略過沒收尾的最後一行（`partial_tail`），所以不報 `bad_stamps:`。
 
     `backup verify` 的時戳層對 `LEDGER_ROLES`（`submissions_log`、`readings`、`judgements`、`sigma`、`anchors_log`、`prereg_log`、`train_log`、`history`、`unseal_log`、`logs`）內的檔，與清單之外的 `backup.log.jsonl`，會把黏過的那一行報成 `bad_stamps:`；只有 `submissions_log` 有 `partial_tail` 的寬限。修法：把 `train/records.py` 的 `_append_whole_line` 搬到 `vcp.core` 共用，各呼叫點改用它；每一處要先看自己的讀端與鎖（`submissions.jsonl` 的 `complete_length`、`anchors` 的先寫後改順序）。只動失敗路徑，PATCH。
-12. **失敗的 `sync` / `upload` 前同步的 VERDICT 帶 `cli_warnings=`。** §2.1 第 21 條讓例外帶著警告行，但 `sync` 與 `upload` 前同步的失敗路徑還沒有人讀 `PlatformError.cli_warnings`；要讓 `sync_failed:` 與 `PlatformError` 的 FAIL VERDICT 也有 `cli_warnings=<n>`（`setdefault`，不蓋過失敗本身的欄位），跟 `upload` 失敗時一樣。另外，後一頁的內容是壞的（`parse_submissions` 丟的是 `ValidationFailed`，不是 `PlatformError`）時，前面頁的警告行仍會跟著丟掉，列表和讀回都一樣；要處理就在 `list_submissions` 也接它，或把剖析失敗包成帶警告的 `PlatformError`。
+12. ~~**失敗的 `sync` / `upload` 前同步的 VERDICT 帶 `cli_warnings=`。**~~ 已完成（2026-11-01，0.17.0）：`cli_warnings` 從 `PlatformError` 搬到 `VcpError`，加 `with_cli_warnings`；失敗的 `sync`（含 `sync_failed:`、CLI 非 0、`platform_response:`）與 `upload` 上傳前同步的 `sync_failed:` 的 VERDICT 帶 `cli_warnings=<n>`；後一頁壞掉（含 `parse_submissions` 的 `ValidationFailed`）時前面頁的行也跟著例外走。FAIL 只有個數，行在 log。設計見 `../specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md` §4，裁決見 `2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md`。下面是當時的問題描述： §2.1 第 21 條讓例外帶著警告行，但 `sync` 與 `upload` 前同步的失敗路徑還沒有人讀 `PlatformError.cli_warnings`；要讓 `sync_failed:` 與 `PlatformError` 的 FAIL VERDICT 也有 `cli_warnings=<n>`（`setdefault`，不蓋過失敗本身的欄位），跟 `upload` 失敗時一樣。另外，後一頁的內容是壞的（`parse_submissions` 丟的是 `ValidationFailed`，不是 `PlatformError`）時，前面頁的警告行仍會跟著丟掉，列表和讀回都一樣；要處理就在 `list_submissions` 也接它，或把剖析失敗包成帶警告的 `PlatformError`。

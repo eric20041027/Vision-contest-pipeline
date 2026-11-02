@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 
-from vcp.core.errors import IntegrityError, PlatformError, ValidationFailed, VcpError
+from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp, utc_now
@@ -28,11 +28,13 @@ from vcp.submit.guards import (
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.location import transaction
 from vcp.submit.platforms import (
+    PlatformList,
     Runner,
     UploadResult,
     as_platform_list,
     get_platform,
     merge_warnings,
+    with_cli_warnings,
 )
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow, PlatformProfile, Staged
@@ -133,7 +135,11 @@ def _force_reason(force: str | None) -> str | None:
 def _pre_sync(p: Prepared, runner: Runner | None) -> SyncResult:
     """spec 2026-09-28 §4.3: what ``vcp submit sync`` does, inside this upload's transaction and
     before the quota is counted, so an upload the platform lists and the ledger lacks counts. A
-    list vcp cannot read -- or cannot store -- stops the upload before anything is sent."""
+    list vcp cannot read -- or cannot store -- stops the upload before anything is sent. That
+    failure counts the warning lines the CLI printed (spec 2026-11-01 §4.2) -- the error's own
+    and those of a list already read -- but reports no ``sync=`` or ``bound=``: the sync did
+    not finish."""
+    listed: PlatformList | None = None
     try:
         listed = as_platform_list(
             get_platform(p.profile.platform).list_submissions(p.profile, runner)
@@ -141,7 +147,11 @@ def _pre_sync(p: Prepared, runner: Runner | None) -> SyncResult:
         res = reconcile(p.paths, p.profile_sha, p.ledger, listed.submissions)
         return replace(res, cli_warnings=listed.warnings)
     except (VcpError, OSError) as e:
-        raise ValidationFailed(f"sync_failed: {e}") from e
+        raise with_cli_warnings(
+            ValidationFailed(f"sync_failed: {e}"),
+            getattr(e, "cli_warnings", ()),
+            listed.warnings if listed else (),
+        ) from e
 
 
 def upload(
@@ -172,10 +182,9 @@ def upload(
         try:
             row, result, quota = _send(p, submission_id, message, reason, runner)
         except VcpError as e:
-            seen = e.cli_warnings if isinstance(e, PlatformError) else ()
             e.fields.setdefault("sync", state)
             e.fields.setdefault("bound", bound)
-            e.fields.setdefault("cli_warnings", len(merge_warnings(pre, seen)))
+            e.fields.setdefault("cli_warnings", len(merge_warnings(pre, e.cli_warnings)))
             raise
     warned = merge_warnings(pre, result.cli_warnings)
     return UploadOutcome(row, result, quota, sync=state, bound=bound, cli_warnings=warned)

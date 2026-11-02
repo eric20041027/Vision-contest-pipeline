@@ -14,13 +14,20 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from vcp.core.errors import PlatformTimeout, ValidationFailed
+from vcp.core.errors import PlatformTimeout, ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp
 from vcp.submit.ledger import TWIN_WINDOW, SubmissionLedger
 from vcp.submit.location import transaction
 from vcp.submit.matching import leads, mentions
-from vcp.submit.platforms import PlatformSubmission, Runner, as_platform_list, get_platform
+from vcp.submit.platforms import (
+    PlatformList,
+    PlatformSubmission,
+    Runner,
+    as_platform_list,
+    get_platform,
+    with_cli_warnings,
+)
 from vcp.submit.profile import load_profile
 from vcp.submit.schema import LedgerRow
 from vcp.submit.stage import load_staged, stage_json
@@ -278,11 +285,18 @@ def sync(
     if profile.platform == "manual":
         raise ValidationFailed("manual_platform: nothing to read back from; use `vcp submit score`")
     with transaction(paths, profile, command="submit.sync") as ledger:
+        # From the list call to the end of reconcile, a failure carries the warning lines the
+        # CLI printed (spec 2026-11-01 §4.2): its own, and those of a list already read. An
+        # OSError (ABORT) carries none -- the failure is the local disk's, not the platform's.
+        listed: PlatformList | None = None
         try:
             listed = as_platform_list(
                 get_platform(profile.platform).list_submissions(profile, runner)
             )
+            res = reconcile(paths, profile_sha, ledger, listed.submissions)
         except PlatformTimeout as e:  # spec 2026-10-04 §6.3: the word upload's pre-sync uses
-            raise ValidationFailed(f"sync_failed: {e}") from e
-        res = reconcile(paths, profile_sha, ledger, listed.submissions)
+            raise with_cli_warnings(ValidationFailed(f"sync_failed: {e}"), e.cli_warnings) from e
+        except VcpError as e:
+            with_cli_warnings(e, listed.warnings if listed else ())
+            raise
         return replace(res, cli_warnings=listed.warnings)

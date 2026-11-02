@@ -25,7 +25,7 @@
   - §2 只做手動記錄加提醒，不自動讀平台：Kaggle SDK 有「只列已勾選」的查詢選項，但 CLI 2.2.5 沒有開放。
   - 截止前 48 小時開始提醒，可設定。
   - §3 `train run` 啟動前可用空間低於 10 GiB 就 ABORT，可覆寫。
-- **2026-11-01**：0.16.0 已全綠合併（#58、#61），使用者同意後在凍結前發版（`v0.16.0`）。Wave 1c 的 spec 草稿在 PR #60，等使用者審它的待確認決定。
+- **2026-11-01**：0.16.0 已全綠合併（#58、#61），使用者同意後在凍結前發版（`v0.16.0`）。Wave 1c 的 spec 草稿在 PR #60，等使用者審它的待確認決定。§4 的 `vcp gc scan` 也提前，與 0.16.0 後記 §2.2 的第 6、7、12 條一起做成 0.17.0（凍結前）；發版仍要使用者同意。
 
 ## 1. 【Bug，P1】Kaggle CLI 的版本警告讓 `submit sync` 失敗
 
@@ -76,6 +76,7 @@
 
 - 經過：清磁碟時，是手動確認設定、`run.yaml`、台帳與文件都沒有引用之後，才由人親手刪掉 8.9 GB 的重複 bundle。
 - 做法（12/6 之後；新命令，MINOR；先設計）：列出大型檔案與目錄，以及每一個被誰引用（run 紀錄、台帳、產物 manifest、backup 清單、provenance 索引），並寫一份稽核紀錄。只列不刪，刪除仍由人執行。引用關係可以從 provenance 圖取得。
+- 處置（2026-11-01，0.17.0，分支 `feat/v0170-selection-gc`）：提前到凍結前，與 0.16.0 後記 §2.2 的第 6、7、12 條一起做成 0.17.0。命令是 `vcp gc scan`，不是 `vcp gc --dry-run`：一個永遠必填的旗標暗示有不帶它的刪除模式，而 vcp 不刪；它只列不刪，沒有 `--apply`，以後也不加。每次寫一份不可變的 `gc_scan` 產物（`scan.json` + `items.jsonl`，逐檔 sha，`--no-record` 才不寫），人刪了檔之後它就是「當時沒有引用」的證據。**引用不從 provenance 圖取**（偏離本節原文）：索引是衍生的、可能過期或不存在，記的是 entity、不是檔案路徑；過期時錯的方向是把要用的檔說成沒被引用。所以 gc 只讀正本——run 卡與 `train.yaml`、台帳、預登記、backup 清單與本機目的地、產物 manifest 的 input——並自己走一遍（不雜湊，秒級）。每個項目標一個類別（`referenced` / `record` / `rebuildable` / `debris` / `unreferenced` / `protected`）與引用它的紀錄；`unreferenced` 只表示 vcp 的紀錄沒提到，不表示可以刪。設計見 `../specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md` §5，裁決與開放待辦見 `2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md`。
 
 ## 5. 【量測】real RSNA 重量：建議不單獨做（待使用者決定）
 

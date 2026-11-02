@@ -27,8 +27,9 @@
 | 7b. kernel 實跑 | 上傳已授權的 dataset/notebook、等實際成功版本與輸出 | 綁定成功 notebook id/version、輸出與 `--weights RUN[:sha]`；不捏造版本或 test run |
 | 8. 提交準備 | `submit init`, `stage`, `verify` | file 走 eval/test 配對；kernel 走 notebook/version/weights；四道門通過且 `stage.json` 可驗證 |
 | 9. 平台 | `upload` 或 `record`, `sync` 或 `score` | 台帳有真實 uploaded/scored，Kaggle 結果由 CLI 回讀 |
-| 10. 決選 | sealed `measure --unseal --reason`, `final --dry-run`, `final`, 平台勾選, `select --record`, `status` | 至少一個 candidate/baseline 已真實上傳或記錄；候選固定；解封後不調參；final 記錄並封槍；平台上實際勾的用 `select --record` 記下（`final` 記的只是 vcp 的建議），`status` 沒有 `selection=missing\|slots\|differs` 的 WARN（核對只在 `board_rule: best`；`last` 的平台自己算最後一發，`selection=none`） |
+| 10. 決選 | sealed `measure --unseal --reason`, `final --dry-run`, `final`, 平台勾選, `select --record`, `status` | 至少一個 candidate/baseline 已真實上傳或記錄；候選固定；解封後不調參；final 記錄並封槍；平台上實際勾的用 `select --record` 記下（`final` 記的只是 vcp 的建議；同一個 id 重傳過就寫 `<id>@<平台 ref>` 指明哪一發，刻意什麼都不勾用 `select --none`；第一次 `--none` 之前，讀寫同一份台帳的每個 checkout 都先升到 0.17.0，0.16.0 讀到空的 `chosen` 會 FAIL `bad ledger row`），`status` 沒有 `selection=missing\|slots\|differs` 的 WARN（核對只在 `board_rule: best`；`last` 的平台自己算最後一發，`selection=none`；`--none` 之後是 `selection=unticked`，單獨不 WARN，有 `final` 時 `unticked,differs` WARN） |
 | 11. 提交證據備份 | `backup manifest`, `push --tier 1/2/3`, `verify`, `status` | 從真實 submission 重建完整證據圖；異機目的地逐檔 sha 通過 |
+| 12. 收尾清磁碟（需要時） | `gc scan [--root projects/<contest>]`（只列不刪） | 備份已 verify；讀 `unreferenced` / `debris` / `duplicate of`，由人決定、人自己刪；`record` 先問自己是否放棄那個 dataset 或 run；WARN（`skipped=` `unreadable=` `running=`）先處理；掃描的 id 記進 RUNBOOK |
 
 小資料集若撐不起四個子集，可以使用較少子集，但要在 RUNBOOK 記錄決定、依據與失去的保證。先檢查每個 group 數及 metric 所需支持：例如每個 multilabel AUC cell 都需要正例與負例。少於兩個 eval 時，`min_bases=2` 不會自動成立；沒有 sealed 就不能宣稱完成正常 sealed final。門檻在看到分數後不得放寬，空集合不能假裝多重驗證。
 
@@ -42,16 +43,17 @@
 
 不要自行創造 legacy/emergency kind。舊 artifact 只能按真實身分記錄；若要用正式 `baseline` waiver，先以目前 `--help` 與 gate 核對必要證據及理由。
 
-## 八組命令的角色
+## 九組命令的角色
 
 - `vcp data import|validate|audit|split|lineage|export|materialize`：建立可追蹤且防洩漏的資料輸入。
 - `vcp train run|upload|status`：包住任意框架，記命令、環境、checkpoint 與副本；vcp 不替你定義模型。
 - `vcp eval ingest|measure|anchor|sigma|preregister|judge|status|report`：把預測正規化，保護量測條件並留下可稽核判決。
 - `vcp fuse recipe|ablate|build`：固定配方並證明每位成員的增益。
-- `vcp submit init|stage|verify|upload|record|score|sync|final|select|lock|unlock|status|report`：治理候選身分、配額、平台事實與決選；`select --record` 記下你在平台上實際勾的最終提交。
+- `vcp submit init|stage|verify|upload|record|score|sync|final|select|lock|unlock|status|report`：治理候選身分、配額、平台事實與決選；`select --record` / `--none` 記下你在平台上實際勾的最終提交。
 - `vcp backup manifest|push|verify|pull|status`：從結論反向收集證據並驗證恢復能力。
 - `vcp artifact create|show|verify|lineage|status|relink|clean`：不可變產物（收據、source audit、dataset diff、policy、比賽自訂 kind）的建立與稽核。
 - `vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index`：資料改版後判定哪些 run 還有效；SQLite 預設、PostgreSQL optional。
+- `vcp gc scan`：磁碟盤點（0.17.0），列出大項目、類別與引用它的紀錄，寫一份 `gc_scan` 產物；只列不刪、不讀 provenance 索引。
 
 選項與例子以 `docs/reference/cli.md` 和 `--help` 為準。不要從這張地圖拼出未驗證命令。
 
@@ -64,7 +66,7 @@
 | `$VCP_DATA_ROOT/runs/<run>/` | run card、預測、train/fuse 證據 | 指定 replace/resume 才換寫，必須留 history/log |
 | `$VCP_DATA_ROOT/measure/<name>/` | readings、judgements、sigma、anchors | 台帳只增；anchor 換寫前先留 log |
 | `$VCP_DATA_ROOT/submit/<test>/<id>/` | submission、stage card | 寫一次不改 |
-| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、label_set、evidence、provenance_policy、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
+| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、label_set、evidence、provenance_policy、gc_scan、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
 | `$VCP_DATA_ROOT/indexes/` | provenance 的 SQLite 索引，每個 checkout 一份（`provenance-<configs root id>.sqlite3`） | 衍生品，可刪可 rebuild，不進 git；新 checkout 或搬過的 checkout 先 rebuild |
 | `configs/datasets/<name>/` | dataset card、splits、prereg、fuse、submit、backup | 進 git；不可變物換 id |
 | `projects/<contest>/` | 模型、轉換器、metric、writer、notebook、RUNBOOK | 比賽專屬且可重跑 |
@@ -76,6 +78,10 @@
 - 真實提交完成：以 `submission:<id>` 建新 manifest，依 tier 1 → 2 → 3 推送並 verify。
 
 manifest 是當下快照，之後的台帳成長不會自動進舊清單。`raw/`、`cache/` 永不進清單；另保存原始資料重新取得方法、Git commit/source bundle、專案程式、環境鎖定檔、必要 notebook bundle。`remote_copy` 只證明那個目的地的副本，C 槽副本不是異機備份：0.13.0 起本機副本跟著 `--tier 3` 推到備份目的地、在那裡驗。0.10.0 以前為多折 run 建的清單會報 `manifest_incomplete:`，換新 id 重建再推、再驗。恢復演練要包含 Git/config 取回、`backup pull/verify`，以及 `submit verify` 重產提交物。
+
+## 收尾時清磁碟
+
+備份 verify 過、比賽結束（或磁碟吃緊）時才清，且只清使用者同意的。`uv run vcp gc scan --root projects/<contest>`（0.17.0；只列不刪，`--root` 把 data root 以外的專案目錄也看進來）：讀 `unreferenced`、`debris`、`duplicate of`；`record` 是 vcp 自己的紀錄，先問自己是否放棄那個 dataset 或 run；`rebuildable` 刪了可重建；`protected`（`raw/`、`locks/`、`.git`）不動。VERDICT 有 WARN（`skipped=` `unreadable=` `running=`）先處理再信 `unreferenced`。`unreferenced` 只表示 vcp 的紀錄沒提到，筆記、notebook 和別的工具可能還要它；刪由人做，掃描的 id（`scan=`）留在 RUNBOOK，當作「當時沒有引用」的證據。
 
 ## 重新接手時的判定法
 

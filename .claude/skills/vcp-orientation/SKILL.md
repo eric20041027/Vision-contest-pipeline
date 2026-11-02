@@ -15,10 +15,11 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 量測 | `vcp eval ingest/measure/anchor/sigma/preregister/judge/status/report` | run 預測檔、`readings.jsonl`、預登記（git）、`judgements.jsonl` |
 | 融合 | `vcp fuse recipe/build/ablate` | 配方（git）、`runs/fuse-<id>/fuse.json` |
 | 訓練 | `vcp train run/upload/status` | `run.yaml`、`train.yaml`、checkpoint sha、access receipt |
-| 提交 | `vcp submit init/stage/verify/upload/record/score/sync/final/select/lock/unlock/status/report`、`vcp submit ledger adopt` | `submit.yaml`、`submissions.jsonl`（`ledger: shared` 時在 data root；`select --record` 記平台上實際勾選的最終提交）、`stage.json` |
+| 提交 | `vcp submit init/stage/verify/upload/record/score/sync/final/select/lock/unlock/status/report`、`vcp submit ledger adopt` | `submit.yaml`、`submissions.jsonl`（`ledger: shared` 時在 data root；`select --record` / `--none` 記平台上實際勾選的最終提交）、`stage.json` |
 | 備份 | `vcp backup manifest/push/verify/pull/status` | manifest（git）、`backup.log.jsonl` |
 | 產物 | `vcp artifact create/show/verify/lineage/status/relink/clean` | `artifacts/<kind>/<id>/manifest.json`（有它才是產物） |
 | provenance | `vcp provenance rebuild/sync/ingest/impact/stale/explain/graph/status/verify-index` | 可刪除的衍生索引（SQLite 預設；PostgreSQL optional）；`graph` 把它畫成 Mermaid 圖 |
+| 盤點（不是第九層） | `vcp gc scan` | `artifacts/gc_scan/<id>/`（`scan.json` + `items.jsonl`）；只列不刪，引用只讀正本、不讀 provenance 索引 |
 
 ## 三條鐵則與 VERDICT
 1. 取時只用 `vcp.core.time.utc_now()/stamp()`。
@@ -47,6 +48,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 匯入 / 稽核 / 切分 / 匯出，或 data 命令的 WARN/FAIL | `vcp-data-pipeline` |
 | 預測 → 讀數 → 預登記 → 判決；融合準入 | `vcp-eval-and-fuse` |
 | 訓練包裝、checkpoint、提交、備份 | `vcp-train-submit-backup` |
+| 清磁碟：列出大檔、類別與誰引用它（`vcp gc scan`） | `vcp-train-submit-backup` |
 | 資料集改版、provenance 索引、PostgreSQL、基準量測 | `vcp-provenance` |
 | 看 / 畫 / 交出比賽的 provenance 圖（lineage、哪些壞了或過期） | `vcp-provenance-graph` |
 | 發版、venv / worktree、訓練中能不能動 main、PR 慣例 | `vcp-release-and-environments` |

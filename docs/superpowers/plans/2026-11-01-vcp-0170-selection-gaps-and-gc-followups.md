@@ -76,3 +76,4 @@
 10. **data root 裡的連結與 junction 讓整棵子樹無聲地消失**（最終審查）。不跟隨連結是設計（spec §12），但目前沒有任何輸出說「有連結沒走」，人會把沒列出的東西當成不存在。建議在 VERDICT 與 `scan.json` 加一個 `links:` 個數。
 11. **`.git` 的保護只看走的根之下**（最終審查）。`--root repo/.git/…` 讓 `.git` 落在根的上面，根之下的檔就不再有 `.git` 這一段，不被標成 `protected`。要修就讓掃描器在 `--root` 本身的路徑上也檢查 `.git`。
 12. **被略過的 run，它在 data root 之外的檢查點目錄讀成 `unreferenced`**（最終審查的建議）。run 卡壞掉時，data root 之內的檔會歸 `record`，檢查點目錄在別處的則沒有這一層；可以也歸 `record`，或至少帶 `skipped run:<id>` 的提示。
+13. **`scan.py` 的兩處版面名稱仍分大小寫**（最終審查修正之後）。`classify` / `unit_of` 已依檔案系統折疊大小寫，但掃描器判斷「被略過的 run」（`parts[0] == "runs"`）與產物脈絡（`parts[0] == "artifacts"`）仍是精確比對：Windows 上手動建的 `Runs/`、`Artifacts/` 會拿不到 `skipped_run` 與 committed / partial 的脈絡，結果偏保守地讀成 `unreferenced`。vcp 自己一律建小寫目錄，所以先不修；要修就從 `layout` 匯出折疊用的函式給掃描器用。

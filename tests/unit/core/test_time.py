@@ -32,6 +32,15 @@ def test_stamp_converts_other_timezones_to_utc():
     assert vtime.stamp(dt) == "2026-09-02T12:00:00.000Z"
 
 
+def test_stamp_zero_pads_every_year_on_every_platform():
+    # glibc's strftime("%Y") gives "1" for year 1; Windows gives "0001".
+    assert vtime.stamp(datetime(1, 1, 1, tzinfo=UTC)) == "0001-01-01T00:00:00.000Z"
+    assert vtime.stamp(datetime(999, 2, 3, 4, 5, 6, 7000, tzinfo=UTC)) == (
+        "0999-02-03T04:05:06.007Z"
+    )
+    assert vtime.stamp(datetime.max.replace(tzinfo=UTC)) == "9999-12-31T23:59:59.999Z"
+
+
 def test_stamp_rejects_naive_datetime():
     with pytest.raises(ValueError):
         vtime.stamp(datetime(2026, 9, 2))

@@ -710,4 +710,5 @@ def test_input_checks(tmp_path):
     _put(tmp_path, "file.txt")
     with pytest.raises(ValidationFailed, match="^not_found: --root"):
         check_roots([tmp_path / "file.txt"])
+    (tmp_path / "x").mkdir()  # POSIX resolves x before "..": a missing x is not a directory
     assert check_roots([tmp_path / "x" / ".."]) == [tmp_path.resolve()]

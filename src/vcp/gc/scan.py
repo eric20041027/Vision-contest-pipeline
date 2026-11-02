@@ -1,15 +1,17 @@
 """The disk inventory's walk (0.17.0 spec 5.2 and 5.5): every file under the roots, classified by
 its place in the layout, merged into items no wider than their unit, counted once, and the copies
-of referenced files found by hashing only the candidates whose size matches one.
+of referenced files found by hashing only the candidates whose size matches one (and the
+original they match, once, to be sure it still holds those bytes).
 
-Read-only: nothing is deleted, changed or locked, and nothing but those candidates is hashed.
-The roots are the data root (recursive), each checkpoint directory the train records name (the
+Read-only: nothing is deleted, changed or locked, and nothing but those files is hashed. The
+roots are the data root (recursive), each checkpoint directory the train records name (the
 files directly in it) and each ``--root`` (recursive). The rules follow the path, not the root:
 a ``--root`` walk never enters the data root -- the data root's own walk covers it, with the data
 root's classes and units -- and never counts the files directly in a checkpoint directory that
 is walked as one, so each file is counted once. Links and junctions are neither entered nor
-counted. Memory holds the summaries on the current path and the items listed, never one object
-per file of the whole tree.
+counted. Whatever a directory holds that was not seen -- one of those, a part another walk
+covers, an entry that could not be read -- keeps it from being one item. Memory holds the
+summaries on the current path and the items listed, never one object per file of the tree.
 """
 
 from __future__ import annotations
@@ -39,8 +41,14 @@ Kind = Literal["file", "dir"]
 
 _DUPLICATE_CLASSES = frozenset({"record", "unreferenced"})
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_LATEST = datetime.max.replace(tzinfo=UTC)
+_EARLIEST = datetime.min.replace(tzinfo=UTC)
 # ``References.unreadable`` keeps the path alone: what failed there was examining it.
 _REFERENCE_ERROR = "OSError"
+# Windows opens no longer path unless long paths are enabled, and says FileNotFoundError.
+_MAX_PATH = 260
+# The walk's own listing, apart from the one ``collect_references`` and pathlib use.
+_scandir = os.scandir
 
 
 @dataclass(frozen=True)
@@ -114,7 +122,7 @@ class ScanResult:
 
 def check_min_mib(value: float) -> int:
     """``--min-mib`` as a byte threshold."""
-    if not math.isfinite(value) or value < 0:
+    if not math.isfinite(value) or value < 0 or not math.isfinite(value * MIB):
         raise ValidationFailed(
             f"invalid: --min-mib must be a finite number >= 0, got {value!r}",
             fields={"min_mib": value},
@@ -220,8 +228,16 @@ def _within_unit(parts: tuple[str, ...], unit: tuple[str, ...]) -> bool:
 
 
 def _mtime(seconds: float) -> str:
-    # the epoch plus a delta rather than fromtimestamp: Windows refuses a time before 1970
-    return stamp(_EPOCH + timedelta(seconds=seconds))
+    """The epoch plus a delta rather than fromtimestamp, which Windows refuses before 1970; a
+    time past what a datetime holds (Windows allows year 30828) is clamped to its end."""
+    try:
+        return stamp(_EPOCH + timedelta(seconds=seconds))
+    except OverflowError:
+        return stamp(_LATEST if seconds > 0 else _EARLIEST)
+
+
+def _beyond_max_path(path: str) -> bool:
+    return os.name == "nt" and len(path) >= _MAX_PATH
 
 
 def _name(entry: os.DirEntry[str]) -> str:
@@ -243,11 +259,19 @@ def _artifact_context(ctx: _Context, entries: list[os.DirEntry[str]]) -> _Contex
     return replace(ctx, committed=committed, partial=not committed and SPEC in files)
 
 
-def _sized(refs: References, data: Path) -> dict[int, dict[str, str]]:
-    """The referenced files a record vouches a sha for, by size, then sha, to the first
-    ``store_path``: the only sizes worth hashing a candidate for. The size is the record's
-    (what its sha describes), else the disk's; a file no longer on disk is no original."""
-    table: dict[int, dict[str, str]] = {}
+@dataclass(frozen=True)
+class _Original:
+    """A referenced file a copy may be of: ``shown`` is its ``store_path``."""
+
+    shown: str
+    path: Path
+
+
+def _sized(refs: References, data: Path) -> dict[int, dict[str, list[_Original]]]:
+    """The referenced files a record vouches a sha for, by size, then sha, in ``store_path``
+    order: the only sizes worth hashing a candidate for. A file no longer on disk is no
+    original, and neither is one whose size is no longer the recorded one (it changed)."""
+    table: dict[int, dict[str, list[_Original]]] = {}
     for ref in refs.files.values():
         if ref.sha256 is None:
             continue
@@ -255,13 +279,24 @@ def _sized(refs: References, data: Path) -> dict[int, dict[str, str]]:
             st = os.stat(ref.path)
         except OSError:
             continue
-        if not stat.S_ISREG(st.st_mode):
+        if not stat.S_ISREG(st.st_mode) or (ref.size is not None and ref.size != st.st_size):
             continue
-        size = st.st_size if ref.size is None else ref.size
-        shown = store_path(ref.path, data)
-        by_sha = table.setdefault(size, {})
-        by_sha[ref.sha256] = min(by_sha.get(ref.sha256, shown), shown)
+        original = _Original(store_path(ref.path, data), ref.path)
+        table.setdefault(st.st_size, {}).setdefault(ref.sha256, []).append(original)
+    for by_sha in table.values():
+        for originals in by_sha.values():
+            originals.sort(key=lambda o: o.shown)
     return table
+
+
+def _may_be_one_file(a: Path | str, b: Path) -> bool:
+    """A hard link or another spelling of the original is no copy of it. ``os.stat``, not
+    ``DirEntry.stat``: the latter has no file id on Windows. When either cannot be examined,
+    the answer is yes -- no duplicate is claimed on a guess."""
+    try:
+        return os.path.samestat(os.stat(a), os.stat(b))
+    except OSError:
+        return True
 
 
 class _Scanner:
@@ -287,11 +322,12 @@ class _Scanner:
         self.duplicates = [0, 0]
         self.items: list[Item] = []
         self.unreadable: dict[str, Unreadable] = {}
+        self.original_sha: dict[str, str | None] = {}
 
     def run(self, w: _Walk) -> None:
         """Post-order over the root's directories; the root itself is above every unit, so it
         lists its children and is never an item."""
-        top = self._open(w, str(w.root), (), self._root_context(w.root))
+        top = self._open(w, None, str(w.root), (), self._root_context(w.root))
         stack = [] if top is None else [top]
         while stack:
             frame = stack[-1]
@@ -329,18 +365,18 @@ class _Scanner:
             in_configs=up.in_configs or key == self.configs_key,
             skipped_run=up.skipped_run or failed_run,
         )
-        return self._open(w, path, parts, ctx)
+        return self._open(w, frame, path, parts, ctx)
 
-    def _open(self, w: _Walk, path: str, parts: tuple[str, ...], ctx: _Context) -> _Frame | None:
+    def _open(
+        self, w: _Walk, parent: _Frame | None, path: str, parts: tuple[str, ...], ctx: _Context
+    ) -> _Frame | None:
         """List a directory in name order: its files are summarized now, its subdirectories
-        kept to walk. One that cannot be listed is unreadable; one that is gone, nothing."""
+        kept to walk. One that cannot be listed keeps ``parent`` from being one item."""
         try:
-            with os.scandir(path) as listing:
+            with _scandir(path) as listing:
                 entries = sorted(listing, key=_name)
-        except (FileNotFoundError, NotADirectoryError):  # gone since its parent was listed
-            return None
         except OSError as e:
-            self._unreadable(w.shown(parts), e)
+            self._fail(w, parent, path, parts, e)
             return None
         if w.where == "data" and len(parts) == 3 and parts[0] == "artifacts":
             ctx = _artifact_context(ctx, entries)
@@ -350,7 +386,7 @@ class _Scanner:
             try:
                 self._entry(w, frame, entry, files_elsewhere=files_elsewhere)
             except OSError as e:
-                self._unreadable(w.shown((*parts, entry.name)), e)
+                self._fail(w, frame, entry.path, (*parts, entry.name), e)
         frame.subdirs.reverse()  # popped from the end: walked in name order
         return frame
 
@@ -358,6 +394,8 @@ class _Scanner:
         self, w: _Walk, frame: _Frame, entry: os.DirEntry[str], *, files_elsewhere: bool
     ) -> None:
         if entry.is_symlink() or entry.is_junction():
+            # not followed; a record may name a path through it, so its directory is no item
+            self._block(w, frame)
             return
         if entry.is_dir(follow_symlinks=False):
             if not w.recursive:
@@ -378,10 +416,8 @@ class _Scanner:
         parts = (*frame.parts, entry.name)
         try:
             st = entry.stat(follow_symlinks=False)
-        except FileNotFoundError:
-            return None
         except OSError as e:
-            self._unreadable(w.shown(parts), e)
+            self._fail(w, frame, entry.path, parts, e)
             return None
         ctx = frame.ctx
         ref = self.refs.files.get(os.path.normcase(entry.path))
@@ -417,7 +453,8 @@ class _Scanner:
     ) -> str | None:
         """The referenced file this one is a bit-for-bit copy of. Only a ``record`` or
         ``unreferenced`` file of at least ``max(1 MiB, threshold)`` whose size a referenced
-        file with a recorded sha has is hashed."""
+        file with a recorded sha has is hashed; a match is claimed only when the original is
+        another file and, hashed too, still holds those bytes."""
         if cls not in _DUPLICATE_CLASSES or size < self.dup_floor:
             return None
         by_sha = self.sized.get(size)
@@ -425,16 +462,27 @@ class _Scanner:
             return None
         try:
             digest = sha256_file(Path(path))
-        except FileNotFoundError:
-            return None
         except OSError as e:
-            self._unreadable(w.shown(parts), e)
+            self._report(w.shown(parts), path, e)
             return None
-        original = by_sha.get(digest)
-        if original is not None:
-            self.duplicates[0] += size
-            self.duplicates[1] += 1
-        return original
+        for original in by_sha.get(digest, ()):
+            if not _may_be_one_file(path, original.path) and self._sha_of(original) == digest:
+                self.duplicates[0] += size
+                self.duplicates[1] += 1
+                return original.shown
+        return None
+
+    def _sha_of(self, original: _Original) -> str | None:
+        """The original's sha as it is on disk now, hashed once per scan; None when it cannot
+        be read."""
+        key = path_key(original.path)
+        if key not in self.original_sha:
+            try:
+                self.original_sha[key] = sha256_file(original.path)
+            except OSError as e:
+                self._report(original.shown, str(original.path), e)
+                self.original_sha[key] = None
+        return self.original_sha[key]
 
     def _add(self, w: _Walk, frame: _Frame, summary: _Summary) -> None:
         if summary is None:
@@ -502,6 +550,21 @@ class _Scanner:
             dup_of=None,
             dup_bytes=frame.dup_bytes,
         )
+
+    def _fail(
+        self, w: _Walk, parent: _Frame | None, path: str, parts: tuple[str, ...], error: OSError
+    ) -> None:
+        """Something below ``parent`` was not seen, so ``parent`` is no item: what is not seen
+        may be anything, a registered checkpoint included."""
+        if parent is not None:
+            self._block(w, parent)
+        self._report(w.shown(parts), path, error)
+
+    def _report(self, shown: str, path: str, error: OSError) -> None:
+        """Name what could not be read. A vanished entry is no finding -- unless Windows said
+        FileNotFoundError because the path is too long for it to open."""
+        if not isinstance(error, FileNotFoundError) or _beyond_max_path(path):
+            self._unreadable(shown, error)
 
     def _unreadable(self, shown: str, error: OSError) -> None:
         self.unreadable.setdefault(shown, Unreadable(shown, type(error).__name__))

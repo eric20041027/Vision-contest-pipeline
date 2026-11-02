@@ -69,32 +69,41 @@ def _scan(roots, *, options=(), min_bytes: int = 0):
     return scan(roots.data, roots.configs, options=check_roots(list(options)), min_bytes=min_bytes)
 
 
-def _deny_scandir(monkeypatch, denied: Path) -> None:
-    """``os.scandir`` raises PermissionError for ``denied`` and lists everything else."""
+def _deny_scandir(monkeypatch, *denied: Path) -> None:
+    """The scan's ``scandir`` raises PermissionError for ``denied`` and lists everything else;
+    the references' walk and pathlib keep the real one."""
     real = os.scandir
-    target = denied.resolve()
+    targets = {path.resolve() for path in denied}
 
     def scandir(path="."):
-        if Path(path).resolve() == target:
+        if Path(path).resolve() in targets:
             raise PermissionError(13, "denied")
         return real(path)
 
-    monkeypatch.setattr(scan_mod.os, "scandir", scandir)
+    monkeypatch.setattr(scan_mod, "_scandir", scandir)
 
 
 class _Entry:
-    """A ``DirEntry`` whose ``stat`` raises ``error`` (when given)."""
+    """A ``DirEntry`` whose ``stat`` raises ``stat_error``, and whose type cannot be read when
+    ``type_error`` is given."""
 
-    def __init__(self, real: os.DirEntry, error: OSError | None) -> None:
-        self._real, self._error = real, error
+    def __init__(
+        self, real: os.DirEntry, stat_error: OSError | None, type_error: OSError | None
+    ) -> None:
+        self._real, self._stat_error, self._type_error = real, stat_error, type_error
         self.name, self.path = real.name, real.path
 
     def __getattr__(self, attr: str):
         return getattr(self._real, attr)
 
+    def is_symlink(self) -> bool:
+        if self._type_error is not None:
+            raise self._type_error
+        return self._real.is_symlink()
+
     def stat(self, *, follow_symlinks: bool = True):
-        if self._error is not None:
-            raise self._error
+        if self._stat_error is not None:
+            raise self._stat_error
         return self._real.stat(follow_symlinks=follow_symlinks)
 
 
@@ -109,18 +118,27 @@ class _Listing:
         return False
 
 
-def _fail_stat(monkeypatch, directory: Path, errors: dict[str, OSError]) -> None:
-    """Listing ``directory`` hands out entries whose ``stat`` raises ``errors[name]``."""
+def _fail_entries(
+    monkeypatch,
+    directory: Path,
+    stat_errors: dict[str, OSError],
+    type_errors: dict[str, OSError] | None = None,
+) -> None:
+    """Listing ``directory`` hands out entries whose ``stat`` raises ``stat_errors[name]`` and
+    whose type cannot be read for ``type_errors[name]``."""
     real = os.scandir
     target = directory.resolve()
+    type_errors = type_errors or {}
 
     def scandir(path="."):
         if Path(path).resolve() != target:
             return real(path)
         with real(path) as listing:
-            return _Listing([_Entry(e, errors.get(e.name)) for e in listing])
+            return _Listing(
+                [_Entry(e, stat_errors.get(e.name), type_errors.get(e.name)) for e in listing]
+            )
 
-    monkeypatch.setattr(scan_mod.os, "scandir", scandir)
+    monkeypatch.setattr(scan_mod, "_scandir", scandir)
 
 
 def _register(data: Path, *files: Path) -> None:
@@ -265,6 +283,20 @@ def test_a_root_inside_a_referenced_directory_inherits_its_referrers(world, tmp_
     )
 
 
+def test_a_walk_from_above_a_referenced_directory_hands_its_referrers_down(world, tmp_path):
+    kw = {"data_root": world.roots.data, "configs_root": world.roots.configs}
+    usb = tmp_path / "usb"
+    build_manifest(EVAL, "run:good", manifest_id="m1", **kw)
+    push(EVAL, "m1", str(usb), **kw)
+
+    res = _scan(world.roots, options=[tmp_path])
+
+    under = [i for i in res.items if i.path.startswith(_abs(usb))]
+    assert under and all(
+        i.cls == "referenced" and "backup:beach/m1#backup_dest" in i.referrers for i in under
+    )
+
+
 def test_a_reference_spelled_another_way_still_matches(world, tmp_path):
     """Review Focus 1: the record's spelling (a ``..``, and on Windows another case) and the
     walk's spelling of one file meet on the same key."""
@@ -310,7 +342,73 @@ def test_a_copy_of_a_referenced_checkpoint_is_a_duplicate_and_only_size_matches_
     assert by[copy].duplicate_bytes == MIB + 7
     assert by[other].duplicate_of is None and by[other].duplicate_bytes == 0
     assert res.duplicates == (MIB + 7, 1)
-    assert sorted(Path(p).name for p in hashed) == ["copy.pt", "other.pt"]
+    assert sorted(Path(p).name for p in hashed) == ["big.pt", "copy.pt", "other.pt"]
+
+
+def test_an_original_overwritten_with_another_size_has_no_duplicates(world, tmp_path, monkeypatch):
+    data = world.roots.data
+    big = _put(world.weights, "big.pt", data=b"a" * (MIB + 7))
+    _register(data, big)
+    big.write_bytes(b"a" * (MIB + 9))  # the record still says MIB + 7 bytes
+    proj = tmp_path / "proj"
+    copy = _abs(_put(proj, "copy.pt", data=b"a" * (MIB + 7)))  # the recorded bytes
+    now = _abs(_put(proj, "now.pt", data=b"a" * (MIB + 9)))  # the original's size today
+    hashed: list[str] = []
+    real = scan_mod.sha256_file
+
+    def recording(path):
+        hashed.append(Path(path).name)
+        return real(path)
+
+    monkeypatch.setattr(scan_mod, "sha256_file", recording)
+
+    res = _scan(world.roots, options=[proj])
+
+    by = _by(res)
+    assert by[copy].duplicate_of is None and by[now].duplicate_of is None
+    assert res.duplicates == (0, 0)
+    assert hashed == []  # a changed original is no original: no size to match, nothing hashed
+
+
+def test_an_original_overwritten_with_the_same_size_has_no_duplicates_and_is_hashed_once(
+    world, tmp_path, monkeypatch
+):
+    data = world.roots.data
+    big = _put(world.weights, "big.pt", data=b"a" * (MIB + 7))
+    _register(data, big)
+    big.write_bytes(b"c" * (MIB + 7))  # same size, other bytes: the recorded sha is stale
+    proj = tmp_path / "proj"
+    copies = [_abs(_put(proj, f"copy-{k}.pt", data=b"a" * (MIB + 7))) for k in (1, 2)]
+    hashed: list[str] = []
+    real = scan_mod.sha256_file
+
+    def recording(path):
+        hashed.append(Path(path).name)
+        return real(path)
+
+    monkeypatch.setattr(scan_mod, "sha256_file", recording)
+
+    res = _scan(world.roots, options=[proj])
+
+    by = _by(res)
+    assert all(by[c].duplicate_of is None for c in copies) and res.duplicates == (0, 0)
+    assert sorted(hashed) == ["big.pt", "copy-1.pt", "copy-2.pt"]
+
+
+def test_a_hard_link_to_the_original_is_no_duplicate(world, tmp_path):
+    data = world.roots.data
+    big = _put(world.weights, "big.pt", data=b"a" * (MIB + 7))
+    _register(data, big)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    try:
+        os.link(big, proj / "hard.pt")
+    except OSError as e:
+        pytest.skip(f"cannot create a hard link here: {e}")
+
+    res = _scan(world.roots, options=[proj])
+
+    assert _by(res)[_abs(proj / "hard.pt")].duplicate_of is None and res.duplicates == (0, 0)
 
 
 def test_a_candidate_that_cannot_be_hashed_is_unreadable_and_no_duplicate(
@@ -374,21 +472,62 @@ def test_an_unreadable_directory_is_listed_and_the_scan_goes_on(roots, monkeypat
     assert "junk.bin" in {i.path for i in res.items}
 
 
-def test_a_file_that_cannot_be_examined_is_unreadable_and_one_that_vanished_is_nothing(
+def test_an_unreadable_child_dir_keeps_its_parent_from_one_item(world, tmp_path, monkeypatch):
+    """What was not seen may be anything -- here a registered checkpoint -- so the directory
+    holding it is never one item."""
+    data = world.roots.data
+    proj = tmp_path / "proj"
+    _put(proj, "weights/a.bin", 4)
+    _register(data, _put(proj, "weights/locked/m.pt", 3))
+    _deny_scandir(monkeypatch, proj / "weights" / "locked")
+
+    res = _scan(world.roots, options=[proj])
+
+    by = _by(res)
+    assert _abs(proj / "weights") not in by and by[_abs(proj / "weights" / "a.bin")].kind == "file"
+    assert (_abs(proj / "weights" / "locked"), "PermissionError") in [
+        (u.path, u.error) for u in res.unreadable
+    ]
+
+
+def test_a_file_that_cannot_be_examined_is_unreadable_and_keeps_its_dir_from_one_item(
     roots, monkeypatch
 ):
-    for name in ("a.bin", "b.bin", "c.bin"):
+    for name in ("a.bin", "b.bin", "c.bin", "d.bin"):
         _put(roots.data, f"junk/{name}", 2)
-    _fail_stat(
+    _fail_entries(
         monkeypatch,
         roots.data / "junk",
         {"a.bin": PermissionError(13, "denied"), "b.bin": FileNotFoundError(2, "gone")},
+        {"d.bin": PermissionError(13, "denied")},
     )
 
     res = scan(roots.data, roots.configs, min_bytes=0)
 
-    assert [(u.path, u.error) for u in res.unreadable] == [("junk/a.bin", "PermissionError")]
-    assert res.totals["unreferenced"] == (2, 1) and _by(res)["junk"].files == 1
+    assert [(u.path, u.error) for u in res.unreadable] == [
+        ("junk/a.bin", "PermissionError"),
+        ("junk/d.bin", "PermissionError"),
+    ]
+    by = _by(res)
+    assert res.totals["unreferenced"] == (2, 1) and "junk" not in by and "junk/c.bin" in by
+
+
+@pytest.mark.parametrize("max_path", [None, 1])
+def test_a_vanished_entry_blocks_silently_unless_windows_could_not_open_its_long_path(
+    roots, monkeypatch, max_path
+):
+    if max_path is not None:
+        monkeypatch.setattr(scan_mod, "_MAX_PATH", max_path)
+    _put(roots.data, "junk/b.bin", 2)
+    _put(roots.data, "junk/c.bin", 2)
+    _fail_entries(monkeypatch, roots.data / "junk", {"b.bin": FileNotFoundError(2, "gone")})
+
+    res = scan(roots.data, roots.configs, min_bytes=0)
+
+    reported = max_path is not None and os.name == "nt"
+    expected = [("junk/b.bin", "FileNotFoundError")] if reported else []
+    assert [(u.path, u.error) for u in res.unreadable] == expected
+    assert "junk" not in _by(res) and "junk/c.bin" in _by(res)
 
 
 def test_links_and_junctions_are_not_followed(roots, tmp_path):
@@ -398,10 +537,14 @@ def test_links_and_junctions_are_not_followed(roots, tmp_path):
     except OSError as e:  # Windows without developer mode or the privilege
         pytest.skip(f"cannot create symlinks here: {e}")
 
+    _put(roots.data, "work/a.bin")
+    os.symlink(tmp_path / "outside", roots.data / "work" / "link", target_is_directory=True)
+
     res = scan(roots.data, roots.configs, min_bytes=0)
 
-    assert not any(i.path.startswith("link") for i in res.items)
-    assert res.totals["unreferenced"][1] == 0
+    assert not any(i.path.startswith("link") or "/link" in i.path for i in res.items)
+    assert res.totals["unreferenced"][1] == 1
+    assert "work" not in _by(res) and "work/a.bin" in _by(res)  # a skipped link blocks its dir
 
 
 def test_a_junction_is_not_entered(roots, tmp_path):
@@ -412,11 +555,14 @@ def test_a_junction_is_not_entered(roots, tmp_path):
         _winapi.CreateJunction(str(tmp_path / "outside"), str(roots.data / "jn"))
     except (ImportError, AttributeError, OSError) as e:
         pytest.skip(f"cannot create a junction here: {e}")
+    _put(roots.data, "work/a.bin")
+    _winapi.CreateJunction(str(tmp_path / "outside"), str(roots.data / "work" / "jn"))
 
     res = scan(roots.data, roots.configs, min_bytes=0)
 
-    assert not any(i.path.startswith("jn") for i in res.items)
-    assert sum(f for _, f in res.totals.values()) == 0
+    assert not any(i.path.startswith("jn") or "/jn" in i.path for i in res.items)
+    assert sum(f for _, f in res.totals.values()) == 1
+    assert "work" not in _by(res) and "work/a.bin" in _by(res)  # a skipped junction blocks it
 
 
 def test_every_class_comes_from_the_path(roots, tmp_path):
@@ -509,6 +655,11 @@ def test_an_item_keeps_its_key_order_and_the_newest_mtime(roots):
     assert item["mtime"] == "2023-11-14T22:13:20.500Z" and item["referrers"] == []
 
 
+def test_an_mtime_beyond_what_a_datetime_holds_is_clamped():
+    assert scan_mod._mtime(9.1e11) == "9999-12-31T23:59:59.999Z"  # Windows allows year 30828
+    assert scan_mod._mtime(-1e12) == "0001-01-01T00:00:00.000Z"
+
+
 def test_a_verified_upload_copy_is_carried_on_the_item(world):
     by = _by(_scan(world.roots))
 
@@ -533,7 +684,7 @@ def test_scanning_writes_nothing(world, tmp_path):
 
 
 def test_input_checks(tmp_path):
-    for bad in (-1.0, float("nan"), float("inf")):
+    for bad in (-1.0, float("nan"), float("inf"), 1e303):
         with pytest.raises(ValidationFailed, match="^invalid: --min-mib") as e:
             check_min_mib(bad)
         assert "min_mib" in e.value.fields

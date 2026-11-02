@@ -22,6 +22,7 @@ from vcp.cli_common import (
 )
 from vcp.cli_eval import eval_app
 from vcp.cli_fuse import fuse_app
+from vcp.cli_gc import gc_app
 from vcp.cli_provenance import provenance_app
 from vcp.cli_submit import submit_app
 from vcp.cli_train import train_app
@@ -56,6 +57,7 @@ app.add_typer(artifact_app, name="artifact")
 app.add_typer(backup_app, name="backup")
 app.add_typer(eval_app, name="eval")
 app.add_typer(fuse_app, name="fuse")
+app.add_typer(gc_app, name="gc")
 app.add_typer(provenance_app, name="provenance")
 app.add_typer(submit_app, name="submit")
 app.add_typer(train_app, name="train")

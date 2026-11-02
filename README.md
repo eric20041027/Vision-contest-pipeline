@@ -3,8 +3,8 @@
 **Traceable training records for image-recognition competitions.**
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.16.0](https://img.shields.io/badge/version-0.16.0-informational.svg)](CHANGELOG.md)
-[![Tests 2549](https://img.shields.io/badge/tests-2549%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.17.0](https://img.shields.io/badge/version-0.17.0-informational.svg)](CHANGELOG.md)
+[![Tests 2958](https://img.shields.io/badge/tests-2958%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -20,7 +20,7 @@ You compete in Kaggle or AIdea image-recognition contests, alone or in a team, a
 |---|---|
 | **Leakage.** Validation looks great and the private board collapses: near-duplicate images straddle the split, test images overlap the training data, the holdout gets peeked at, or the "best" model is the best of twenty tries. | `vcp data audit` flags near-duplicates and test overlap before you split. A split plan is written once and never edited; the holdout is sealed, and every opening needs a reason, is logged and is counted at the final pick. Training that reads through vcp leaves a receipt naming the subsets it touched. |
 | **Wishful model selection.** A candidate "wins" because it was measured until it did. | You write the claim down *before* the candidate is measured. `vcp eval judge` admits it only if it wins on as many independent evaluation bases as the claim requires (two by default) — never on the best of N. Ensemble members are admitted one by one the same way. |
-| **Submission chaos.** Which model was submission #37? How much quota is left? Which two did you pick as final? | Every submission is staged from an (eval run, test run) pair identified by its weights hash; staging refuses a candidate that was never admitted or a deadline that has passed, uploads are counted against the quota, and all of it lands in an append-only ledger. `vcp submit final` picks from sealed readings and locks the ledger. (Recording the pick you then tick on the platform arrives in 0.16.0.) |
+| **Submission chaos.** Which model was submission #37? How much quota is left? Which two did you pick as final? | Every submission is staged from an (eval run, test run) pair identified by its weights hash; staging refuses a candidate that was never admitted or a deadline that has passed, uploads are counted against the quota, and all of it lands in an append-only ledger. `vcp submit final` picks from sealed readings and locks the ledger. `vcp submit select` then records the ones you actually tick on the platform. |
 | **Lost evidence.** A week later nobody can rebuild the score; a teammate or an AI agent picking the work up cold can't tell what was trained on what. | Every command ends with one machine-readable `VERDICT` line and leaves its evidence on disk. A backup manifest is generated backwards from a conclusion and verified copy by copy. When the organiser changes the data, `vcp provenance stale` lists the runs that must be redone. |
 
 vcp grew out of a postmortem. In the 2026 AIdea marine-debris detection contest our validation set predicted the public board well, but its link to the private board was never estimated and the most suspect part of the final ensemble was never checked outside it — and the private board fell by 0.0108, the largest drop among the top 16 teams. Each rule above is a mechanical answer to a failure we could not catch that time: a command refuses, or a record shows what happened, instead of relying on discipline.
@@ -146,7 +146,7 @@ Each layer is a command group; you can adopt one without the rest.
 | `vcp eval` | Readings, guardrails, σ_p, pre-registration, verdicts | `ingest`, `measure`, `anchor`, `sigma`, `preregister`, `judge`, `status`, `report` |
 | `vcp fuse` | Ensemble recipes and member admission | `recipe`, `build`, `ablate` |
 | `vcp train` | Wraps any training command; records what it read and produced | `run`, `upload`, `status` |
-| `vcp submit` | Quota, deadline, candidate identity, final selection, lock | `init`, `stage`, `verify`, `upload`, `record`, `sync`, `final`, `status` |
+| `vcp submit` | Quota, deadline, candidate identity, final selection, lock | `init`, `stage`, `verify`, `upload`, `record`, `sync`, `final`, `select`, `status` |
 | `vcp backup` | Evidence manifests generated backwards from a conclusion; tiered push and verify | `manifest`, `push`, `verify`, `pull`, `status` |
 | `vcp artifact` | The immutable-artifact primitive the layers above are built on | `create`, `show`, `verify`, `lineage`, `status`, `clean` |
 | `vcp provenance` | Which runs a dataset change affects; a derived index (SQLite by default, [PostgreSQL optional](docs/guides/POSTGRESQL_PROVENANCE.md)) | `rebuild`, `sync`, `ingest`, `impact`, `stale`, `explain`, `graph`, `verify-index` |
@@ -155,10 +155,10 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 
 ## Roadmap
 
-`0.16.0`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
+`0.17.0`, pre-1.0: a minor version may still change what vcp writes (artifact and ledger formats) or the CLI contract, and [CHANGELOG.md](CHANGELOG.md) says what each one changed. Once you use a feature a newer version added, an older vcp may not read the records it wrote.
 
 1. **Lessons from RSNA (0.16.0).** Record the final selection you actually made on the platform and warn when it differs from vcp's pick; warn when the Kaggle CLI is out of date; check free disk space before training and name a full disk in the verdict.
-2. **A safe clean-up report.** `vcp gc --dry-run` lists large files and what references each one; it never deletes.
+2. **A safe clean-up report (0.17.0).** `vcp gc scan` lists large files, their class and which record names each one; it never deletes.
 3. **Audit wave 1c.** A snapshot of the code behind every artifact, and artifact authorisation.
 4. **`1.0.0`**, once all of audit wave 1 (1a, 1b, 1c) has landed: from then on the artifact and ledger formats are a promise.
 

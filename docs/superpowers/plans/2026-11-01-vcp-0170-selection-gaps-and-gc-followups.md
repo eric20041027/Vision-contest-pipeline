@@ -23,7 +23,8 @@
   - 最終審查的文件更正一個 commit（`docs: 0.17.0 final-review corrections`：升級順序、「多半只會多報」、本檔的開放待辦與 spec §12）。
 - 每個行為變更都先寫測試、看它失敗再實作。例外是只鎖現狀的測試：`backup manifest` 的位元組 golden（`e562ef5`，在 Collector 重構之前就是綠的，重構後仍綠）；0.16.0 留下的 `final` 列 golden 也照舊綠（有沒有 `selected` 列，`final` 列除 `ts` 外逐位元組相同）。
 - 同版的兩項 PATCH（#63、#64）當時為了避開衝突沒有帶文件，它們的處置寫在 `2026-10-30-vcp-0160-selection-and-disk-followups.md` §2.2 的第 10、11 條。
-- 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json`、`docs/handover/` 在發版 commit 改（§2.2 第 1 條）。
+- 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json`、`docs/handover/` 在發版 commit `chore(release): v0.17.0` 改（§2.2 第 1 條）。
+- 合併到 `main` 之前，ubuntu 的 CI 抓到兩個 Windows 上看不到的失敗，修在 `8313e31`：`stamp()` 改成自己補零（glibc 的 `%Y` 對 1000 年以前不補零，gc 對超出 `datetime` 範圍的 mtime 夾到最小值時會寫出 `1-01-01`），與 `--root x/..` 的測試先建好 `x`（POSIX 上不存在的 `x` 讓 `x/..` 不是目錄，那是正確的行為）。
 
 ## 1. 已知限制
 
@@ -61,7 +62,7 @@
 
 ### 2.2 開放待辦（依優先順序）
 
-1. **發版 0.17.0**（使用者同意之後；發版 commit 不在功能分支）。`CHANGELOG.md` 加 `## [0.17.0]`：MINOR 的理由（spec §9）；Added / Changed / Fixed（#63、#64 兩項 PATCH：整列 append 與每日 log 在 Windows 改成 LF、審查留下的小項）；相容性與升級（spec §8；空的 `chosen` 的升級順序）；已知限制（spec §12 與本檔 §1）。`src/vcp/__init__.py` 的 `__version__` 與 `.claude/.claude-plugin/plugin.json` 同步改成 0.17.0；`docs/handover/HANDOVER.md` 與 `CODEX_PROMPT.md` 更新現況、待辦與升級順序。
+1. ~~**發版 0.17.0**（使用者同意之後；發版 commit 不在功能分支）。~~ 已完成（2026-11-02，使用者同意）：`chore(release): v0.17.0`，tag `v0.17.0` 打在發版 PR 的合併 commit 上。`CHANGELOG.md` 加 `## [0.17.0]`：MINOR 的理由（spec §9）；Added / Changed / Fixed（#63、#64 兩項 PATCH：整列 append 與每日 log 在 Windows 改成 LF、審查留下的小項）；相容性與升級（spec §8；空的 `chosen` 的升級順序）；已知限制（spec §12 與本檔 §1）。`src/vcp/__init__.py` 的 `__version__` 與 `.claude/.claude-plugin/plugin.json` 同步改成 0.17.0；`docs/handover/HANDOVER.md` 與 `CODEX_PROMPT.md` 更新現況、待辦與升級順序。
 2. **使用者覆核 spec §13 與 §13.1 的裁決**（二十二條，集中在發版前一次看）。其中兩條偏離既有文字：gc 不讀 provenance 索引（RSNA 收尾後記 §4 原本寫從圖取得），命令叫 `gc scan` 不叫 `gc --dry-run`。
 3. **自動讀回平台的勾選**（0.16.0 後記第 9 條照舊）：kaggle CLI 目前最新是 2.2.5（2026-11-01 查），沒有「只列已勾選」的旗標。有了之後 `sync` 可以寫 `source=platform` 的 `selected` 列（schema 已留位置）。
 4. **`gc` 的進度輸出**：很大的 `--root` 沒有進度，要等到掃完。

@@ -16,6 +16,89 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`，再以本檔該版的段落建 GitHub Release：`gh release create vx.y.z --verify-tag --title "vcp x.y.z" --notes-file <該版段落>`（repo 首頁的 Releases 欄才會跟上；0.15.1 以前的 tag 在 2026-10-24 一次補齊）。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.17.0] - 2026-11-02
+
+0.16.0 後記（`docs/superpowers/plans/2026-10-30-vcp-0160-selection-and-disk-followups.md`）§2.2 的第 6、7、10、11、
+12 條，與 RSNA Knee 收尾後記（`docs/superpowers/plans/2026-10-23-rsna-wrapup-followups.md`）§4 的磁碟盤點（#63、
+#64、#65；spec `docs/superpowers/specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md`，後記
+`docs/superpowers/plans/2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md`）；tag `v0.17.0` 打在發版 PR 的
+合併 commit 上。
+MINOR 的理由：
+- 台帳與產物的新內容：`selected` 列的 `chosen` 可以是空的（`select --none`）；條目多一種寫法 `<id>@<ref>`；新產物
+  kind `gc_scan`（`scan.json`、`items.jsonl`）。
+- CLI 契約：新命令 `vcp gc scan`；`submit select` 的 `--none`，`--record` 收 `<id>@<ref>`；新字
+  `selection=unticked`（`select`、`status`；`final` 對已記的空選取報 `selection=differs`）與 `--json` 的 `selection.resolved`；失敗的 `sync` 與 `upload`
+  的 `sync_failed:` 也帶 `cli_warnings=`；`status`、`report`、`final` 的選取比對改以標籤為準。沒有新的 `reason=`
+  字彙。
+- API：`VcpError.cli_warnings`（`PlatformError(cli_warnings=)` 照舊可用）與
+  `vcp.submit.platforms.base.with_cli_warnings`；`SubmissionLedger.refs_of`、`owners`；`vcp.submit.select.resolve`；
+  `vcp.train.status.checkpoint_dirs`；backup `Collector` 的記錄端（`Recorder`、`attempt`）與 `walk_all(split=)`；
+  `vcp.core.atomic.append_whole_line`。
+
+### Added
+- `vcp submit select --none`：記下「平台上一發都沒勾」，寫一列 `chosen: []`（最新一列已是空的就不寫；之後再
+  `--record` 以新列為準）。`selection=unticked` 單獨不 WARN；有 `final` 列時是 `unticked,differs`、WARN，因為平台
+  會照自己的規則挑，vcp 不知道挑了哪幾發。不判 `slots`。
+- `--record <id>@<ref>`：同一個 id 傳過不只一次時，指定勾的是哪一發；ref 要是那個 id 的上傳（`uploaded`、
+  `scored`、`errored` 列的 `platform_ref`），否則 `not_found:`。`report` 只標那一發；比對的單位仍是 submission
+  標籤，所以 `slots` 數的是不同標籤數。同一個 id 同時以 `<id>` 與 `<id>@…` 出現、或兩項指到同一個 ref →
+  `invalid:`。
+- `vcp gc scan [--root DIR]… [--min-mib M] [--no-record] [--json]`：磁碟盤點。掃 data root（遞迴）、每個 run 的
+  檢查點目錄（不遞迴）與 `--root`；每個大項目（預設 ≥ 100 MiB）印一行：類別（`protected` `debris` `referenced`
+  `rebuildable` `record` `unreferenced`）、大小、引用者，有 `train upload` 驗過的副本時加 `copy`，逐位元相同的
+  複本加 `duplicate of`。只讀正本（run 卡、`train.yaml`、台帳、預登記、backup 清單與目的地、產物 manifest 的
+  input），不讀 provenance 索引；不上鎖；**不刪任何檔**，也沒有刪除模式——所以 RSNA 收尾後記與賽後報告寫的
+  `vcp gc --dry-run` 改名為 `gc scan`。有引用沒讀到（`skipped=`）、有目錄讀不了（`unreadable=`）、有 run 還在
+  `running`（`running=`）時 WARN。
+- 產物 `artifacts/gc_scan/<id>/`（id `gc-<時間>-<nonce>`；`scan.json` + `items.jsonl`）：每次掃描寫一份，記下當時
+  vcp 的紀錄有沒有引用每個大項目，人刪了檔之後它就是證據；`--no-record` 不寫（VERDICT `scan=none`）。
+
+### Changed
+- `foreign:<ref>` 條目在讀取時解析：ref 之後被台帳認成自己某個 id 的上傳，就讀成那個 id。台帳照寫人說的；0.16.0
+  對這種條目的 `differs` 誤報與 `report` 不標都消失。`select` 記這種條目時多印一行 `note:`。
+- 失敗的 `sync`（`sync_failed:`、CLI 非 0、`platform_response:`；`kaggle_not_found:` 時是 `cli_warnings=0`）與
+  `upload` 上傳前同步的 `sync_failed:`，VERDICT 也帶 `cli_warnings=<n>`；某一頁內容壞掉時，這一頁與前面頁的警告行
+  一起算。FAIL 只有個數，行在 log。
+- 每日 log `logs/vcp-<日期>.jsonl` 在 Windows 上的行尾從 CRLF 改成 LF（#63 換掉了 `logging.FileHandler`）。
+- `train status` 的 `.tmp` 掃描改用 `os.scandir`：不進符號連結與 junction（之前指回上層的 junction 會一路繞到
+  reparse 上限）；讀不了的目錄每個只略過一次，記一筆 WARNING、印一行 `tmp_scan: skipped <path> (<Class>)`，不再
+  ABORT；連結以它自己的路徑列出，指向不存在目標的 `.tmp` 連結也列。VERDICT 與 `--json` 不變（#64）。
+- `console_marker` 讀不到 console 時記 WARNING（檔案不存在只記 DEBUG）；`status_cmd`、`_final_locked`、`train_run`
+  拆成小函式，輸出不變（#64）。
+
+### Fixed
+- 其他只增的 jsonl 寫到一半失敗（磁碟滿、被中斷）不再留下半列：量測台帳（`readings`、`judgements`、`sigma`）、
+  `prereg.log.jsonl`、`supersession.jsonl`、`history.jsonl`、`anchors.log.jsonl`、`unseal.jsonl`、
+  `backup.log.jsonl`、`submissions.jsonl` 與每日 log 都經 `append_whole_line`，失敗時只截掉自己寫的位元組（#63）。
+  之前黏上去的半列會讓之後讀它的命令 FAIL `bad ledger row`，或讓 `backup verify` 永遠報 `bad_stamps:`。
+- `stamp()` 在 Linux 上也把 1000 年以前的年份補到四位（glibc 的 `%Y` 印 `1-01-01`，Windows 印 `0001-01-01`）；
+  四位數年份的輸出不變。
+
+### 相容性與升級
+- 0.16.0 讀到空的 `chosen`（`select --none` 寫的）會 FAIL `bad ledger row`（每個 submit 寫入命令、`status`、
+  `report`、`backup manifest`、`backup verify`）。讀寫同一份台帳的每個 checkout 或 worktree 先升到 0.17.0，才第一次
+  `select --none`（`configs` 台帳：共用它的每個 checkout；`shared` 正本：同一個 data root 的每個 worktree）；在那
+  之前 0.16 與 0.17 可以共用台帳。
+- `<id>@<ref>` 條目 0.16.0 照常載入，但讀錯：`status`、`select`、`final` 可能誤報 `differs`，條目數與標籤數不同時
+  誤報 `slots`，`report` 不標這些列。多半只會多報、不會 FAIL；例外是沒有 `final` 列、可選的 id 有兩個以上、記了
+  `A@1,A@2` 時，0.17.0 報 `slots`（不同標籤數 1），0.16.0 照條目數報 `ok`。建議升級，不擋。
+- `foreign:<ref>` 的解析只改讀法；同一份台帳在 0.17.0 的 `differs` 比 0.16.0 少（少的都是誤報）。
+- `gc_scan` 是新的產物 kind；舊 vcp 的 `artifact status`、`verify`、`clean` 與 provenance 索引不分 kind，照常
+  處理。backup 清單的位元組不變（重構前先鎖了 golden）。
+- 在 Windows 上讀每日 log 的工具若依賴 CRLF，要改成按 LF 切行。
+- 不需要遷移：0.16.0 寫的每一列在 0.17.0 意思不變。
+
+### 已知限制
+- 見 spec §12 與後記 §1、§2.2。主要是：
+  - 平台的勾選仍讀不到（kaggle CLI 2.2.5 沒有對應旗標）；`--none` 時平台會計哪幾發，vcp 不知道；
+  - 沒有 ref 的一發只能用裸 id 記，ref 含逗號的條目寫不出來；
+  - 失敗的 `sync` 只帶警告的個數，本機 `OSError` 的 ABORT 不帶；
+  - gc 只知道 vcp 自己的紀錄，`unreferenced` 不等於可以刪；只以 sha 記的權重（`eval ingest --weights`、kernel 的
+    `WeightRef`）不算引用；
+  - gc 不跟隨連結，也還不說有連結沒走（後記待辦 10）；硬連結算兩次；壓縮或重新打包的複本認不出來；符號連結
+    迴圈讓整次掃描 ABORT（停下，不給錯的分類）；很大的 `--root` 沒有進度輸出；
+  - 整列 append 不加鎖：檢查與截斷之間有短窗口，硬殺與斷電不涵蓋。
+
 ## [0.16.0] - 2026-11-01
 
 RSNA Knee 收尾後記（`docs/superpowers/plans/2026-10-23-rsna-wrapup-followups.md`）§1 的 1b、§2、§3（#58、#61；

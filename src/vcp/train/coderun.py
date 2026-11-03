@@ -48,6 +48,7 @@ __all__ = [
     "snapshot_state",
     "untracked_notice",
     "untracked_total",
+    "warnings",
     "write_all",
 ]
 
@@ -244,6 +245,18 @@ def untracked_total(results: list[RootResult]) -> int | None:
     if not git_roots:
         return None
     return sum(len(r.scan.untracked_code) for r in git_roots)
+
+
+def warnings(state: SnapshotState, missing: list[str], untracked: int | None) -> list[str]:
+    """The WARN lines about a run's code: a root without a snapshot, and untracked code that went
+    into a snapshot (spec 2026-10-31 §5.1). The arguments are what ``snapshot_state`` and
+    ``untracked_total`` said, so the VERDICT and its warnings read the same values."""
+    lines = []
+    if state != "ok":
+        lines.append(f"code_snapshot={state} (code_missing={','.join(missing)})")
+    if untracked:
+        lines.append(f"untracked_code={untracked}")
+    return lines
 
 
 def untracked_notice(results: list[RootResult]) -> str | None:

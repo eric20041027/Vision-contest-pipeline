@@ -50,6 +50,7 @@ from vcp.train.coderun import (
     untracked_total,
     write_all,
 )
+from vcp.train.coderun import warnings as code_warnings
 from vcp.train.disk import (
     DEFAULT_MIN_FREE_GIB,
     DiskFailure,
@@ -908,20 +909,9 @@ def _run_attempt(spec: RunSpec, p: _Prepared, results: list[RootResult]) -> _Att
     )
 
 
-def _code_warnings(results: list[RootResult]) -> list[str]:
-    """spec 2026-10-31 §5.1: a root without a snapshot, and untracked code in a snapshot."""
-    warnings = []
-    state, missing = snapshot_state(results)
-    if state != "ok":
-        warnings.append(f"code_snapshot={state} (code_missing={','.join(missing)})")
-    untracked = untracked_total(results)
-    if untracked:
-        warnings.append(f"untracked_code={untracked}")
-    return warnings
-
-
-def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
-    """What is worth a WARN about the run itself, before what its receipts say."""
+def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted, code: list[str]) -> list[str]:
+    """What is worth a WARN about the run itself, before what its receipts say; ``code`` is what
+    ``coderun.warnings`` says about the code roots."""
     warnings = list(a.warnings)
     if spec.seed is None:
         warnings.append("seed=none")
@@ -936,11 +926,13 @@ def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
         warnings.append(f"git_changed={','.join(a.git_changed)}")
     if unavailable(p.disk_check):
         warnings.append("disk_check=unavailable")
-    return [*warnings, *_code_warnings(a.code)]
+    return [*warnings, *code]
 
 
 def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
-    warnings = _run_warnings(spec, p, a)
+    code_state, code_missing = snapshot_state(a.code)
+    untracked = untracked_total(a.code)
+    warnings = _run_warnings(spec, p, a, code_warnings(code_state, code_missing, untracked))
     info = provenance(a.card, data_root=p.data_root, configs_root=p.configs_root)
     observed_beyond = sorted(set(info.observed) - set(p.trained_on))
     if observed_beyond:
@@ -950,7 +942,6 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
     source_audit_missing = sum(1 for r in a.card.access if r.identity == "full_hash")
     if source_audit_missing:
         warnings.append("source_audit=missing")
-    code_state, code_missing = snapshot_state(a.code)
     return RunResult(
         record=a.record,
         card=a.card,
@@ -976,7 +967,7 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         disk_failure=a.disk_failure,
         code_snapshot=code_state,
         code_missing=code_missing,
-        untracked_code=untracked_total(a.code),
+        untracked_code=untracked,
     )
 
 

@@ -47,6 +47,7 @@ from vcp.train.coderun import (
     code_section,
     plan_code,
     snapshot_state,
+    trace_summary,
     untracked_notice,
     untracked_total,
     write_all,
@@ -158,6 +159,9 @@ class RunResult(BaseModel):
     code_missing: list[str] = Field(default_factory=list)
     untracked_code: int | None = None
     code_changed: int = 0  # listed files the child changed or removed (§5.3)
+    # §5.3: what the attempt's import traces say, and their gaps (outside + unlisted + changed).
+    code_trace: str = "none"
+    code_gaps: int = 0
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -954,8 +958,9 @@ def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted, code: list[str]) -
 def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
     code_state, code_missing = snapshot_state(a.code)
     untracked = untracked_total(a.code)
+    trace = trace_summary(p.data_root, a.record, a.n)
     warnings = _run_warnings(
-        spec, p, a, code_warnings(code_state, code_missing, untracked, a.code_changed)
+        spec, p, a, code_warnings(code_state, code_missing, untracked, a.code_changed, trace=trace)
     )
     info = provenance(a.card, data_root=p.data_root, configs_root=p.configs_root)
     observed_beyond = sorted(set(info.observed) - set(p.trained_on))
@@ -993,6 +998,8 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         code_missing=code_missing,
         untracked_code=untracked,
         code_changed=a.code_changed,
+        code_trace=trace.state,
+        code_gaps=trace.gaps,
     )
 
 

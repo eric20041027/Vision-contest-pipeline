@@ -87,3 +87,27 @@ class CodeSection(_Strict):
     rules: int
     excluded_dirs: list[str]
     roots: list[CodeRoot]
+
+
+class TraceDoc(_Strict):
+    """``trace.json`` of a ``code_trace`` artifact (spec §4.4): what one process of a training
+    attempt imported, by class. ``roots`` are the ``{label, snapshot}`` it was held against;
+    ``counts`` always has the seven classes; ``outside`` lists absolute posix paths and
+    ``unlisted`` / ``changed`` ``<label>:<path>``, each sorted and cut to the first 50 (the counts
+    stay exact). ``complete`` is no ``outside``, ``unlisted`` or ``changed`` module: a generated
+    one is not a gap."""
+
+    schema_version: int = 1
+    run_id: str
+    attempt: int
+    executable: str
+    python: str
+    roots: list[dict[str, str]]
+    counts: dict[str, int]
+    generated_by: dict[str, int]
+    outside: list[str]
+    unlisted: list[str]
+    changed: list[str]
+    complete: bool
+    taken_at: str
+    vcp_version: str

@@ -7,7 +7,8 @@ directory is bad input, every other problem with a root is only that root's ``re
 ``env.<n>.json`` records them (``code_section``) and the run binds every snapshot as a
 ``code.<label>`` ref (``attach_code_refs``). A root without a snapshot is a WARN, never a reason
 not to train: that refusal belongs to a run that carries an authorization. After the child exits,
-``changed_since_snapshot`` hashes the files each snapshot lists once more (§5.3).
+``changed_since_snapshot`` hashes the files each snapshot lists once more, and ``trace_summary``
+reads the import traces the child's ``Session`` left on the attempt (§5.3).
 """
 
 from __future__ import annotations
@@ -28,13 +29,15 @@ from vcp.code.roots import (
     skip_dirs_for,
 )
 from vcp.code.scan import IndexEntry, RootScan, scan_root
-from vcp.code.schema import CodeRoot, CodeSection, RootReason
+from vcp.code.schema import CodeRoot, CodeSection, RootReason, TraceDoc
 from vcp.code.snapshot import SnapshotOutcome, write_snapshot
+from vcp.code.trace import GAP_CLASSES, TRACE_FILE
+from vcp.code.trace import KIND as TRACE_KIND
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
-from vcp.core.paths import path_key, store_path
+from vcp.core.paths import artifact_dir, path_key, store_path
 from vcp.data.evidence import artifact_ref
-from vcp.data.evidence_ref import CODE_ROLE
+from vcp.data.evidence_ref import CODE_ROLE, CODE_TRACE_ROLE, EvidenceRef, current
 from vcp.train.env import ProbeReport
 from vcp.train.records import bind_ref
 from vcp.train.schema import TrainRecord
@@ -45,12 +48,15 @@ __all__ = [
     "CodePlan",
     "RootResult",
     "SnapshotState",
+    "TraceState",
+    "TraceSummary",
     "attach_code_refs",
     "changed_since_snapshot",
     "check_child_vcp",
     "code_section",
     "plan_code",
     "snapshot_state",
+    "trace_summary",
     "untracked_notice",
     "untracked_total",
     "warnings",
@@ -58,6 +64,7 @@ __all__ = [
 ]
 
 SnapshotState = Literal["ok", "partial", "none"]
+TraceState = Literal["complete", "incomplete", "none"]
 COMMAND = "train.run"  # who holds a snapshot's lock, as the lock file says
 NOTICE_PATHS = 5  # untracked paths the line before the child names; the count stays exact
 CHANGED_PATHS = 5  # changed paths the code_changed note lists; the count stays exact
@@ -254,12 +261,18 @@ def untracked_total(results: list[RootResult]) -> int | None:
 
 
 def warnings(
-    state: SnapshotState, missing: list[str], untracked: int | None, changed: int
+    state: SnapshotState,
+    missing: list[str],
+    untracked: int | None,
+    changed: int,
+    *,
+    trace: TraceSummary,
 ) -> list[str]:
     """The WARN lines about a run's code: a root without a snapshot, untracked code that went
-    into a snapshot (spec 2026-10-31 §5.1), and listed files the child changed (§5.3). The
-    arguments are what ``snapshot_state``, ``untracked_total`` and ``changed_since_snapshot``
-    said, so the VERDICT and its warnings read the same values."""
+    into a snapshot (spec 2026-10-31 §5.1), listed files the child changed and an import trace
+    with gaps (§5.3). The arguments are what ``snapshot_state``, ``untracked_total``,
+    ``changed_since_snapshot`` and ``trace_summary`` said, so the VERDICT and its warnings read
+    the same values. No trace is no WARN: most children never use ``Session``."""
     lines = []
     if state != "ok":
         lines.append(f"code_snapshot={state} (code_missing={','.join(missing)})")
@@ -267,6 +280,8 @@ def warnings(
         lines.append(f"untracked_code={untracked}")
     if changed:
         lines.append(f"code_changed={changed}")
+    if trace.state == "incomplete":
+        lines.append(f"code_trace=incomplete (code_gaps={trace.gaps})")
     return lines
 
 
@@ -323,3 +338,37 @@ def changed_since_snapshot(results: list[RootResult]) -> CodeChange:
             paths.extend(f"{label}:{path}" for path in differing[:CHANGED_PATHS])
             roots.append(label)
     return CodeChange(count=count, paths=paths[:CHANGED_PATHS], roots=roots)
+
+
+@dataclass(frozen=True)
+class TraceSummary:
+    """The import traces of one attempt (spec §5.3): ``none`` when its children left none,
+    ``complete`` when every one reads back complete, ``incomplete`` otherwise; ``gaps`` sums their
+    ``outside + unlisted + changed`` (a trace that cannot be read adds none, and is a gap of its
+    own kind: nothing says what it held)."""
+
+    state: TraceState
+    gaps: int
+
+
+def _trace_doc(data_root: Path, ref: EvidenceRef) -> TraceDoc | None:
+    path = artifact_dir(data_root, TRACE_KIND, ref.artifact_id) / TRACE_FILE
+    try:
+        return TraceDoc.model_validate_json(path.read_bytes())
+    except (OSError, ValueError):  # pydantic's ValidationError is a ValueError
+        return None
+
+
+def trace_summary(data_root: Path, record: TrainRecord, attempt: int) -> TraceSummary:
+    """What the ``code_trace`` refs of ``attempt`` say, picked by kind and role."""
+    refs = [
+        r
+        for r in current(record.evidence)
+        if r.kind == TRACE_KIND and r.role == CODE_TRACE_ROLE and r.attempt == attempt
+    ]
+    if not refs:
+        return TraceSummary(state="none", gaps=0)
+    docs = [_trace_doc(data_root, ref) for ref in refs]
+    gaps = sum(doc.counts.get(cls, 0) for doc in docs if doc is not None for cls in GAP_CLASSES)
+    complete = all(doc is not None and doc.complete for doc in docs)
+    return TraceSummary(state="complete" if complete else "incomplete", gaps=gaps)

@@ -47,7 +47,13 @@ class Session:
         root = resolve_data_root(data_root)
         if not has_record(root, run_id):
             raise ValidationFailed(f"no training record for run {run_id!r} under {root}")
-        return cls(run_id, root)
+        session = cls(run_id, root)
+        # spec 2026-10-31 §5.2: the first session of a process traces its imports at exit. Not
+        # imported at the top: the trace module imports the training layer.
+        from vcp.code import trace
+
+        trace.arm(session)
+        return session
 
     @property
     def attempt(self) -> int:

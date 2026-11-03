@@ -1,6 +1,7 @@
 """``vcp train run`` snapshots the code it runs (spec 2026-10-31 §5.1 steps 2-5 and 7-9, §10.2):
 every root is planned and scanned before the first write, written or reused under ``own_writes``,
-recorded in ``env.<n>.json`` and bound to the run as a ``code.<label>`` ref."""
+recorded in ``env.<n>.json`` and bound to the run as a ``code.<label>`` ref; a child that uses
+``Session`` traces what it imported into a ``code_trace.a<n>.<seq>`` ref (§5.2)."""
 
 import builtins
 import errno
@@ -8,16 +9,20 @@ import json
 import os
 import re
 import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 import helpers
 import vcp
 from helpers import FAKE, git_repo, seed_train
+from vcp.artifact.store import load_manifest
+from vcp.cli import app
 from vcp.code import roots as code_roots
-from vcp.code import rules
+from vcp.code import rules, trace
 from vcp.code.roots import Editable, canonical_name
 from vcp.code.schema import Distribution
 from vcp.code.snapshot import SnapshotOutcome, load_index
@@ -549,6 +554,157 @@ def test_a_snapshot_damaged_during_the_run_does_not_cost_the_run(roots, work, da
     (note,) = _code_changed_notes(roots)
     assert (note["value"], note["paths"], note["roots"]) == (1, ["cwd:helper.py"], ["cwd"])
     assert res.code_changed == 1 and "code_changed=1" in res.warnings
+
+
+# -- what the child imported (spec §5.2, §5.3 third point) ----------------------------------------
+
+SESSION_CHILD = "from vcp.train import Session\nSession.current()\n"
+
+
+def _child_first(work: Path, head: str) -> None:
+    """``fake_train.py`` that runs ``head`` (Python source) before ``FAKE``."""
+    (work / "fake_train.py").write_bytes((head + FAKE).encode())
+
+
+def _stray_child(work: Path, tmp_path: Path) -> Path:
+    """A child that imports ``stray`` from a directory no root, stdlib or site dir holds."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "stray.py").write_bytes(b"S = 1\n")
+    head = f"import sys\nsys.path.insert(0, {str(elsewhere)!r})\nimport stray\n" + SESSION_CHILD
+    _child_first(work, head)
+    return elsewhere / "stray.py"
+
+
+def _trace_refs(roots, run_id="r"):
+    """The run's trace refs, picked by kind and role."""
+    record = load_record(roots.data, run_id)
+    return [r for r in record.evidence if r.kind == "code_trace" and r.role == "code_trace"]
+
+
+def _trace_doc(roots, artifact_id: str) -> dict:
+    path = artifact_dir(roots.data, "code_trace", artifact_id) / "trace.json"
+    return json.loads(path.read_bytes())
+
+
+def test_a_session_child_importing_only_root_code_is_traced(roots, work, monkeypatch):
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    (work / "helper.py").write_bytes(b"VALUE = 1\n")
+    _child_first(work, "import helper\n" + SESSION_CHILD)
+    res = train_run(_spec(roots, work))
+    assert res.attempt.exit_code == 0
+    assert (res.code_trace, res.code_gaps) == ("complete", 0)
+    assert not any(w.startswith("code_trace=") for w in res.warnings)
+    (ref,) = _trace_refs(roots)
+    doc = _trace_doc(roots, ref.artifact_id)
+    assert doc["complete"] and doc["counts"]["outside"] == 0 and doc["roots"][0]["label"] == "cwd"
+    assert [r.name for r in load_record(roots.data, "r").evidence if r.kind == "code_trace"] == [
+        "code_trace.a1.1"
+    ]
+    assert (ref.artifact_id, ref.binding, ref.attempt) == ("r-a1-t1", "session", 1)
+    assert doc["counts"]["root"] >= 3  # fake_train.py, helper.py and the vcp modules it loaded
+    assert (doc["run_id"], doc["attempt"], doc["unlisted"], doc["changed"]) == ("r", 1, [], [])
+    events = [e for e in read_events(roots.data, "r") if e["event"] == "evidence"]
+    assert [e["name"] for e in events if e["kind"] == "code_trace"] == ["code_trace.a1.1"]
+    assert "code_trace.a1.1" in [r.name for r in load_run(roots.data, "r").evidence]
+
+
+def test_a_module_outside_every_root_makes_the_trace_incomplete(roots, work, tmp_path, monkeypatch):
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    stray = _stray_child(work, tmp_path)
+    res = train_run(_spec(roots, work))
+    assert res.attempt.exit_code == 0
+    assert (res.code_trace, res.code_gaps) == ("incomplete", 1)
+    assert "code_trace=incomplete (code_gaps=1)" in res.warnings
+    (ref,) = _trace_refs(roots)
+    doc = _trace_doc(roots, ref.artifact_id)
+    assert doc["outside"] == [stray.resolve().as_posix()] and not doc["complete"]
+
+
+# atexit runs handlers last-registered first: `before` runs just before the trace, `after` after.
+BRACKETED_SESSION = """import atexit, sys
+_seen = {}
+atexit.register(lambda: print("NEW_AT_EXIT", sorted(set(sys.modules) - _seen["before"])))
+from vcp.train import Session
+Session.current()
+atexit.register(lambda: _seen.update(before=set(sys.modules)))
+"""
+
+
+def test_the_trace_imports_nothing_at_exit(roots, work, monkeypatch):
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    _child_first(work, BRACKETED_SESSION)
+    res = train_run(_spec(roots, work))
+    assert res.attempt.exit_code == 0 and res.code_trace == "complete"
+    console_text = (run_dir(roots.data, "r") / res.attempt.console).read_text(encoding="utf-8")
+    assert "NEW_AT_EXIT []" in console_text
+
+
+def test_a_failing_trace_keeps_the_exit_code(roots, work, monkeypatch):
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    broken = "import vcp.code.trace as t\nt.write_trace = lambda *a, **k: 1 / 0\n"
+    _child_first(work, broken + SESSION_CHILD)
+    res = train_run(_spec(roots, work, command=[sys.executable, "fake_train.py", "3"]))
+    assert res.attempt.exit_code == 3 and res.code_trace == "none"
+    console_text = (run_dir(roots.data, "r") / res.attempt.console).read_text(encoding="utf-8")
+    assert "[vcp] code trace skipped: ZeroDivisionError" in console_text
+    assert not _trace_refs(roots) and not (roots.data / "artifacts" / "code_trace").exists()
+
+
+def test_a_trace_id_that_is_taken_moves_to_the_next_seq(roots, work):
+    """``ArtifactWriter``'s ``exists:`` is seq + 1; the inputs are the snapshots, named
+    ``snapshot.<label>`` (open point 9), and a trace that cannot be read is ``incomplete``."""
+    seed_train(roots)
+    train_run(_spec(roots, work))  # a child without Session: no trace yet
+    main = types.ModuleType("__main__")
+    main.__file__ = str(work / "fake_train.py")
+    (roots.data / "artifacts" / "code_trace" / "r-a1-t1").mkdir(parents=True)  # a crashed writer
+    first = trace.write_trace("r", roots.data, 1, modules={"__main__": main})
+    second = trace.write_trace("r", roots.data, 1, modules={"__main__": main})
+    assert (first, second) == ("r-a1-t2", "r-a1-t3")
+    assert [r.name for r in _trace_refs(roots)] == ["code_trace.a1.2", "code_trace.a1.3"]
+    spec = load_manifest(roots.data, "code_trace", first).spec
+    sid = _env(roots)["code"]["roots"][0]["snapshot"]
+    assert [(i.name, i.path) for i in spec.inputs] == [
+        ("snapshot.cwd", f"artifacts/code_snapshot/{sid}/snapshot.json")
+    ]
+    assert (spec.params, spec.dataset, spec.plan_id) == (
+        {"run": "r", "attempt": "1"},
+        "tiny",
+        "fixed-v1",
+    )
+    assert _trace_doc(roots, first)["counts"]["root"] == 1
+    record = load_record(roots.data, "r")
+    assert coderun.trace_summary(roots.data, record, 1) == coderun.TraceSummary("complete", 0)
+    assert coderun.trace_summary(roots.data, record, 2) == coderun.TraceSummary("none", 0)
+    (artifact_dir(roots.data, "code_trace", second) / "trace.json").write_bytes(b"{")
+    assert coderun.trace_summary(roots.data, record, 1).state == "incomplete"
+
+
+def test_the_verdict_always_says_code_trace(roots, work, tmp_path, monkeypatch):
+    seed_train(roots)
+    base = ["train", "run", "--dataset", "tiny", "--plan", "fixed-v1", "--trained-on", "train"]
+    base += ["--cwd", str(work), "--checkpoints", "weights/*.pt", "--final", "weights/best.pt"]
+
+    def verdict(run_id):
+        out = CliRunner().invoke(
+            app, [*base, "--run", run_id, "--", sys.executable, "fake_train.py", "0"]
+        )
+        return out, [line for line in out.output.splitlines() if line.startswith("VERDICT ")][-1]
+
+    out, v = verdict("r1")  # no Session in the child: no trace
+    assert out.exit_code == 0 and "code_trace=none" in v and "code_gaps=" not in v
+    assert v.index("code_snapshot=") < v.index("code_trace=")
+    helpers.trace_on(monkeypatch)
+    _stray_child(work, tmp_path)
+    out, v = verdict("r2")
+    assert out.exit_code == 0 and "status=WARN" in v
+    assert re.search(r" code_trace=incomplete( |$)", v) and re.search(r" code_gaps=1( |$)", v)
+    assert "warning: code_trace=incomplete (code_gaps=1)" in out.output
 
 
 def test_code_tracking_is_off_unless_a_test_turns_it_on(monkeypatch):

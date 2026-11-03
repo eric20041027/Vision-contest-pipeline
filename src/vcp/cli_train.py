@@ -154,6 +154,7 @@ def run_cmd(
             "free_gib": free_gib(res.disk) if res.disk is not None else UNKNOWN,
             # spec 2026-10-31 §6: always, in the order code, code_snapshot, code_trace.
             "code_snapshot": res.code_snapshot,
+            "code_trace": res.code_trace,
         }
         if res.disk is not None and unavailable(res.disk):
             fields["disk_check"] = "unavailable"
@@ -178,6 +179,8 @@ def run_cmd(
             fields["code_missing"] = ",".join(res.code_missing)
         if res.code_changed:
             fields["code_changed"] = res.code_changed
+        if res.code_trace == "incomplete":
+            fields["code_gaps"] = res.code_gaps
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":

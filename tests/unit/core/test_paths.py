@@ -1,3 +1,5 @@
+import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -128,3 +130,35 @@ def test_check_relative_path_rejects(bad):
 @pytest.mark.parametrize("good", ["a", "a/b.txt", "runs/r1/run.yaml", ".hidden/x"])
 def test_check_relative_path_accepts(good):
     paths.check_relative_path(good)
+
+
+def test_path_key_is_one_string_for_the_spellings_of_one_path(tmp_path):
+    (tmp_path / "d").mkdir()
+    assert paths.path_key(tmp_path / "d" / ".." / "d") == paths.path_key(tmp_path / "d")
+    assert paths.path_key(tmp_path / "missing") == paths.path_key(tmp_path / "missing" / ".")
+    if sys.platform == "win32":  # the platform's case: drive-letter and name case do not matter
+        assert paths.path_key(tmp_path / "D") == paths.path_key(tmp_path / "d")
+
+
+def test_path_id_hashes_the_path_key(tmp_path):
+    expected = hashlib.sha256(paths.path_key(tmp_path).encode("utf-8")).hexdigest()[:16]
+    assert paths.path_id(tmp_path) == expected
+
+
+def test_is_under_takes_the_directory_itself_and_what_is_inside(tmp_path):
+    base = tmp_path / "data"
+    (base / "sub").mkdir(parents=True)
+    assert paths.is_under(base, base)
+    assert paths.is_under(base / "sub" / "f.py", base)
+    assert paths.is_under(base / "sub" / ".." / "sub", base)
+    assert not paths.is_under(tmp_path / "data2" / "f.py", base)  # a name prefix is not a parent
+    assert not paths.is_under(tmp_path, base)
+    assert not paths.is_under(tmp_path / "other", base)
+
+
+def test_key_within_compares_keys_without_touching_the_disk():
+    sep = os.sep
+    assert paths.key_within(f"a{sep}b", f"a{sep}b")
+    assert paths.key_within(f"a{sep}b{sep}c", f"a{sep}b")
+    assert not paths.key_within(f"a{sep}bc", f"a{sep}b")
+    assert paths.key_within(f"{sep}x", sep)  # a filesystem root holds everything

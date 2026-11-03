@@ -86,13 +86,28 @@ def indexes_root(data_root: Path) -> Path:
 LEGACY_PROVENANCE_INDEX = "provenance.sqlite3"
 
 
+def path_key(path: Path) -> str:
+    """How two spellings of one path are told to be one: resolved, in the platform's case."""
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def key_within(key: str, base: str) -> bool:
+    """``key`` is ``base`` or lies below it; both are ``path_key`` strings (or built from one), so
+    nothing here touches the disk."""
+    return key == base or key.startswith(base if base.endswith(os.sep) else base + os.sep)
+
+
+def is_under(path: Path, directory: Path) -> bool:
+    """``path`` is ``directory`` itself or inside it, compared by ``path_key``."""
+    return key_within(path_key(path), path_key(directory))
+
+
 def path_id(path: Path) -> str:
     """The first 16 hex of sha256 over the resolved, platform-case-folded path (spec 2026-10-04
     §3.1): the identity of a configs root or a data root, and the name of a lock file. Spellings
     of one directory -- drive-letter case, an 8.3 short name, a junction or a symlink -- share an
     id; moving or renaming the directory gives it a new one."""
-    key = os.path.normcase(str(Path(path).resolve()))
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(path_key(path).encode("utf-8")).hexdigest()[:16]
 
 
 def provenance_index_path(data_root: Path, configs_root: Path) -> Path:

@@ -8,7 +8,7 @@
 | `REVIEW` | 上游有未知或未分類的變更（預設 `meta.*`、policy 標 UNKNOWN），要人判 | policy plugin 或預設 |
 | `BROKEN` | 上游實體被移除或證據消失 | 圖 |
 
-`dataset_diff` 的每個 `SampleChange`：`change_type ADDED|REMOVED|MODIFIED`、`changed_domains[]`（LABELS、VIEWS、GROUP、META、LABEL_SOURCE…）、`semantic_effects[]`（TRAINING_AFFECTING、EVALUATION_AFFECTING、SPLIT_AFFECTING、INPUT_AFFECTING、UNKNOWN）；`grade=fallback` 表示沒有 policy plugin 介入。比賽專屬的分類以 `register_impact_policy` 登記、`data diff --plugin … --policy …` 使用。
+`dataset_diff` 的每個 `SampleChange`：`change_type ADDED|REMOVED|MODIFIED`、`changed_domains[]`（LABELS、VIEWS、GROUP、META、LABEL_SOURCE…）、`semantic_effects[]`（TRAINING_AFFECTING、EVALUATION_AFFECTING、SPLIT_AFFECTING、INPUT_AFFECTING、UNKNOWN）；`grade=source_audit` 要兩版都有通過驗證的 source audit，否則是 `grade=fallback`；用了哪些 policy plugin 記在 summary 的 `policies`。比賽專屬的分類以 `register_impact_policy` 登記、`data diff --plugin … --policy …` 使用。
 
 ## Strategy 與 reason code
 | requested | selected | reason |
@@ -58,6 +58,7 @@ reason 字彙兩版相同，決策的 `policy_version` 分辨 v1／v2。policy �
 | `postgres-provenance-v2.md` / `-course-brief-v2.md` | v2 證據紀錄與 acceptance record / 簡報素材 |
 | `postgres-provenance-break-even-v1.json` / `.md` | E5 打平點：28 場景 × 4 方法，112 列；H5a、H5c 成立，H5b 不成立（v2 在不確定區太早選 FULL） |
 | `postgres-provenance-course-brief-v3.md` | E5 與 10/20 之後的更新、英文投影片文字 |
+| `postgres-provenance-final-report-explainer-v1.md` | 期末報告的英文說明：相關研究、PostgreSQL 實作、溯源記下了什麼、policy 與 E1–E5 |
 
 `tests/unit/provenance/test_postgres_docs.py` 斷言 evidence record 與 handoff 的精確字串（含「沒有 Absent 格」）——改這兩份文件要同步改測試。
 

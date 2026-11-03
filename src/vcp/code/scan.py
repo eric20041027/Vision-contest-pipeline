@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from vcp.code import rules
+from vcp.code.schema import RootKind
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import is_under, key_within, path_key
 from vcp.core.proc import git_environment
@@ -41,7 +42,6 @@ __all__ = [
     "snapshot_json_bytes",
 ]
 
-RootKind = Literal["git", "dir"]
 ScanReason = Literal["too_large", "unreadable", "not_found"]
 Keep = Literal["capped", "all"]
 _SNAPSHOT_SCHEMA = 1

@@ -23,7 +23,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
-from vcp.data.evidence_ref import current, labels_field
+from vcp.data.evidence_ref import evidence_count, labels_field
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
@@ -181,7 +181,7 @@ def ingest_cmd(
             "replaced": res.replaced,
             "receipts": len(res.run.access),
             "provenance": res.provenance,
-            "evidence": len(current(res.run.evidence)),
+            "evidence": evidence_count(res.run.evidence),
             "labels": labels_field(res.run.evidence),
         }
         if res.unknown:

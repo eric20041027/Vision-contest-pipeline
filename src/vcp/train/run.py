@@ -27,7 +27,7 @@ from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp, utc_now
 from vcp.data.dataset import Dataset
 from vcp.data.evidence import RunScope, check_names
-from vcp.data.evidence_ref import current, labels_field, merge_refs
+from vcp.data.evidence_ref import evidence_count, labels_field, merge_refs
 from vcp.data.schema import DatasetCard
 from vcp.data.split import SplitPlan, assert_plan_matches, load_plan
 from vcp.measure.provenance import provenance
@@ -897,7 +897,7 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         observed_beyond=observed_beyond,
         receipt_invalid=len(info.invalid),
         source_audit_missing=source_audit_missing,
-        evidence=len(current(a.card.evidence)),
+        evidence=evidence_count(a.card.evidence),
         labels=labels_field(a.card.evidence),
         evidence_changed=a.changed,
         git=a.git,

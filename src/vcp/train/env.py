@@ -11,8 +11,13 @@ import json
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from pydantic import BaseModel
+
+from vcp.code.schema import CodeSection, EnvIdentity
 from vcp.core.build import build_string
 from vcp.core.errors import VcpError
 from vcp.core.time import stamp
@@ -118,4 +123,41 @@ def snapshot(
         git=git_info(cwd, patch=patch),
         taken_at=stamp(),
         disk=disk,
+    )
+
+
+@dataclass(frozen=True)
+class EnvSections:
+    """The parts of an ``env.<n>.json`` later code reads back; None where a section is absent or
+    does not validate."""
+
+    git: GitInfo | None
+    code: CodeSection | None
+    identity: EnvIdentity | None
+
+
+def _section[T: BaseModel](data: dict[str, Any], key: str, model: type[T]) -> T | None:
+    try:
+        return model.model_validate(data.get(key))
+    except ValueError:  # pydantic's ValidationError is one; a missing or null section lands here
+        return None
+
+
+def read_sections(path: Path) -> EnvSections:
+    """The ``git``, ``code`` and ``identity`` sections of an ``env.<n>.json``, never raising.
+
+    The file is vcp's record of what a venv reported, and it may be absent (a run from before the
+    file existed), cut short, or from another vcp, so a file that is missing, not JSON or not an
+    object gives three None, and each section is validated on its own: one that fails leaves the
+    other two alone."""
+    try:
+        data = json.loads(path.read_bytes())
+    except (OSError, ValueError, RecursionError):
+        return EnvSections(git=None, code=None, identity=None)
+    if not isinstance(data, dict):
+        return EnvSections(git=None, code=None, identity=None)
+    return EnvSections(
+        git=_section(data, "git", GitInfo),
+        code=_section(data, "code", CodeSection),
+        identity=_section(data, "identity", EnvIdentity),
     )

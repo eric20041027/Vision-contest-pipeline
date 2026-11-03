@@ -19,7 +19,7 @@ from vcp.cli_common import (
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import resolve_data_root
-from vcp.data.evidence_ref import current, labels_field
+from vcp.data.evidence_ref import evidence_count, labels_field
 from vcp.train.disk import DEFAULT_MIN_FREE_GIB, UNKNOWN, free_gib, unavailable
 from vcp.train.run import RunSpec, train_run
 from vcp.train.status import status as status_view
@@ -247,7 +247,7 @@ def status_cmd(
             # up. Reported, never WARNed: no copy of them can appear any more.
             "superseded": len(st.superseded),
             "running": st.running,
-            "evidence": len(current(st.record.evidence)),
+            "evidence": evidence_count(st.record.evidence),
             "labels": labels_field(st.record.evidence),
             # 5.5: leftover `*.tmp` files; always reported, > 0 is a WARN (also while running).
             "tmp": len(st.tmp),

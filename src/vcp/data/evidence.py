@@ -17,11 +17,13 @@ from vcp.core.paths import validate_name
 from vcp.core.time import stamp
 from vcp.data.evidence_ref import (
     LABELS_ROLE,
+    RESERVED_ROLES,
     Binding,
     EvidenceKind,
     EvidenceRef,
     check_name,
     current,
+    is_reserved_name,
 )
 from vcp.data.labels import LABEL_SET_KIND, load_label_set
 
@@ -63,13 +65,26 @@ def check_evidence_file(name: str, path: Path, role: str) -> None:
     """Everything an evidence attachment needs before a byte is copied. The copy keeps the
     source's file name, so a name the artifact writer would refuse is refused here -- one of
     its own files in any case (a case-insensitive disk folds ``MANIFEST.JSON`` onto
-    ``manifest.json``), or a temp name ``clean`` may remove."""
+    ``manifest.json``), or a temp name ``clean`` may remove. The roles and names of vcp's own
+    refs (``labels``, the code layer's) are not for evidence."""
     validate_name(name)
     validate_name(role)
     if role == LABELS_ROLE:
         raise ValidationFailed(
             f"role_reserved: role {LABELS_ROLE!r} is for label sets; attach them with --labels "
             "or Session.attach_labels",
+            fields={"evidence_name": name},
+        )
+    if role in RESERVED_ROLES:
+        raise ValidationFailed(
+            f"role_reserved: role {role!r} is vcp's own (code snapshots, traces and "
+            "authorizations); pick another role",
+            fields={"evidence_name": name},
+        )
+    if is_reserved_name(name):
+        raise ValidationFailed(
+            f"role_reserved: name {name!r} is vcp's own (authorization, code.*, code_trace.*); "
+            "pick another name",
             fields={"evidence_name": name},
         )
     if not path.exists():

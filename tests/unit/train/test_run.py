@@ -842,6 +842,22 @@ def test_evidence_and_labels_are_checked_before_the_first_write(roots, work, tmp
         assert not evidence_dir.exists() or not any(evidence_dir.iterdir())
 
 
+@pytest.mark.parametrize(
+    "name", ["authorization", "code.cwd", "code_trace.a1.1", "code", "code_trace"]
+)
+def test_train_run_evidence_refuses_a_reserved_name(roots, work, tmp_path, name):
+    """`--evidence NAME=PATH` uses NAME as the role too, so the reserved names and the reserved
+    roles ("code", "code_trace") are all refused before the first write."""
+    _seed(roots)
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="^role_reserved:") as ei:
+        train_run(_spec(roots, work, evidence=[f"{name}={f}"]))
+    assert ei.value.fields == {"evidence_name": name}
+    assert not run_dir(roots.data, "r1").exists()
+    assert not (roots.data / "artifacts" / "evidence").exists()
+
+
 def test_evidence_conflict_on_resume_leaves_no_trace_of_the_second_attempt(roots, work, tmp_path):
     """The `evidence_conflict:` check must run before ANY write of the new attempt: a --resume
     that trips it (the name is already bound under another role/kind from attempt 1) must not

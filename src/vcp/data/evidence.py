@@ -127,7 +127,7 @@ def check_names(
         check_name(existing, label_set_id, LABELS_ROLE, "label_set")
 
 
-def _ref(
+def artifact_ref(
     data_root: Path,
     kind: EvidenceKind,
     artifact_id: str,
@@ -137,6 +137,8 @@ def _ref(
     attempt: int | None,
     binding: Binding,
 ) -> EvidenceRef:
+    """The reference to a committed artifact, pinned to its ``manifest.json`` as it is now. Every
+    kind of ref is made here: evidence copies, label sets, and the code layer's snapshots."""
     return EvidenceRef(
         name=name,
         role=role,
@@ -181,7 +183,7 @@ def attach_evidence(
                     fields={"evidence_name": name},
                 )
             writer.commit()
-    return _ref(
+    return artifact_ref(
         data_root,
         EVIDENCE_KIND,
         artifact_id,
@@ -218,7 +220,7 @@ def label_ref(
             f"labels_mismatch: label_set/{label_set_id}: {'; '.join(problems)}",
             fields={"label_set": label_set_id},
         )
-    return _ref(
+    return artifact_ref(
         data_root,
         LABEL_SET_KIND,
         label_set_id,

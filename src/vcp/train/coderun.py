@@ -6,7 +6,8 @@ directory is bad input, every other problem with a root is only that root's ``re
 ``own_writes``, each scanned root's snapshot is written or reused (``write_all``); the attempt's
 ``env.<n>.json`` records them (``code_section``) and the run binds every snapshot as a
 ``code.<label>`` ref (``attach_code_refs``). A root without a snapshot is a WARN, never a reason
-not to train: that refusal belongs to a run that carries an authorization.
+not to train: that refusal belongs to a run that carries an authorization. After the child exits,
+``changed_since_snapshot`` hashes the files each snapshot lists once more (§5.3).
 """
 
 from __future__ import annotations
@@ -26,10 +27,11 @@ from vcp.code.roots import (
     plan_roots,
     skip_dirs_for,
 )
-from vcp.code.scan import RootScan, scan_root
+from vcp.code.scan import IndexEntry, RootScan, scan_root
 from vcp.code.schema import CodeRoot, CodeSection, RootReason
-from vcp.code.snapshot import SnapshotOutcome, write_snapshot
+from vcp.code.snapshot import SnapshotOutcome, load_index, write_snapshot
 from vcp.core.errors import ValidationFailed
+from vcp.core.hashing import sha256_file
 from vcp.core.paths import path_key, store_path
 from vcp.data.evidence import artifact_ref
 from vcp.data.evidence_ref import CODE_ROLE
@@ -38,10 +40,13 @@ from vcp.train.records import bind_ref
 from vcp.train.schema import TrainRecord
 
 __all__ = [
+    "CHANGED_PATHS",
+    "CodeChange",
     "CodePlan",
     "RootResult",
     "SnapshotState",
     "attach_code_refs",
+    "changed_since_snapshot",
     "check_child_vcp",
     "code_section",
     "plan_code",
@@ -55,6 +60,7 @@ __all__ = [
 SnapshotState = Literal["ok", "partial", "none"]
 COMMAND = "train.run"  # who holds a snapshot's lock, as the lock file says
 NOTICE_PATHS = 5  # untracked paths the line before the child names; the count stays exact
+CHANGED_PATHS = 5  # changed paths the code_changed note lists; the count stays exact
 _MINOR = re.compile(r"^(\d+)\.(\d+)")
 
 
@@ -247,15 +253,20 @@ def untracked_total(results: list[RootResult]) -> int | None:
     return sum(len(r.scan.untracked_code) for r in git_roots)
 
 
-def warnings(state: SnapshotState, missing: list[str], untracked: int | None) -> list[str]:
-    """The WARN lines about a run's code: a root without a snapshot, and untracked code that went
-    into a snapshot (spec 2026-10-31 §5.1). The arguments are what ``snapshot_state`` and
-    ``untracked_total`` said, so the VERDICT and its warnings read the same values."""
+def warnings(
+    state: SnapshotState, missing: list[str], untracked: int | None, changed: int
+) -> list[str]:
+    """The WARN lines about a run's code: a root without a snapshot, untracked code that went
+    into a snapshot (spec 2026-10-31 §5.1), and listed files the child changed (§5.3). The
+    arguments are what ``snapshot_state``, ``untracked_total`` and ``changed_since_snapshot``
+    said, so the VERDICT and its warnings read the same values."""
     lines = []
     if state != "ok":
         lines.append(f"code_snapshot={state} (code_missing={','.join(missing)})")
     if untracked:
         lines.append(f"untracked_code={untracked}")
+    if changed:
+        lines.append(f"code_changed={changed}")
     return lines
 
 
@@ -267,3 +278,45 @@ def untracked_notice(results: list[RootResult]) -> str | None:
     paths = [f"{r.root.label}:{path}" for r in results for path in r.scan.untracked_code]
     shown = ", ".join(paths[:NOTICE_PATHS])
     return f"untracked_code={count}: {shown} (in the snapshot; git add or ignore them)"
+
+
+# -- after the child exits ------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CodeChange:
+    """What the child did to the files its snapshots list (spec §5.3): how many differ or are
+    gone, the first ``CHANGED_PATHS`` of them as ``<label>:<path>``, and the labels of the roots
+    that hold them, in root order."""
+
+    count: int
+    paths: list[str]
+    roots: list[str]
+
+
+def _differs(root: Path, entry: IndexEntry) -> bool:
+    """Is the file the index lists gone, or other bytes than the index says? A file that cannot be
+    read back differs too: nothing says it is the same."""
+    try:
+        return sha256_file(root / entry.path) != entry.sha256
+    except OSError:
+        return True
+
+
+def changed_since_snapshot(data_root: Path, results: list[RootResult]) -> CodeChange:
+    """spec §5.3: every file a root's snapshot lists, hashed again. Only the listed files are
+    looked at -- a file the child added is not code anybody snapshotted -- and a root without a
+    snapshot has nothing to compare."""
+    count = 0
+    paths: list[str] = []
+    roots: list[str] = []
+    for r in results:
+        if r.snapshot is None:
+            continue
+        label = r.root.label
+        differing = [e.path for e in load_index(data_root, r.snapshot) if _differs(r.root.path, e)]
+        if differing:
+            count += len(differing)
+            paths.extend(f"{label}:{path}" for path in differing[:CHANGED_PATHS])
+            roots.append(label)
+    return CodeChange(count=count, paths=paths[:CHANGED_PATHS], roots=roots)

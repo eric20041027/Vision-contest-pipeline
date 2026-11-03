@@ -42,6 +42,7 @@ from vcp.train.coderun import (
     CodePlan,
     RootResult,
     attach_code_refs,
+    changed_since_snapshot,
     check_child_vcp,
     code_section,
     plan_code,
@@ -156,6 +157,7 @@ class RunResult(BaseModel):
     code_snapshot: str = "none"
     code_missing: list[str] = Field(default_factory=list)
     untracked_code: int | None = None
+    code_changed: int = 0  # listed files the child changed or removed (§5.3)
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -558,6 +560,7 @@ class _Attempted:
     changed: list[str]
     disk_failure: DiskFailure | None
     code: list[RootResult]  # every code root and its snapshot, as env.<n>.json records them
+    code_changed: int  # the listed files that differ now (spec 2026-10-31 §5.3)
     uploaded: int = 0
     verified: int = 0
     skipped: int = 0
@@ -821,11 +824,17 @@ def _diagnose_disk(
 
 
 def _note_changes(
-    spec: RunSpec, p: _Prepared, n: int, digests: dict[str, str], git: GitInfo | None
-) -> tuple[list[str], list[str]]:
+    spec: RunSpec,
+    p: _Prepared,
+    n: int,
+    digests: dict[str, str],
+    git: GitInfo | None,
+    results: list[RootResult],
+) -> tuple[list[str], list[str], int]:
     """What the command changed under its own feet, each a ``note`` event: the evidence files
-    that moved, and (VCP-041, spec 2026-09-27 §4.3) HEAD and the tracked diff. Returns the names
-    and the paths."""
+    that moved, (VCP-041, spec 2026-09-27 §4.3) HEAD and the tracked diff, and (spec 2026-10-31
+    §5.3) the files the code snapshots list. Returns the names, the git changes and the number
+    of changed code files."""
     changed = moved(p.evidence, digests)
     if changed:
         append_event(
@@ -844,7 +853,19 @@ def _note_changes(
             commit=delta.commit,
             diff_sha256=delta.diff_sha256,
         )
-    return changed, git_changed
+    code = changed_since_snapshot(p.data_root, results)
+    if code.count:
+        append_event(
+            p.data_root,
+            spec.run_id,
+            "note",
+            n,
+            key="code_changed",
+            value=code.count,
+            paths=code.paths,
+            roots=code.roots,
+        )
+    return changed, git_changed, code.count
 
 
 def _merge_receipts(p: _Prepared, record: TrainRecord) -> RunCard:
@@ -887,7 +908,7 @@ def _run_attempt(spec: RunSpec, p: _Prepared, results: list[RootResult]) -> _Att
         print(notice, file=sys.stderr, flush=True)  # before the child's first line
     record, attempt, code = _execute_attempt(spec, p, attempt, n)
     disk_failure = _diagnose_disk(spec, p, attempt, n, code)
-    changed, git_changed = _note_changes(spec, p, n, digests, snap.git)
+    changed, git_changed, code_changed = _note_changes(spec, p, n, digests, snap.git, results)
     card = _merge_receipts(p, record)
     # steps 8-9
     record, card, final, registered, warnings = _finish_checkpoints(
@@ -906,6 +927,7 @@ def _run_attempt(spec: RunSpec, p: _Prepared, results: list[RootResult]) -> _Att
         changed=changed,
         disk_failure=disk_failure,
         code=results,
+        code_changed=code_changed,
     )
 
 
@@ -932,7 +954,9 @@ def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted, code: list[str]) -
 def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
     code_state, code_missing = snapshot_state(a.code)
     untracked = untracked_total(a.code)
-    warnings = _run_warnings(spec, p, a, code_warnings(code_state, code_missing, untracked))
+    warnings = _run_warnings(
+        spec, p, a, code_warnings(code_state, code_missing, untracked, a.code_changed)
+    )
     info = provenance(a.card, data_root=p.data_root, configs_root=p.configs_root)
     observed_beyond = sorted(set(info.observed) - set(p.trained_on))
     if observed_beyond:
@@ -968,6 +992,7 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         code_snapshot=code_state,
         code_missing=code_missing,
         untracked_code=untracked,
+        code_changed=a.code_changed,
     )
 
 

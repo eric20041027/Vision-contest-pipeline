@@ -176,6 +176,8 @@ def run_cmd(
             fields["untracked_code"] = res.untracked_code
         if res.code_missing:
             fields["code_missing"] = ",".join(res.code_missing)
+        if res.code_changed:
+            fields["code_changed"] = res.code_changed
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":

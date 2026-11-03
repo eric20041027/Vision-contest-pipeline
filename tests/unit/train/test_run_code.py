@@ -405,6 +405,124 @@ def test_framework_outputs_do_not_change_the_identity(roots, tmp_path, isolated_
     )
 
 
+# -- what the child changes (spec §5.3) ----------------------------------------------------------
+
+
+def _fake_with(body: str) -> bytes:
+    """``FAKE`` whose child also runs ``body`` (Python source) just before it exits."""
+    return (FAKE.replace("sys.exit(code)\n", "") + body + "sys.exit(code)\n").encode()
+
+
+APPEND_TO_HELPER = 'with open("helper.py", "ab") as f:\n    f.write(b"# edited\\n")\n'
+
+
+def _code_changed_notes(roots, run_id="r") -> list[dict]:
+    return [e for e in read_events(roots.data, run_id) if e.get("key") == "code_changed"]
+
+
+def test_a_listed_file_the_child_changes_is_noted(roots, work):
+    seed_train(roots)
+    (work / "helper.py").write_bytes(b"VALUE = 1\n")
+    (work / "fake_train.py").write_bytes(_fake_with(APPEND_TO_HELPER))
+    res = train_run(_spec(roots, work))
+    assert res.attempt.status == "finished" and res.attempt.exit_code == 0
+    events = read_events(roots.data, "r")
+    (note,) = _code_changed_notes(roots)
+    assert note["event"] == "note"
+    assert (note["value"], note["paths"], note["roots"], note["attempt"]) == (
+        1,
+        ["cwd:helper.py"],
+        ["cwd"],
+        1,
+    )
+    kinds = [e["event"] for e in events]
+    assert kinds.index("finished") < events.index(note)  # after the child, like git_changed
+    assert res.code_changed == 1 and "code_changed=1" in res.warnings
+    assert res.code_snapshot == "ok"  # the snapshot is still there; it is the files that moved on
+
+
+def test_a_new_file_or_nothing_is_no_change(roots, work):
+    seed_train(roots)
+    new_file = 'Path("new.py").write_bytes(b"X = 1\\n")\n'
+    (work / "fake_train.py").write_bytes(_fake_with(new_file))
+    first = train_run(_spec(roots, work))  # new.py is not in the snapshot: nobody listed it
+    assert first.code_changed == 0 and not _code_changed_notes(roots)
+    assert not any(w.startswith("code_changed") for w in first.warnings)
+    again = train_run(_spec(roots, work, resume=True))  # now it is listed; the child rewrites it
+    assert again.code_changed == 0 and not _code_changed_notes(roots)  # with the same bytes
+    assert not any(w.startswith("code_changed") for w in again.warnings)
+
+
+def test_a_deleted_listed_file_is_a_change(roots, work):
+    seed_train(roots)
+    (work / "helper.py").write_bytes(b"VALUE = 1\n")
+    (work / "fake_train.py").write_bytes(_fake_with('os.remove("helper.py")\n'))
+    res = train_run(_spec(roots, work))
+    (note,) = _code_changed_notes(roots)
+    assert (note["value"], note["paths"], note["roots"]) == (1, ["cwd:helper.py"], ["cwd"])
+    assert res.code_changed == 1 and "code_changed=1" in res.warnings
+
+
+def test_the_note_counts_every_change_and_lists_five_paths_of_the_changed_roots(
+    roots, work, tmp_path
+):
+    seed_train(roots)
+    for i in range(7):
+        (work / f"h{i}.py").write_bytes(b"X = 1\n")
+    quiet, busy = tmp_path / "quiet", tmp_path / "busy"
+    for directory in (quiet, busy):
+        directory.mkdir()
+        (directory / "lib.py").write_bytes(b"L = 1\n")
+    body = (
+        "for i in range(7):\n"
+        '    with open(f"h{i}.py", "ab") as f:\n'
+        '        f.write(b"# edited\\n")\n'
+        f'Path({str(busy / "lib.py")!r}).write_bytes(b"L = 2\\n")\n'
+    )
+    (work / "fake_train.py").write_bytes(_fake_with(body))
+    res = train_run(_spec(roots, work, code_roots=[quiet, busy]))
+    (note,) = _code_changed_notes(roots)
+    assert note["value"] == 8 and res.code_changed == 8 and "code_changed=8" in res.warnings
+    assert note["paths"] == [f"cwd:h{i}.py" for i in range(5)]  # the first five, root order
+    assert note["roots"] == ["cwd", "root-2"]  # root-1 (quiet) did not change
+
+
+def test_a_root_without_a_snapshot_is_not_compared(roots, work, tmp_path, monkeypatch):
+    seed_train(roots)
+    (work / "a.py").write_bytes(b"A = 1\n")
+    (work / "b.py").write_bytes(b"B = 1\n")
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    (extra / "lib.py").write_bytes(b"L = 1\n")
+    monkeypatch.setattr(rules, "MAX_FILES", 2)  # cwd has three .py files: too_large, no snapshot
+    body = (
+        f'Path({str(extra / "lib.py")!r}).write_bytes(b"L = 2\\n")\n'
+        + 'Path("a.py").write_bytes(b"A = 2\\n")\n'
+    )
+    (work / "fake_train.py").write_bytes(_fake_with(body))
+    res = train_run(_spec(roots, work, code_roots=[extra]))
+    assert (res.code_snapshot, res.code_missing) == ("partial", ["cwd"])
+    (note,) = _code_changed_notes(roots)
+    assert (note["value"], note["paths"], note["roots"]) == (1, ["root-1:lib.py"], ["root-1"])
+
+
+def test_a_listed_file_that_cannot_be_read_back_is_a_change(roots, work, monkeypatch):
+    seed_train(roots)
+    (work / "helper.py").write_bytes(b"VALUE = 1\n")
+    real = coderun.sha256_file
+
+    def denied(path):
+        if path.name == "helper.py":
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return real(path)
+
+    monkeypatch.setattr(coderun, "sha256_file", denied)
+    res = train_run(_spec(roots, work))  # the child touched nothing; vcp just cannot confirm it
+    (note,) = _code_changed_notes(roots)
+    assert (note["value"], note["paths"]) == (1, ["cwd:helper.py"])
+    assert res.attempt.status == "finished" and res.code_changed == 1
+
+
 def test_code_tracking_is_off_unless_a_test_turns_it_on(monkeypatch):
     assert os.environ["VCP_CODE_TRACE"] == "0" and code_roots.editables_of([{"name": "x"}]) == []
     helpers.trace_on(monkeypatch)

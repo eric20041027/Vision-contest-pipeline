@@ -3,8 +3,8 @@
 **影像辨識比賽的可回溯訓練紀錄。**
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.16.0](https://img.shields.io/badge/version-0.16.0-informational.svg)](CHANGELOG.md)
-[![Tests 2549](https://img.shields.io/badge/tests-2549%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.17.0](https://img.shields.io/badge/version-0.17.0-informational.svg)](CHANGELOG.md)
+[![Tests 2958](https://img.shields.io/badge/tests-2958%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -20,7 +20,7 @@ English: [README.md](README.md)
 |---|---|
 | **洩漏。** 驗證分數很好看，private 榜一開就垮：近重複的圖跨在切分兩邊、test 圖和訓練資料重疊、holdout 被偷看，或「最好的」模型其實是二十次裡挑最好的一次。 | `vcp data audit` 在切分前抓出近重複與 test 重疊。切分計畫寫一次就不再改；holdout 封存，每次打開都要寫理由、會留紀錄，決選時也會算進開啟次數。經 vcp 讀資料的訓練會留下收據，寫明它碰了哪些子集。 |
 | **一廂情願的選模。** 候選會「贏」，是因為一直量到它贏為止。 | 主張在量測候選**之前**就寫下來。`vcp eval judge` 只在它贏過主張要求數量的獨立評估基底（預設兩個）時才準入——永遠不是 N 次取最好。融合成員也用同樣的方式逐一準入。 |
-| **提交亂掉。** 第 37 發是哪個模型？配額還剩幾發？最後勾了哪兩發當 final？ | 每一發都從一組 (eval run, test run) 配對 stage，身分靠權重 hash；沒準入的候選或過了截止時間，stage 直接拒絕，上傳時扣配額，全部寫進只增不改的台帳。`vcp submit final` 依 sealed 讀數決選並封槍。（記錄你之後在平台上實際勾選的那幾發，0.16.0 才會有。） |
+| **提交亂掉。** 第 37 發是哪個模型？配額還剩幾發？最後勾了哪兩發當 final？ | 每一發都從一組 (eval run, test run) 配對 stage，身分靠權重 hash；沒準入的候選或過了截止時間，stage 直接拒絕，上傳時扣配額，全部寫進只增不改的台帳。`vcp submit final` 依 sealed 讀數決選並封槍。`vcp submit select` 再記下你在平台上實際勾選的那幾發。 |
 | **證據散掉。** 一週後沒人重建得出那個分數；隊友或 AI agent 冷接手，看不出什麼是用什麼訓練的。 | 每個命令都以一行機器可讀的 `VERDICT` 收尾，並把證據留在磁碟上。備份清單從結論反向生成、逐檔驗證。主辦方改了資料時，`vcp provenance stale` 列出哪些 run 要重做。 |
 
 vcp 來自一份賽後報告。在 2026 AIdea 海洋廢棄物偵測比賽裡，我們的驗證集對 public 榜預測得很準，但它和 private 榜的關係從來沒估計過，最終融合裡最可疑的那個組件也從沒在驗證集之外檢查過——結果 private 榜掉了 0.0108，是前段 16 隊裡最大的跌幅。上面每一條規則，都是對那次沒抓到的失誤給出的機械式回答：由命令拒絕，或由紀錄留下發生過的事，而不是靠自律。
@@ -146,7 +146,7 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 | `vcp eval` | 讀數、護欄、σ_p、預登記、判決 | `ingest`、`measure`、`anchor`、`sigma`、`preregister`、`judge`、`status`、`report` |
 | `vcp fuse` | 融合配方與成員準入 | `recipe`、`build`、`ablate` |
 | `vcp train` | 包在任何訓練命令外面，記錄它實際讀了什麼、產出什麼 | `run`、`upload`、`status` |
-| `vcp submit` | 配額、截止、候選身分、決選與封槍 | `init`、`stage`、`verify`、`upload`、`record`、`sync`、`final`、`status` |
+| `vcp submit` | 配額、截止、候選身分、決選與封槍 | `init`、`stage`、`verify`、`upload`、`record`、`sync`、`final`、`select`、`status` |
 | `vcp backup` | 從結論反向生成證據清單，分層推送與驗證 | `manifest`、`push`、`verify`、`pull`、`status` |
 | `vcp artifact` | 上面各層共用的不可變產物原語 | `create`、`show`、`verify`、`lineage`、`status`、`clean` |
 | `vcp provenance` | 資料改版會影響哪些 run；衍生索引（預設 SQLite，[PostgreSQL 可選](docs/guides/POSTGRESQL_PROVENANCE.md)） | `rebuild`、`sync`、`ingest`、`impact`、`stale`、`explain`、`graph`、`verify-index` |
@@ -155,10 +155,10 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 
 ## 路線圖
 
-`0.16.0`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
+`0.17.0`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
 
 1. **RSNA 的教訓（0.16.0）。** 記錄你在平台上實際勾選的最終提交，和 vcp 的決選不同時警告；Kaggle CLI 過舊時警告；訓練前檢查磁碟空間，磁碟滿時在判決裡寫明原因。
-2. **安全的清理報告。** `vcp gc --dry-run` 列出大型檔案與每一個被誰引用；只列不刪。
+2. **安全的清理報告（0.17.0）。** `vcp gc scan` 列出大型檔案、它們的類別與每一個被誰引用；只列不刪。
 3. **稽核 Wave 1c。** 每個產物背後的程式碼快照，以及產物授權。
 4. **`1.0.0`**，等稽核 Wave 1（1a、1b、1c）全部落地：從那之後，產物與台帳格式就是對外的承諾。
 

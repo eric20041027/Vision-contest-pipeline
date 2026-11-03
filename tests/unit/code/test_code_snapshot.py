@@ -6,6 +6,7 @@ and the integrity check that compares the artifact with its own index."""
 import errno
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -41,7 +42,7 @@ from vcp.code.snapshot import (
     snapshot_spec,
     write_snapshot,
 )
-from vcp.core import lock
+from vcp.core import atomic, lock
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.lock import file_lock
 from vcp.core.paths import artifact_dir
@@ -448,16 +449,45 @@ def test_a_missing_target_is_not_drift_while_the_source_is_there(roots, tmp_path
 # -- unwritable and full ------------------------------------------------------------------------
 
 
+def _tmp_len(target: Path) -> int:
+    """The length of the temp path ``write_once_stream`` really opens for ``target``."""
+    return len(os.path.abspath(atomic._tmp_path(target)))
+
+
+TOP_LEVEL = ("spec.json", "snapshot.json", "index.jsonl", "manifest.json", "failure.json")
+
+
 def test_unwritable_paths_claim_nothing(roots, tmp_path, monkeypatch):
-    scanned = _scan(_put(tmp_path / "src", FILES))
+    """The limit is on the temp file `.<name>.<nonce>.tmp` that is opened beside each target, not
+    on the final name: one character under the longest temp path passes, one over is refused."""
+    files = {**FILES, "pkg/" + "n" * 30 + ".py": b"z = 3\n"}
+    scanned = _scan(_put(tmp_path / "src", files))
     adir = artifact_dir(roots.data, KIND, scanned.snapshot_id)
-    longest = max(len(str(adir / "files" / e.path)) for e in scanned.entries)
+    longest = max(_tmp_len(adir / "files" / e.path) for e in scanned.entries)
+    assert longest > max(_tmp_len(adir / name) for name in TOP_LEVEL)  # it is a file that decides
+    assert longest == max(len(str(adir / "files" / e.path)) for e in scanned.entries) + 14
     monkeypatch.setattr(snapshot, "_WINDOWS", True)
     monkeypatch.setattr(snapshot, "MAX_PATH", longest - 1)
     out = write_snapshot(roots.data, scanned, command=CMD)
-    assert out == SnapshotOutcome(scanned.snapshot_id, None, "unwritable", 3, 0)
+    assert out == SnapshotOutcome(scanned.snapshot_id, None, "unwritable", 4, 0)
     assert not (roots.data / "artifacts").exists()  # no directory, so no half-written claim
-    monkeypatch.setattr(snapshot, "MAX_PATH", longest)  # the longest path that still fits
+    monkeypatch.setattr(snapshot, "MAX_PATH", longest)  # the longest temp path that still fits
+    assert write_snapshot(roots.data, scanned, command=CMD).state == "created"
+
+
+def test_the_top_level_files_are_held_to_the_same_limit(roots, tmp_path, monkeypatch):
+    """`.manifest.json.<nonce>.tmp` is the longest name the writer creates in the artifact
+    directory; a root of short names is refused, or not, by it alone."""
+    scanned = _scan(_put(tmp_path / "src", {"a.py": b"x = 1\n"}))
+    adir = artifact_dir(roots.data, KIND, scanned.snapshot_id)
+    top = max(_tmp_len(adir / name) for name in TOP_LEVEL)
+    assert top == _tmp_len(adir / "manifest.json") > _tmp_len(adir / "files" / "a.py")
+    monkeypatch.setattr(snapshot, "_WINDOWS", True)
+    monkeypatch.setattr(snapshot, "MAX_PATH", top - 1)
+    out = write_snapshot(roots.data, scanned, command=CMD)
+    assert (out.state, out.reason) == (None, "unwritable")
+    assert not (roots.data / "artifacts").exists()
+    monkeypatch.setattr(snapshot, "MAX_PATH", top)
     assert write_snapshot(roots.data, scanned, command=CMD).state == "created"
 
 
@@ -468,10 +498,16 @@ def test_a_long_path_is_nothing_to_check_off_windows(roots, tmp_path, monkeypatc
     assert write_snapshot(roots.data, scanned, command=CMD).state == "created"
 
 
-def test_two_names_that_differ_only_in_case_claim_nothing(roots, tmp_path, monkeypatch):
+@pytest.mark.parametrize("windows", [None, False])
+def test_two_names_that_differ_only_in_case_claim_nothing(roots, tmp_path, monkeypatch, windows):
+    """On every platform, not only Windows: a case-insensitive target (macOS, a share) would make
+    the writer raise `exists:` halfway, and a snapshot that cannot be restored there is not worth
+    keeping. `None` leaves `_WINDOWS` as the host has it; `False` proves the check does not
+    depend on it."""
+    if windows is not None:
+        monkeypatch.setattr(snapshot, "_WINDOWS", windows)
     src = tmp_path / "src"
     clash = _synthetic(src, [_entry("A.py"), _entry("a.py")])
-    monkeypatch.setattr(snapshot, "_WINDOWS", True)
     out = write_snapshot(roots.data, clash, command=CMD)
     assert (out.state, out.reason, out.kept) == (None, "unwritable", 2)
     assert not (roots.data / "artifacts").exists()
@@ -738,3 +774,21 @@ def test_check_snapshot_of_a_missing_or_half_written_artifact(roots, tmp_path):
         pass
     with pytest.raises(ValidationFailed, match="^partial:"):
         check_snapshot(roots.data, scanned.snapshot_id)
+
+
+@pytest.mark.parametrize("name", [SNAPSHOT_FILE, INDEX_FILE])
+def test_check_snapshot_reports_a_file_that_is_gone_from_the_manifest_and_the_disk(
+    roots, tmp_path, name
+):
+    """The manifest can be edited to stop naming a file the directory no longer has; `verify`
+    then has nothing to report, and the snapshot is still not whole."""
+    _, scanned, out, adir = _written(roots, tmp_path)
+    _manifest_edit(
+        adir, lambda doc: doc.update(files=[f for f in doc["files"] if f["name"] != name])
+    )
+    (adir / name).unlink()
+    assert store.verify(roots.data, KIND, out.snapshot_id).failed is False
+    gone = check_snapshot(roots.data, out.snapshot_id)
+    assert not gone.ok and name in gone.missing
+    with pytest.raises(IntegrityError, match="^mismatch:"):
+        write_snapshot(roots.data, scanned, command=CMD)  # reuse refuses the same directory

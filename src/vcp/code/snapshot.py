@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Literal
 
 from vcp.artifact import store
-from vcp.artifact.schema import ArtifactManifest, ArtifactSpec, check_file_name
+from vcp.artifact.schema import RESERVED_NAMES, ArtifactManifest, ArtifactSpec, check_file_name
 from vcp.artifact.writer import ArtifactWriter
 from vcp.code import rules
 from vcp.code.scan import (
@@ -35,6 +35,7 @@ from vcp.code.scan import (
     index_jsonl_bytes,
     snapshot_json_bytes,
 )
+from vcp.core import atomic
 from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.lock import LOCKS_DIR, file_lock
@@ -68,6 +69,12 @@ SNAPSHOT_PATH = re.compile(r"^artifacts/code_snapshot/(code-[0-9a-f]{16})/snapsh
 # write, or to restore on another machine. Tests patch both names, never ``os.name``.
 MAX_PATH = 259
 _WINDOWS = os.name == "nt"
+# What `write_once_stream` adds to a name for the temp file it opens beside the target
+# (`.<name>.<8 hex>.tmp`), measured on atomic's own naming so the two cannot drift apart. It is the
+# temp path that has to fit, not the final one.
+_TMP_EXTRA = len(atomic._tmp_path(Path("x")).name) - len("x")
+# The longest name the writer creates directly in the artifact directory (`manifest.json`).
+_TOP_LEVEL_NAME = max(len(name) for name in (*RESERVED_NAMES, SNAPSHOT_FILE, INDEX_FILE))
 
 WriteReason = Literal["locked", "partial", "unwritable", "drift"]
 
@@ -257,22 +264,28 @@ def _has_a_path_the_artifact_cannot_hold(scan: RootScan) -> bool:
     return False
 
 
-def _cannot_be_written_on_windows(data_root: Path, scan: RootScan, snapshot_id: str) -> bool:
-    """A kept file whose place in the artifact is longer than ``MAX_PATH``, or two kept paths that
-    differ only in case (one file on a case-insensitive disk): asked before the id is claimed, so
-    a root that cannot be written leaves no directory behind to block its own content."""
-    base = os.path.abspath(artifact_dir(data_root, KIND, snapshot_id) / FILES_DIR)
-    seen: set[str] = set()
-    for entry in scan.entries:
-        if not entry.kept:
-            continue
-        if len(base) + 1 + len(entry.path) > MAX_PATH:
-            return True
-        folded = entry.path.casefold()
-        if folded in seen:
-            return True
-        seen.add(folded)
-    return False
+def _has_a_case_clash(scan: RootScan) -> bool:
+    """Two kept paths that differ only in case are one file on a case-insensitive disk (macOS,
+    Windows, a share): the writer would raise ``exists:`` halfway, and the snapshot could not be
+    restored there. Asked on every platform, before the id is claimed."""
+    folded = [entry.path.casefold() for entry in scan.entries if entry.kept]
+    return len(set(folded)) != len(folded)
+
+
+def _too_long_for_windows(data_root: Path, scan: RootScan, snapshot_id: str) -> bool:
+    """A temp path the writer would open that is longer than ``MAX_PATH``: for a kept file, beside
+    its place under ``files/``; for the writer's own files, in the artifact directory. Asked before
+    the id is claimed, so a root that cannot be written leaves no directory behind to block its
+    own content."""
+    directory = os.path.abspath(artifact_dir(data_root, KIND, snapshot_id))
+    if len(directory) + 1 + _TOP_LEVEL_NAME + _TMP_EXTRA > MAX_PATH:
+        return True
+    base = os.path.abspath(os.path.join(directory, FILES_DIR))
+    return any(
+        len(base) + 1 + len(entry.path) + _TMP_EXTRA > MAX_PATH
+        for entry in scan.entries
+        if entry.kept
+    )
 
 
 def _copy_kept(writer: ArtifactWriter, root: Path, entry: IndexEntry) -> None:
@@ -324,7 +337,9 @@ def _write_locked(data_root: Path, scan: RootScan, snapshot_id: str) -> Snapshot
         return _reuse(data_root, scan, snapshot_id)
     if _has_a_path_the_artifact_cannot_hold(scan):
         return _outcome(scan, None, "unwritable")
-    if _WINDOWS and _cannot_be_written_on_windows(data_root, scan, snapshot_id):
+    if _has_a_case_clash(scan):
+        return _outcome(scan, None, "unwritable")
+    if _WINDOWS and _too_long_for_windows(data_root, scan, snapshot_id):
         return _outcome(scan, None, "unwritable")
     return _create(data_root, scan)
 
@@ -370,7 +385,9 @@ def check_snapshot(data_root: Path, snapshot_id: str) -> SnapshotCheck:
     mismatch = {*verified.mismatch, *verified.extra}
     missing = set(verified.missing)
     index: list[IndexEntry] | None = None
-    if INDEX_FILE not in mismatch and INDEX_FILE not in missing:
+    if not (directory / INDEX_FILE).is_file():  # whether or not the manifest still names it
+        missing.add(INDEX_FILE)
+    elif INDEX_FILE not in mismatch:
         try:
             index = _read_index(directory / INDEX_FILE, snapshot_id)
         except IntegrityError:
@@ -388,19 +405,28 @@ def check_snapshot(data_root: Path, snapshot_id: str) -> SnapshotCheck:
             mismatch.add(name)
     kept_names = {f"{FILES_DIR}/{entry.path}" for entry in index if entry.kept}
     mismatch.update(name for name in held if name not in kept_names)
-    if not _snapshot_json_holds(directory, snapshot_id, index):
+    found = _snapshot_json_state(directory, snapshot_id, index)
+    if found == "missing":
+        missing.add(SNAPSHOT_FILE)
+    elif found == "mismatch":
         mismatch.add(SNAPSHOT_FILE)
     return _result(mismatch, missing, len(index), sum(1 for entry in index if entry.kept))
 
 
-def _snapshot_json_holds(directory: Path, snapshot_id: str, index: list[IndexEntry]) -> bool:
-    """``snapshot.json`` is what the index makes of it, and the index's identity is the id."""
-    if f"code-{identity_sha256(index)[:16]}" != snapshot_id:
-        return False
+def _snapshot_json_state(
+    directory: Path, snapshot_id: str, index: list[IndexEntry]
+) -> Literal["ok", "mismatch", "missing"]:
+    """``snapshot.json`` is what the index makes of it, and the index's identity is the id. A file
+    that is not there is ``missing`` even when the manifest has stopped naming it."""
     try:
-        return (directory / SNAPSHOT_FILE).read_bytes() == snapshot_json_bytes(index)
+        on_disk = (directory / SNAPSHOT_FILE).read_bytes()
     except FileNotFoundError:
-        return True  # `store.verify` has already reported it as missing
+        return "missing"
+    if f"code-{identity_sha256(index)[:16]}" != snapshot_id or on_disk != snapshot_json_bytes(
+        index
+    ):
+        return "mismatch"
+    return "ok"
 
 
 def _result(mismatch: set[str], missing: set[str], files: int, kept: int) -> SnapshotCheck:

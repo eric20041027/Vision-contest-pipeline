@@ -401,10 +401,52 @@ def test_root_kind_ignores_git_variables_of_another_repository(tmp_path, monkeyp
     assert root_kind(plain) == "dir"
 
 
-def test_root_kind_without_git_is_dir(tmp_path, monkeypatch):
-    repo = helpers.git_repo(tmp_path / "repo", {"x.py": b"x = 1\n"})
-    monkeypatch.setattr(scan.shutil, "which", lambda name: None)
-    assert root_kind(repo) == "dir"
+def _git_unavailable(monkeypatch, how):
+    """git is not on PATH, or it refuses the repository (dubious ownership on a WSL mount, a
+    Docker bind mount, a volume that cannot hold git's lock files)."""
+    if how == "missing":
+        monkeypatch.setattr(scan.shutil, "which", lambda name: None)
+        return
+
+    def refuses(command, **kwargs):
+        err = b"fatal: detected dubious ownership in repository"
+        return subprocess.CompletedProcess(command, 128, stdout=b"", stderr=err)
+
+    monkeypatch.setattr(scan.subprocess, "run", refuses)
+
+
+@pytest.mark.parametrize("how", ["missing", "refuses"])
+def test_a_repository_git_cannot_read_is_still_git_and_is_not_scanned(how, tmp_path, monkeypatch):
+    """Scanned as a plain directory it would read and keep the gitignored CODE files (spec §7):
+    the root stays ``git`` and the scan fails closed."""
+    repo = helpers.git_repo(tmp_path / "repo", {"train.py": b"v = 1\n", ".gitignore": b"gen.py\n"})
+    _put(repo, {"gen.py": "g = 1\n", "loose.py": "l = 1\n"})
+    _never_open(monkeypatch, {"train.py", "gen.py", "loose.py"})
+    _git_unavailable(monkeypatch, how)
+    kind = root_kind(repo)
+    assert kind == "git"
+    s = scan_root(repo, kind=kind)
+    assert (s.reason, s.entries, s.untracked_code, s.excluded_paths) == ("unreadable", (), (), ())
+    assert (s.identity_sha256, s.snapshot_id) == (None, None)
+    assert root_kind(repo / "pkg" / "not-yet-created") == "git"  # below a work tree, too
+
+
+def test_a_dot_git_file_above_the_path_makes_it_git(tmp_path, monkeypatch):
+    """A linked worktree or a submodule checkout has a ``.git`` file, not a directory."""
+    top = _put(tmp_path / "wt", {".git": "gitdir: ../elsewhere/.git/worktrees/wt\n"})
+    deep = _put(top / "sub", {"deep/a.py": "x = 1\n"}) / "deep"
+    _git_unavailable(monkeypatch, "missing")
+    assert root_kind(top) == "git"
+    assert root_kind(deep) == "git"
+    assert scan_root(deep, kind=root_kind(deep)).reason == "unreadable"
+
+
+@pytest.mark.parametrize("how", ["missing", "refuses"])
+def test_a_directory_with_no_dot_git_above_it_is_dir_even_without_git(how, tmp_path, monkeypatch):
+    plain = _put(tmp_path / "plain", {"a.py": "x = 1\n", "sub/b.py": "y = 2\n"})
+    _git_unavailable(monkeypatch, how)
+    assert root_kind(plain) == "dir" and root_kind(plain / "sub") == "dir"
+    assert _paths(scan_root(plain, kind=root_kind(plain))) == ["a.py", "sub/b.py"]
 
 
 def test_every_git_call_runs_in_the_git_environment(tmp_path, monkeypatch):

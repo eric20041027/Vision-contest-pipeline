@@ -178,13 +178,30 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes] | None:
     return subprocess.run([exe, "-C", str(root), *args], capture_output=True, env=git_environment())
 
 
+def _has_dot_git(path: Path) -> bool:
+    """A ``.git`` file or directory at ``path`` or in any directory above it: a work tree, a
+    linked worktree and a submodule checkout all have one."""
+    try:
+        resolved = Path(path).resolve()
+    except (OSError, RuntimeError):  # a path that cannot be resolved is no work tree we can name
+        return False
+    return any(os.path.lexists(directory / ".git") for directory in (resolved, *resolved.parents))
+
+
 def root_kind(path: Path) -> RootKind:
-    """``git`` when ``path`` is inside a git work tree, else ``dir`` (also without git)."""
+    """``git`` when ``path`` is inside a git work tree, else ``dir``.
+
+    A tree that carries a ``.git`` entry stays ``git`` when git cannot be asked -- no git on PATH,
+    or git refuses the repository (dubious ownership on a WSL mount or a bind mount). Taken as a
+    plain directory it would be walked without ``.gitignore``, so ignored files would be read and
+    kept (spec §7); as ``git`` its scan fails closed (``unreadable``) instead."""
     try:
         proc = _git(path, "rev-parse", "--show-toplevel")
     except OSError:
-        return "dir"
-    return "git" if proc is not None and proc.returncode == 0 else "dir"
+        proc = None
+    if proc is not None and proc.returncode == 0:
+        return "git"
+    return "git" if _has_dot_git(path) else "dir"
 
 
 def _ls_files(root: Path, *args: str) -> list[str]:

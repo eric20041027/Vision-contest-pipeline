@@ -2,10 +2,11 @@
 
 Every check runs before the first file is written: the dataset and plan agree, the export
 manifests say which subsets were trained on, the config has a hash, the venv has a python, the
-command can be found, the run id is free (or resumable), and every disk the run writes to has
-room (spec 2026-10-30 §5.1). Only then the run card, the training record, the console log and
-the environment snapshot appear -- and whatever the command does next is recorded, exit code
-and all.
+command can be found, the run id is free (or resumable), the training environment answers its
+probe and its code roots are scanned (spec 2026-10-31 §5.1), and every disk the run writes to has
+room (spec 2026-10-30 §5.1). Only then the code snapshots, the run card, the training record, the
+console log and the environment snapshot appear -- and whatever the command does next is
+recorded, exit code and all.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -36,6 +38,18 @@ from vcp.measure.schema import RunCard, RunSource
 from vcp.train.attach import attach as attach_cli_evidence
 from vcp.train.attach import moved, preflight
 from vcp.train.checkpoints import expand, register, resolve_final
+from vcp.train.coderun import (
+    CodePlan,
+    RootResult,
+    attach_code_refs,
+    check_child_vcp,
+    code_section,
+    plan_code,
+    snapshot_state,
+    untracked_notice,
+    untracked_total,
+    write_all,
+)
 from vcp.train.disk import (
     DEFAULT_MIN_FREE_GIB,
     DiskFailure,
@@ -47,7 +61,7 @@ from vcp.train.disk import (
     targets,
     unavailable,
 )
-from vcp.train.env import snapshot, venv_python
+from vcp.train.env import ProbeReport, probe, snapshot, venv_python
 from vcp.train.gitstate import changed_since, require_clean
 from vcp.train.gitstate import warning as git_warning
 from vcp.train.records import (
@@ -103,6 +117,7 @@ class RunSpec(BaseModel):
     labels: list[str] = Field(default_factory=list)  # label_set ids
     require_clean: bool = False  # VCP-041: FAIL before the first write on tracked changes
     min_free_gib: float = DEFAULT_MIN_FREE_GIB  # ABORT below this free space; 0 = only record
+    code_roots: list[Path] = Field(default_factory=list)  # --code-root (spec 2026-10-31 §5.1)
     command: list[str]
     on_line: Callable[[str], None] | None = None
     rclone_runner: Runner | None = None
@@ -135,6 +150,11 @@ class RunResult(BaseModel):
     git_changed: list[str] = Field(default_factory=list)
     disk: DiskCheck | None = None  # the free space measured before the first write (§5.1)
     disk_failure: DiskFailure | None = None  # a failed attempt the disk explains (§5.3)
+    # spec 2026-10-31 §5.1: whether every code root has a snapshot, the labels of those that have
+    # none, and the untracked CODE files of the git roots (None when no root is a git root).
+    code_snapshot: str = "none"
+    code_missing: list[str] = Field(default_factory=list)
+    untracked_code: int | None = None
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -515,6 +535,8 @@ class _Prepared:
     created: bool  # a new run: its card is not on disk yet
     disk_targets: list[tuple[DiskRole, Path]]
     disk_check: DiskCheck
+    report: ProbeReport  # the training environment's probe (spec 2026-10-31 §5.1 step 2)
+    code: CodePlan  # its code roots, scanned (steps 4-5)
 
 
 @dataclass(frozen=True)
@@ -534,6 +556,7 @@ class _Attempted:
     git_changed: list[str]
     changed: list[str]
     disk_failure: DiskFailure | None
+    code: list[RootResult]  # every code root and its snapshot, as env.<n>.json records them
     uploaded: int = 0
     verified: int = 0
     skipped: int = 0
@@ -631,6 +654,19 @@ def _prepare(spec: RunSpec) -> _Prepared:
     )
     # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
     check_names([*record.evidence, *card.evidence], evidence, spec.labels)
+    # spec 2026-10-31 §5.1 steps 2-5: the probe (an ABORT here writes nothing), the training
+    # venv's vcp, and the code roots planned and scanned in memory.
+    report = probe(python)
+    check_child_vcp(report, spec.venv)
+    code = plan_code(
+        cwd=cwd,
+        command=spec.command,
+        report=report,
+        code_roots=spec.code_roots,
+        patterns=_patterns(spec),
+        data_root=data_root,
+        configs_root=configs_root,
+    )
     disk_targets, disk_check = _check_disk(spec, data_root, cwd)
     return _Prepared(
         data_root=data_root,
@@ -648,6 +684,8 @@ def _prepare(spec: RunSpec) -> _Prepared:
         created=created,
         disk_targets=disk_targets,
         disk_check=disk_check,
+        report=report,
+        code=code,
     )
 
 
@@ -694,11 +732,24 @@ def _start_attempt(
 
 
 def _snapshot_env(
-    spec: RunSpec, p: _Prepared, record: TrainRecord, attempt: Attempt, n: int
+    spec: RunSpec,
+    p: _Prepared,
+    record: TrainRecord,
+    attempt: Attempt,
+    n: int,
+    results: list[RootResult],
 ) -> tuple[TrainRecord, Attempt, EnvSnapshot]:
-    """step 6: the environment snapshot, with the tracked diff beside it, named on the attempt."""
+    """step 6: the environment snapshot, with the tracked diff beside it, named on the attempt.
+    The probe is the one ``_prepare`` ran; the code section says which snapshot each root has."""
     patch_rel = f"{TRAIN_DIR}/git.{n}.patch"
-    snap = snapshot(p.python, p.cwd, patch=(p.run_root / patch_rel, patch_rel), disk=p.disk_check)
+    snap = snapshot(
+        p.python,
+        p.cwd,
+        patch=(p.run_root / patch_rel, patch_rel),
+        disk=p.disk_check,
+        report=p.report,
+        code=code_section(p.code, results, p.data_root),
+    )
     env_rel = f"{TRAIN_DIR}/env.{n}.json"
     with (p.run_root / env_rel).open("w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(snap.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n")
@@ -816,18 +867,23 @@ def _merge_receipts(p: _Prepared, record: TrainRecord) -> RunCard:
     return card
 
 
-def _run_attempt(spec: RunSpec, p: _Prepared) -> _Attempted:
+def _run_attempt(spec: RunSpec, p: _Prepared, results: list[RootResult]) -> _Attempted:
     """Steps 5-9: everything vcp writes around the command, in the order it writes it."""
     # no-op for a new run
     record = _close_running(p.record, data_root=p.data_root, run_id=spec.run_id)
     n = len(record.attempts) + 1
     record, attempt = _start_attempt(spec, p, record, n)
-    record, attempt, snap = _snapshot_env(spec, p, record, attempt, n)
-    # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything.
-    # (The record it returns is superseded by the re-read after the command.)
-    _, digests = attach_cli_evidence(
+    record, attempt, snap = _snapshot_env(spec, p, record, attempt, n, results)
+    # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything;
+    # the code snapshots (spec 2026-10-31 §5.1 step 9) on the record that holds the --evidence.
+    # (The record they return is superseded by the re-read after the command.)
+    record, digests = attach_cli_evidence(
         p.data_root, p.scope, record, p.evidence, spec.labels, attempt=n
     )
+    record = attach_code_refs(p.data_root, record, results, n)
+    notice = untracked_notice(results)
+    if notice is not None:
+        print(notice, file=sys.stderr, flush=True)  # before the child's first line
     record, attempt, code = _execute_attempt(spec, p, attempt, n)
     disk_failure = _diagnose_disk(spec, p, attempt, n, code)
     changed, git_changed = _note_changes(spec, p, n, digests, snap.git)
@@ -848,7 +904,20 @@ def _run_attempt(spec: RunSpec, p: _Prepared) -> _Attempted:
         git_changed=git_changed,
         changed=changed,
         disk_failure=disk_failure,
+        code=results,
     )
+
+
+def _code_warnings(results: list[RootResult]) -> list[str]:
+    """spec 2026-10-31 §5.1: a root without a snapshot, and untracked code in a snapshot."""
+    warnings = []
+    state, missing = snapshot_state(results)
+    if state != "ok":
+        warnings.append(f"code_snapshot={state} (code_missing={','.join(missing)})")
+    untracked = untracked_total(results)
+    if untracked:
+        warnings.append(f"untracked_code={untracked}")
+    return warnings
 
 
 def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
@@ -867,7 +936,7 @@ def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
         warnings.append(f"git_changed={','.join(a.git_changed)}")
     if unavailable(p.disk_check):
         warnings.append("disk_check=unavailable")
-    return warnings
+    return [*warnings, *_code_warnings(a.code)]
 
 
 def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
@@ -881,6 +950,7 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
     source_audit_missing = sum(1 for r in a.card.access if r.identity == "full_hash")
     if source_audit_missing:
         warnings.append("source_audit=missing")
+    code_state, code_missing = snapshot_state(a.code)
     return RunResult(
         record=a.record,
         card=a.card,
@@ -904,6 +974,9 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         git_changed=a.git_changed,
         disk=p.disk_check,
         disk_failure=a.disk_failure,
+        code_snapshot=code_state,
+        code_missing=code_missing,
+        untracked_code=untracked_total(a.code),
     )
 
 
@@ -912,9 +985,12 @@ def train_run(spec: RunSpec) -> RunResult:
     # §5.3: from here on every write is vcp's own record. A full disk under it is an ABORT
     # `disk_full:` (the child is already stopped by execute() when its console write is the one
     # that fails). The upload destination is not vcp's record, so `_upload_all` guards only its own
-    # bookkeeping writes, not the `upload(...)` call.
+    # bookkeeping writes, not the `upload(...)` call. The code snapshots come first (spec
+    # 2026-10-31 §5.1 step 8): they are artifacts, not the run's files, so a snapshot that cannot be
+    # written leaves the run with nothing on disk yet.
     with own_writes():
-        a = _run_attempt(spec, p)
+        results = write_all(p.data_root, p.code, strict=False)
+        a = _run_attempt(spec, p, results)
     if a.attempt.status == "finished" and spec.uploads:
         record, uploaded, verified, skipped = _upload_all(
             spec, a.record, data_root=p.data_root, n=a.n

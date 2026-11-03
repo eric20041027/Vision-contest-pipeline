@@ -13,10 +13,12 @@ import pytest
 import vcp
 from compat_v0170 import ENV_JSON_0100, ENV_JSON_0170
 from helpers import git_repo
+from vcp.code import roots as code_roots
 from vcp.code.roots import (
     _DISTRIBUTIONS_SRC,
     canonical_name,
     distribution_record,
+    editables_of,
     local_distributions,
     plan_roots,
 )
@@ -469,6 +471,8 @@ def test_one_row_per_canonical_name_and_the_first_on_the_path_wins(tmp_path, mon
     _fake_dist(first, "Fake_Pkg", "1.0", direct_url={"url": dir_a.as_uri(), **flag})
     _fake_dist(second, "fake-pkg", "2.0", direct_url={"url": dir_b.as_uri(), **flag})
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(first), str(second)]))
+    # The real reader (bound at collection), not the conftest's: this test is about the rows.
+    monkeypatch.setattr(code_roots, "editables_of", editables_of)
     report = probe(None)
     rows = [d for d in report.distributions if canonical_name(d.name) == "fake-pkg"]
     assert [(d.name, d.version) for d in rows] == [("Fake_Pkg", "1.0")]

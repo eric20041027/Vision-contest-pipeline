@@ -93,6 +93,10 @@ def run_cmd(
             "(GiB); 0 only records the measurement",
         ),
     ] = DEFAULT_MIN_FREE_GIB,
+    code_root: Annotated[
+        list[Path] | None,
+        typer.Option("--code-root", help="another directory whose code the run uses (repeatable)"),
+    ] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -121,6 +125,7 @@ def run_cmd(
                 labels=list(labels or []),
                 require_clean=require_clean,
                 min_free_gib=min_free_gib,
+                code_roots=list(code_root or []),
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -147,6 +152,8 @@ def run_cmd(
             "labels": res.labels,
             "commit": res.git.commit[:12] if res.git is not None else "none",
             "free_gib": free_gib(res.disk) if res.disk is not None else UNKNOWN,
+            # spec 2026-10-31 §6: always, in the order code, code_snapshot, code_trace.
+            "code_snapshot": res.code_snapshot,
         }
         if res.disk is not None and unavailable(res.disk):
             fields["disk_check"] = "unavailable"
@@ -165,6 +172,10 @@ def run_cmd(
             fields["untracked"] = res.git.untracked
         if res.git_changed:
             fields["git_changed"] = ",".join(res.git_changed)
+        if res.untracked_code is not None:  # there is a git root
+            fields["untracked_code"] = res.untracked_code
+        if res.code_missing:
+            fields["code_missing"] = ",".join(res.code_missing)
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":

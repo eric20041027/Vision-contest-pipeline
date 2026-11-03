@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from helpers import (
+    FAKE,
     ROOMY_BYTES,
     det_samples,
     det_with_runs,
@@ -47,22 +48,6 @@ from vcp.train.run import (
 )
 from vcp.train.status import status as status_view
 from vcp.train.status import upload_run
-
-FAKE = """
-import os, sys, time
-from pathlib import Path
-print("VCP_RUN_ID", os.environ.get("VCP_RUN_ID"))
-print("VCP_SEED", os.environ.get("VCP_SEED"), "HASHSEED", os.environ.get("PYTHONHASHSEED"))
-code = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-Path("weights").mkdir(exist_ok=True)
-Path("weights/best.pt").write_bytes(b"best-" + str(code).encode())
-Path("weights/last.pt").write_bytes(b"last")
-if len(sys.argv) > 2 and sys.argv[2] == "sleep":
-    for i in range(50):
-        print("tick", i, flush=True)
-        time.sleep(0.1)
-sys.exit(code)
-"""
 
 # C1 regression: a hand-written loop registers a checkpoint and a note via Session WHILE
 # train_run's child is still running -- train.yaml must keep what Session wrote.
@@ -354,6 +339,7 @@ def test_train_run_happy_path_writes_run_and_record(roots, work, tmp_path):
     assert [e["event"] for e in read_events(roots.data, "r1")] == [
         "started",
         "env",
+        "evidence",  # 0.18.0: the code snapshot of the cwd root, bound before the command
         "finished",
         "checkpoint",
         "checkpoint",
@@ -896,14 +882,16 @@ def test_train_run_binds_evidence_and_labels_to_the_run(roots, work, tmp_path):
     assert res.attempt.status == "finished", res.record
     assert (res.evidence, res.labels, res.evidence_changed) == (3, "pseudo-v1", [])
     card = load_run(roots.data, "r1")
+    # 0.18.0: the run's code snapshot is bound beside them, after the command line's own.
     assert [(r.name, r.kind, r.binding) for r in card.evidence] == [
         ("corpus", "evidence", "cli"),
         ("pseudo-v1", "label_set", "cli"),
+        ("code.cwd", "code_snapshot", "cli"),
         ("teacher", "evidence", "session"),
     ]
     assert card.evidence == load_record(roots.data, "r1").evidence
     again = train_run(_spec(roots, work, resume=True, **kw))  # same bytes: same artifacts
-    assert again.evidence == 3 and len(load_run(roots.data, "r1").evidence) == 3
+    assert again.evidence == 3 and len(load_run(roots.data, "r1").evidence) == 4
     assert len(list((roots.data / "artifacts" / "evidence").iterdir())) == 2
 
 

@@ -349,6 +349,38 @@ def _work(tmp_path):
     return work
 
 
+def test_train_run_cli_code_fields(roots, tmp_path, isolated_git, monkeypatch):
+    seed_det(roots)
+    repo = git_repo(
+        tmp_path / "repo", {"fake_train.py": FAKE.encode(), ".gitignore": b"weights/\n"}
+    )
+    r = _run(repo, run="r1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "code_snapshot=ok" in v and "untracked_code=0" in v
+    assert v.index("free_gib=") < v.index("code_snapshot=") < v.index("untracked_code=")
+    assert "code_missing=" not in v
+    work = _work(tmp_path)
+    v = _verdict(_run(work, run="r2").output)
+    assert "code_snapshot=ok" in v and "untracked_code=" not in v and "code_missing=" not in v
+    r = _run(work, "--code-root", str(tmp_path / "nowhere"), run="r3")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "not_found:" in v and "run=r3" in v
+    assert not (roots.data / "runs" / "r3").exists()
+    from vcp.code import rules
+
+    monkeypatch.setattr(rules, "MAX_FILES", 0)
+    r = _run(work, "--code-root", str(repo), run="r4")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "code_snapshot=none" in v
+    assert "code_missing=cwd,root-1" in v and "untracked_code=0" in v
+    assert "warning: code_snapshot=none (code_missing=cwd,root-1)" in r.output
+
+
+def test_train_run_help_documents_code_root(roots):
+    out = runner.invoke(app, ["train", "run", "--help"]).output
+    assert "--code-root" in out and "another" in out
+
+
 def test_train_run_cli_free_gib_and_min_free_gib(roots, tmp_path, monkeypatch):
     seed_det(roots)
     work = _work(tmp_path)

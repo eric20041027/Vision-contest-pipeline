@@ -34,6 +34,17 @@ def _roomy_disk(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _code_tracking_off(monkeypatch):
+    """No editable install is a code root and no child traces its imports unless the test calls
+    helpers.trace_on: the test venv's editable vcp is this whole checkout, which every train run
+    would scan and copy."""
+    from vcp.code import roots
+
+    monkeypatch.setenv("VCP_CODE_TRACE", "0")
+    monkeypatch.setattr(roots, "editables_of", lambda raw: [])
+
+
+@pytest.fixture(autouse=True)
 def _plain_help_output(monkeypatch):
     """Keep help output unstyled even if typer was imported before this conftest ran.
 
@@ -65,6 +76,19 @@ def isolated_git(tmp_path, monkeypatch):
         "GIT_CONFIG_COUNT",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def work(tmp_path):
+    """A plain working directory for ``vcp train run`` -- no repository -- holding
+    ``fake_train.py`` (``helpers.FAKE``). ``tests/unit/train/test_run.py`` has its own, which wins
+    there."""
+    from helpers import FAKE
+
+    path = tmp_path / "work"
+    path.mkdir()
+    (path / "fake_train.py").write_bytes(FAKE.encode("utf-8"))
+    return path
 
 
 @pytest.fixture

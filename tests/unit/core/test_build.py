@@ -80,6 +80,22 @@ def test_a_copy_installed_inside_someone_elses_repo_is_not_claimed(repo):
     assert probe_build(venv_pkg) == BuildInfo(vcp.__version__, None, None)
 
 
+def test_vcp_version_ignores_a_git_dir_pointing_elsewhere(repo, tmp_path, monkeypatch):
+    """A ``GIT_DIR`` left by a git hook or a shell must not make ``vcp_version`` name another
+    repository's commit: the build is read from vcp's own repository."""
+    root, pkg = repo
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "__init__.py").write_text("", encoding="utf-8")  # tracked there too, at its top
+    _git(other, "init", "-q")
+    _git(other, "add", "__init__.py")
+    _git(other, "commit", "-q", "-m", "elsewhere")
+    own_head, other_head = _git(root, "rev-parse", "HEAD"), _git(other, "rev-parse", "HEAD")
+    assert own_head != other_head  # both read before the variable is set
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    assert probe_build(pkg).commit == own_head
+
+
 def test_git_head_names_the_enclosing_repository(repo, monkeypatch):
     root, _ = repo
     head = git_head(root / "src")

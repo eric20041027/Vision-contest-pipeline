@@ -523,6 +523,34 @@ def test_a_listed_file_that_cannot_be_read_back_is_a_change(roots, work, monkeyp
     assert res.attempt.status == "finished" and res.code_changed == 1
 
 
+# Child source that damages every code snapshot under ``{base}``, by what is done to it.
+DESTROY_SNAPSHOTS = {
+    "removed": "import shutil\nshutil.rmtree({base!r})\n",
+    "index_truncated": (
+        "for index in Path({base!r}).glob('*/index.jsonl'):\n    index.write_bytes(b'')\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("damage", sorted(DESTROY_SNAPSHOTS))
+def test_a_snapshot_damaged_during_the_run_does_not_cost_the_run(roots, work, damage):
+    """The compare uses the entries the snapshot was made from, not the index on disk: a snapshot
+    that is removed or damaged while the child runs changes nothing about the run's records."""
+    seed_train(roots)
+    (work / "helper.py").write_bytes(b"VALUE = 1\n")
+    base = str(roots.data / "artifacts" / "code_snapshot")
+    body = DESTROY_SNAPSHOTS[damage].format(base=base) + APPEND_TO_HELPER
+    (work / "fake_train.py").write_bytes(_fake_with(body))
+    res = train_run(_spec(roots, work))
+    assert res.attempt.status == "finished" and res.attempt.exit_code == 0
+    assert res.registered == 2 and res.final is not None  # best.pt and last.pt, --final resolved
+    checkpoints = load_record(roots.data, "r").checkpoints
+    assert sorted(Path(c.path).name for c in checkpoints) == ["best.pt", "last.pt"]
+    (note,) = _code_changed_notes(roots)
+    assert (note["value"], note["paths"], note["roots"]) == (1, ["cwd:helper.py"], ["cwd"])
+    assert res.code_changed == 1 and "code_changed=1" in res.warnings
+
+
 def test_code_tracking_is_off_unless_a_test_turns_it_on(monkeypatch):
     assert os.environ["VCP_CODE_TRACE"] == "0" and code_roots.editables_of([{"name": "x"}]) == []
     helpers.trace_on(monkeypatch)

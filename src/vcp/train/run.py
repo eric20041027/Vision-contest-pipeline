@@ -853,7 +853,7 @@ def _note_changes(
             commit=delta.commit,
             diff_sha256=delta.diff_sha256,
         )
-    code = changed_since_snapshot(p.data_root, results)
+    code = changed_since_snapshot(results)
     if code.count:
         append_event(
             p.data_root,

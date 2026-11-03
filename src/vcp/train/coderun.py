@@ -29,7 +29,7 @@ from vcp.code.roots import (
 )
 from vcp.code.scan import IndexEntry, RootScan, scan_root
 from vcp.code.schema import CodeRoot, CodeSection, RootReason
-from vcp.code.snapshot import SnapshotOutcome, load_index, write_snapshot
+from vcp.code.snapshot import SnapshotOutcome, write_snapshot
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import path_key, store_path
@@ -303,10 +303,13 @@ def _differs(root: Path, entry: IndexEntry) -> bool:
         return True
 
 
-def changed_since_snapshot(data_root: Path, results: list[RootResult]) -> CodeChange:
+def changed_since_snapshot(results: list[RootResult]) -> CodeChange:
     """spec §5.3: every file a root's snapshot lists, hashed again. Only the listed files are
     looked at -- a file the child added is not code anybody snapshotted -- and a root without a
-    snapshot has nothing to compare."""
+    snapshot has nothing to compare. The listing is the scan's entries: the ones the snapshot was
+    written from or, on reuse, found to have the same identity as its index. The snapshot
+    directory is never read here, so one removed or damaged while the child ran cannot cost the
+    run its records (the child's exit code and the checkpoints come first)."""
     count = 0
     paths: list[str] = []
     roots: list[str] = []
@@ -314,7 +317,7 @@ def changed_since_snapshot(data_root: Path, results: list[RootResult]) -> CodeCh
         if r.snapshot is None:
             continue
         label = r.root.label
-        differing = [e.path for e in load_index(data_root, r.snapshot) if _differs(r.root.path, e)]
+        differing = [e.path for e in r.scan.entries if _differs(r.root.path, e)]
         if differing:
             count += len(differing)
             paths.extend(f"{label}:{path}" for path in differing[:CHANGED_PATHS])

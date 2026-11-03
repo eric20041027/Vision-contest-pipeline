@@ -393,6 +393,22 @@ def test_train_run_cli_code_changed_field(roots, tmp_path):
     assert r.exit_code == 0 and "code_changed" not in v and "code_changed" not in r.output
 
 
+def test_train_run_cli_keeps_the_exit_code_when_the_snapshot_is_removed_mid_run(roots, tmp_path):
+    seed_det(roots)
+    work = _work(tmp_path)
+    (work / "helper.py").write_bytes(b"V = 1\n")
+    base = str(roots.data / "artifacts" / "code_snapshot")
+    child = f'import shutil\nshutil.rmtree({base!r})\nPath("helper.py").write_bytes(b"V = 2\\n")\n'
+    (work / "fake_train.py").write_text(
+        FAKE.replace("sys.exit(", child + "sys.exit(", 1), encoding="utf-8"
+    )
+    r = _run(work, run="r1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "status_attempt" not in v
+    assert "exit_code=0" in v and "checkpoints=1" in v and "code_changed=1" in v
+    assert "final=none" not in v
+
+
 def test_train_run_help_documents_code_root(roots):
     out = runner.invoke(app, ["train", "run", "--help"]).output
     assert "--code-root" in out and "another" in out

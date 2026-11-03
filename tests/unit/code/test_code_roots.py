@@ -23,7 +23,7 @@ from vcp.code.roots import (
     script_of,
     skip_dirs_for,
 )
-from vcp.code.scan import root_kind
+from vcp.code.scan import root_kind, scan_root
 from vcp.code.schema import DirectUrl, Distribution
 
 pytestmark = pytest.mark.usefixtures("isolated_git")
@@ -442,6 +442,47 @@ def test_a_glob_base_inside_a_nested_root_is_excluded_once(tmp_path):
     assert checkpoint_exclusions(["inner/out/*.pt"], work, planned) == [inner / "out"]
 
 
+def test_a_glob_base_that_is_a_nested_root_excludes_nothing(tmp_path):
+    work = _dir(tmp_path / "work")
+    inner = _dir(work / "inner")
+    planned = [
+        PlannedRoot("cwd", "cwd", work, "dir", None),
+        PlannedRoot("dist-inner", "editable", inner, "dir", None),
+    ]
+    assert checkpoint_exclusions(["inner/*.pt"], work, planned) == []
+    assert checkpoint_exclusions(["inner/last.pt"], work, planned) == []
+
+
+def test_a_glob_base_that_holds_a_nested_root_excludes_nothing(tmp_path):
+    work = _dir(tmp_path / "work")
+    sub = _dir(work / "runs" / "sub")
+    planned = [
+        PlannedRoot("cwd", "cwd", work, "dir", None),
+        PlannedRoot("root-1", "extra", sub, "dir", None),
+    ]
+    assert checkpoint_exclusions(["runs/*.pt"], work, planned) == []
+    # a base beside the nested root, inside the outer one, is still output
+    assert checkpoint_exclusions(["runs/other/*.pt"], work, planned) == [work / "runs" / "other"]
+
+
+def test_checkpoint_exclusions_never_empty_a_scanned_root(tmp_path):
+    """The exclusions go to ``skip_dirs_for(..., fixed=)``; a skip directory at or above a root
+    removes everything the scan of that root would find."""
+    work = _dir(tmp_path / "work", ("train.py",))
+    inner = _dir(work / "inner", ("pkg.py",))
+    sub = _dir(work / "runs" / "sub", ("sub.py",))
+    planned = [
+        PlannedRoot("cwd", "cwd", work, "dir", None),
+        PlannedRoot("dist-inner", "editable", inner, "dir", None),
+        PlannedRoot("root-1", "extra", sub, "dir", None),
+    ]
+    fixed = checkpoint_exclusions(["inner/*.pt", "runs/*.pt"], work, planned)
+    for i, expected in enumerate((["train.py"], ["pkg.py"], ["sub.py"])):
+        skip = skip_dirs_for(planned, i, fixed=fixed)
+        found = scan_root(planned[i].path, kind="dir", skip_dirs=skip)
+        assert [entry.path for entry in found.entries] == expected, planned[i].label
+
+
 @pytest.fixture
 def no_generated_env(monkeypatch):
     for var in GENERATED_VARS:
@@ -494,3 +535,21 @@ def test_two_variables_naming_one_directory_exclude_it_once(
     monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(work / "cache"))
     monkeypatch.setenv("TRITON_CACHE_DIR", str(work / "cache"))
     assert generated_exclusions(planned) == [work / "cache"]
+
+
+def test_a_generated_directory_that_is_or_holds_a_root_is_not_excluded(
+    tmp_path, monkeypatch, no_generated_env
+):
+    work = _dir(tmp_path / "work")
+    inner = _dir(work / "inner")
+    sub = _dir(work / "cache" / "sub")
+    planned = [
+        PlannedRoot("cwd", "cwd", work, "dir", None),
+        PlannedRoot("dist-inner", "editable", inner, "dir", None),
+        PlannedRoot("root-1", "extra", sub, "dir", None),
+    ]
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(inner))  # is a root
+    monkeypatch.setenv("TRITON_CACHE_DIR", str(work / "cache"))  # holds one
+    assert generated_exclusions(planned) == []
+    monkeypatch.setenv("TORCH_EXTENSIONS_DIR", str(work / "cache" / "other"))
+    assert generated_exclusions(planned) == [work / "cache" / "other"]

@@ -272,12 +272,15 @@ def skip_dirs_for(roots: Sequence[PlannedRoot], i: int, *, fixed: Sequence[Path]
 
 def _within_roots(directories: Iterable[Path], roots: Sequence[PlannedRoot]) -> list[Path]:
     """The directories strictly inside some root, resolved, once each, in ``path_key`` order. One
-    that is a root, or holds one, is not: excluding it would empty a root."""
+    that is a root, or holds one, is left out: a skip directory at or above a root removes
+    everything the scan of that root would find."""
     kept: dict[str, Path] = {}
     for directory in directories:
         resolved = Path(directory).resolve()
-        if any(_strictly_inside(resolved, root.path) for root in roots):
-            kept[path_key(resolved)] = resolved
+        key = path_key(resolved)
+        holds_a_root = any(key_within(path_key(root.path), key) for root in roots)
+        if not holds_a_root and any(_strictly_inside(resolved, root.path) for root in roots):
+            kept[key] = resolved
     return [kept[key] for key in sorted(kept)]
 
 
@@ -295,13 +298,13 @@ def checkpoint_exclusions(
     patterns: Sequence[str], cwd: Path, roots: Sequence[PlannedRoot]
 ) -> list[Path]:
     """The base directories of the ``--checkpoints`` / ``--final`` globs that lie strictly inside a
-    root (relative ones read from ``cwd``, as the globs are expanded): what the child writes there
-    is output, not code."""
+    root and neither are nor hold another one (relative ones read from ``cwd``, as the globs are
+    expanded): what the child writes there is output, not code."""
     bases = (_glob_base(pattern) for pattern in patterns)
     return _within_roots((Path(cwd) / base for base in bases if base), roots)
 
 
 def generated_exclusions(roots: Sequence[PlannedRoot]) -> list[Path]:
     """The generated-code directories (``vcp.code.generated``) that an environment variable puts
-    strictly inside a root."""
+    strictly inside a root, unless one is or holds another root."""
     return _within_roots(generated_locations(env_only=True).values(), roots)

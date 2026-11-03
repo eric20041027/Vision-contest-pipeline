@@ -2,9 +2,10 @@
 
 - 日期：2026-10-31
 - 來源：稽核 `docs/audits/2026-09-11-vcp-improvement-audit.md` 的 VCP-004（code inventory 漏列）、VCP-006（benchmark PASS 沒有綁定正式 job）、VCP-007 留給 1c 的「commit 前比對程式碼快照」、稽核 §11 Wave 1 第 1 項的 `CodeSnapshot` / `ArtifactAuthorization`、稽核 §12 release gate 第 10 條（歷史可重現）；RSNA 賽後報告 §8（程式碼盤點兩次在 review 時才發現漏列）。
-- 前置：1a 不可變產物（`src/vcp/artifact/`）、1b 收據與來源稽核、VCP-040/042 的證據清單（`EvidenceRef`）、VCP-041 dirty 工作樹（`src/vcp/train/gitstate.py`）、0.16.0（`replace_text`、`own_writes`）。
-- 決定：使用者跳過提問。選擇由 spec 作者裁決，集中在 §14；builder 檢查後 controller 2026-10-31 的四項裁決（C1–C4）在 §15；只有使用者能推翻的預設在 §16。只寫設計；實作在課程凍結（2026-12-06）之後，實作期的裁決記在後記 `docs/superpowers/plans/<日期>-vcp-wave1c-followups.md`。
-- 版本：0.17.0（MINOR，§9）；1.0.0 的門檻見 §13。
+- 前置：1a 不可變產物（`src/vcp/artifact/`）、1b 收據與來源稽核、VCP-040/042 的證據清單（`EvidenceRef`）、VCP-041 dirty 工作樹（`src/vcp/train/gitstate.py`）、0.16.0（`replace_text`、`own_writes`）、0.17.0（`gc scan` 沿用備份的證據走訪）。
+- 決定：使用者跳過提問。選擇由 spec 作者裁決，集中在 §14；builder 檢查後 controller 2026-10-31 的四項裁決（C1–C4）在 §15；§16 的十二項預設由使用者 2026-11-03 全部照預設批准。實作提前到課程凍結（2026-11-13）之前，目標 11/11 前合併；趕不上就留在分支、凍結結束（12/06）後再合；發版另經使用者同意。實作期的裁決記在後記 `docs/superpowers/plans/<日期>-vcp-wave1c-followups.md`。
+- 0.17.0 已用掉原本預定的版號（選取記錄的缺口與 `gc scan`），本 spec 改以 0.18.0 發出；文中「舊 vcp」指 0.17 以前。
+- 版本：0.18.0（MINOR，§9）；1.0.0 的門檻見 §13。
 
 ## 1. 問題
 
@@ -169,6 +170,7 @@ reason: "50 筆 benchmark：速度與幾何都過"
 
 - 備份 role（`src/vcp/backup/schema.py`）：`code_snapshot`（tier 2）、`code_trace`（tier 1）、`authorization`（tier 1）、`authorization_basis`（tier 2）。`walk_run` 照 `_artifact(ref)` 收新 kind；`authorization` ref 另收它的依據：產物依據的 `manifest.json` 與檔案（`authorization_basis`），run 依據走 `walk_run`。`walk_submission` 收 kernel 的 `Artifact.code_snapshot`。`authorization`、`code_trace` 進 `CARD_ROLES`。
 - 完整性（`src/vcp/backup/completeness.py`）不用改：清單建立前掛上的 ref 本來就要在清單裡。
+- `gc scan`（`src/vcp/gc/`，0.17.0）的引用沿用備份的 `Collector` 走訪：`walk_run` 收進的快照、trace、授權與依據，以及 `_walk_artifact` 讀到的 `code_snapshot.*` / `authorization` input，自然算 `referenced`；`locks/` 本來就是 `protected`。不另寫讀法。
 - provenance（`src/vcp/provenance/graph.py`）：新 kind 是一般 artifact entity；快照、授權、依據之間的邊由既有的 `inputs` 路徑連出；run entity 多 `code_grade` 屬性；`_link_artifact_runs` 跳過 `code_trace`（經 run 的清單連）；run 依據 → 授權加 `PRODUCED_BY {input: basis}`；kernel 的快照 → submission 加 `CONSUMED_BY`。渲染不用改。
 
 ## 5. 行為
@@ -179,7 +181,7 @@ reason: "50 筆 benchmark：速度與幾何都過"
 
 1. 既有的輸入檢查，到 `check_names` 為止。
 2. **PROBE**（唯讀；從原本的第 6 步提前）：多回報 `distributions` 與 `identity` 的欄位。PROBE 失敗 → ABORT，一個檔都沒寫（以前會留下 `running` 的 attempt）。
-3. **子程序的 vcp**：給了 `--venv`、它的 distributions 裡有 `vcp`、而 `MAJOR.MINOR` 跟 wrapper 不同 → FAIL `vcp_mismatch:`（`child_vcp=`）。0.16 以前的 `Session` 讀不動 0.17 的 `train.yaml`，會到第一次登記 checkpoint 時才當掉。
+3. **子程序的 vcp**：給了 `--venv`、它的 distributions 裡有 `vcp`、而 `MAJOR.MINOR` 跟 wrapper 不同 → FAIL `vcp_mismatch:`（`child_vcp=`）。0.17 以前的 `Session` 讀不動 0.18 的 `train.yaml`，會到第一次登記 checkpoint 時才當掉。
 4. **規劃 root**：
    - `cwd`：`--cwd` 所在 repo 的頂層；不在 git 裡就是 `--cwd` 本身；
    - `script`：命令裡第一個以 `.py` 結尾、存在、又不在其他 root 裡的檔：它所在 repo 的頂層，不在 git 裡就是它的目錄；
@@ -329,18 +331,18 @@ reason: "50 筆 benchmark：速度與幾何都過"
 
 ## 8. 相容性與升級
 
-- **舊紀錄在 0.17**：全部照讀、不改寫。等級照 §5.4 算：0.11 以後的訓練 run 多半是 `commit`；更早、或 dirty 而沒有 patch 的是 `declared`；沒有 `train.yaml` 的 run 是 `declared`。舊產物裡剛好叫 `code_snapshot.*` / `authorization` 的輸入只在新寫入時檢查，讀取不管。不補快照：補了也不是當時跑的程式碼。
-- **新紀錄在舊 vcp**（0.16 以前讀到會 FAIL）：
-  - `train.yaml` / `run.yaml` 的 `evidence` 有新 kind（每個 0.17 的 `train run` 都會有）；
+- **舊紀錄在 0.18**：全部照讀、不改寫。等級照 §5.4 算：0.11 以後的訓練 run 多半是 `commit`；更早、或 dirty 而沒有 patch 的是 `declared`；沒有 `train.yaml` 的 run 是 `declared`。舊產物裡剛好叫 `code_snapshot.*` / `authorization` 的輸入只在新寫入時檢查，讀取不管。不補快照：補了也不是當時跑的程式碼。
+- **新紀錄在舊 vcp**（0.17 以前讀到會 FAIL）：
+  - `train.yaml` / `run.yaml` 的 `evidence` 有新 kind（每個 0.18 的 `train run` 都會有）；
   - 備份清單的新 role；`stage.json` 的 `code` / `code_snapshot`；寫了 `require_code` 的 `submit.yaml`（`extra_forbidden`，這正是要的）。
   - `env.<n>.json` 的新段落舊 vcp 不讀；三種新產物在舊 vcp 眼中是一般產物，`artifact verify` 照驗。
-- **升級順序**：讀同一個 data root 的每個 checkout 與每個訓練 venv（editable 的 vcp）都先升到 0.17，再跑第一個 0.17 的 `train run`。訓練 venv 沒升 → §5.1 第 3 步的 `vcp_mismatch:`。
+- **升級順序**：讀同一個 data root 的每個 checkout 與每個訓練 venv（editable 的 vcp）都先升到 0.18，再跑第一個 0.18 的 `train run`。訓練 venv 沒升 → §5.1 第 3 步的 `vcp_mismatch:`。
 - **provenance 索引**：run entity 多了 `code_grade`，`sync` 會當成改寫而拒絕 → 每個 checkout `vcp provenance rebuild` 一次（SQLite 與 PostgreSQL 都是）。
-- **位元組不變的**：沒有新 ref 的 `TrainRecord` / `RunCard`、`require_code: declared` 的 profile、沒有 `code` 的 `stage.json` 都跟 0.16 逐位元組相同（golden 測試）。
+- **位元組不變的**：沒有新 ref 的 `TrainRecord` / `RunCard`、`require_code: declared` 的 profile、沒有 `code` 的 `stage.json` 都跟 0.17 逐位元組相同（golden 測試）。
 
 ## 9. 版本
 
-0.17.0（MINOR），依 CHANGELOG「版本規則」：三種新產物 kind；寫進紀錄的新內容（`evidence` 的新 kind、`env.<n>.json` 三段、`stage.json` 兩個欄位、`code_changed` note）；新命令群與選項、VERDICT 欄位、八個 `reason=` 字（七個 FAIL、一個 ABORT）；`submit.yaml` 新鍵；`ArtifactWriter` 對兩個保留輸入名的新規則；PROBE 提前讓它的失敗變成不寫檔的 ABORT。`vcp.core.build` 的子程序環境是 PATCH 等級，隨本版發出。發版時 plugin 的版本跟著改。1.0.0 另發（§13、§16）。
+0.18.0（MINOR），依 CHANGELOG「版本規則」：三種新產物 kind；寫進紀錄的新內容（`evidence` 的新 kind、`env.<n>.json` 三段、`stage.json` 兩個欄位、`code_changed` note）；新命令群與選項、VERDICT 欄位、八個 `reason=` 字（七個 FAIL、一個 ABORT）；`submit.yaml` 新鍵；`ArtifactWriter` 對兩個保留輸入名的新規則；PROBE 提前讓它的失敗變成不寫檔的 ABORT。`vcp.core.build` 的子程序環境是 PATCH 等級，隨本版發出。發版時 plugin 的版本跟著改。1.0.0 另發（§13、§16）。
 
 ## 10. 測試（先寫、先紅）
 
@@ -378,7 +380,7 @@ reason: "50 筆 benchmark：速度與幾何都過"
 
 ### 10.4 等級
 
-- §5.4 的每一列；0.11 以前的 `env.json`（只有 `commit`、`dirty`）；0.16 的 `env.json`（沒有 `code`）→ `commit`；`git_changed` note → `declared`；快照產物被刪 → 降級；fused 取最低；ingest 的 run。
+- §5.4 的每一列；0.11 以前的 `env.json`（只有 `commit`、`dirty`）；0.17 的 `env.json`（沒有 `code`）→ `commit`；`git_changed` note → `declared`；快照產物被刪 → 降級；fused 取最低；ingest 的 run。
 
 ### 10.5 產物 job 與授權
 
@@ -391,15 +393,16 @@ reason: "50 筆 benchmark：速度與幾何都過"
 
 - `require_code`：預設不寫出；stage FAIL `code_required:`、probe 只記；`final` 的 `why=code_required`；kernel `--code` 記進 `stage.json`，file 給了 `invalid:`。
 - 備份：新 role 與 tier；`walk_run` 收快照、trace、授權與依據；`manifest_gaps` 認得新 ref；`backup verify` OK。
+- `gc scan`：run 掛著的快照、trace、授權與依據都是 `referenced`，誰引用它列得出來；沒有 run 引用的快照不是 `referenced`。
 - provenance：新 entity 與邊、`code_grade`；rebuild 兩次 graph hash 相同。
 - `vcp code`：四個命令的 VERDICT 與 `--json`；`verify --dir` 在 PATH 上沒有 git 時照驗；`export` 拒絕 data root 與非空目錄；改了工作樹之後 `diff` WARN、而 `verify --id` 仍 OK（稽核 §12 release gate 第 10 條）。
 - 來回（C4）：`code snapshot` 新寫的快照保留 > 1 MiB 的檔；它重用 `train run` 先寫的有上限快照時 WARN `not_kept=`。有上限的快照 `export` → `verify --dir`：WARN `not_kept=<n>`、exit 0；把缺的大檔手動放進去 → OK；改一個在場的檔 → `mismatch:`；刪一個 `kept` 的檔 → `mismatch:`（`missing=`）。
-- 相容：0.16 的 `train.yaml` / `run.yaml` / `env.json` / `stage.json` / `submit.yaml` golden 照讀；沒有新內容時寫出的位元組不變。
+- 相容：0.17 的 `train.yaml` / `run.yaml` / `env.json` / `stage.json` / `submit.yaml` golden 照讀；沒有新內容時寫出的位元組不變。
 - `vcp.core.build`：設了 `GIT_DIR` 指向別的 repo 時，`vcp_version` 仍是 vcp 自己的 commit。
 
 ### 10.7 回歸門檻與範例
 
-- `tests/unit/test_regression_gate.py` 加一列 `0.17.0`：VCP-004 驗收四條、VCP-006 消耗的拒絕、稽核 §12 第 10 條、追蹤不改 exit code、機密檔不被讀、訓練輸出不改身分（C1）、`generated` 不算缺口（C2）、有授權時寫不成快照就 fail closed（C3）、`verify --dir` 的 `not_kept`（C4）。
+- `tests/unit/test_regression_gate.py` 加一列 `0.18.0`：VCP-004 驗收四條、VCP-006 消耗的拒絕、稽核 §12 第 10 條、追蹤不改 exit code、機密檔不被讀、訓練輸出不改身分（C1）、`generated` 不算缺口（C2）、有授權時寫不成快照就 fail closed（C3）、`verify --dir` 的 `not_kept`（C4）。
 - `examples/quickstart.py`（CI 會跑）加一段：`train run` 之後 `code=snapshot`，再 `vcp code verify`。
 - 選配的整合測試（`VCP_REALDATA_ROOT` 缺席就 skip）：對一份真實 data root 的每個 run 算等級，不得有例外。
 
@@ -445,7 +448,7 @@ reason: "50 筆 benchmark：速度與幾何都過"
 
 Wave 1（1a、1b、1c）算完成，要同時成立：
 
-1. 本 spec 的實作以 0.17.0 發出；稽核文件的 VCP-004、VCP-006 標為已實作。
+1. 本 spec 的實作以 0.18.0 發出；稽核文件的 VCP-004、VCP-006 標為已實作。
 2. 回歸門檻有 §10.7 那一列，上表每一行都有具名測試；Windows 與 Linux CI 都綠。
 3. 凍結前的契約項（`CODEX_PROMPT.md` 第 3 項：各後記最後一節會改寫入內容、VERDICT、`reason=` 或 exit 類別的待辦，含本 spec 的後記）做完，或逐項寫明留到 1.0 之後。
 4. 合成的端到端流程在 CI 裡跑：quickstart 的 `code verify`；benchmark → authorize → 正式 job → `stage`（`require_code: snapshot`）。
@@ -498,13 +501,13 @@ Wave 1（1a、1b、1c）算完成，要同時成立：
 - **C3** 同一份內容定址快照的併發寫入者以 `locks/code_snapshot-<id>.lock` 排隊（60 秒）並重用；半途目錄留到 `artifact clean`，不做重開的例外；有授權的 run 寫不成快照就 fail closed（`drift` FAIL、其餘 ABORT `code_unavailable:`），沒有授權的降級 WARN；`snapshot_inputs` 與 `vcp code snapshot` 沒有降級（§4.1、§5.1、§5.5、§5.7）。
 - **C4** `export` 與 `verify --dir` 的來回：沒保留位元組、也不在目錄裡的檔是 WARN `not_kept=`，不是 `mismatch:`；在場的檔一律要對；`vcp code snapshot` 新寫的快照預設全保留，不另設上限選項（§4.1、§5.7）。
 
-## 16. 待使用者確認
+## 16. 使用者確認的預設
 
-依重要性排序；括號裡是預設。標 C 的是 controller 的預設（§15），其餘是本 spec 作者的。
+依重要性排序；括號裡是預設。標 C 的是 controller 的預設（§15），其餘是本 spec 作者的。使用者 2026-11-03 全部照預設批准。
 
 1. **程式碼位元組進 data root 與備份**（保留：`train run` ≤ 1 MiB／檔、≤ 64 MiB／root；`vcp code snapshot` 全保留；含未追蹤的 `CODE` 檔與 editable 套件）。替代：只記 sha，靠 git 與 patch 還原——省空間、少帶機密，但沒有原 repo 或 commit 被改寫時就驗不回內容。
 2. **C1 未追蹤的設定與資料不算身分**（不算；未追蹤只算 `CODE`；checkpoint 基底目錄排除）。替代：未追蹤的 `CONFIG` 也算——手寫未 commit 的設定進得了快照，代價是框架每次寫的 `args.yaml` 之類讓每個 run 的快照都不同，授權（§5.6）與重用實際上用不了，結束比對也會一直報 `code_changed`。
-3. **新 ref 放在 `train.yaml` / `run.yaml` 的 `evidence` 清單**（是：0.16 以前讀不動 0.17 的 run，整個 data root 一起升級）。替代：只寫在 `env.json` 與事件裡——舊版仍讀得動，但備份、完整性、provenance 都要另寫一套讀法。
+3. **新 ref 放在 `train.yaml` / `run.yaml` 的 `evidence` 清單**（是：0.17 以前讀不動 0.18 的 run，整個 data root 一起升級）。替代：只寫在 `env.json` 與事件裡——舊版仍讀得動，但備份、完整性、provenance 都要另寫一套讀法。
 4. **自動追蹤**（自動：子程序第一次用 `Session` 就登記，`VCP_CODE_TRACE=0` 關）。替代：opt-in——沒人開就沒有 `traced`。
 5. **C3 有授權時寫不成快照就 fail closed**（`drift` FAIL、鎖逾時／半途目錄／寫不進 ABORT `code_unavailable:`；沒有授權則降級）。替代：一律降級成 WARN——訓練不被擋，但會留下一個指向不存在快照的授權，授權的意義就沒了；或一律 fail closed——沒有授權的 run 也會因別人的半途目錄而停下，違反「快照不擋訓練」。
 6. **1.0 的範圍含 `train run --authorization`**（含）。替代：只做產物 job 的授權（稽核原文只說 artifact gate），訓練的授權留到 1.0 之後。
@@ -512,5 +515,5 @@ Wave 1（1a、1b、1c）算完成，要同時成立：
 8. **`require_code` 的預設**（`declared`：不寫就不擋，跟 `require_provenance` 一樣）。替代：新的 `submit init` 寫 `snapshot`。
 9. **C2 框架生成的模組不算缺口**（`generated`，登記表內建 torch inductor、torch extensions、triton）。替代：算 `outside`——用 `torch.compile` 或 JIT 擴充的 run 永遠到不了 `traced`，產物 job 會在 commit 時 `code_outside:`；或整個快取目錄都當 root——要雜湊大量、每次都不同的產物，身分天天變。
 10. **C4 `verify --dir` 對沒保留的檔只 WARN，`vcp code snapshot` 預設全保留**（是）。替代：沒保留的檔不在就 `mismatch:`——有上限的快照永遠匯出不成可驗的 bundle；或 `vcp code snapshot` 也套 1 MiB 上限——bundle 常缺大檔，要手動補。
-11. **發版方式**（1c 以 0.17.0 發出，契約項收完再發 1.0.0）。替代：1c 直接發 1.0.0。
-12. **1.0 前要不要一場真實比賽用過 0.17**（不要求：CI 的合成端到端加選配的真實 data root 唯讀測試即可）。替代：等下一場比賽跑完再發 1.0。
+11. **發版方式**（1c 以 0.18.0 發出，契約項收完再發 1.0.0）。替代：1c 直接發 1.0.0。
+12. **1.0 前要不要一場真實比賽用過 0.18**（不要求：CI 的合成端到端加選配的真實 data root 唯讀測試即可）。替代：等下一場比賽跑完再發 1.0。

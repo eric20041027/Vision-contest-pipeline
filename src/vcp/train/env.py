@@ -17,17 +17,27 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from vcp.code.schema import CodeSection, EnvIdentity
+from vcp.code import roots
+from vcp.code.roots import _DISTRIBUTIONS_SRC  # the one reader, shared with local_distributions
+from vcp.code.schema import CodeSection, Distribution, EnvIdentity
 from vcp.core.build import build_string
 from vcp.core.errors import VcpError
 from vcp.core.time import stamp
 from vcp.train.gitstate import record as git_record
 from vcp.train.schema import DiskCheck, EnvSnapshot, GitInfo
 
-PROBE = """
-import importlib.metadata as m, json, platform, socket, sys
+# Standard library only, and it prints nothing from the environment. The distributions come from
+# the reader ``local_distributions`` runs too; the identity's python string is built here because
+# only the venv's own interpreter can say what it is.
+PROBE = (
+    "import importlib.metadata as m, json, platform, socket, sys, sysconfig\n"
+    + _DISTRIBUTIONS_SRC
+    + """
 out = {"python": sys.version, "executable": sys.executable, "platform": platform.platform(),
-       "hostname": socket.gethostname(), "packages": {}, "torch": None, "cuda": None, "cudnn": None}
+       "hostname": socket.gethostname(), "packages": {}, "torch": None, "cuda": None, "cudnn": None,
+       "distributions": installed_distributions(),
+       "identity_python": f"{sys.implementation.name}-{platform.python_version()}-"
+                          f"{sys.implementation.cache_tag}-{sysconfig.get_platform()}"}
 for d in m.distributions():
     try:
         out["packages"][d.name] = d.version
@@ -43,6 +53,7 @@ except Exception:
     pass
 print(json.dumps(out))
 """
+)
 
 
 def venv_python(venv: Path) -> Path:
@@ -104,25 +115,95 @@ def git_info(cwd: Path, *, patch: tuple[Path, str] | None = None) -> GitInfo | N
     return git_record(cwd, patch)
 
 
+@dataclass(frozen=True)
+class ProbeReport:
+    """What one probe of an environment found (spec 2026-10-31 §4.3, §5.1 step 2).
+
+    ``data`` is the probe's own JSON object as printed -- the raw ``distributions`` rows (with
+    ``direct_url.json`` as the venv holds it, credentials and all) and ``identity_python`` among its
+    keys -- and is never written anywhere. What is recorded is ``distributions`` (urls cleaned),
+    ``identity``, ``gpus`` and ``driver``; ``editables`` are the directories the editable
+    distributions point at, read from the raw urls."""
+
+    data: dict[str, Any]
+    distributions: list[Distribution]
+    editables: list[roots.Editable]
+    identity: EnvIdentity
+    gpus: list[str]
+    driver: str | None
+
+    @property
+    def child_vcp(self) -> str | None:
+        """The version of the ``vcp`` distribution the environment has; None when it has none."""
+        for dist in self.distributions:
+            if roots.canonical_name(dist.name) == "vcp":
+                return dist.version
+        return None
+
+
+def _distribution_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = data.get("distributions")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise VcpError("environment probe reported no list of distributions")
+    return rows
+
+
+def probe(python: Path | None) -> ProbeReport:
+    """Run the probe with ``python`` (this interpreter when None) and ask nvidia-smi about the GPUs.
+    A venv that cannot be probed, or whose report is not what the probe prints, is an ABORT."""
+    data = _probe(python or Path(sys.executable))
+    raw = _distribution_rows(data)
+    try:
+        distributions = [roots.distribution_record(row) for row in raw]
+    except ValueError as e:  # pydantic refuses a row whose fields are not what the probe prints
+        raise VcpError("environment probe reported a distribution vcp cannot record") from e
+    identity_python = data.get("identity_python")
+    if not isinstance(identity_python, str):
+        raise VcpError("environment probe reported no python identity")
+    names, driver = gpus()
+    return ProbeReport(
+        data=data,
+        distributions=distributions,
+        editables=roots.editables_of(raw),
+        identity=roots.identity_of(raw, identity_python, names),
+        gpus=names,
+        driver=driver,
+    )
+
+
+# Keys of the probe's JSON that EnvSnapshot has no field of that name for (it is strict about
+# extra keys): its ``distributions`` and ``identity`` come from the report's parsed values.
+_PROBE_ONLY = ("distributions", "identity_python")
+
+
 def snapshot(
     python: Path | None,
     cwd: Path,
     *,
     patch: tuple[Path, str] | None = None,
     disk: DiskCheck | None = None,
+    report: ProbeReport | None = None,
+    code: CodeSection | None = None,
 ) -> EnvSnapshot:
     """spec 4.4: the venv's report plus what vcp sees from outside. ``disk`` is the free-space
-    check the attempt made before its first write (spec 2026-10-30 §5.2), kept as measured."""
-    data = _probe(python or Path(sys.executable))
-    names, driver = gpus()
+    check the attempt made before its first write (spec 2026-10-30 §5.2), kept as measured.
+
+    ``report`` is the probe the caller already ran (the code roots were planned from it), and is
+    only run here when it is None; ``code`` is the code section the caller built. The distributions
+    are always a list -- empty when none is installed -- once a probe has run."""
+    report = report if report is not None else probe(python)
+    fields = {k: v for k, v in report.data.items() if k not in _PROBE_ONLY}
     return EnvSnapshot(
-        **data,
-        gpus=names,
-        nvidia_driver=driver,
+        **fields,
+        gpus=report.gpus,
+        nvidia_driver=report.driver,
         vcp_version=build_string(),
         git=git_info(cwd, patch=patch),
         taken_at=stamp(),
         disk=disk,
+        distributions=report.distributions,
+        identity=report.identity,
+        code=code,
     )
 
 

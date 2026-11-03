@@ -1,4 +1,6 @@
+import importlib.metadata
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,13 +20,16 @@ from vcp.code.roots import (
     editable_dir,
     editables_of,
     generated_exclusions,
+    identity_of,
+    local_distributions,
     plan_roots,
     repo_top,
     script_of,
     skip_dirs_for,
 )
 from vcp.code.scan import root_kind, scan_root
-from vcp.code.schema import DirectUrl, Distribution
+from vcp.code.schema import DirectUrl, Distribution, EnvIdentity
+from vcp.core.hashing import sha256_text
 
 pytestmark = pytest.mark.usefixtures("isolated_git")
 
@@ -553,3 +558,81 @@ def test_a_generated_directory_that_is_or_holds_a_root_is_not_excluded(
     assert generated_exclusions(planned) == []
     monkeypatch.setenv("TORCH_EXTENSIONS_DIR", str(work / "cache" / "other"))
     assert generated_exclusions(planned) == [work / "cache" / "other"]
+
+
+# -- the environment's distributions and its identity ---------------------------------------------
+
+
+def _documented_sha(lines: list[str]) -> str:
+    """spec 2026-10-31 §4.3, written out: sorted lines, each ended by a newline."""
+    return sha256_text("".join(f"{line}\n" for line in sorted(lines)))
+
+
+def test_packages_sha_skips_editables_and_is_the_documented_sha(tmp_path):
+    pkg = _dir(tmp_path / "pkg")
+    plain = _raw("Zeta_Pkg", None, record="b" * 64)
+    vcs = _raw("alpha", "https://h.example/r.git", commit="c0ffee", record=None)
+    editable = _raw("vcp", pkg.as_uri(), record="e" * 64)
+    vcs["version"] = "2.0"
+    got = identity_of([plain, vcs, editable], "cpython-3.12-tag-win_amd64", ["A", "B"])
+    expected = _documented_sha([f"zeta-pkg==1.0 {'b' * 64}", "alpha==2.0 - c0ffee"])
+    assert got == EnvIdentity(
+        python="cpython-3.12-tag-win_amd64", packages_sha256=expected, gpus="A,B"
+    )
+    # the editable row is out of the sha altogether, and so is any change to it
+    assert identity_of([plain, vcs], "p", []).packages_sha256 == expected
+    editable["record_sha256"], editable["version"] = "f" * 64, "9.9"
+    assert identity_of([plain, vcs, editable], "p", []).packages_sha256 == expected
+
+
+def test_packages_sha_does_not_depend_on_the_order_of_the_rows():
+    a, b = _raw("beta", None, record="1" * 64), _raw("Alpha", None, record=None)
+    assert identity_of([a, b], "p", []) == identity_of([b, a], "p", [])
+    assert identity_of([a, b], "p", []).packages_sha256 == _documented_sha(
+        [f"beta==1.0 {'1' * 64}", "alpha==1.0 -"]
+    )
+
+
+def test_packages_sha_changes_with_a_version_a_record_or_a_commit():
+    base = identity_of([_raw("x", None, record="1" * 64)], "p", []).packages_sha256
+    other_record = identity_of([_raw("x", None, record="2" * 64)], "p", []).packages_sha256
+    other_version = _raw("x", None, record="1" * 64) | {"version": "1.1"}
+    commit_a = _raw("x", "https://h.example/r.git", commit="aaa", record="1" * 64)
+    commit_b = _raw("x", "https://h.example/r.git", commit="bbb", record="1" * 64)
+    shas = {
+        base,
+        other_record,
+        identity_of([other_version], "p", []).packages_sha256,
+        identity_of([commit_a], "p", []).packages_sha256,
+        identity_of([commit_b], "p", []).packages_sha256,
+    }
+    assert len(shas) == 5
+
+
+def test_a_url_without_a_commit_adds_nothing_to_the_line():
+    row = _raw("x", "https://h.example/x.zip", editable=False, record="1" * 64)
+    assert identity_of([row], "p", []).packages_sha256 == _documented_sha([f"x==1.0 {'1' * 64}"])
+
+
+def test_an_identity_covers_exactly_what_is_recorded():
+    """A row without a name or a version is no ``Distribution``; it is not in the sha either."""
+    good = _raw("x", None, record="1" * 64)
+    partial = [{"version": "1", "record_sha256": None}, {"name": "y", "record_sha256": None}]
+    assert identity_of([good, *partial], "p", []) == identity_of([good], "p", [])
+
+
+def test_the_identity_of_nothing_installed_is_the_sha_of_nothing():
+    got = identity_of([], "p", [])
+    assert got == EnvIdentity(python="p", packages_sha256=sha256_text(""), gpus="")
+
+
+def test_local_distributions_are_the_rows_of_this_process():
+    rows = local_distributions()
+    assert rows and all(set(r) == {"name", "version", "record_sha256", "direct_url"} for r in rows)
+    names = [canonical_name(r["name"]) for r in rows]
+    assert len(names) == len(set(names))  # one row per distribution name
+    pydantic = next(r for r in rows if canonical_name(r["name"]) == "pydantic")
+    assert pydantic["version"] == importlib.metadata.version("pydantic")
+    assert re.fullmatch(r"[0-9a-f]{64}", pydantic["record_sha256"])
+    # every row is something a Distribution can hold
+    assert [distribution_record(r).name for r in rows] == [r["name"] for r in rows]

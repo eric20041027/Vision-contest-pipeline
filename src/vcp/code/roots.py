@@ -9,6 +9,10 @@ outer one.
 
 ``editables_of`` is the seam tests replace: callers reach it as ``roots.editables_of(...)``, never
 by an imported name, so a test can give a run an editable root without installing anything.
+
+The distributions of an environment are read by one piece of source (``_DISTRIBUTIONS_SRC``): the
+probe the training venv's interpreter runs embeds it, and ``local_distributions`` runs the same text
+in this process, so the two cannot drift apart.
 """
 
 from __future__ import annotations
@@ -26,7 +30,8 @@ from urllib.request import url2pathname
 
 from vcp.code.generated import generated_locations
 from vcp.code.scan import RootKind, nearest_dot_git, root_kind
-from vcp.code.schema import DirectUrl, Distribution, RootSource
+from vcp.code.schema import DirectUrl, Distribution, EnvIdentity, RootSource
+from vcp.core.hashing import sha256_text
 from vcp.core.paths import is_under, key_within, path_key
 from vcp.core.proc import git_environment, redact
 
@@ -40,6 +45,8 @@ __all__ = [
     "editable_dir",
     "editables_of",
     "generated_exclusions",
+    "identity_of",
+    "local_distributions",
     "plan_roots",
     "repo_top",
     "script_of",
@@ -48,6 +55,59 @@ __all__ = [
 
 _WILDCARDS = frozenset("*?[")
 _UNREADABLE_URL = "<redacted>"  # what a URL that cannot be taken apart is recorded as
+
+# Standard library only: it runs in the training venv, which has no vcp. One row per PEP 503 name
+# (importlib lists the distributions in ``sys.path`` order, so the first one is the one that
+# resolves); a distribution without a name or a version is no row. A damaged dist-info costs its own
+# ``record_sha256`` or ``direct_url`` -- never the probe.
+_DISTRIBUTIONS_SRC = """
+def installed_distributions():
+    import hashlib
+    import importlib.metadata
+    import json
+    import re
+    from pathlib import Path
+
+    def record_sha256(dist):
+        try:
+            digest = hashlib.sha256()
+            with (Path(dist._path) / "RECORD").open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except Exception:
+            return None
+
+    def direct_url(dist):
+        try:
+            found = json.loads(dist.read_text("direct_url.json"))
+        except Exception:
+            return None
+        return found if isinstance(found, dict) else None
+
+    rows, seen = [], set()
+    for dist in importlib.metadata.distributions():
+        try:
+            headers = dist.metadata  # .get: a missing header is None, not a warning or a KeyError
+            name, version = headers.get("Name"), headers.get("Version")
+        except Exception:
+            continue
+        if not (isinstance(name, str) and name and isinstance(version, str) and version):
+            continue
+        key = re.sub(r"[-_.]+", "-", name).lower()
+        if key not in seen:
+            seen.add(key)
+            rows.append(
+                {
+                    "name": name,
+                    "version": version,
+                    "record_sha256": record_sha256(dist),
+                    "direct_url": direct_url(dist),
+                }
+            )
+    return rows
+"""
+_DISTRIBUTIONS_CODE = compile(_DISTRIBUTIONS_SRC, "<vcp-distributions>", "exec")
 
 
 @dataclass(frozen=True)
@@ -118,6 +178,13 @@ def _is_editable(direct: Mapping[str, Any]) -> bool:
     return isinstance(info, Mapping) and info.get("editable") is True
 
 
+def _commit_id(direct: Mapping[str, Any]) -> str | None:
+    """The ``vcs_info.commit_id`` of a ``direct_url.json`` when it is a string."""
+    vcs = direct.get("vcs_info")
+    commit = vcs.get("commit_id") if isinstance(vcs, Mapping) else None
+    return commit if isinstance(commit, str) else None
+
+
 def distribution_record(raw: Mapping[str, Any]) -> Distribution:
     """The record of one PROBE row (``name``, ``version``, ``record_sha256`` and ``direct_url`` as
     ``direct_url.json`` holds it, or None). The URL is cleaned here, so what is recorded is never
@@ -125,12 +192,10 @@ def distribution_record(raw: Mapping[str, Any]) -> Distribution:
     direct = _direct_url(raw)
     recorded = None
     if direct is not None:
-        vcs = direct.get("vcs_info")
-        commit = vcs.get("commit_id") if isinstance(vcs, Mapping) else None
         recorded = DirectUrl(
             url=clean_url(direct["url"]),
             editable=_is_editable(direct),
-            commit_id=commit if isinstance(commit, str) else None,
+            commit_id=_commit_id(direct),
         )
     return Distribution(
         name=raw.get("name"),  # a missing name or version is pydantic's to refuse
@@ -154,6 +219,33 @@ def editables_of(raw: Sequence[Mapping[str, Any]]) -> list[Editable]:
         if path is not None:
             found.append(Editable(name, path))
     return found
+
+
+def local_distributions() -> list[dict[str, Any]]:
+    """The PROBE rows of this process: the same source the probe runs in the training venv."""
+    scope: dict[str, Any] = {}
+    exec(_DISTRIBUTIONS_CODE, scope)
+    return scope["installed_distributions"]()
+
+
+def identity_of(raw: Sequence[Mapping[str, Any]], python: str, gpus: Sequence[str]) -> EnvIdentity:
+    """What a run claims about its environment (spec 2026-10-31 §4.3). Every row that is no
+    editable gives ``<canonical name>==<version> <RECORD sha or -> [<commit>]``; the sha is that of
+    the sorted lines, each ended by a newline. An editable is left out -- its code is a root of the
+    run, snapshotted -- and so is a row without a name or a version, which is no
+    ``Distribution`` either: the identity covers exactly what is recorded."""
+    lines = []
+    for row in raw:
+        name, version, direct = row.get("name"), row.get("version"), _direct_url(row)
+        if not isinstance(name, str) or not isinstance(version, str):
+            continue
+        if direct is not None and _is_editable(direct):
+            continue
+        line = f"{canonical_name(name)}=={version} {row.get('record_sha256') or '-'}"
+        commit = _commit_id(direct) if direct is not None else None
+        lines.append(f"{line} {commit}" if commit else line)
+    packages = sha256_text("".join(f"{line}\n" for line in sorted(lines)))
+    return EnvIdentity(python=python, packages_sha256=packages, gpus=",".join(gpus))
 
 
 # -- finding the roots ----------------------------------------------------------------------------

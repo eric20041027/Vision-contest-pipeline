@@ -56,6 +56,8 @@ reason 字彙兩版相同，決策的 `policy_version` 分辨 v1／v2。policy �
 | `postgres-provenance-real-rsna-v2.json` | 3 個真實 transition × 7 方法，21 列；r4→r5 v2 INCREMENTAL（1.007×）、v1 FULL（1.72×） |
 | `postgres-provenance-six-method-v2.json` | calibration seeds 的預覽，648 列 |
 | `postgres-provenance-v2.md` / `-course-brief-v2.md` | v2 證據紀錄與 acceptance record / 簡報素材 |
+| `postgres-provenance-break-even-v1.json` / `.md` | E5 打平點：28 場景 × 4 方法，112 列；H5a、H5c 成立，H5b 不成立（v2 在不確定區太早選 FULL） |
+| `postgres-provenance-course-brief-v3.md` | E5 與 10/20 之後的更新、英文投影片文字 |
 
 `tests/unit/provenance/test_postgres_docs.py` 斷言 evidence record 與 handoff 的精確字串（含「沒有 Absent 格」）——改這兩份文件要同步改測試。
 

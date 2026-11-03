@@ -33,6 +33,7 @@ __all__ = [
     "identity_sha256",
     "index_jsonl_bytes",
     "is_under",
+    "nearest_dot_git",
     "path_key",
     "root_kind",
     "scan_root",
@@ -178,14 +179,18 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes] | None:
     return subprocess.run([exe, "-C", str(root), *args], capture_output=True, env=git_environment())
 
 
-def _has_dot_git(path: Path) -> bool:
-    """A ``.git`` file or directory at ``path`` or in any directory above it: a work tree, a
-    linked worktree and a submodule checkout all have one."""
+def nearest_dot_git(path: Path) -> Path | None:
+    """The nearest directory at or above ``path`` that holds a ``.git`` file or directory -- a
+    work tree, a linked worktree and a submodule checkout all have one -- resolved; None when no
+    directory above ``path`` does."""
     try:
         resolved = Path(path).resolve()
     except (OSError, RuntimeError):  # a path that cannot be resolved is no work tree we can name
-        return False
-    return any(os.path.lexists(directory / ".git") for directory in (resolved, *resolved.parents))
+        return None
+    for directory in (resolved, *resolved.parents):
+        if os.path.lexists(directory / ".git"):
+            return directory
+    return None
 
 
 def root_kind(path: Path) -> RootKind:
@@ -201,7 +206,7 @@ def root_kind(path: Path) -> RootKind:
         proc = None
     if proc is not None and proc.returncode == 0:
         return "git"
-    return "git" if _has_dot_git(path) else "dir"
+    return "git" if nearest_dot_git(path) is not None else "dir"
 
 
 def _ls_files(root: Path, *args: str) -> list[str]:

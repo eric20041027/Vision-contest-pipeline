@@ -6,9 +6,11 @@ throwaway data root, in about a minute. Nothing here touches ``VCP_DATA_ROOT``.
     uv run python examples/quickstart.py            # temporary directory, cleaned up
     uv run python examples/quickstart.py --root ./qs --keep
 
-The point of the last two steps is the one vcp exists for: a candidate that looks better
+The point of steps 9 to 11 is the one vcp exists for: a candidate that looks better
 is not admitted until a claim written down *beforehand* survives a paired bootstrap on at
-least two independent validation subsets.
+least two independent validation subsets. Steps 13 and 14 show the other half of a trustworthy
+result: a training run snapshots the code it ran before it writes anything, and the snapshot
+verifies later with neither the project nor its repository.
 """
 
 from __future__ import annotations
@@ -20,34 +22,46 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 CLASSES = ("cat", "dog")
 IMAGES_PER_CLASS = 120
 BASELINE_ACCURACY = 0.70
 CANDIDATE_ACCURACY = 0.93
+TRAIN_SCRIPT = """from pathlib import Path
+
+print("training the demo model")
+Path("weights").mkdir(exist_ok=True)
+Path("weights/last.pt").write_bytes(b"demo weights")
+"""
 
 
-def run(step: str, *args: str, env_root: Path, configs_root: Path) -> None:
-    """Run one vcp command and echo its VERDICT line."""
-    print(f"\n=== {step}\n$ vcp {' '.join(args)}")
+def run(
+    step: str,
+    *args: str,
+    env_root: Path,
+    configs_root: Path | None,
+    tail: Sequence[str] = (),
+    quiet: bool = False,
+) -> str:
+    """Run one vcp command, echo its output and VERDICT line, and return its stdout.
+
+    ``tail`` goes after the root options, so a ``-- <command>`` stays last. A command that has no
+    ``--configs-root`` (``train status``, ``code verify``) is given ``configs_root=None``.
+    ``quiet`` leaves stdout out of the echo: the caller parses a ``--json`` document."""
+    print(f"\n=== {step}\n$ vcp {' '.join([*args, *tail])}")
+    roots = ["--data-root", str(env_root)]
+    if configs_root is not None:
+        roots += ["--configs-root", str(configs_root)]
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "vcp",
-            *args,
-            "--data-root",
-            str(env_root),
-            "--configs-root",
-            str(configs_root),
-        ],
+        [sys.executable, "-m", "vcp", *args, *roots, *tail],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-    for line in (completed.stdout or "").splitlines():
+    for line in [] if quiet else (completed.stdout or "").splitlines():
         print(f"  {line}")
     for line in (completed.stderr or "").splitlines():
         if line.startswith("VERDICT") or "Error" in line or "Traceback" in line:
@@ -56,6 +70,7 @@ def run(step: str, *args: str, env_root: Path, configs_root: Path) -> None:
         raise SystemExit(
             f"quickstart step failed: vcp {' '.join(args)} (exit {completed.returncode})"
         )
+    return completed.stdout or ""
 
 
 def make_images(raw: Path) -> None:
@@ -101,6 +116,51 @@ def write_predictions(data_root: Path, configs_root: Path, out: Path) -> None:
                 "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
             )
     print(f"  4 prediction files under {out}")
+
+
+def write_training_project(project: Path) -> None:
+    """A one-file training project: a script that prints a line and saves a checkpoint."""
+    project.mkdir(parents=True, exist_ok=True)
+    (project / "train.py").write_text(TRAIN_SCRIPT, encoding="utf-8", newline="\n")
+    print(f"  a training project under {project}")
+
+
+def make_training_venv(venv: Path) -> Path:
+    """A bare virtualenv for the demo training, and its python. A real one holds your framework.
+    It is not this environment on purpose: an editable vcp here is a code root of its own, and
+    snapshotting the whole checkout is more than a demo needs (a long temporary path can even
+    make it too long to write on Windows)."""
+    made = subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(venv)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if made.returncode != 0:
+        raise SystemExit(f"quickstart step failed: python -m venv ({made.stderr.strip()})")
+    for python in (venv / "Scripts" / "python.exe", venv / "bin" / "python"):
+        if python.is_file():
+            print(f"  a bare training venv under {venv}")
+            return python
+    raise SystemExit(f"quickstart step failed: no python in the new venv {venv}")
+
+
+def verdict_fields(stdout: str, cmd: str) -> list[str]:
+    """The ``key=value`` words of the VERDICT line of ``cmd``."""
+    for line in stdout.splitlines():
+        if line.startswith(f"VERDICT cmd={cmd} "):
+            return line.split()
+    raise SystemExit(f"quickstart step failed: no VERDICT line for {cmd}")
+
+
+def pinned_snapshot(status_json: str) -> str:
+    """The code snapshot a run pinned: the ``code.cwd`` row of ``train status --json``."""
+    doc = json.loads(status_json.splitlines()[0])
+    for row in doc["result"]["evidence"]:
+        if row["name"] == "code.cwd":
+            return row["artifact_id"]
+    raise SystemExit("quickstart step failed: the run pins no code.cwd snapshot")
 
 
 def main() -> int:
@@ -254,9 +314,66 @@ def main() -> int:
         )
         run("12. the ledger", "eval", "report", "--dataset", "demo", **roots)
 
-        print("\nDone. The verdict above is PASS because the candidate cleared the threshold on")
-        print("both valA and valB. Lower CANDIDATE_ACCURACY in this file to about 0.80 and run it")
-        print("again: the gap still looks good, but the verdict flips to FAIL. That is the point.")
+        print("\n=== a training run keeps the code that ran")
+        project = root / "project"
+        write_training_project(project)
+        venv = root / "train-venv"
+        python = make_training_venv(venv)
+        trained = run(
+            "13. train run: the code that ran is snapshotted before the first write",
+            "train",
+            "run",
+            "--run",
+            "trained",
+            "--dataset",
+            "demo",
+            "--plan",
+            "fixed-v1",
+            "--trained-on",
+            "train",
+            "--seed",
+            "0",
+            "--venv",
+            str(venv),
+            "--cwd",
+            str(project),
+            "--checkpoints",
+            "weights/*.pt",
+            "--final",
+            "weights/last.pt",
+            "--min-free-gib",  # the demo writes a few KiB; the 10 GiB default is for real runs
+            "0.1",
+            tail=("--", str(python), "train.py"),
+            **roots,
+        )
+        if "code=snapshot" not in verdict_fields(trained, "train.run"):
+            raise SystemExit("quickstart step failed: expected code=snapshot")
+        status = run(
+            "14a. train status: which snapshot the run pinned",
+            "train",
+            "status",
+            "--run",
+            "trained",
+            "--json",
+            env_root=data_root,
+            configs_root=None,
+            quiet=True,
+        )
+        shutil.rmtree(project)
+        run(
+            "14b. code verify: the snapshot verifies with the project gone",
+            "code",
+            "verify",
+            "--id",
+            pinned_snapshot(status),
+            env_root=data_root,
+            configs_root=None,
+        )
+
+        print("\nDone. The judge verdict of step 11 is PASS because the candidate cleared the")
+        print("threshold on both valA and valB. Lower CANDIDATE_ACCURACY in this file to about")
+        print("0.80 and run it again: the gap still looks good, but the verdict flips to FAIL.")
+        print("That is the point. The code snapshot of step 13 lets you check which code ran.")
         return 0
     finally:
         if args.root is None or not args.keep:

@@ -12,10 +12,12 @@ from typing import Any
 from vcp.artifact import store
 from vcp.artifact.ledger import append_supersession, row_for
 from vcp.artifact.schema import (
+    CODE_INPUT_PREFIX,
     ArtifactManifest,
     ArtifactSpec,
     FailureRecord,
     FileEntry,
+    InputRef,
     SpecRecord,
     check_file_name,
 )
@@ -23,6 +25,7 @@ from vcp.core.atomic import write_once, write_once_stream
 from vcp.core.build import build_string
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file
+from vcp.core.log import FieldValue
 from vcp.core.paths import artifact_dir, resolve_stored_path
 from vcp.core.proc import redact
 from vcp.core.time import stamp
@@ -38,6 +41,51 @@ def _chunks(path: Path) -> Iterator[bytes]:
     with path.open("rb") as f:
         while chunk := f.read(_CHUNK):
             yield chunk
+
+
+def _check_code_snapshot(spec: ArtifactSpec, ref: InputRef, data_root: Path) -> None:
+    """A ``code_snapshot.<label>`` input: ``artifacts/code_snapshot/<id>/snapshot.json`` of this
+    data root (``not_found:`` otherwise), and that snapshot intact against its manifest and its own
+    index (``mismatch:``). A snapshot that is not there or never committed keeps the word
+    ``store.load_manifest`` gives it."""
+    from vcp.code.snapshot import KIND, SNAPSHOT_PATH, check_snapshot  # imports this module
+
+    fields: dict[str, FieldValue] = {"kind": spec.kind, "id": spec.id, "input": ref.name}
+    found = SNAPSHOT_PATH.fullmatch(ref.path or "")
+    if found is None:
+        raise ValidationFailed(
+            f"not_found: input {ref.name!r} is not artifacts/{KIND}/<id>/snapshot.json of this "
+            f"data root ({ref.path or 'no path'})",
+            fields=fields,
+        )
+    snapshot_id = found[1]
+    try:
+        checked = check_snapshot(data_root, snapshot_id)
+    except (ValidationFailed, IntegrityError) as e:  # not_found / partial / an unreadable manifest
+        raise type(e)(f"{e.args[0]} (input {ref.name!r})", fields=fields) from e
+    if not checked.ok:
+        bad = [*checked.mismatch, *checked.missing]
+        raise IntegrityError(
+            f"mismatch: input {ref.name!r}: {KIND}/{snapshot_id} does not hold "
+            f"(mismatch={len(checked.mismatch)} missing={len(checked.missing)}: "
+            f"{', '.join(bad[:5])}); move the directory aside and snapshot again",
+            fields=fields,
+        )
+
+
+def _check_reserved_inputs(spec: ArtifactSpec, data_root: Path) -> None:
+    """spec 2026-10-31 §5.5: every ``code_snapshot.*`` input is an intact snapshot of this data
+    root; then the snapshots this process took (``vcp.code.process.snapshot_inputs``) hold the
+    modules it has loaded. Asked at ``create`` before anything is claimed, and at ``commit``. Not a
+    single import of the code layer unless the spec has such an input."""
+    code = [ref for ref in spec.inputs if ref.name.startswith(CODE_INPUT_PREFIX)]
+    if not code:
+        return
+    for ref in code:
+        _check_code_snapshot(spec, ref, data_root)
+    from vcp.code import process  # not at import time: vcp.code.snapshot imports this module
+
+    process.check_imports(spec, data_root)
 
 
 class ArtifactWriter:
@@ -58,10 +106,12 @@ class ArtifactWriter:
 
     @classmethod
     def create(cls, spec: ArtifactSpec, *, data_root: Path) -> ArtifactWriter:
-        """Open: resolve the inputs (their sha is fixed now), require a supersedes target that
-        exists and is committed, claim the directory, write ``spec.json``."""
+        """Open: resolve the inputs (their sha is fixed now), check the reserved ones, require a
+        supersedes target that exists and is committed, claim the directory, write
+        ``spec.json``."""
         data_root = Path(data_root)
         resolved = store.resolve_inputs(spec, data_root)
+        _check_reserved_inputs(resolved, data_root)
         if resolved.supersedes is not None:
             store.load_manifest(data_root, resolved.kind, resolved.supersedes)
         directory = artifact_dir(data_root, resolved.kind, resolved.id)
@@ -226,8 +276,9 @@ class ArtifactWriter:
         )
 
     def commit(self) -> ArtifactManifest:
-        """Reserved files present → inputs unchanged → superseded artifact verified →
-        ``manifest.json`` (the commit point) → ledger row. Afterwards the writer is closed."""
+        """Reserved files present → inputs unchanged → reserved inputs hold again →
+        superseded artifact verified → ``manifest.json`` (the commit point) → ledger row.
+        Afterwards the writer is closed."""
         if self._closed:
             raise ValidationFailed(
                 f"closed: artifact {self.spec.kind}/{self.spec.id} is committed or closed",
@@ -236,6 +287,7 @@ class ArtifactWriter:
         self._still_claimed()
         self._check_reserved()
         self._check_drift()
+        _check_reserved_inputs(self.spec, self.data_root)
         supersedes_sha256 = self._check_supersedes()
         manifest = ArtifactManifest(
             spec=self.spec,

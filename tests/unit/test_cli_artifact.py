@@ -5,6 +5,8 @@ import json
 from typer.testing import CliRunner
 
 from vcp.cli import app
+from vcp.code.scan import scan_root
+from vcp.code.snapshot import snapshot_json_path, write_snapshot
 from vcp.core.paths import artifact_dir
 
 runner = CliRunner()
@@ -241,6 +243,28 @@ def test_status_and_clean(roots, tmp_path):
     assert r.exit_code == 0 and "kinds=0" in _verdict(r.output)
     r = _run("clean")
     assert r.exit_code == 0 and "status=OK" in _verdict(r.output) and "nothing to clean" in r.output
+
+
+def test_cli_create_checks_a_snapshot_input_only_statically(roots, tmp_path):
+    """spec 2026-10-31 §5.5: a snapshot another process took is checked for integrity only --
+    this process (pytest, CliRunner) has modules everywhere, and that does not matter."""
+    code = tmp_path / "code"
+    code.mkdir()
+    (code / "a.py").write_bytes(b"a = 1\n")
+    outcome = write_snapshot(roots.data, scan_root(code, kind="dir"), command="test")
+    snapshot = snapshot_json_path(roots.data, outcome.snapshot_id)
+    r = _create(tmp_path, "r1", "--input", f"code_snapshot.cwd={snapshot}")
+    assert r.exit_code == 0, r.output
+    r = _create(tmp_path, "r2", "--input", f"code_snapshot.cwd={snapshot.parent / 'manifest.json'}")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "not_found: input 'code_snapshot.cwd'" in v
+    assert "kind=receipt id=r2" in v and "input=code_snapshot.cwd" in v
+    (snapshot.parent / "files" / "a.py").write_bytes(b"a = 2\n")
+    r = _create(tmp_path, "r3", "--input", f"code_snapshot.cwd={snapshot}")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and 'reason="IntegrityError: mismatch: ' in v and "id=r3" in v
+    assert not artifact_dir(roots.data, "receipt", "r2").exists()
+    assert not artifact_dir(roots.data, "receipt", "r3").exists()
 
 
 def test_artifact_failure_preserves_command_identity(roots):

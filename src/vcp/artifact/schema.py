@@ -17,6 +17,10 @@ from vcp.core.paths import check_relative_path, validate_name
 
 SCHEMA_VERSION = 1
 RESERVED_NAMES = frozenset({"manifest.json", "spec.json", "failure.json"})
+# Input names the writer checks itself (spec 2026-10-31 §5.5): ``code_snapshot.<label>`` must be
+# an intact code snapshot of the data root, ``authorization`` an authorization the job meets.
+CODE_INPUT_PREFIX = "code_snapshot."
+AUTHORIZATION_INPUT = "authorization"
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 
 

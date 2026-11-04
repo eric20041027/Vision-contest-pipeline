@@ -15,6 +15,10 @@ os.environ["NO_COLOR"] = "1"
 for _forced in ("FORCE_COLOR", "PY_COLORS", "CLICOLOR_FORCE"):
     os.environ.pop(_forced, None)
 
+# Fixtures defined once for the tests that use them (`proj`; Wave 1c preflight R13). Registered
+# here, the top-level conftest, so pytest imports the module itself and rewrites its asserts.
+pytest_plugins = ["code_fixtures"]
+
 
 @pytest.fixture(autouse=True)
 def _isolated_roots(tmp_path, monkeypatch):
@@ -37,11 +41,14 @@ def _roomy_disk(monkeypatch):
 def _code_tracking_off(monkeypatch):
     """No editable install is a code root and no child traces its imports unless the test calls
     helpers.trace_on: the test venv's editable vcp is this whole checkout, which every train run
-    would scan and copy."""
-    from vcp.code import roots
+    would scan and copy. No snapshot an earlier test took with ``snapshot_inputs`` is tracked:
+    ids are content, so a stale entry would turn another test's static ``code_snapshot.*`` input
+    into an import check against this pytest process."""
+    from vcp.code import process, roots
 
     monkeypatch.setenv("VCP_CODE_TRACE", "0")
     monkeypatch.setattr(roots, "editables_of", lambda raw: [])
+    monkeypatch.setattr(process, "_TRACKED", {})
 
 
 @pytest.fixture(autouse=True)

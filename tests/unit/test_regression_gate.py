@@ -545,6 +545,7 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
                 "test_an_untracked_helper_is_kept_and_warned",
                 "test_framework_outputs_do_not_change_the_identity",
                 "test_a_failing_trace_keeps_the_exit_code",
+                "test_a_trace_that_cannot_be_imported_keeps_the_exit_code",
                 "test_an_unignored_secret_is_not_read",
             ],
             "tests/unit/artifact/test_authorization.py": [

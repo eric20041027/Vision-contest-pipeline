@@ -49,6 +49,22 @@ def test_current_requires_the_wrapper_env(roots, monkeypatch):
         Session.current(roots.data)
 
 
+def test_current_survives_a_trace_module_that_cannot_be_imported(roots, monkeypatch, capsys):
+    """Spec 2026-10-31 §5.2: the whole trace is inside the guard, its import included -- a trace
+    that cannot even load is one stderr line, never a ``Session.current()`` that raises."""
+    import vcp.code
+
+    _running(roots)
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.delattr(vcp.code, "trace", raising=False)
+    monkeypatch.setitem(sys.modules, "vcp.code.trace", None)  # the import raises
+    s = Session.current(roots.data)
+    assert (s.run_id, s.data_root) == ("r1", roots.data)
+    err = capsys.readouterr().err
+    assert err.startswith("[vcp] code trace skipped: ModuleNotFoundError: ")
+    assert err.count("\n") == 1
+
+
 def test_attempt_is_the_exported_one_or_else_the_records(roots, monkeypatch):
     """VCP-043: a public, read-only attempt number (the contest had to call ``_attempt()``)."""
     _running(roots)  # the record's current attempt is 2

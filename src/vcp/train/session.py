@@ -10,6 +10,7 @@ and after -- so there is no concurrent writer.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -34,6 +35,15 @@ from vcp.train.records import (
 from vcp.train.schema import CheckpointRecord
 
 
+def _trace_skipped(error: Exception) -> None:
+    """The one stderr line ``vcp.code.trace`` writes when it gives up, for a trace module that
+    could not be imported (and so cannot write it itself)."""
+    try:
+        sys.stderr.write(f"[vcp] code trace skipped: {type(error).__name__}: {error}\n")
+    except Exception:  # no stderr to tell: the session goes on regardless
+        pass
+
+
 class Session:
     def __init__(self, run_id: str, data_root: Path) -> None:
         self.run_id = run_id
@@ -49,10 +59,14 @@ class Session:
             raise ValidationFailed(f"no training record for run {run_id!r} under {root}")
         session = cls(run_id, root)
         # spec 2026-10-31 §5.2: the first session of a process traces its imports at exit. Not
-        # imported at the top: the trace module imports the training layer.
-        from vcp.code import trace
+        # imported at the top: the trace module imports the training layer. The import is inside
+        # the guard as well: a trace that cannot even load must not change what the child does.
+        try:
+            from vcp.code import trace
 
-        trace.arm(session)
+            trace.arm(session)
+        except Exception as e:
+            _trace_skipped(e)
         return session
 
     @property

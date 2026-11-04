@@ -689,6 +689,25 @@ def test_a_failing_trace_keeps_the_exit_code(roots, work, monkeypatch):
     assert not _trace_refs(roots) and not (roots.data / "artifacts" / "code_trace").exists()
 
 
+def test_a_trace_that_cannot_be_imported_keeps_the_exit_code(roots, work, monkeypatch):
+    """The import of the trace module is inside the guard too (spec §5.2): the child goes on, its
+    exit code is its own, and the trace is one stderr line."""
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    poisoned = (
+        "import sys\nimport vcp.code\nfrom vcp.train import Session\n"
+        "vars(vcp.code).pop('trace', None)\nsys.modules['vcp.code.trace'] = None\n"
+        "Session.current()\n"
+    )
+    _child_first(work, poisoned)
+    res = train_run(_spec(roots, work, command=[sys.executable, "fake_train.py", "3"]))
+    assert res.attempt.exit_code == 3 and res.code_trace == "none"
+    console_text = (run_dir(roots.data, "r") / res.attempt.console).read_text(encoding="utf-8")
+    assert "[vcp] code trace skipped: ModuleNotFoundError" in console_text
+    assert "Traceback" not in console_text
+    assert not _trace_refs(roots) and not (roots.data / "artifacts" / "code_trace").exists()
+
+
 def test_a_trace_id_that_is_taken_moves_to_the_next_seq(roots, work):
     """``ArtifactWriter``'s ``exists:`` is seq + 1; the inputs are the snapshots, named
     ``snapshot.<label>`` (open point 9), and a trace that cannot be read is ``incomplete``."""

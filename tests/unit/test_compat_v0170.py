@@ -2,11 +2,22 @@
 record with no new content is written back byte for byte. The literals are in
 ``tests/compat_v0170.py``; later tasks add theirs there."""
 
+import json
+
 import pytest
 
-from compat_v0170 import ENV_JSON_0100, ENV_JSON_0170, RUN_YAML_0170, TRAIN_YAML_0170
+from compat_v0170 import (
+    ENV_JSON_0100,
+    ENV_JSON_0170,
+    RUN_YAML_0170,
+    STAGE_JSON_0170_FILE,
+    STAGE_JSON_0170_KERNEL,
+    SUBMIT_YAML_0170,
+    TRAIN_YAML_0170,
+)
 from vcp.core.config import dump_yaml_model, load_yaml_model
 from vcp.measure.schema import RunCard
+from vcp.submit.schema import PlatformProfile, Staged
 from vcp.train.schema import EnvSnapshot, TrainRecord
 
 
@@ -29,3 +40,27 @@ def test_a_0170_train_yaml_and_run_yaml_keep_their_bytes(tmp_path, name, text, m
 def test_old_env_json_still_loads(text):
     snap = EnvSnapshot.model_validate_json(text)
     assert snap.git is not None and snap.git.commit.startswith("6f867fe")
+
+
+def test_a_0170_submit_yaml_keeps_its_bytes(tmp_path):
+    """A profile without ``require_code`` loads and is written back as it was: the default is
+    never written (spec §4.7), so ``vcp submit init`` still writes what 0.17 reads."""
+    source = tmp_path / "in" / "submit.yaml"
+    source.parent.mkdir()
+    source.write_bytes(SUBMIT_YAML_0170.encode("utf-8"))
+    profile = load_yaml_model(source, PlatformProfile)
+    written = tmp_path / "out" / "submit.yaml"
+    written.parent.mkdir()
+    dump_yaml_model(profile, written)
+    assert written.read_bytes() == SUBMIT_YAML_0170.encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "text", [STAGE_JSON_0170_FILE, STAGE_JSON_0170_KERNEL], ids=["file", "kernel"]
+)
+def test_a_0170_stage_json_keeps_its_bytes(text):
+    """A ``stage.json`` without ``code`` / ``code_snapshot`` loads, and the serializer ``stage``
+    writes it with (the two keys are left out when they are None) gives the same text back."""
+    staged = Staged.model_validate_json(text)
+    again = json.dumps(staged.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
+    assert again == text

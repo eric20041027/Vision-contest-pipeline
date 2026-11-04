@@ -15,6 +15,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.code.grade import lowest
+from vcp.code.schema import CODE_RANK, CodeGrade
 from vcp.core.build import build_string
 from vcp.core.errors import IntegrityError, PlanMismatchError, ValidationFailed
 from vcp.core.hashing import md5_file, sha256_file
@@ -23,6 +25,7 @@ from vcp.core.time import stamp, utc_now
 from vcp.data.access.access import DatasetAccess
 from vcp.data.access.schema import GRADE_RANK
 from vcp.data.dataset import Dataset
+from vcp.data.evidence import IntactMemo
 from vcp.data.schema import DatasetCard
 from vcp.data.split import load_plan
 from vcp.fuse.build import load_record
@@ -32,7 +35,7 @@ from vcp.measure.runs import assert_run_matches, load_run, verify_prediction
 from vcp.measure.schema import RunCard
 from vcp.submit.gate import admit
 from vcp.submit.guards import assert_before_deadline, assert_unlocked
-from vcp.submit.kernel import check_weights
+from vcp.submit.kernel import check_notebook_code, check_weights, code_grades, submission_runs
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.location import LEDGER_NAME, transaction
 from vcp.submit.pairing import UNCHECKED, is_fusion, verify_pairing, verify_weights
@@ -67,6 +70,7 @@ class StageSpec(BaseModel):
     output: str = "submission.csv"
     weights: list[str] = Field(default_factory=list)
     writer_opts: dict[str, str] = Field(default_factory=dict)
+    code: str | None = None  # a kernel's notebook: the code_snapshot id
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -173,6 +177,46 @@ def _render(
     return artifact, tmp, identity
 
 
+def _code_gate(
+    spec: StageSpec,
+    profile: PlatformProfile,
+    data_root: Path,
+    pairing: Pairing,
+    test_card: RunCard | None,
+    weights: list[WeightRef],
+) -> tuple[CodeGrade, Pairing]:
+    """The code grade of the submission (spec 2026-10-31 §5.8): the lowest over its eval run, its
+    test run and its weights runs, held to ``require_code``. A candidate below the requirement
+    stops here (``code_required:``); a baseline or probe passes and carries ``code:<run>=<grade>``
+    for each run below it in its pairing checks. A kernel's ``--code`` snapshot must hold, and a
+    kernel candidate needs one once the profile asks for ``snapshot`` or more."""
+    if spec.code is not None:
+        check_notebook_code(data_root, spec.code)
+    require = profile.require_code
+    test_run = test_card.run_id if test_card is not None else None
+    runs = submission_runs(spec.eval_run, test_run, weights)
+    grades = code_grades(data_root, runs, IntactMemo())
+    below = {run: grade for run, grade in grades.items() if CODE_RANK[grade] < CODE_RANK[require]}
+    if spec.kind != "candidate":
+        notes = [f"code:{run}={grade}" for run, grade in below.items()]
+        checked = pairing.model_copy(update={"checks": [*pairing.checks, *notes]})
+        return lowest(grades.values()), checked
+    if below:
+        run, grade = next(iter(below.items()))
+        raise ValidationFailed(
+            f"code_required: run {run!r} is {grade}, profile requires {require}",
+            fields={"run": run, "code": grade},
+        )
+    needs_notebook = CODE_RANK[require] >= CODE_RANK["snapshot"]
+    if profile.submission_kind == "kernel" and needs_notebook and spec.code is None:
+        raise ValidationFailed(
+            "code_required: a kernel candidate needs --code <snapshot id> when the profile "
+            f"requires {require}",
+            fields={"code": "none"},
+        )
+    return lowest(grades.values()), pairing
+
+
 def stage(spec: StageSpec) -> StageResult:
     paths = DatasetPaths.resolve(
         spec.dataset, data_root=spec.data_root, configs_root=spec.configs_root
@@ -182,6 +226,12 @@ def stage(spec: StageSpec) -> StageResult:
         raise ValidationFailed(
             "kernel_options: --kernel / --version / --weights apply to kernel submissions; "
             "this profile is submission_kind=file",
+            fields={"kind": "file"},
+        )
+    if profile.submission_kind == "file" and spec.code is not None:
+        raise ValidationFailed(
+            "invalid: --code names a kernel's notebook snapshot; this profile is "
+            "submission_kind=file (its code is the runs')",
             fields={"kind": "file"},
         )
     if profile.submission_kind == "kernel" and spec.test_run:
@@ -294,6 +344,7 @@ def _stage_locked(
         )
         pairing = pairing.model_copy(update={"checks": [*pairing.checks, *checked.notes]})
         grade = min(grade, checked.grade, key=lambda g: GRADE_RANK[g])
+    code_grade, pairing = _code_gate(spec, profile, paths.data_root, pairing, test_card, weights)
     if UNCHECKED in pairing.checks:
         warnings.append("config_hash unchecked (missing on one side)")
     fuse = (
@@ -315,6 +366,7 @@ def _stage_locked(
             version=spec.version,
             output=spec.output,
             weights=weights,
+            code_snapshot=spec.code,
         )
         final_dir.mkdir(parents=True)
     try:
@@ -331,6 +383,7 @@ def _stage_locked(
             staged_at=stamp(),
             vcp_version=build_string(),
             provenance=grade,
+            code=code_grade,
         )
         text = json.dumps(staged.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
         (final_dir / STAGE_FILE).write_text(text, encoding="utf-8", newline="\n")

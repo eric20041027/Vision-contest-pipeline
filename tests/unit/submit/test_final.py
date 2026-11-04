@@ -7,19 +7,24 @@ from submit_fixtures import (
     EVAL,
     STAMP,
     TEST,
+    code_snapshot,
     ingest_run,
     seed_eval_runs,
     seed_judgements,
     seed_test_runs,
     selected_row,
+    tie_code,
 )
+from vcp.code.snapshot import KIND
 from vcp.core.config import dump_yaml_model
 from vcp.core.errors import ValidationFailed
+from vcp.core.paths import artifact_dir
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.data.access.access import DatasetAccess
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, save_run
+from vcp.submit import kernel
 from vcp.submit.actions import record, score
 from vcp.submit.final import count_unseals, final, lock, next_step_hint, rank_key, unlock
 from vcp.submit.ledger import SubmissionLedger
@@ -460,3 +465,95 @@ def test_next_step_hint_joins_every_chosen_id():
         == "select S1,S2 on the platform, then: vcp submit select --dataset beach-test "
         "--record S1,S2"
     )
+
+
+# --- 0.18.0: final re-reads the code grade (spec 2026-10-31 §5.8) -----------------------------
+
+FINAL_ENTRY_KEYS = {
+    "submission_id",
+    "eligible",
+    "why",
+    "sealed_value",
+    "sealed_reading_id",
+    "public",
+    "staged_at",
+    "provenance",
+}
+
+
+def test_final_marks_code_required(uploaded):
+    """S1 was staged while the profile asked for nothing; the profile now asks for a snapshot, so
+    `final` reads the grade again: S1 (a candidate) drops out, the baseline S2 stays, and the
+    table keeps the shape it had."""
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+    assert load_staged(uploaded.test_paths, "S1").code == "declared"
+    plain = final(TEST, dry_run=True, **_kw(uploaded))
+    dump_yaml_model(_profile(require_code="snapshot"), uploaded.test_paths.submit_yaml)
+
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+
+    table = {e.submission_id: e for e in res.row.table}
+    assert table["S1"].why == "code_required" and not table["S1"].eligible
+    assert table["S2"].eligible and table["S3"].why == "probe"
+    assert res.chosen == ["S2"] and res.unranked == ["S1"]
+    assert all(set(e.model_dump(mode="json")) == FINAL_ENTRY_KEYS for e in res.row.table)
+    assert {e.submission_id: e.provenance for e in res.row.table} == {
+        e.submission_id: e.provenance for e in plain.row.table
+    }
+
+    tie_code(uploaded, "good", code_snapshot(uploaded))  # one run of the two is not enough
+    assert {e.submission_id: e.why for e in final(TEST, dry_run=True, **_kw(uploaded)).row.table}[
+        "S1"
+    ] == "code_required"
+    tie_code(uploaded, "good.test", code_snapshot(uploaded))
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert {e.submission_id: e.eligible for e in res.row.table}["S1"] and res.chosen == ["S1"]
+
+
+def test_final_reads_the_kernel_snapshot_as_stage_recorded_it(pair):
+    seed_eval_runs(pair)
+    seed_judgements(pair)
+    init_profile(
+        _profile(submission_kind="kernel", writer=None, require_code="snapshot"), **_kw(pair)
+    )
+    tie_code(pair, "good", code_snapshot(pair))
+    snap = code_snapshot(pair, "notebook", b"NOTEBOOK = 1")
+    for sid, code in (("K1", snap), ("K2", None)):
+        spec = StageSpec(
+            dataset=TEST,
+            submission_id=sid,
+            eval_run="good",
+            kernel="u/nb",
+            version=3,
+            weights=["good"],
+            kind="candidate" if code else "baseline",
+            reason=None if code else "why",
+            code=code,
+            **_kw(pair),
+        )
+        stage(spec)
+        record(TEST, sid, utc_now().strftime("%Y-%m-%d %H:%M:%S"), tz="utc", **_kw(pair))
+    _measure_holdout(pair, "good")
+
+    res = final(TEST, dry_run=True, **_kw(pair))
+    assert {e.submission_id: e.eligible for e in res.row.table} == {"K1": True, "K2": True}
+
+    # the snapshot K1 names stops holding: the notebook's code can no longer be shown
+    (artifact_dir(pair.roots.data, KIND, snap) / "files" / "a.py").write_bytes(b"NOTEBOOK = 2")
+    res = final(TEST, dry_run=True, **_kw(pair))
+    assert {e.submission_id: e.why for e in res.row.table}["K1"] == "code_required"
+    assert res.chosen == ["K2"]
+
+
+def test_final_does_not_look_at_the_code_when_the_profile_does_not_ask(uploaded, monkeypatch):
+    """`declared` is the default and nothing is below it: not a single run is graded."""
+    _measure_holdout(uploaded, "good")
+    _measure_holdout(uploaded, "bad")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("code_info called")
+
+    monkeypatch.setattr(kernel, "code_info", boom)
+    res = final(TEST, dry_run=True, **_kw(uploaded))
+    assert res.chosen == ["S1"]

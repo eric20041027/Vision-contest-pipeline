@@ -10,10 +10,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from vcp.code.grade import lowest
+from vcp.code.schema import CODE_RANK
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, stamp, utc_now
 from vcp.data.access.schema import GRADE_RANK, Grade
+from vcp.data.evidence import IntactMemo
 from vcp.data.split import load_plan
 from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.metrics import effective_params, get_metric, params_key
@@ -21,11 +24,16 @@ from vcp.measure.provenance import provenance
 from vcp.measure.runs import load_run
 from vcp.measure.schema import Reading, RunCard
 from vcp.submit.guards import assert_unlocked
-from vcp.submit.kernel import kernel_provenance
+from vcp.submit.kernel import (
+    code_grades,
+    kernel_provenance,
+    notebook_code_holds,
+    submission_runs,
+)
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.location import transaction
 from vcp.submit.profile import load_profile
-from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile
+from vcp.submit.schema import FinalEntry, LedgerRow, PlatformProfile, Staged
 from vcp.submit.select import resolve
 from vcp.submit.stage import load_staged
 
@@ -213,14 +221,14 @@ def _deadline_warnings(profile: PlatformProfile) -> list[str]:
 
 
 def _run_provenance(
-    paths: DatasetPaths, configs_root: Path | None, sid: str, eval_run: str
+    paths: DatasetPaths, configs_root: Path | None, staged: Staged
 ) -> tuple[RunCard, Grade, set[str]]:
     """The eval run behind a submission, with the grade of its reads and every subset it read
     (a kernel submission re-read as ``stage`` recorded it, weights included)."""
-    card = load_run(paths.data_root, eval_run)
+    card = load_run(paths.data_root, staged.eval_run)
     info = provenance(card, data_root=paths.data_root, configs_root=configs_root)
     grade, observed = info.grade, set(info.observed)
-    artifact = load_staged(paths, sid).artifact
+    artifact = staged.artifact
     if artifact.kind == "kernel":  # VCP-036: the weights the notebook loads count too
         grade, observed = kernel_provenance(
             data_root=paths.data_root,
@@ -230,6 +238,24 @@ def _run_provenance(
             weights=artifact.weights,
         )
     return card, grade, observed
+
+
+def _lacks_code(
+    paths: DatasetPaths, profile: PlatformProfile, staged: Staged, memo: IntactMemo
+) -> bool:
+    """Whether the code behind a submission is short of ``require_code``, read again the way
+    ``stage`` read it (spec 2026-10-31 §5.8): a run (the eval run, a file's test run, a kernel's
+    weights runs) below the requirement, or -- once it asks for ``snapshot`` or more -- a kernel
+    whose ``--code`` snapshot was not recorded or no longer holds."""
+    require = CODE_RANK[profile.require_code]
+    artifact = staged.artifact
+    runs = submission_runs(staged.eval_run, staged.test_run, artifact.weights)
+    grade = lowest(code_grades(paths.data_root, runs, memo).values())
+    if CODE_RANK[grade] < require:
+        return True
+    if artifact.kind == "kernel" and require >= CODE_RANK["snapshot"]:
+        return not notebook_code_holds(paths.data_root, artifact.code_snapshot)
+    return False
 
 
 def _final_entries(
@@ -245,10 +271,12 @@ def _final_entries(
     usable one, and ``why`` it is not eligible when it has not."""
     params_hash = params_key(params)
     readings = ReadingsLedger(eval_paths.measure_dir / READINGS_LEDGER)
+    memo = IntactMemo()  # one for the table: a snapshot several runs share is hashed once
     entries: list[FinalEntry] = []
     for sid in ledger.ids():
         st = ledger.staged(sid)
         assert st is not None
+        staged = load_staged(paths, sid)
         latest = ledger.latest_score(sid)
         public = latest.public if latest is not None else None
         reading: Reading | None = None
@@ -260,13 +288,17 @@ def _final_entries(
         elif _errored(ledger, sid):
             why = "errored"  # not in NOT_RANKED: listed among the unranked (spec 2026-10-09 §4.5)
         else:
-            card, grade, observed = _run_provenance(paths, configs_root, sid, str(st.eval_run))
+            card, grade, observed = _run_provenance(paths, configs_root, staged)
             reading, why = sealed_reading(readings, card, profile, params_hash, sealed_size)
             if why == "" and st.kind == "candidate":
                 if profile.sealed_subset in observed:
                     why = "observed_sealed"
                 elif GRADE_RANK[grade] < GRADE_RANK[profile.require_provenance]:
                     why = "provenance_required"
+                elif profile.require_code != "declared" and _lacks_code(
+                    paths, profile, staged, memo
+                ):
+                    why = "code_required"
         entries.append(
             FinalEntry(
                 submission_id=sid,
@@ -275,7 +307,7 @@ def _final_entries(
                 sealed_value=reading.value if reading is not None else None,
                 sealed_reading_id=reading.reading_id if reading is not None else None,
                 public=public,
-                staged_at=load_staged(paths, sid).staged_at,
+                staged_at=staged.staged_at,
                 provenance=grade,
             )
         )

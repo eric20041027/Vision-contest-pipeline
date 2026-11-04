@@ -270,3 +270,136 @@ ENV_JSON_0100 = """\
   "taken_at": "2026-10-20T08:00:00.000Z"
 }
 """
+
+# submit.yaml as `vcp submit init` wrote it in 0.17 (ledger configs and the default
+# selection_warn_hours are left out)
+SUBMIT_YAML_0170 = """\
+dataset: beach-test
+eval_dataset: beach
+plan_id: fixed-v1
+sealed_subset: holdout
+test_plan: all-v1
+test_subset: test
+platform: manual
+competition: null
+submission_kind: file
+board_rule: last
+final_rule: best_sealed
+final_slots: 1
+quota:
+  per_day: 3
+  day_tz: Asia/Taipei
+  day_start: 00:00
+display_tz: null
+deadline: null
+metric: accuracy
+metric_params: {}
+writer: scores_csv
+writer_opts:
+  id_field: view_stem
+kaggle_command:
+- kaggle
+require_provenance: declared
+created_at: '2026-09-05T00:00:00.000Z'
+"""
+
+# stage.json of a file candidate (0.17): provenance, no code
+STAGE_JSON_0170_FILE = """\
+{
+  "submission_id": "S1",
+  "dataset": "beach-test",
+  "kind": "candidate",
+  "eval_run": "good",
+  "test_run": "good.test",
+  "pairing": {
+    "mode": "single",
+    "members": [],
+    "checks": [
+      "weights_hash=770e607624d6",
+      "config_hash=unchecked"
+    ]
+  },
+  "artifact": {
+    "kind": "file",
+    "path": "submission.csv",
+    "bytes": 3236,
+    "sha256": "eda509f26bf8115481be64484350961243bdc420da3b812f4ffaa6928ee64b27",
+    "md5": "3e72f1799525b31917f0c0b8abfedc8b",
+    "writer": "scores_csv",
+    "writer_version": "1",
+    "writer_opts": {
+      "id_field": "view_stem"
+    },
+    "rows": 50,
+    "samples": 50,
+    "missing": 0,
+    "kernel": null,
+    "version": null,
+    "output": null,
+    "weights": []
+  },
+  "gate": {
+    "admission": "PASS",
+    "judgements": [
+      "p-good"
+    ],
+    "reason": ""
+  },
+  "profile_sha256": "5b917d8e773c3f2e80477e6474fd1a5d4b8aef4fc97e7a179081e6abff1aae04",
+  "staged_at": "2026-10-20T10:00:00.000Z",
+  "vcp_version": "0.17.0+g6f867fe",
+  "provenance": "declared"
+}
+"""
+
+# stage.json of a kernel candidate (0.17): weights, provenance, no code or code_snapshot
+STAGE_JSON_0170_KERNEL = """\
+{
+  "submission_id": "K1",
+  "dataset": "beach-test",
+  "kind": "candidate",
+  "eval_run": "good",
+  "test_run": null,
+  "pairing": {
+    "mode": "kernel",
+    "members": [],
+    "checks": [
+      "notebook=declared",
+      "weights:good=770e607624d6"
+    ]
+  },
+  "artifact": {
+    "kind": "kernel",
+    "path": null,
+    "bytes": null,
+    "sha256": null,
+    "md5": null,
+    "writer": null,
+    "writer_version": null,
+    "writer_opts": {},
+    "rows": null,
+    "samples": null,
+    "missing": null,
+    "kernel": "u/nb",
+    "version": 3,
+    "output": "submission.csv",
+    "weights": [
+      {
+        "run": "good",
+        "sha256": "770e607624d689265ca6c44884d0807d9b054d23c473c106c72be9de08b7376c"
+      }
+    ]
+  },
+  "gate": {
+    "admission": "PASS",
+    "judgements": [
+      "p-good"
+    ],
+    "reason": ""
+  },
+  "profile_sha256": "62b401d9b6287dda7a775ccaaf6bacb5763fd9cd66f1afa199b8f6d470375c11",
+  "staged_at": "2026-10-20T10:00:00.000Z",
+  "vcp_version": "0.17.0+g6f867fe",
+  "provenance": "declared"
+}
+"""

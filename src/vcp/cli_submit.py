@@ -181,6 +181,10 @@ def stage_cmd(
         list[str] | None,
         typer.Option("--weights", help="RUN[:sha] the kernel loads (repeatable)"),
     ] = None,
+    code: Annotated[
+        str | None,
+        typer.Option("--code", help="kernel submissions: the code_snapshot id of the notebook"),
+    ] = None,
     writer_opt: Annotated[
         list[str] | None, typer.Option("--writer-opt", help="writer option key=value")
     ] = None,
@@ -205,6 +209,7 @@ def stage_cmd(
                 version=version,
                 output=output,
                 weights=list(weights or []),
+                code=code,
                 writer_opts=parse_opts(writer_opt, "--writer-opt"),
                 data_root=data_root,
                 configs_root=configs_root,
@@ -233,6 +238,8 @@ def stage_cmd(
             fields["missing"] = st.artifact.missing or 0
         if st.provenance:
             fields["provenance"] = st.provenance
+        if st.code:
+            fields["code"] = st.code
         if res.identity:
             fields["identity"] = res.identity
         for check in st.pairing.checks:

@@ -351,3 +351,31 @@ def test_snapshot_roots_does_not_track_anything_for_the_import_check(roots, tmp_
     one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
     process.snapshot_roots(roots.data, None, [one])
     assert process._TRACKED == {}
+
+
+@pytest.mark.parametrize("inside", [False, True], ids=["at", "inside"])
+@pytest.mark.parametrize("which", ["data root", "configs root"])
+def test_snapshot_roots_refuses_a_root_at_or_inside_the_data_or_configs_root(
+    tmp_path, which, inside
+):
+    data, configs = tmp_path / "data", tmp_path / "configs"
+    base = data if which == "data root" else configs
+    write_file(base / "sub" / "x.py")
+    with pytest.raises(ValidationFailed, match="^invalid:") as ei:
+        process.snapshot_roots(data, configs, [base / "sub" if inside else base])
+    assert ei.value.fields == {"code_root": "root-1"} and which in str(ei.value)
+    assert not (data / "artifacts").exists()
+
+
+def test_snapshot_roots_refuses_before_it_writes_for_a_later_root_too(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+    with pytest.raises(ValidationFailed, match="^invalid:") as ei:
+        process.snapshot_roots(roots.data, roots.configs, [one, roots.configs])
+    assert ei.value.fields == {"code_root": "root-2"}
+    assert not (roots.data / "artifacts").exists()
+
+
+def test_without_a_configs_root_a_directory_called_configs_is_just_a_root(roots, tmp_path):
+    configs = _dir(tmp_path, "configs", {"c.py": b"c = 1\n"})
+    [written] = process.snapshot_roots(roots.data, None, [configs])
+    assert written.scan.files == 1

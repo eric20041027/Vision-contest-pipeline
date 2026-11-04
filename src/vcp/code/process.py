@@ -49,7 +49,13 @@ from vcp.code.trace import TracedRoot, classify_modules, site_dirs, stdlib_dirs
 from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.log import FieldValue
-from vcp.core.paths import path_key, resolve_configs_root, resolve_stored_path, store_path
+from vcp.core.paths import (
+    is_under,
+    path_key,
+    resolve_configs_root,
+    resolve_stored_path,
+    store_path,
+)
 
 __all__ = [
     "COMMAND",
@@ -232,11 +238,12 @@ class Written:
     outcome: SnapshotOutcome
 
 
-def _given_roots(paths: Sequence[Path]) -> list[PlannedRoot]:
+def _given_roots(paths: Sequence[Path], left_out: Mapping[str, Path]) -> list[PlannedRoot]:
     """Each ``--root`` as it was given: ``root-<n>`` (``n`` counts from 1 in what was given,
     whatever is dropped before it), the kind the disk says (``root_kind``), a second spelling of
-    one directory dropped. A path that is no directory is ``not_found:``, before anything is
-    scanned or written."""
+    one directory dropped. A path that is no directory is ``not_found:``, and one at or inside a
+    directory a snapshot leaves out (``left_out``: the data root, the configs root) is
+    ``invalid:`` -- it would hold no code at all -- both before anything is scanned or written."""
     planned: list[PlannedRoot] = []
     seen: set[str] = set()
     for n, path in enumerate(paths, start=1):
@@ -245,6 +252,13 @@ def _given_roots(paths: Sequence[Path]) -> list[PlannedRoot]:
             raise ValidationFailed(
                 f"not_found: --root {path} is not a directory", fields={"code_root": label}
             )
+        for name, directory in left_out.items():
+            if is_under(path, directory):
+                raise ValidationFailed(
+                    f"invalid: --root {path} is the {name} {directory} or inside it, which a "
+                    "snapshot leaves out; give the directory that holds the code",
+                    fields={"code_root": label},
+                )
         resolved = Path(path).resolve()
         key = path_key(resolved)
         if key in seen:
@@ -264,15 +278,16 @@ def snapshot_roots(
     the generated-code directories an environment variable puts inside one (R4); every file keeps
     its bytes (``keep="all"``: the limits that stay are the file and hash totals). A root that
     cannot be scanned stops everything before anything is written; then each snapshot is written
-    or reused, and one that cannot be is a refusal (``strict``). A reused snapshot is whatever
-    was written first: a capped one comes back with ``outcome.not_kept`` > 0."""
+    or reused, and one that cannot be is a refusal (``strict``). A root that is no directory is
+    ``not_found:`` and one at or inside the data or configs root is ``invalid:``. A reused
+    snapshot is whatever was written first: a capped one comes back with ``outcome.not_kept`` >
+    0."""
     data_root = Path(data_root)
-    planned = _given_roots(roots)
-    fixed = [
-        data_root,
-        *([Path(configs_root)] if configs_root is not None else []),
-        *generated_exclusions(planned),
-    ]
+    left_out = {"data root": data_root}
+    if configs_root is not None:
+        left_out["configs root"] = Path(configs_root)
+    planned = _given_roots(roots, left_out)
+    fixed = [*left_out.values(), *generated_exclusions(planned)]
     scans = [
         scan_root(
             root.path,

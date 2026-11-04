@@ -31,8 +31,10 @@ __all__ = [
     "RootKind",
     "RootScan",
     "ScanReason",
+    "ScanStopped",
     "identity_sha256",
     "index_jsonl_bytes",
+    "is_linked",
     "is_under",
     "nearest_dot_git",
     "path_key",
@@ -40,6 +42,7 @@ __all__ = [
     "scan_root",
     "select_kept",
     "snapshot_json_bytes",
+    "walk_files",
 ]
 
 ScanReason = Literal["too_large", "unreadable", "not_found"]
@@ -157,7 +160,7 @@ class RootScan:
         return sum(entry.bytes for entry in self.entries)
 
 
-class _Stop(Exception):
+class ScanStopped(Exception):
     """The root cannot be scanned; ``reason`` says why."""
 
     def __init__(self, reason: ScanReason) -> None:
@@ -214,13 +217,13 @@ def _ls_files(root: Path, *args: str) -> list[str]:
     try:
         proc = _git(root, "ls-files", "-z", *args)
     except OSError as e:
-        raise _Stop("unreadable") from e
+        raise ScanStopped("unreadable") from e
     if proc is None or proc.returncode != 0:
-        raise _Stop("unreadable")
+        raise ScanStopped("unreadable")
     try:
         text = proc.stdout.decode("utf-8")
     except UnicodeDecodeError as e:
-        raise _Stop("unreadable") from e
+        raise ScanStopped("unreadable") from e
     return [path for path in text.split("\0") if path]
 
 
@@ -238,6 +241,13 @@ def _lstat(path: str) -> os.stat_result | None:
         return os.lstat(path)
     except (FileNotFoundError, NotADirectoryError):
         return None
+
+
+def is_linked(path: Path) -> bool:
+    """``path`` is a symlink or a Windows junction (``lstat``: nothing is followed). A path that is
+    gone is not."""
+    st = _lstat(str(path))
+    return st is not None and _is_link(st)
 
 
 @dataclass(frozen=True)
@@ -364,7 +374,7 @@ def _walk_candidates(root: Path, selector: _Selector) -> list[tuple[str, bool]]:
                     continue
                 seen += 1
                 if seen > limit:
-                    raise _Stop("too_large")
+                    raise ScanStopped("too_large")
                 path = prefix + entry.name
                 if linked:
                     selector.excluded.add(path)
@@ -373,8 +383,19 @@ def _walk_candidates(root: Path, selector: _Selector) -> list[tuple[str, bool]]:
                 else:
                     files.append((path, False))
     except OSError as e:
-        raise _Stop("unreadable") from e
+        raise ScanStopped("unreadable") from e
     return files
+
+
+def walk_files(root: Path, skip_dirs: Sequence[Path] = ()) -> list[str]:
+    """The root-relative posix path of every file below ``root`` that is neither skipped nor
+    behind a link, in path order: the walk a plain-directory scan takes, under the same limits.
+    Too many entries or a directory that cannot be read stops it as it stops a scan
+    (``ScanStopped``, ``too_large`` / ``unreadable``). Nothing is opened; which of these files
+    the rules take (``file_class``, secrets) is for the caller."""
+    root = Path(root)
+    walked = _walk_candidates(root, _Selector(root, skip_dirs))
+    return sorted(path for path, _ in walked)
 
 
 def _hash(taken: Sequence[_Taken]) -> list[IndexEntry]:
@@ -385,7 +406,7 @@ def _hash(taken: Sequence[_Taken]) -> list[IndexEntry]:
         except (FileNotFoundError, NotADirectoryError):  # it went away since it was listed
             continue
         except OSError as e:
-            raise _Stop("unreadable") from e
+            raise ScanStopped("unreadable") from e
         entries.append(IndexEntry(item.path, digest, item.size))
     return entries
 
@@ -395,7 +416,7 @@ def _scan(root: Path, kind: RootKind, skip_dirs: Sequence[Path], keep: Keep) -> 
     candidates = _git_candidates(root) if kind == "git" else _walk_candidates(root, selector)
     taken = selector.take(candidates)
     if len(taken) > rules.MAX_FILES or sum(t.size for t in taken) > rules.MAX_HASH_BYTES:
-        raise _Stop("too_large")  # nothing has been hashed yet
+        raise ScanStopped("too_large")  # nothing has been hashed yet
     entries = select_kept(_hash(taken), keep)
     untracked = {t.path for t in taken if not t.tracked} if kind == "git" else set()
     return RootScan(
@@ -429,7 +450,7 @@ def scan_root(
         if not root.is_dir():
             return _failed(root, kind, "not_found")
         return _scan(root, kind, skip_dirs, keep)
-    except _Stop as stop:
+    except ScanStopped as stop:
         return _failed(root, kind, stop.reason)
     except OSError:
         return _failed(root, kind, "unreadable")

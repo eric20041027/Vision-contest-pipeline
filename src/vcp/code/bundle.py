@@ -11,7 +11,10 @@ failures: ``verify_dir`` reports them (``not_kept``) and, once somebody puts the
 it by the sha the index holds. A file that is in the directory must match; a file the snapshot
 kept and the directory lost is ``missing``; a file the rules would take that the index does not
 list is ``extra``. The identity is recomputed from the index (``snapshot_json_bytes``), so the
-directory vouches for itself.
+directory vouches for itself -- which is no proof it is the snapshot you meant: its files, index
+and ``snapshot.json`` could all have been rewritten together. So the result names the snapshot
+the directory is (``snapshot_id``, from the identity), for the caller to hold against the id it
+expected.
 """
 
 from __future__ import annotations
@@ -22,7 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vcp.code import rules
-from vcp.code.scan import IndexEntry, snapshot_json_bytes
+from vcp.code.scan import (
+    ScanStopped,
+    identity_sha256,
+    is_linked,
+    snapshot_json_bytes,
+    walk_files,
+)
 from vcp.code.snapshot import (
     FILES_DIR,
     INDEX_FILE,
@@ -33,7 +42,7 @@ from vcp.code.snapshot import (
     parse_index,
 )
 from vcp.core import atomic
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir, is_under
 
@@ -62,7 +71,10 @@ class VerifyDirResult:
     the index. ``mismatch`` is a file that is there and is not what the index says (or the
     ``.vcp-code`` file that disagrees with the index); ``missing`` a kept file that is gone;
     ``not_kept`` a file the snapshot never held the bytes of and the directory lacks; ``extra`` a
-    file the rules take that the index does not list. Only ``mismatch`` and ``missing`` fail."""
+    file the rules take that the index does not list. Only ``mismatch`` and ``missing`` fail.
+    ``snapshot_id`` is the snapshot the directory is, derived from its own index; None when the
+    index cannot be read or ``.vcp-code/snapshot.json`` is not what the index makes of it. A
+    directory that was rewritten consistently verifies, under another id."""
 
     files: int
     kept: int
@@ -70,6 +82,7 @@ class VerifyDirResult:
     missing: list[str]
     not_kept: list[str]
     extra: list[str]
+    snapshot_id: str | None = None
 
 
 def _chunks(path: Path) -> Iterator[bytes]:
@@ -131,73 +144,97 @@ def export(data_root: Path, snapshot_id: str, out: Path) -> ExportResult:
 # -- verify_dir ---------------------------------------------------------------------------------
 
 
+def _walk_refusal(directory: Path, reason: str) -> VcpError:
+    """What a walk that stopped (``ScanStopped``) is, for a directory being verified."""
+    if reason == "too_large":
+        return ValidationFailed(
+            f"too_large: {directory} holds more than {rules.MAX_WALK_ENTRIES} entries to look "
+            "through"
+        )
+    return VcpError(
+        f"code_unavailable: {directory} could not be read all the way down",
+        fields={"cause": reason},
+    )
+
+
 def _extras(directory: Path, listed: set[str]) -> list[str]:
     """The files below ``directory`` that the rules take (``file_class``) and ``listed`` does not
-    hold (``os.path.normcase``-ed relative paths). A hidden or cache segment, a virtualenv, a link
-    and a secret name are left alone, as a scan leaves them; nothing is opened. More than
-    ``rules.MAX_WALK_ENTRIES`` entries is ``too_large:``."""
-    limit = rules.MAX_WALK_ENTRIES
-    seen = 0
-    found: list[str] = []
-    pending = [("", directory)]
-    while pending:
-        prefix, current = pending.pop()
-        with os.scandir(current) as entries:
-            children = list(entries)
-        for child in children:
-            if rules.skipped_segment(child.name):
-                continue
-            linked = child.is_symlink() or child.is_junction()
-            is_dir = not linked and child.is_dir(follow_symlinks=False)
-            if is_dir and os.path.exists(os.path.join(child.path, "pyvenv.cfg")):
-                continue
-            seen += 1
-            if seen > limit:
-                raise ValidationFailed(
-                    f"too_large: {directory} holds more than {limit} entries to look through"
-                )
-            relative = prefix + child.name
-            if is_dir:
-                pending.append((relative + "/", Path(child.path)))
-            elif linked or rules.is_secret(child.name) or rules.file_class(child.name) is None:
-                continue
-            elif os.path.normcase(relative) not in listed:
-                found.append(relative)
-    return sorted(found)
-
-
-def _own_file_is_wrong(directory: Path, index: list[IndexEntry]) -> bool:
-    """``.vcp-code/snapshot.json`` is not what the index makes of it (or is not there)."""
+    hold (``os.path.normcase``-ed relative paths). The walk is the one a scan takes
+    (``scan.walk_files``): a hidden or cache segment, a virtualenv and a link are left alone, and
+    so is a secret name; nothing is opened."""
     try:
-        on_disk = (directory / VCP_CODE_DIR / SNAPSHOT_FILE).read_bytes()
-    except FileNotFoundError:
-        return True
-    return on_disk != snapshot_json_bytes(index)
+        walked = walk_files(directory)
+    except ScanStopped as stop:
+        raise _walk_refusal(directory, stop.reason) from None
+    return [
+        path
+        for path in walked
+        if not rules.is_secret(path.rsplit("/", 1)[-1])
+        and rules.file_class(path.rsplit("/", 1)[-1]) is not None
+        and os.path.normcase(path) not in listed
+    ]
+
+
+def _behind_a_link(directory: Path, relative: str, known: dict[str, bool]) -> bool:
+    """``relative`` below ``directory``, or a directory above it, is a symlink or a junction.
+    Looked at with ``lstat`` and never followed: a link would make the check read outside
+    ``directory``. ``known`` remembers each prefix once."""
+    parts = relative.split("/")
+    for depth in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:depth])
+        if prefix not in known:
+            known[prefix] = is_linked(directory.joinpath(*parts[:depth]))
+        if known[prefix]:
+            return True
+    return False
+
+
+def _read_own(directory: Path, name: str, known: dict[str, bool]) -> bytes | None:
+    """The bytes of ``.vcp-code/<name>``; None when it is a link, is not a readable file or is
+    gone."""
+    relative = f"{VCP_CODE_DIR}/{name}"
+    if _behind_a_link(directory, relative, known):
+        return None
+    try:
+        return (directory / VCP_CODE_DIR / name).read_bytes()
+    except OSError:  # gone, a directory, or not ours to read
+        return None
 
 
 def verify_dir(directory: Path) -> VerifyDirResult:
     """Check a directory ``export`` wrote (or one somebody completed by hand) against its own
     ``.vcp-code/index.jsonl``: no git, no data root, no original repository. A directory with no
-    index is ``not_found:`` -- it is no export; an index that is unsorted, lists a path twice or
-    has a row it would not have written is a ``mismatch`` of the index file, and nothing else is
-    looked at (there is nothing to hold it against)."""
+    ``.vcp-code/index.jsonl`` is ``not_found:`` -- it is no export; an index that cannot be read,
+    is unsorted, lists a path twice or has a row it would not have written is a ``mismatch`` of
+    the index file, and nothing else is looked at (there is nothing to hold it against).
+
+    Nothing is followed out of ``directory``: a symlink or junction at an index path, above one,
+    or in place of a ``.vcp-code`` file is a ``mismatch``. When the index parses and
+    ``.vcp-code/snapshot.json`` is what it makes of it, ``snapshot_id`` is the snapshot the
+    directory is (``code-<identity[:16]>``); otherwise it is None."""
     directory = Path(directory)
-    index_file = directory / VCP_CODE_DIR / INDEX_FILE
-    if not index_file.is_file():
+    if not os.path.lexists(directory / VCP_CODE_DIR / INDEX_FILE):
         raise ValidationFailed(
             f"not_found: {directory} has no {VCP_CODE_DIR}/{INDEX_FILE}: it is not a directory "
             "`vcp code export` wrote"
         )
+    links: dict[str, bool] = {}
+    raw = _read_own(directory, INDEX_FILE, links)
     try:
-        index = parse_index(index_file.read_bytes())
+        if raw is None:
+            raise ValueError("cannot be read")
+        index = parse_index(raw)
     except ValueError:
         return VerifyDirResult(0, 0, [_INDEX_PATH], [], [], [])
-    mismatch = [_SNAPSHOT_PATH] if _own_file_is_wrong(directory, index) else []
+    own_ok = _read_own(directory, SNAPSHOT_FILE, links) == snapshot_json_bytes(index)
+    mismatch = [] if own_ok else [_SNAPSHOT_PATH]
     missing: list[str] = []
     not_kept: list[str] = []
     for entry in index:
         path = directory / entry.path
-        if path.is_file():
+        if _behind_a_link(directory, entry.path, links):
+            mismatch.append(entry.path)
+        elif path.is_file():
             if sha256_file(path) != entry.sha256:
                 mismatch.append(entry.path)
         elif path.exists():  # a directory, or something else, where the file should be
@@ -214,4 +251,5 @@ def verify_dir(directory: Path) -> VerifyDirResult:
         missing=missing,
         not_kept=not_kept,
         extra=_extras(directory, listed),
+        snapshot_id=f"code-{identity_sha256(index)[:16]}" if own_ok else None,
     )

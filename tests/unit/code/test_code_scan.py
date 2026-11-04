@@ -649,3 +649,79 @@ def test_link_detection_needs_no_windows_only_names(monkeypatch):
     assert not scan._is_link(SimpleNamespace(st_mode=stat.S_IFREG | 0o644))
     assert scan._is_link(SimpleNamespace(st_mode=stat.S_IFDIR, st_reparse_tag=0xA0000003))
     assert not scan._is_link(SimpleNamespace(st_mode=stat.S_IFREG, st_reparse_tag=0))
+
+
+# -- walk_files: the plain-directory walk, for callers that are not a scan ------------------------
+
+
+def test_walk_files_lists_what_a_directory_scan_walks(tmp_path):
+    r = _put(
+        tmp_path / "r",
+        {"b.py": "", "a.txt": "", "pkg/c.py": "", ".hidden/x.py": "", "__pycache__/y.py": ""},
+    )
+    _put(r / "venv", {"pyvenv.cfg": "", "lib/z.py": ""})
+    _put(r / "data", {"d.py": ""})
+    assert scan.walk_files(r, skip_dirs=[r / "data"]) == ["a.txt", "b.py", "pkg/c.py"]
+    assert scan.walk_files(r) == ["a.txt", "b.py", "data/d.py", "pkg/c.py"]  # no rule applied
+
+
+def test_walk_files_does_not_follow_links(tmp_path):
+    outside = _put(tmp_path / "outside", {"o.py": "y = 2\n"})
+    r = _put(tmp_path / "r", {"real.py": "x = 1\n"})
+    try:
+        os.symlink(r / "real.py", r / "link.py")
+        os.symlink(outside, r / "linkdir", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this OS cannot create symlinks here")
+    assert scan.walk_files(r) == ["real.py"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are a Windows thing")
+def test_walk_files_does_not_enter_a_junction(tmp_path):
+    import _winapi
+
+    outside = _put(tmp_path / "outside", {"o.py": "y = 2\n"})
+    r = _put(tmp_path / "r", {"real.py": "x = 1\n"})
+    _winapi.CreateJunction(str(outside), str(r / "junc"))
+    assert scan.walk_files(r) == ["real.py"]
+    assert scan.is_linked(r / "junc") and not scan.is_linked(r / "real.py")
+
+
+def test_walk_files_stops_as_a_scan_does(tmp_path, monkeypatch):
+    r = _put(tmp_path / "r", {f"{n}.py": "" for n in "abcde"})
+    monkeypatch.setattr(rules, "MAX_WALK_ENTRIES", 3)
+    with pytest.raises(scan.ScanStopped) as ei:
+        scan.walk_files(r)
+    assert ei.value.reason == "too_large"
+    monkeypatch.setattr(rules, "MAX_WALK_ENTRIES", 5)
+    assert len(scan.walk_files(r)) == 5
+
+    real = os.scandir
+
+    def denied(path="."):
+        if Path(path).name == "locked":
+            raise PermissionError(13, "denied")
+        return real(path)
+
+    r2 = _put(tmp_path / "r2", {"a.py": "", "locked/x.py": ""})
+    monkeypatch.setattr(scan.os, "scandir", denied)
+    with pytest.raises(scan.ScanStopped) as ei:
+        scan.walk_files(r2)
+    assert ei.value.reason == "unreadable"
+
+
+def test_a_directory_that_vanishes_during_the_walk_is_not_an_error(tmp_path, monkeypatch):
+    r = _put(tmp_path / "r", {"a.py": "", "gone/b.py": ""})
+    real = os.scandir
+
+    def vanished(path="."):
+        if Path(path).name == "gone":
+            raise FileNotFoundError(2, "gone")
+        return real(path)
+
+    monkeypatch.setattr(scan.os, "scandir", vanished)
+    assert scan.walk_files(r) == ["a.py"]
+
+
+def test_is_linked_is_false_for_a_path_that_is_gone(tmp_path):
+    assert not scan.is_linked(tmp_path / "nowhere") and not scan.is_linked(tmp_path)

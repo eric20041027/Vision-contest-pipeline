@@ -49,8 +49,12 @@ def _names(paths: Sequence[str]) -> str:
     return ",".join(paths[:SHOWN_IN_REASON]) + (f" (+{more} more)" if more > 0 else "")
 
 
-def _mismatch_reason(mismatch: Sequence[str], missing: Sequence[str]) -> str:
-    parts = []
+def _mismatch_reason(
+    mismatch: Sequence[str], missing: Sequence[str], other: str | None = None
+) -> str:
+    """``mismatch: ...`` with the first names of each list; ``other`` is a finding of its own that
+    goes first (a directory that is another snapshot than the one asked for)."""
+    parts = [other] if other else []
     if mismatch:
         parts.append(f"differs {_names(mismatch)}")
     if missing:
@@ -134,7 +138,12 @@ def snapshot_cmd(
 @code_app.command("verify")
 def verify_cmd(
     snapshot_id: Annotated[
-        str | None, typer.Option("--id", help="a code snapshot id (code-...) in the data root")
+        str | None,
+        typer.Option(
+            "--id",
+            help="a code snapshot id (code-...) in the data root; with --dir, the snapshot the "
+            "directory must be",
+        ),
     ] = None,
     directory: Annotated[
         Path | None,
@@ -145,19 +154,23 @@ def verify_cmd(
 ) -> None:
     """Does it still hold? --id: the artifact is intact, its index agrees with the kept files and
     the identity recomputes -- whatever the working tree looks like now. --dir: the files that are
-    there match the index; kept files that are gone fail, files the snapshot never held warn."""
+    there match the index; kept files that are gone fail, files the snapshot never held warn. The
+    VERDICT names the snapshot the directory is (id=); --dir with --id fails unless it is that
+    one."""
+    # What a failure still says about the command. With --dir the id is the directory's to
+    # derive, so a given --id is not repeated as if it had been verified.
     context: dict[str, FieldValue] = {}
-    if snapshot_id is not None:
-        context["id"] = snapshot_id
     if directory is not None:
         context["dir"] = str(directory)
+    elif snapshot_id is not None:
+        context["id"] = snapshot_id
 
     def fn() -> CmdResult:
-        if snapshot_id is not None and directory is None:
+        if directory is not None:
+            return _verify_directory(directory.expanduser(), str(directory), snapshot_id)
+        if snapshot_id is not None:
             return _verify_snapshot(resolve_data_root(data_root), snapshot_id)
-        if directory is not None and snapshot_id is None:
-            return _verify_directory(directory.expanduser(), str(directory))
-        raise ValidationFailed("invalid: pass exactly one of --id and --dir")
+        raise ValidationFailed("invalid: pass --id, or --dir (with the --id it must be)")
 
     run_command("code.verify", json_mode, data_root, fn, context=context)
 
@@ -184,13 +197,18 @@ def _verify_snapshot(data_root: Path, snapshot_id: str) -> CmdResult:
     return status, fields, payload, lines
 
 
-def _verify_directory(directory: Path, shown: str) -> CmdResult:
+def _verify_directory(directory: Path, shown: str, expected: str | None) -> CmdResult:
     res = verify_dir(directory)
-    failed = bool(res.mismatch or res.missing)
+    other = res.snapshot_id is not None and expected is not None and res.snapshot_id != expected
+    failed = bool(res.mismatch or res.missing or other)
     fields: dict[str, FieldValue] = {}
     if failed:
-        fields["reason"] = _mismatch_reason(res.mismatch, res.missing)
-    fields.update({"dir": shown, "files": res.files, "kept": res.kept})
+        wrong = f"the directory is {res.snapshot_id}, not {expected}" if other else None
+        fields["reason"] = _mismatch_reason(res.mismatch, res.missing, wrong)
+    fields["dir"] = shown
+    if res.snapshot_id is not None:
+        fields["id"] = res.snapshot_id
+    fields.update({"files": res.files, "kept": res.kept})
     if failed:
         fields.update({"mismatch": len(res.mismatch), "missing": len(res.missing)})
     fields.update({"not_kept": len(res.not_kept), "extra": len(res.extra)})
@@ -200,10 +218,13 @@ def _verify_directory(directory: Path, shown: str) -> CmdResult:
         *_listed("not_kept", res.not_kept),
         *_listed("extra", res.extra),
     ]
+    if other:
+        lines.insert(0, f"id: the directory is {res.snapshot_id}, not {expected}")
     if not lines:
-        lines = [f"{shown} holds: {res.files} file(s), all of them as the index says"]
+        lines = [f"{shown} holds {res.snapshot_id}: {res.files} file(s), all as the index says"]
     payload = {
         "dir": shown,
+        "id": res.snapshot_id,
         "files": res.files,
         "kept": res.kept,
         "mismatch": res.mismatch,

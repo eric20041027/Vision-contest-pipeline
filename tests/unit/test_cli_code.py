@@ -3,18 +3,21 @@ controller ruling C4; audit §12 release gate item 10): the VERDICT of each, ``-
 refusals, and the two questions kept apart -- ``verify`` asks whether a snapshot still holds and
 never looks at the working tree, ``diff`` asks whether the working tree has moved from it."""
 
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from code_fixtures import write_file
 from helpers import seed_train
 from vcp.cli import app
 from vcp.code import process, rules
-from vcp.code.scan import scan_root
-from vcp.code.snapshot import FILES_DIR, SnapshotOutcome, write_snapshot
+from vcp.code.scan import scan_root, snapshot_json_bytes
+from vcp.code.snapshot import FILES_DIR, SnapshotOutcome, parse_index, write_snapshot
 from vcp.core.paths import artifact_dir
 from vcp.train.run import RunSpec, train_run
 
@@ -223,11 +226,10 @@ def test_verify_an_unknown_id_is_not_found(roots):
     assert f"id=code-{'0' * 16}" in v
 
 
-def test_verify_takes_exactly_one_of_id_and_dir(roots, tmp_path):
-    for args in ([], ["--id", "code-" + "0" * 16, "--dir", str(tmp_path)]):
-        r = _code("verify", *args)
-        v = _verdict(r.output)
-        assert r.exit_code == 1 and "status=FAIL" in v and "invalid:" in v
+def test_verify_needs_an_id_or_a_dir(roots):
+    r = _code("verify")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "invalid:" in v
 
 
 # -- code export and verify --dir -----------------------------------------------------------------
@@ -271,7 +273,7 @@ def test_export_then_verify_dir_round_trip(roots, tmp_path):
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v and "cmd=code.verify" in v
     assert "not_kept=1" in v and "extra=0" in v and "files=3" in v and "kept=2" in v
-    assert f"dir={out}" in v and "id=" not in v
+    assert f"dir={out}" in v and f"id={sid}" in v
     assert "not_kept: big.py" in r.output
 
     (out / "big.py").write_bytes(BIG)  # the missing file, put in by hand
@@ -498,3 +500,84 @@ def test_a_long_list_of_differences_is_cut_in_the_reason_and_the_lines(
         "mismatch: m2.py",
         "mismatch: ... and 4 more",
     ]
+
+
+# -- which snapshot a directory is ----------------------------------------------------------------
+
+
+def _rewrite(out: Path, *, snapshot_json: bool) -> None:
+    """Put other bytes in ``a.py`` of an exported directory and give its index row the new sha and
+    size; with ``snapshot_json`` also write the ``.vcp-code/snapshot.json`` that index makes."""
+    data = b"a = 999\n"
+    (out / "a.py").write_bytes(data)
+    index = out / ".vcp-code" / "index.jsonl"
+    rows = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
+    for row in rows:
+        if row["path"] == "a.py":
+            row["sha256"], row["bytes"] = hashlib.sha256(data).hexdigest(), len(data)
+    index.write_bytes("".join(json.dumps(row) + "\n" for row in rows).encode("utf-8"))
+    if snapshot_json:
+        (out / ".vcp-code" / "snapshot.json").write_bytes(
+            snapshot_json_bytes(parse_index(index.read_bytes()))
+        )
+
+
+def _exported(roots, tmp_path: Path) -> tuple[str, Path]:
+    _, sid = _snapshot(tmp_path)
+    out = tmp_path / "bundle"
+    assert _code("export", "--id", sid, "--out", str(out)).exit_code == 0
+    return sid, out
+
+
+def test_verify_dir_names_the_snapshot_and_holds_it_to_the_id_asked_for(roots, tmp_path):
+    sid, out = _exported(roots, tmp_path)
+    r = _code("verify", "--dir", str(out), "--json")
+    doc = _doc(r)
+    assert doc["fields"]["id"] == sid and doc["result"]["id"] == sid
+    assert list(doc["fields"])[:2] == ["dir", "id"]  # id= is beside dir=
+    r = _code("verify", "--dir", str(out), "--id", sid)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=OK" in v and f"id={sid}" in v
+    other = "code-" + "3" * 16
+    r = _code("verify", "--dir", str(out), "--id", other)
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "mismatch:" in v
+    assert f"the directory is {sid}, not {other}" in v and f"id={sid}" in v
+    assert f"id: the directory is {sid}, not {other}" in r.output
+
+
+def test_a_directory_rewritten_without_its_snapshot_json_is_a_mismatch_with_no_id(roots, tmp_path):
+    sid, out = _exported(roots, tmp_path)
+    _rewrite(out, snapshot_json=False)
+    r = _code("verify", "--dir", str(out), "--id", sid)
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and ".vcp-code/snapshot.json" in v
+    assert "mismatch=1" in v and "id=" not in v
+
+
+def test_a_directory_rewritten_consistently_is_another_snapshot(roots, tmp_path):
+    sid, out = _exported(roots, tmp_path)
+    _rewrite(out, snapshot_json=True)
+    r = _code("verify", "--dir", str(out))
+    v = _verdict(r.output)
+    derived = _field(v, "id")
+    assert r.exit_code == 0 and "status=OK" in v and re.fullmatch(ID, derived) and derived != sid
+    r = _code("verify", "--dir", str(out), "--id", sid)  # the id the export was made from
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "mismatch:" in v and f"id={derived}" in v
+    assert _code("verify", "--dir", str(out), "--id", derived).exit_code == 0
+
+
+# -- a root the snapshot would leave out ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("which", ["data", "configs"])
+def test_code_snapshot_refuses_a_root_at_or_inside_the_data_or_configs_root(roots, which):
+    base = roots.data if which == "data" else roots.configs
+    inner = write_file(base / "sub" / "x.py").parent
+    for root in (base, inner):
+        r = _code("snapshot", "--root", str(root))
+        v = _verdict(r.output)
+        assert r.exit_code == 1 and "status=FAIL" in v and "invalid:" in v, root
+        assert "code_root=root-1" in v and f"{which} root" in v
+    assert not (roots.data / "artifacts").exists()

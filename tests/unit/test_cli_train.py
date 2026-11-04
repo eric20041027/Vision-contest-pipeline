@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -407,6 +408,62 @@ def test_train_run_cli_keeps_the_exit_code_when_the_snapshot_is_removed_mid_run(
     assert r.exit_code == 0 and "status=WARN" in v and "status_attempt" not in v
     assert "exit_code=0" in v and "checkpoints=1" in v and "code_changed=1" in v
     assert "final=none" not in v
+
+
+def test_train_run_cli_always_says_code(roots, work):
+    seed_det(roots)
+    r = _run(work)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and re.search(r" code=snapshot( |$)", v)
+    assert v.index(" code=") < v.index("code_snapshot=") < v.index("code_trace=")
+
+
+def test_train_status_always_reports_code(roots, work):
+    seed_det(roots)
+    assert _run(work).exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and re.search(r" code=snapshot( |$)", v)
+    assert "attempt 1: code=snapshot" in r.output
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--json"])
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    code = doc["result"]["code"]
+    assert code["grade"] == "snapshot" and code["attempts"][0]["grade"] == "snapshot"
+    (root,) = code["attempts"][0]["roots"]
+    assert (
+        root["label"] == "cwd" and root["snapshot"].startswith("code-") and root["reason"] is None
+    )
+    assert re.search(r" code=snapshot( |$)", r.stderr)
+
+
+def test_train_status_says_when_the_code_is_only_declared(roots, work, tmp_path):
+    seed_det(roots)
+    assert _run(work).exit_code == 0
+    (work / "helper.py").write_bytes(b"V = 1\n")
+    edit = 'Path("helper.py").write_bytes(b"V = 2\\n")\nsys.exit('
+    (work / "fake_train.py").write_text(FAKE.replace("sys.exit(", edit, 1), encoding="utf-8")
+    assert _run(work, run="r2").exit_code == 0  # the child edited a file its snapshot lists
+    r = runner.invoke(app, ["train", "status", "--run", "r2"])
+    assert re.search(r" code=declared( |$)", _verdict(r.output))
+    assert "attempt 1: code=declared" in r.output
+    r = runner.invoke(app, ["train", "status", "--run", "ghost"])
+    assert r.exit_code == 1 and " code=" not in _verdict(r.output)
+
+
+def test_train_status_verify_names_a_broken_snapshot(roots, work):
+    seed_det(roots)
+    assert _run(work).exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--verify"])
+    assert "drift=0" in _verdict(r.output) and "drift: evidence" not in r.output
+    env = json.loads((roots.data / "runs" / "r1" / "train" / "env.1.json").read_bytes())
+    sid = env["code"]["roots"][0]["snapshot"]
+    kept = roots.data / "artifacts" / "code_snapshot" / sid / "files" / "fake_train.py"
+    kept.write_bytes(kept.read_bytes() + b"# tampered\n")
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--verify"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "drift=1" in v
+    assert "drift: evidence:code.cwd" in r.output
+    assert re.search(r" code=declared( |$)", v)  # the snapshot no longer holds: the grade drops
 
 
 def test_train_run_help_documents_code_root(roots):

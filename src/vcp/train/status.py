@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath
 
+from vcp.code.grade import CodeInfo, code_info
 from vcp.core.paths import resolve_stored_path, store_path
 from vcp.data.evidence import broken_refs
 from vcp.measure.runs import run_dir
@@ -58,6 +59,7 @@ class StatusResult:
     running: int
     tmp: list[TmpFile]
     tmp_skipped: list[TmpSkip]
+    code: CodeInfo  # spec 2026-10-31 §5.4: read back from the record on every call
 
 
 def _is_plain_dir(entry: os.DirEntry[str]) -> bool:
@@ -259,6 +261,7 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
         running=sum(1 for a in record.attempts if a.status == "running"),
         tmp=scan.files,
         tmp_skipped=scan.skipped,
+        code=code_info(data_root, run_id),
     )
 
 

@@ -153,6 +153,7 @@ def run_cmd(
             "commit": res.git.commit[:12] if res.git is not None else "none",
             "free_gib": free_gib(res.disk) if res.disk is not None else UNKNOWN,
             # spec 2026-10-31 §6: always, in the order code, code_snapshot, code_trace.
+            "code": res.code,
             "code_snapshot": res.code_snapshot,
             "code_trace": res.code_trace,
         }
@@ -265,6 +266,8 @@ def status_cmd(
             "running": st.running,
             "evidence": evidence_count(st.record.evidence),
             "labels": labels_field(st.record.evidence),
+            # spec 2026-10-31 §5.8: always; the run's weakest attempt (a grade never WARNs).
+            "code": st.code.grade,
             # 5.5: leftover `*.tmp` files; always reported, > 0 is a WARN (also while running).
             "tmp": len(st.tmp),
         }
@@ -278,6 +281,7 @@ def status_cmd(
         human = []
         if last is not None:
             human.append(f"attempt {last.n} command: {' '.join(last.command or st.record.command)}")
+        human += [f"attempt {a.n}: code={a.grade}" for a in st.code.attempts]
         human += [f"unbacked: {p}" for p in st.unbacked]
         human += [f"superseded: {p}" for p in st.superseded]
         human += [f"missing: {p}" for p in st.missing]
@@ -293,6 +297,7 @@ def status_cmd(
             "unbacked": st.unbacked,
             "superseded": st.superseded,
             "tmp": [{"path": t.path, "bytes": t.bytes} for t in st.tmp],
+            "code": st.code.to_json(),
         }
         return ("WARN" if warn else "OK"), fields, payload, human
 

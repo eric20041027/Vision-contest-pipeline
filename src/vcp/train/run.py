@@ -23,6 +23,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.code.grade import code_info
+from vcp.code.schema import CodeGrade
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths, store_path
@@ -153,7 +155,9 @@ class RunResult(BaseModel):
     git_changed: list[str] = Field(default_factory=list)
     disk: DiskCheck | None = None  # the free space measured before the first write (§5.1)
     disk_failure: DiskFailure | None = None  # a failed attempt the disk explains (§5.3)
-    # spec 2026-10-31 §5.1: whether every code root has a snapshot, the labels of those that have
+    # spec 2026-10-31 §5.4: the run's code grade (its weakest attempt's), read back from the record.
+    code: CodeGrade = "declared"
+    # §5.1: whether every code root has a snapshot, the labels of those that have
     # none, and the untracked CODE files of the git roots (None when no root is a git root).
     code_snapshot: str = "none"
     code_missing: list[str] = Field(default_factory=list)
@@ -994,6 +998,7 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         git_changed=a.git_changed,
         disk=p.disk_check,
         disk_failure=a.disk_failure,
+        code=code_info(p.data_root, spec.run_id).grade,
         code_snapshot=code_state,
         code_missing=code_missing,
         untracked_code=untracked,

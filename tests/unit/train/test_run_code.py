@@ -8,6 +8,7 @@ import errno
 import json
 import os
 import re
+import shutil
 import sys
 import types
 from dataclasses import replace
@@ -23,6 +24,7 @@ from vcp.artifact.store import load_manifest
 from vcp.cli import app
 from vcp.code import roots as code_roots
 from vcp.code import rules, trace
+from vcp.code.grade import code_info
 from vcp.code.roots import Editable, canonical_name
 from vcp.code.schema import Distribution
 from vcp.code.snapshot import SnapshotOutcome, load_index
@@ -713,3 +715,48 @@ def test_code_tracking_is_off_unless_a_test_turns_it_on(monkeypatch):
     assert "VCP_CODE_TRACE" not in os.environ
     assert code_roots.editables_of([]) == [Editable("vcp", helpers.VCP_PACKAGE)]
     assert (helpers.VCP_PACKAGE / "__init__.py").is_file()
+
+
+# -- the code grade (spec §5.4) --------------------------------------------------------------------
+
+
+def test_train_run_reports_its_code_grade(roots, work):
+    seed_train(roots)
+    res = train_run(_spec(roots, work))
+    assert (res.code, res.code_snapshot, res.code_trace) == ("snapshot", "ok", "none")
+    (work / "helper.py").write_bytes(b"VALUE = 1\n")
+    (work / "fake_train.py").write_bytes(_fake_with(APPEND_TO_HELPER))
+    changed = train_run(_spec(roots, work, run_id="r2"))
+    assert changed.code_changed == 1 and changed.code == "declared"  # no repository to fall back on
+    again = train_run(_spec(roots, work, run_id="r2", resume=True))
+    assert again.code == "declared"  # the lowest attempt of the run, not the latest one's
+
+
+def test_a_traced_run_is_traced(roots, work, monkeypatch):
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    _child_first(work, SESSION_CHILD)
+    res = train_run(_spec(roots, work))
+    assert (res.code, res.code_trace) == ("traced", "complete")
+    (ref,) = _trace_refs(roots)
+    shutil.rmtree(artifact_dir(roots.data, "code_trace", ref.artifact_id))
+    assert code_info(roots.data, "r").grade == "snapshot"  # read again later: the trace is gone
+
+
+def test_a_generated_module_does_not_keep_a_run_from_being_traced(
+    roots, work, tmp_path, monkeypatch
+):
+    seed_train(roots)
+    helpers.trace_on(monkeypatch)
+    cache = tmp_path / "inductor-cache"  # outside every root, like torch.compile's
+    (cache / "c1").mkdir(parents=True)
+    (cache / "c1" / "kernel.py").write_bytes(b"K = 1\n")
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(cache))
+    head = f"import sys\nsys.path.insert(0, {str(cache / 'c1')!r})\nimport kernel\n"
+    _child_first(work, head + SESSION_CHILD)
+    res = train_run(_spec(roots, work))
+    assert res.attempt.exit_code == 0 and (res.code, res.code_trace) == ("traced", "complete")
+    assert res.code_gaps == 0
+    (ref,) = _trace_refs(roots)
+    doc = _trace_doc(roots, ref.artifact_id)
+    assert doc["generated_by"] == {"torch_inductor": 1} and doc["outside"] == [] and doc["complete"]

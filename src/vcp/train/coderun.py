@@ -1,18 +1,22 @@
-"""The code a ``vcp train run`` attempt runs (spec 2026-10-31 §5.1 steps 3-5 and 8-9, §4.3).
+"""The code a ``vcp train run`` attempt runs (spec 2026-10-31 §5.1 steps 3-6 and 8-9, §4.3).
 
 Before the first write: the training venv's vcp must share this vcp's MINOR (``check_child_vcp``),
 and the roots are planned and scanned in memory (``plan_code``) -- a ``--code-root`` that is not a
-directory is bad input, every other problem with a root is only that root's ``reason``. Then, under
-``own_writes``, each scanned root's snapshot is written or reused (``write_all``); the attempt's
-``env.<n>.json`` records them (``code_section``) and the run binds every snapshot as a
-``code.<label>`` ref (``attach_code_refs``). A root without a snapshot is a WARN, never a reason
-not to train: that refusal belongs to a run that carries an authorization. After the child exits,
+directory is bad input, every other problem with a root is only that root's ``reason``. The names
+vcp's own refs will take must be free (``check_ref_names``), and a run with ``--authorization``
+computes its claims (``claims_now``) for ``consume``. Then, under ``own_writes``, each scanned
+root's snapshot is written or reused (``write_all``); the attempt's ``env.<n>.json`` records them
+(``code_section``) and the run binds every snapshot as a ``code.<label>`` ref
+(``attach_code_refs``), and the authorization as ``authorization`` (``authorization_ref``). A root
+without a snapshot is a WARN, never a reason not to train -- except in a run that carries an
+authorization, whose snapshots fail closed (``write_all(strict=True)``). After the child exits,
 ``changed_since_snapshot`` hashes the files each snapshot lists once more, and ``trace_summary``
 reads the import traces the child's ``Session`` left on the attempt (§5.3).
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -20,7 +24,10 @@ from pathlib import Path
 from typing import Literal
 
 import vcp
+from vcp.artifact import store
+from vcp.artifact.authorization import KIND as AUTHORIZATION_KIND
 from vcp.code import rules
+from vcp.code.process import raise_for_outcome
 from vcp.code.roots import (
     PlannedRoot,
     checkpoint_exclusions,
@@ -28,7 +35,7 @@ from vcp.code.roots import (
     plan_roots,
     skip_dirs_for,
 )
-from vcp.code.scan import IndexEntry, RootScan, scan_root
+from vcp.code.scan import IndexEntry, RootScan, scan_root, snapshot_json_bytes
 from vcp.code.schema import CodeRoot, CodeSection, RootReason, TraceDoc
 from vcp.code.snapshot import KIND as SNAPSHOT_KIND
 from vcp.code.snapshot import SnapshotOutcome, write_snapshot
@@ -38,7 +45,17 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir, path_key, store_path
 from vcp.data.evidence import artifact_ref
-from vcp.data.evidence_ref import CODE_ROLE, CODE_TRACE_ROLE, EvidenceRef, check_name, current
+from vcp.data.evidence_ref import (
+    AUTHORIZATION_NAME,
+    AUTHORIZATION_ROLE,
+    CODE_ROLE,
+    CODE_TRACE_ROLE,
+    EvidenceRef,
+    check_name,
+    current,
+)
+from vcp.data.labels import LABEL_SET_KIND
+from vcp.train.authorize import train_claims
 from vcp.train.env import ProbeReport
 from vcp.train.records import bind_ref
 from vcp.train.schema import TrainRecord
@@ -52,9 +69,11 @@ __all__ = [
     "TraceState",
     "TraceSummary",
     "attach_code_refs",
+    "authorization_ref",
     "changed_since_snapshot",
     "check_child_vcp",
     "check_ref_names",
+    "claims_now",
     "code_section",
     "plan_code",
     "snapshot_state",
@@ -189,14 +208,66 @@ def _check_free(
         )
 
 
-def check_ref_names(existing: list[EvidenceRef], labels: list[str], plan: CodePlan) -> None:
-    """Before the first write: the ``code.<label>`` name of every root that may get a snapshot is
-    free for it. A run from before 0.18 may hold an ``--evidence code.cwd`` and a label set may be
-    called ``code.cwd``; ``bind_ref`` would meet the clash only after the run's first writes.
+def check_ref_names(
+    existing: list[EvidenceRef], labels: list[str], plan: CodePlan, authorization: str | None
+) -> None:
+    """Before the first write: the ``code.<label>`` name of every root that may get a snapshot,
+    and with an authorization the name ``authorization``, are free for vcp's refs. A run from
+    before 0.18 may hold an ``--evidence code.cwd`` and a label set may be called ``code.cwd`` or
+    ``authorization``; ``bind_ref`` would meet the clash only after the run's first writes.
     ``existing`` are the refs of the run's record and card."""
     for root, scan in zip(plan.roots, plan.scans, strict=True):
         if scan.reason is None:
             _check_free(existing, labels, _code_ref_name(root.label), CODE_ROLE, SNAPSHOT_KIND)
+    if authorization is not None:
+        _check_free(existing, labels, AUTHORIZATION_NAME, AUTHORIZATION_ROLE, AUTHORIZATION_KIND)
+
+
+def claims_now(
+    *,
+    dataset: str,
+    plan_id: str,
+    seed: int | None,
+    samples_hash: str,
+    trained_on: list[str],
+    chash: str,
+    command: list[str],
+    plan_sha256: str,
+    evidence: list[tuple[str, Path]],
+    labels: list[str],
+    plan: CodePlan,
+    report: ProbeReport,
+    data_root: Path,
+) -> dict[str, str]:
+    """spec §5.1 step 6: this run's ``train`` claims (§4.6), computed from its inputs before its
+    first write, through ``train_claims`` so they come out byte-equal to a basis run's for the
+    same setup. A root's code claim is the sha of the ``snapshot.json`` its snapshot has: the
+    bytes depend on the scan's entries alone, so they are known before the snapshot is written.
+    A root whose scan has a reason has no code claim, and an authorization that binds it is then
+    ``unauthorized:``. Evidence is each ``--evidence`` file's sha, labels each label set's
+    manifest sha, ``env:`` the probe's identity."""
+    code = {
+        root.label: hashlib.sha256(snapshot_json_bytes(scan.entries)).hexdigest()
+        for root, scan in zip(plan.roots, plan.scans, strict=True)
+        if scan.reason is None
+    }
+    return train_claims(
+        dataset=dataset,
+        plan_id=plan_id,
+        seed=seed,
+        samples_hash=samples_hash,
+        trained_on=trained_on,
+        config_sha256=chash,
+        command=command,
+        plan_sha256=plan_sha256,
+        code=code,
+        evidence={name: sha256_file(path) for name, path in evidence},
+        labels={
+            label_set_id: sha256_file(store.manifest_path(data_root, LABEL_SET_KIND, label_set_id))
+            for label_set_id in labels
+        },
+        identity=report.identity,
+    )
 
 
 # -- the writes -----------------------------------------------------------------------------------
@@ -207,15 +278,20 @@ def write_all(data_root: Path, plan: CodePlan, *, strict: bool) -> list[RootResu
     ``strict`` a snapshot that cannot be written (``locked``, ``partial``, ``unwritable``,
     ``drift``) is only that root's reason; a committed snapshot of this content that does not
     hold is ``mismatch:`` and a full disk the ``OSError`` ``own_writes`` turns into
-    ``disk_full:``, both raised by ``write_snapshot``. ``strict`` -- the fail-closed path of a run
-    with an authorization -- arrives with ``--authorization``."""
-    if strict:
-        raise NotImplementedError("write_all(strict=True) comes with train run --authorization")
+    ``disk_full:``, both raised by ``write_snapshot``.
+
+    ``strict`` is a run with an authorization, which fails closed (C3): a snapshot that cannot be
+    written raises ``raise_for_outcome``'s refusal -- ``drift:`` FAIL, ``code_unavailable:`` ABORT
+    -- before the run has a file. A scan's reason is not raised here: the authorization was held
+    against the scans already (a root it binds whose scan failed is ``unauthorized:``), so a root
+    it frees keeps the downgrade."""
     results = []
     for root, scan in zip(plan.roots, plan.scans, strict=True):
         outcome = (
             None if scan.reason is not None else write_snapshot(data_root, scan, command=COMMAND)
         )
+        if strict and outcome is not None and outcome.reason is not None:
+            raise_for_outcome(root.label, outcome.reason)
         results.append(RootResult(root=root, scan=scan, outcome=outcome))
     return results
 
@@ -267,6 +343,21 @@ def attach_code_refs(
         )
         record, _ = bind_ref(data_root, record, ref, attempt)
     return record
+
+
+def authorization_ref(data_root: Path, authorization_id: str, attempt: int) -> EvidenceRef:
+    """The run's pin on the authorization it was checked against (spec §5.6): named, kinded and
+    roled ``authorization``, bound beside the ``code.<label>`` refs. One authorization serves any
+    number of runs, each of which pins it here."""
+    return artifact_ref(
+        data_root,
+        AUTHORIZATION_KIND,
+        authorization_id,
+        name=AUTHORIZATION_NAME,
+        role=AUTHORIZATION_ROLE,
+        attempt=attempt,
+        binding="cli",
+    )
 
 
 # -- what the VERDICT says ------------------------------------------------------------------------

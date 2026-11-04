@@ -3,8 +3,9 @@
 Every check runs before the first file is written: the dataset and plan agree, the export
 manifests say which subsets were trained on, the config has a hash, the venv has a python, the
 command can be found, the run id is free (or resumable), the training environment answers its
-probe and its code roots are scanned (spec 2026-10-31 §5.1), and every disk the run writes to has
-room (spec 2026-10-30 §5.1). Only then the code snapshots, the run card, the training record, the
+probe and its code roots are scanned (spec 2026-10-31 §5.1), an ``--authorization`` holds for the
+run's claims, and every disk the run writes to has room (spec 2026-10-30 §5.1). Only then the
+code snapshots (which, with an authorization, fail closed), the run card, the training record, the
 console log and the environment snapshot appear -- and whatever the command does next is
 recorded, exit code and all.
 """
@@ -23,6 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.artifact.authorization import consume
 from vcp.code.grade import code_info
 from vcp.code.schema import CodeGrade
 from vcp.core.errors import PlanMismatchError, ValidationFailed
@@ -39,14 +41,17 @@ from vcp.measure.runs import append_history, assert_run_matches, load_run, run_d
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train.attach import attach as attach_cli_evidence
 from vcp.train.attach import moved, preflight
+from vcp.train.authorize import plan_file_sha
 from vcp.train.checkpoints import expand, register, resolve_final
 from vcp.train.coderun import (
     CodePlan,
     RootResult,
     attach_code_refs,
+    authorization_ref,
     changed_since_snapshot,
     check_child_vcp,
     check_ref_names,
+    claims_now,
     code_section,
     plan_code,
     snapshot_state,
@@ -73,6 +78,7 @@ from vcp.train.gitstate import warning as git_warning
 from vcp.train.records import (
     TRAIN_DIR,
     append_event,
+    bind_ref,
     has_record,
     load_record,
     save_record,
@@ -124,6 +130,7 @@ class RunSpec(BaseModel):
     require_clean: bool = False  # VCP-041: FAIL before the first write on tracked changes
     min_free_gib: float = DEFAULT_MIN_FREE_GIB  # ABORT below this free space; 0 = only record
     code_roots: list[Path] = Field(default_factory=list)  # --code-root (spec 2026-10-31 §5.1)
+    authorization: str | None = None  # --authorization: held for this call only (§5.1 step 6)
     command: list[str]
     on_line: Callable[[str], None] | None = None
     rclone_runner: Runner | None = None
@@ -167,6 +174,7 @@ class RunResult(BaseModel):
     # §5.3: what the attempt's import traces say, and their gaps (outside + unlisted + changed).
     code_trace: str = "none"
     code_gaps: int = 0
+    authorization: str | None = None  # the authorization this call was checked against (§5.6)
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -638,6 +646,41 @@ def _check_disk(
     return disk_targets, disk_check
 
 
+def _consume(
+    spec: RunSpec,
+    *,
+    data_root: Path,
+    configs_root: Path,
+    dataset_card: DatasetCard,
+    trained_on: list[str],
+    chash: str,
+    evidence: list[tuple[str, Path]],
+    report: ProbeReport,
+    code: CodePlan,
+) -> None:
+    """spec 2026-10-31 §5.1 step 6: with ``--authorization``, the claims this run has before its
+    first write must come out as the authorization binds them (§5.6): ``unauthorized:`` or
+    ``superseded:`` otherwise, with nothing written. Without one, nothing to do."""
+    if spec.authorization is None:
+        return
+    claims = claims_now(
+        dataset=dataset_card.name,
+        plan_id=spec.plan_id,
+        seed=spec.seed,
+        samples_hash=dataset_card.samples_hash,
+        trained_on=trained_on,
+        chash=chash,
+        command=spec.command,
+        plan_sha256=plan_file_sha(data_root, configs_root, dataset_card.name, spec.plan_id),
+        evidence=evidence,
+        labels=spec.labels,
+        plan=code,
+        report=report,
+        data_root=data_root,
+    )
+    consume(data_root, spec.authorization, consumer="train", target_kind=None, claims=claims)
+
+
 def _prepare(spec: RunSpec) -> _Prepared:
     """Every check and measurement that comes before vcp's first write (module docstring)."""
     paths = DatasetPaths.resolve(
@@ -681,7 +724,18 @@ def _prepare(spec: RunSpec) -> _Prepared:
         configs_root=configs_root,
     )
     # The names vcp's own refs will take, held against the same lists and this call's --labels.
-    check_ref_names([*record.evidence, *card.evidence], spec.labels, code)
+    check_ref_names([*record.evidence, *card.evidence], spec.labels, code, spec.authorization)
+    _consume(
+        spec,
+        data_root=data_root,
+        configs_root=configs_root,
+        dataset_card=dataset_card,
+        trained_on=trained_on,
+        chash=chash,
+        evidence=evidence,
+        report=report,
+        code=code,
+    )
     disk_targets, disk_check = _check_disk(spec, data_root, cwd)
     return _Prepared(
         data_root=data_root,
@@ -914,6 +968,10 @@ def _run_attempt(spec: RunSpec, p: _Prepared, results: list[RootResult]) -> _Att
         p.data_root, p.scope, record, p.evidence, spec.labels, attempt=n
     )
     record = attach_code_refs(p.data_root, record, results, n)
+    if spec.authorization is not None:  # the run pins what it was checked against (§5.6)
+        record, _ = bind_ref(
+            p.data_root, record, authorization_ref(p.data_root, spec.authorization, n), n
+        )
     notice = untracked_notice(results)
     if notice is not None:
         print(notice, file=sys.stderr, flush=True)  # before the child's first line
@@ -1008,6 +1066,7 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         code_changed=a.code_changed,
         code_trace=trace.state,
         code_gaps=trace.gaps,
+        authorization=spec.authorization,
     )
 
 
@@ -1018,9 +1077,10 @@ def train_run(spec: RunSpec) -> RunResult:
     # that fails). The upload destination is not vcp's record, so `_upload_all` guards only its own
     # bookkeeping writes, not the `upload(...)` call. The code snapshots come first (spec
     # 2026-10-31 §5.1 step 8): they are artifacts, not the run's files, so a snapshot that cannot be
-    # written leaves the run with nothing on disk yet.
+    # written leaves the run with nothing on disk yet -- which is when a run with an authorization
+    # stops (C3: `drift:`, `code_unavailable:`).
     with own_writes():
-        results = write_all(p.data_root, p.code, strict=False)
+        results = write_all(p.data_root, p.code, strict=spec.authorization is not None)
         a = _run_attempt(spec, p, results)
     if a.attempt.status == "finished" and spec.uploads:
         record, uploaded, verified, skipped = _upload_all(

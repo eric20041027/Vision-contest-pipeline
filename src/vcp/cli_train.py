@@ -97,6 +97,13 @@ def run_cmd(
         list[Path] | None,
         typer.Option("--code-root", help="another directory whose code the run uses (repeatable)"),
     ] = None,
+    authorization: Annotated[
+        str | None,
+        typer.Option(
+            "--authorization",
+            help="authorization id: FAIL before any write unless every claim it binds holds",
+        ),
+    ] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -126,6 +133,7 @@ def run_cmd(
                 require_clean=require_clean,
                 min_free_gib=min_free_gib,
                 code_roots=list(code_root or []),
+                authorization=authorization,
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -157,6 +165,8 @@ def run_cmd(
             "code_snapshot": res.code_snapshot,
             "code_trace": res.code_trace,
         }
+        if res.authorization is not None:
+            fields["authorization"] = res.authorization
         if res.disk is not None and unavailable(res.disk):
             fields["disk_check"] = "unavailable"
         if res.skipped:
@@ -196,13 +206,11 @@ def run_cmd(
             human.append(f"{res.disk_failure.reason}; free space, then --resume")
         return status, fields, res.record.model_dump(mode="json"), human
 
-    run_command(
-        "train.run",
-        json_mode,
-        data_root,
-        fn,
-        context={"run": run, "dataset": dataset, "plan": plan},
-    )
+    # A failure keeps authorization= too: consume's superseded: names no field of its own.
+    context: dict[str, FieldValue] = {"run": run, "dataset": dataset, "plan": plan}
+    if authorization is not None:
+        context["authorization"] = authorization
+    run_command("train.run", json_mode, data_root, fn, context=context)
 
 
 @train_app.command("upload")

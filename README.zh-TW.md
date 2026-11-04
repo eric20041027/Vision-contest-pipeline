@@ -84,7 +84,7 @@ VERDICT cmd=eval.judge status=OK dataset=demo prereg=p1 verdict=PASS bases_posit
 - **寫一次的檔就不再改。** 切分計畫、預登記、融合配方、備份清單都不可變——要改就換 id，舊證據因此永遠還是它原本的意思。台帳（讀數、判決、提交）只增不改。
 - **主張先於量測。** 候選只有在預登記的主張贏過它要求數量的獨立評估基底（預設兩個）才準入。打開 sealed holdout 要留下理由，決選時會列出它被打開過幾次。
 - **讀取是證明出來的，不是宣告的。** 訓練迴圈經 vcp 的存取器讀資料時會留下收據，寫明它碰了哪些子集；「這個模型沒看過 holdout」因此可以查核。
-- **跑的是哪些程式碼有紀錄，benchmark 綁住正式 job（0.18.0）。** 每個訓練 attempt 都替它用到的原始碼做內容定址的快照（含還沒 commit 的新檔），並追蹤程序實際 import 的模組；`vcp artifact authorize` 把 benchmark 證明過的東西記成授權，正式 job 的資料、ids、程式碼、batch 或模型有一項不同就被拒絕。
+- **跑的是哪些程式碼有紀錄，benchmark 綁住正式 job（0.18.0，待發版）。** 每個訓練 attempt 都替它用到的原始碼做內容定址的快照（含還沒 commit 的新檔），並追蹤程序實際 import 的模組；`vcp artifact authorize` 把 benchmark 證明過的東西記成授權，正式 job 的資料、ids、程式碼、batch 或模型有一項不同就被拒絕。
 - **比賽專屬程式碼不進核心。** 你的指標、轉換器、融合器與輸出格式以 `--plugin projects.<contest>.<module>` 自行登記。
 
 ```mermaid

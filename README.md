@@ -84,7 +84,7 @@ Every step is a command that ends with a machine-readable verdict, and the files
 - **Written-once files stay written once.** Split plans, pre-registrations, fusion recipes and backup manifests are immutable — to change one you change its id, so old evidence keeps meaning what it meant. Ledgers (readings, judgements, submissions) only grow.
 - **Claims come before measurements.** A candidate is admitted only if its pre-registered claim wins on as many independent evaluation bases as the claim requires (two by default). Opening the sealed holdout takes a recorded reason, and the final pick reports how many times it was opened.
 - **Reads are proven, not declared.** A training loop that reads through vcp's accessor leaves an access receipt naming the subsets it touched; "this model never saw the holdout" becomes checkable.
-- **The code that ran is on record, and a benchmark is bound to the real job (0.18.0).** Each training attempt snapshots the source it uses (a content-addressed copy, new uncommitted files included) and traces what the process imports; `vcp artifact authorize` records what a benchmark proved, and the full job is refused if its dataset, ids, code, batch or model differ.
+- **The code that ran is on record, and a benchmark is bound to the real job (0.18.0, awaiting release).** Each training attempt snapshots the source it uses (a content-addressed copy, new uncommitted files included) and traces what the process imports; `vcp artifact authorize` records what a benchmark proved, and the full job is refused if its dataset, ids, code, batch or model differ.
 - **Competition code stays out of the core.** Your metrics, converters, fusers and output formats register themselves through `--plugin projects.<contest>.<module>`.
 
 ```mermaid

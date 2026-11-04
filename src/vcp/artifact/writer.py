@@ -12,6 +12,7 @@ from typing import Any
 from vcp.artifact import store
 from vcp.artifact.ledger import append_supersession, row_for
 from vcp.artifact.schema import (
+    AUTHORIZATION_INPUT,
     CODE_INPUT_PREFIX,
     ArtifactManifest,
     ArtifactSpec,
@@ -73,10 +74,9 @@ def _check_code_snapshot(spec: ArtifactSpec, ref: InputRef, data_root: Path) -> 
         )
 
 
-def _check_reserved_inputs(spec: ArtifactSpec, data_root: Path) -> None:
-    """spec 2026-10-31 §5.5: every ``code_snapshot.*`` input is an intact snapshot of this data
-    root; then the snapshots this process took (``vcp.code.process.snapshot_inputs``) hold the
-    modules it has loaded. Asked at ``create`` before anything is claimed, and at ``commit``. Not a
+def _check_code_inputs(spec: ArtifactSpec, data_root: Path) -> None:
+    """Every ``code_snapshot.*`` input is an intact snapshot of this data root; then the snapshots
+    this process took (``vcp.code.process.snapshot_inputs``) hold the modules it has loaded. Not a
     single import of the code layer unless the spec has such an input."""
     code = [ref for ref in spec.inputs if ref.name.startswith(CODE_INPUT_PREFIX)]
     if not code:
@@ -86,6 +86,40 @@ def _check_reserved_inputs(spec: ArtifactSpec, data_root: Path) -> None:
     from vcp.code import process  # not at import time: vcp.code.snapshot imports this module
 
     process.check_imports(spec, data_root)
+
+
+def _check_authorization(spec: ArtifactSpec, data_root: Path) -> None:
+    """The ``authorization`` input is ``artifacts/authorization/<id>/manifest.json`` of this data
+    root (``not_found:`` otherwise) and the job meets it (``vcp.artifact.authorization.consume``:
+    ``superseded:`` / ``unauthorized:``). Not an import of the authorization layer unless the spec
+    has such an input."""
+    refs = [ref for ref in spec.inputs if ref.name == AUTHORIZATION_INPUT]
+    if not refs:
+        return
+    from vcp.artifact import authorization  # not at import time: it imports this module
+
+    ref = refs[0]
+    found = authorization.AUTHORIZATION_PATH.fullmatch(ref.path or "")
+    if found is None:
+        raise ValidationFailed(
+            f"not_found: input {ref.name!r} is not artifacts/{authorization.KIND}/<id>/"
+            f"manifest.json of this data root ({ref.path or 'no path'})",
+            fields={"kind": spec.kind, "id": spec.id, "input": ref.name},
+        )
+    authorization.consume(
+        data_root,
+        found[1],
+        consumer="artifact",
+        target_kind=spec.kind,
+        claims=authorization.artifact_claims(spec),
+    )
+
+
+def _check_reserved_inputs(spec: ArtifactSpec, data_root: Path) -> None:
+    """spec 2026-10-31 §5.5: the inputs the writer understands -- ``code_snapshot.<label>`` and
+    ``authorization``. Asked at ``create`` before anything is claimed, and at ``commit``."""
+    _check_code_inputs(spec, data_root)
+    _check_authorization(spec, data_root)
 
 
 class ArtifactWriter:

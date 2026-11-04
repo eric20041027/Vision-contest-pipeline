@@ -4,6 +4,7 @@ import json
 
 from typer.testing import CliRunner
 
+from vcp.artifact.authorization import AuthorizeSpec, authorize
 from vcp.cli import app
 from vcp.code.scan import scan_root
 from vcp.code.snapshot import snapshot_json_path, write_snapshot
@@ -274,3 +275,41 @@ def test_artifact_failure_preserves_command_identity(roots):
     assert "kind=receipt id=nope" in v
     r = _run("lineage", "--kind", "receipt", "--id", "nope")
     assert r.exit_code == 1 and "kind=receipt id=nope" in _verdict(r.output)
+
+
+def test_cli_create_with_an_authorization_input(roots, tmp_path, bench):
+    """VCP-006 through the CLI: the authorization is an ordinary ``--input``; a job that differs
+    from what it binds is a FAIL naming the difference, and leaves no directory."""
+    authorize(
+        AuthorizeSpec(
+            "a1",
+            "artifact:benchmark/b-50",
+            "artifact",
+            "features",
+            ["param:limit"],
+            [],
+            "50-sample benchmark passed",
+        ),
+        data_root=roots.data,
+    )
+    payload = tmp_path / "features.bin"
+    payload.write_bytes(b"f")
+
+    def create(artifact_id: str, batch: str):
+        spec = bench.spec(artifact_id, batch=batch, authorization="a1")
+        args = ["--kind", "features", "--id", artifact_id, "--dataset", "demo"]
+        args += ["--file", str(payload)]
+        for key, value in spec.params.items():
+            args += ["--param", f"{key}={value}"]
+        for ref in spec.inputs:
+            args += ["--input", f"{ref.name}={ref.path}"]
+        return _run("create", *args)
+
+    r = create("f-1", "8")
+    assert r.exit_code == 0, r.output
+    assert "status=OK" in _verdict(r.output)
+    r = create("f-2", "16")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "unauthorized:" in v and "differs=param:batch" in v
+    assert "authorization=a1" in v and "kind=features id=f-2" in v
+    assert not artifact_dir(roots.data, "features", "f-2").exists()

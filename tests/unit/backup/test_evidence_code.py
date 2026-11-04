@@ -30,16 +30,18 @@ from submit_fixtures import (
     seed_judgements,
 )
 from vcp.artifact import store
-from vcp.artifact.authorization import AuthorizeSpec, authorize
+from vcp.artifact.authorization import AuthorizeSpec, authorize, consume
 from vcp.backup.completeness import manifest_gaps
 from vcp.backup.evidence import Collector, build_manifest
 from vcp.backup.push import push
 from vcp.backup.schema import CARD_ROLES, ROLES, TIER_OF
 from vcp.backup.verify import verify
+from vcp.core.errors import ValidationFailed
+from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths, artifact_dir
 from vcp.data.evidence import RunScope, label_ref
 from vcp.data.split import load_plan
-from vcp.measure.runs import load_run
+from vcp.measure.runs import load_run, run_dir
 from vcp.submit.profile import init_profile
 from vcp.submit.schema import PlatformProfile
 from vcp.submit.stage import StageSpec, stage
@@ -144,6 +146,40 @@ def test_a_run_basis_is_walked_as_a_run(world):
     assert any(path.startswith("runs/bad/predictions/") for path in roles["prediction"])
     assert "authorization_basis" not in roles  # a run is not an artifact basis
     assert all(e.for_ == ["run:good"] for e in col.files_of())
+
+
+def test_a_run_basis_without_a_run_card_fails_the_run_conclusion(world):
+    """A run basis is walked as a run, so one that is gone fails the way a missing fuse member
+    does: ``not_found:`` and no manifest (controller ruling, Task 18)."""
+    attach_authorization(world, "good", "auth-run", basis="run:bad")
+    (run_dir(world.roots.data, "bad") / "run.yaml").unlink()
+    with pytest.raises(ValidationFailed, match="not_found: run 'bad'"):
+        build_manifest(EVAL, "run:good", manifest_id="gone", **_kw(world))
+    assert not _paths(world).backup_manifest("gone").exists()
+
+
+def test_a_rewritten_basis_is_backed_up_as_it_is_and_consume_refuses_it(world, coded):
+    """Backup records evidence as it exists: a basis ``manifest.json`` rewritten after the
+    authorization is listed with the bytes it has now, and ``verify`` finds nothing wrong. That
+    the basis is no longer the one authorized is ``consume``'s to say (``superseded:``)."""
+    claims = {"dataset": EVAL, "plan_id": "fixed-v1"}
+    held = {"consumer": "train", "target_kind": None, "claims": claims}
+    consume(world.roots.data, coded.authorization, **held)
+    basis = store.manifest_path(world.roots.data, "benchmark", BENCH_ID)
+    authorization = store.load_manifest(world.roots.data, "authorization", coded.authorization)
+    (pinned,) = [i.sha256 for i in authorization.spec.inputs if i.name == "basis"]
+    assert sha256_file(basis) == pinned
+    basis.write_bytes(basis.read_bytes() + b"\n\n")  # still the same manifest, other bytes
+
+    built = build_manifest(EVAL, "run:good", manifest_id="rewritten", **_kw(world))
+    key = f"data/artifacts/benchmark/{BENCH_ID}/manifest.json"
+    row = {f.key: f for f in built.manifest.files}[key]
+    assert row.role == "authorization_basis" and row.present
+    assert row.sha256 == sha256_file(basis) != pinned
+    res = verify(EVAL, "rewritten", **_kw(world))
+    assert res.ok and res.drift == [] and res.bad_stamps == []
+    with pytest.raises(ValidationFailed, match="superseded"):
+        consume(world.roots.data, coded.authorization, **held)
 
 
 def test_run_bases_that_name_each_other_end_the_walk(world):

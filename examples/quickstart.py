@@ -154,6 +154,12 @@ def verdict_fields(stdout: str, cmd: str) -> list[str]:
     raise SystemExit(f"quickstart step failed: no VERDICT line for {cmd}")
 
 
+def expect(stdout: str, cmd: str, word: str) -> None:
+    """Stop unless the VERDICT line of ``cmd`` holds ``word``: exit 0 alone lets a WARN pass."""
+    if word not in verdict_fields(stdout, cmd):
+        raise SystemExit(f"quickstart step failed: expected {word} from {cmd}")
+
+
 def pinned_snapshot(status_json: str) -> str:
     """The code snapshot a run pinned: the ``code.cwd`` row of ``train status --json``."""
     doc = json.loads(status_json.splitlines()[0])
@@ -346,8 +352,7 @@ def main() -> int:
             tail=("--", str(python), "train.py"),
             **roots,
         )
-        if "code=snapshot" not in verdict_fields(trained, "train.run"):
-            raise SystemExit("quickstart step failed: expected code=snapshot")
+        expect(trained, "train.run", "code=snapshot")
         status = run(
             "14a. train status: which snapshot the run pinned",
             "train",
@@ -360,7 +365,7 @@ def main() -> int:
             quiet=True,
         )
         shutil.rmtree(project)
-        run(
+        verified = run(
             "14b. code verify: the snapshot verifies with the project gone",
             "code",
             "verify",
@@ -369,6 +374,7 @@ def main() -> int:
             env_root=data_root,
             configs_root=None,
         )
+        expect(verified, "code.verify", "status=OK")
 
         print("\nDone. The judge verdict of step 11 is PASS because the candidate cleared the")
         print("threshold on both valA and valB. Lower CANDIDATE_ACCURACY in this file to about")

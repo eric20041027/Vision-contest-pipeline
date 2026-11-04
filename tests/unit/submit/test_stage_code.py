@@ -294,7 +294,7 @@ def test_a_kernel_snapshot_must_exist_and_hold(pair):
     assert not pair.test_paths.submissions_log.exists()
 
 
-def test_a_kernel_candidate_needs_code_when_the_profile_wants_acode_snapshot(pair):
+def test_a_kernel_candidate_needs_code_when_the_profile_wants_a_code_snapshot(pair):
     _kernel(pair, require_code="snapshot")
     tie_code(pair, "good", code_snapshot(pair))
 

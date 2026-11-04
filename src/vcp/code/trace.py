@@ -469,10 +469,13 @@ def _wanted() -> bool:
 def _warm() -> None:
     """Ask, now, what the exit asks again, so whatever the asking imports is imported now: on
     POSIX the first ``sysconfig`` path loads ``_sysconfigdata_*``, and ``getpass.getuser`` may
-    load ``pwd``. The answers are not kept; the exit's own are the ones recorded."""
+    load ``pwd``. The answers are not kept; the exit's own are the ones recorded. The build string
+    is the exception: it is cached for the process (``build_info``), so asking it now means the
+    exit runs no git, whose subprocesses have no timeout."""
     stdlib_dirs()
     site_dirs()
     generated_locations()
+    build_string()
 
 
 def arm(session: Session) -> None:

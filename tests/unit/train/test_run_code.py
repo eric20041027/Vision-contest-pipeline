@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import types
 from dataclasses import replace
@@ -706,6 +707,30 @@ def test_a_trace_that_cannot_be_imported_keeps_the_exit_code(roots, work, monkey
     assert "[vcp] code trace skipped: ModuleNotFoundError" in console_text
     assert "Traceback" not in console_text
     assert not _trace_refs(roots) and not (roots.data / "artifacts" / "code_trace").exists()
+
+
+def test_the_trace_at_exit_starts_no_git(roots, work, monkeypatch):
+    """``build_string()`` may run git (three subprocesses, no timeout); it is asked when the trace
+    is armed -- it is cached for the process -- so the exit asks git nothing (final review)."""
+    from vcp.core import build
+
+    seed_train(roots)
+    train_run(_spec(roots, work))  # a child without Session: no trace yet
+    helpers.trace_on(monkeypatch)
+    monkeypatch.setattr(trace, "_ARMED", False)
+    monkeypatch.setattr(trace.multiprocessing, "parent_process", lambda: None)
+    monkeypatch.delenv("RANK", raising=False)
+    monkeypatch.setattr(trace.atexit, "register", lambda *args: None)
+    build.build_info.cache_clear()
+    trace.arm(types.SimpleNamespace(run_id="r", data_root=roots.data, attempt=1))
+
+    def no_subprocess(*args, **kwargs):
+        raise AssertionError(f"a subprocess at exit: {args!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", no_subprocess)
+    main = types.ModuleType("__main__")
+    main.__file__ = str(work / "fake_train.py")
+    assert trace.write_trace("r", roots.data, 1, modules={"__main__": main}) == "r-a1-t1"
 
 
 def test_a_trace_id_that_is_taken_moves_to_the_next_seq(roots, work):

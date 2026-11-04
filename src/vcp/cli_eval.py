@@ -629,7 +629,7 @@ def status_cmd(
         ]
         human += [f"unreadable run card (not counted in runs=): {p}" for p in st.unreadable]
         human += [
-            f"provenance unavailable for run {run}: {msg}"
+            f"provenance unavailable for run {run}: {msg} code={st.code.get(run, 'declared')}"
             for run, msg in st.provenance_failed.items()
         ]
         human += [

@@ -1324,6 +1324,9 @@ def test_eval_status_warns_when_a_fused_runs_member_cannot_be_read(roots, tmp_pa
     v = _verdict(r.output)
     assert "status=WARN" in v and "provenance_failed=1" in v
     assert "provenance unavailable for run fused:" in r.output
+    # spec 2026-10-31 §5.8: every run's code, in the text as in --json, this one's included.
+    (line,) = [x for x in r.output.splitlines() if "provenance unavailable for run fused:" in x]
+    assert line.endswith(" code=declared"), line
 
 
 def test_measure_verdict_prints_identity(roots, tmp_path):

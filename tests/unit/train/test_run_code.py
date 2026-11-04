@@ -34,7 +34,7 @@ from vcp.measure.runs import load_run, run_dir
 from vcp.train import coderun
 from vcp.train import env as envmod
 from vcp.train import run as run_module
-from vcp.train.records import load_record, read_events, train_yaml
+from vcp.train.records import events_path, load_record, read_events, train_yaml
 from vcp.train.run import RunSpec, train_run
 
 IGNORE_WEIGHTS = b"weights/\n"
@@ -331,6 +331,38 @@ def test_a_failing_probe_aborts_before_any_write(roots, work, monkeypatch):
     with pytest.raises(VcpError, match="environment probe failed"):
         train_run(_spec(roots, work, resume=True))
     assert train_yaml(roots.data, "r").read_bytes() == before  # no `running` attempt left behind
+
+
+def test_a_label_set_named_like_a_code_ref_fails_before_any_write(roots, work, tmp_path):
+    """A label set may be called ``code.cwd``; the run's cwd snapshot is bound under that name,
+    so the clash is refused before the first write, not found by ``bind_ref`` after it."""
+    _, plan = seed_train(roots)
+    helpers.make_label_set(roots, tmp_path, plan, label_set_id="code.cwd")
+    with pytest.raises(ValidationFailed, match="^evidence_conflict: 'code.cwd'") as ei:
+        train_run(_spec(roots, work, labels=["code.cwd"]))
+    assert ei.value.fields == {"evidence_name": "code.cwd"}
+    assert not run_dir(roots.data, "r").exists() and _snapshots(roots) == []
+
+
+def test_a_run_from_before_0_18_holding_a_code_name_fails_before_any_write(roots, work, tmp_path):
+    """0.17 let ``--evidence code.cwd`` through; resumed under 0.18, the cwd snapshot would be
+    bound under the same name, so the resume stops before it writes anything."""
+    seed_train(roots)
+    f = tmp_path / "notes.txt"
+    f.write_text("n", encoding="utf-8")
+    train_run(_spec(roots, work, evidence=[f"cfg={f}"]))
+    record, card = load_record(roots.data, "r"), load_run(roots.data, "r")
+    (cfg,) = [r for r in record.evidence if r.kind == "evidence"]
+    old = [cfg.model_copy(update={"name": "code.cwd", "role": "code.cwd"})]  # 0.17's evidence
+    run_module.save_record(roots.data, record.model_copy(update={"evidence": old}))
+    run_module.save_run(roots.data, card.model_copy(update={"evidence": old}))
+    log = events_path(roots.data, "r")
+    before = (train_yaml(roots.data, "r").read_bytes(), log.read_bytes())
+    snapshots = _snapshots(roots)
+    with pytest.raises(ValidationFailed, match="^evidence_conflict: 'code.cwd'"):
+        train_run(_spec(roots, work, resume=True))
+    assert (train_yaml(roots.data, "r").read_bytes(), log.read_bytes()) == before
+    assert _snapshots(roots) == snapshots
 
 
 def test_a_missing_code_root_fails_before_any_write(roots, work, tmp_path):

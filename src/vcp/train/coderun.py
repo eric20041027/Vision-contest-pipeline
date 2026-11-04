@@ -30,6 +30,7 @@ from vcp.code.roots import (
 )
 from vcp.code.scan import IndexEntry, RootScan, scan_root
 from vcp.code.schema import CodeRoot, CodeSection, RootReason, TraceDoc
+from vcp.code.snapshot import KIND as SNAPSHOT_KIND
 from vcp.code.snapshot import SnapshotOutcome, write_snapshot
 from vcp.code.trace import GAP_CLASSES, TRACE_FILE
 from vcp.code.trace import KIND as TRACE_KIND
@@ -37,7 +38,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir, path_key, store_path
 from vcp.data.evidence import artifact_ref
-from vcp.data.evidence_ref import CODE_ROLE, CODE_TRACE_ROLE, EvidenceRef, current
+from vcp.data.evidence_ref import CODE_ROLE, CODE_TRACE_ROLE, EvidenceRef, check_name, current
 from vcp.train.env import ProbeReport
 from vcp.train.records import bind_ref
 from vcp.train.schema import TrainRecord
@@ -53,6 +54,7 @@ __all__ = [
     "attach_code_refs",
     "changed_since_snapshot",
     "check_child_vcp",
+    "check_ref_names",
     "code_section",
     "plan_code",
     "snapshot_state",
@@ -170,6 +172,33 @@ def plan_code(
     return CodePlan(roots=planned, scans=scans, excluded_dirs=excluded)
 
 
+def _code_ref_name(label: str) -> str:
+    return f"code.{label}"
+
+
+def _check_free(
+    existing: list[EvidenceRef], labels: list[str], name: str, role: str, kind: str
+) -> None:
+    """``name`` can be bound as ``kind`` / ``role``: no ref of the run's records has it under
+    another kind or role (``check_name``), and it is not a ``--labels`` id of this call."""
+    check_name(existing, name, role, kind)
+    if name in labels:
+        raise ValidationFailed(
+            f"evidence_conflict: {name!r} is both a --labels id and the name of vcp's {kind} ref",
+            fields={"evidence_name": name},
+        )
+
+
+def check_ref_names(existing: list[EvidenceRef], labels: list[str], plan: CodePlan) -> None:
+    """Before the first write: the ``code.<label>`` name of every root that may get a snapshot is
+    free for it. A run from before 0.18 may hold an ``--evidence code.cwd`` and a label set may be
+    called ``code.cwd``; ``bind_ref`` would meet the clash only after the run's first writes.
+    ``existing`` are the refs of the run's record and card."""
+    for root, scan in zip(plan.roots, plan.scans, strict=True):
+        if scan.reason is None:
+            _check_free(existing, labels, _code_ref_name(root.label), CODE_ROLE, SNAPSHOT_KIND)
+
+
 # -- the writes -----------------------------------------------------------------------------------
 
 
@@ -229,9 +258,9 @@ def attach_code_refs(
             continue
         ref = artifact_ref(
             data_root,
-            "code_snapshot",
+            SNAPSHOT_KIND,
             r.snapshot,
-            name=f"code.{r.root.label}",
+            name=_code_ref_name(r.root.label),
             role=CODE_ROLE,
             attempt=attempt,
             binding="cli",

@@ -46,6 +46,7 @@ from vcp.train.coderun import (
     attach_code_refs,
     changed_since_snapshot,
     check_child_vcp,
+    check_ref_names,
     code_section,
     plan_code,
     snapshot_state,
@@ -679,6 +680,8 @@ def _prepare(spec: RunSpec) -> _Prepared:
         data_root=data_root,
         configs_root=configs_root,
     )
+    # The names vcp's own refs will take, held against the same lists and this call's --labels.
+    check_ref_names([*record.evidence, *card.evidence], spec.labels, code)
     disk_targets, disk_check = _check_disk(spec, data_root, cwd)
     return _Prepared(
         data_root=data_root,

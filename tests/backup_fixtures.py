@@ -13,18 +13,26 @@ from submit_fixtures import (
     EVAL,
     STAMP,
     TEST,
+    code_snapshot,
     make_pair,
     seed_eval_runs,
     seed_judgements,
     seed_test_runs,
 )
+from vcp.artifact.authorization import AuthorizeSpec, authorize
+from vcp.artifact.schema import ArtifactSpec, InputRef
+from vcp.artifact.writer import ArtifactWriter
 from vcp.backup.evidence import Collector, parse_conclusion
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import write_manifest
 from vcp.backup.schema import BackupRow, Manifest
+from vcp.code.schema import TraceDoc
+from vcp.code.snapshot import code_ref, snapshot_json_path
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
+from vcp.data.evidence import artifact_ref
+from vcp.data.evidence_ref import add_refs
 from vcp.fuse.build import write_record
 from vcp.fuse.recipes import save_recipe
 from vcp.fuse.schema import FuseRecord, Member, MemberRecord, Recipe, SubsetBuild
@@ -302,3 +310,129 @@ def write_old_manifest(
         )
     )
     return manifest
+
+
+# -- what a 0.18 train run binds beside its code: snapshot, trace, authorization ------------------
+
+TRACE_CLASSES = ("root", "generated", "stdlib", "distribution", "outside", "unlisted", "changed")
+BENCH_ID = "bench-1"
+
+
+def tie_ref(world, run_id: str, *refs) -> None:
+    """``run_id``'s run card carries ``refs`` as well as what it had."""
+    card = load_run(world.roots.data, run_id)
+    save_run(
+        world.roots.data, card.model_copy(update={"evidence": add_refs(card.evidence, list(refs))})
+    )
+
+
+def write_bench(data_root: Path, bench_id: str = BENCH_ID, dataset: str = EVAL) -> str:
+    """A committed `benchmark` artifact of `dataset` (plan fixed-v1), for an authorization to
+    rest on."""
+    spec = ArtifactSpec(
+        kind="benchmark",
+        id=bench_id,
+        dataset=dataset,
+        plan_id="fixed-v1",
+        params={"batch": "8"},
+    )
+    with ArtifactWriter.create(spec, data_root=data_root) as art:
+        art.write_json("receipt.json", {"samples": 50})
+        art.commit()
+    return bench_id
+
+
+def attach_snapshot(world, run_id: str = "good", body: bytes = b"A = 1") -> str:
+    """The run carries ``code.cwd``, pinned to a snapshot of a small directory of the test's own."""
+    snapshot_id = code_snapshot(world.pair, f"code-{run_id}", body)
+    tie_ref(
+        world,
+        run_id,
+        code_ref(world.roots.data, "cwd", snapshot_id, attempt=None, binding="manual"),
+    )
+    return snapshot_id
+
+
+def attach_trace(world, run_id: str, snapshot_id: str, *, attempt: int = 1, seq: int = 1) -> str:
+    """The run carries ``code_trace.a<n>.<seq>``: a ``code_trace`` artifact whose one input is the
+    snapshot, the way ``vcp.code.trace`` writes it."""
+    data = world.roots.data
+    trace_id = f"{run_id}-a{attempt}-t{seq}"
+    doc = TraceDoc(
+        run_id=run_id,
+        attempt=attempt,
+        executable="python",
+        python="3.12.0",
+        roots=[{"label": "cwd", "snapshot": snapshot_id}],
+        counts=dict.fromkeys(TRACE_CLASSES, 0),
+        generated_by={},
+        outside=[],
+        unlisted=[],
+        changed=[],
+        complete=True,
+        taken_at=stamp(),
+        vcp_version="0",
+    )
+    spec = ArtifactSpec(
+        kind="code_trace",
+        id=trace_id,
+        dataset=EVAL,
+        plan_id="fixed-v1",
+        params={"run": run_id, "attempt": str(attempt)},
+        inputs=[InputRef(name="snapshot.cwd", path=str(snapshot_json_path(data, snapshot_id)))],
+    )
+    with ArtifactWriter.create(spec, data_root=data) as art:
+        art.write_json("trace.json", doc.model_dump(mode="json"))
+        art.commit()
+    tie_ref(
+        world,
+        run_id,
+        artifact_ref(
+            data,
+            "code_trace",
+            trace_id,
+            name=f"code_trace.a{attempt}.{seq}",
+            role="code_trace",
+            attempt=attempt,
+            binding="session",
+        ),
+    )
+    return trace_id
+
+
+def attach_authorization(
+    world, run_id: str, authorization_id: str = "auth-1", *, basis: str | None = None
+) -> str:
+    """The run pins an authorization. ``basis`` is ``run:<id>``, authorized with a stand-in for
+    the training layer's claims (one dataset claim); by default it is the ``benchmark`` artifact
+    of `write_bench`, written here, with its batch size freed."""
+    data = world.roots.data
+    if basis is None:
+        basis = f"artifact:benchmark/{write_bench(data)}"
+    run_basis = basis.startswith("run:")
+    spec = AuthorizeSpec(
+        authorization_id,
+        basis,
+        "train",
+        None,
+        [] if run_basis else ["param:batch"],
+        [],
+        "the benchmark passed",
+    )
+    authorize(
+        spec, data_root=data, run_claims=(lambda run: {"dataset": EVAL}) if run_basis else None
+    )
+    tie_ref(
+        world,
+        run_id,
+        artifact_ref(
+            data,
+            "authorization",
+            authorization_id,
+            name="authorization",
+            role="authorization",
+            attempt=1,
+            binding="cli",
+        ),
+    )
+    return authorization_id

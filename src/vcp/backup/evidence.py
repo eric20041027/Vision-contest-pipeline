@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from vcp.artifact import store
+from vcp.artifact.authorization import BASIS_INPUT, load_authorization, parse_basis
+from vcp.artifact.authorization import KIND as AUTHORIZATION_KIND
 from vcp.backup.completeness import manifest_gaps
 from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import default_manifest_id, locate_file, write_manifest
@@ -247,14 +249,52 @@ class Collector:
         return merge_refs(card_refs, load_train_record(self.data_root, run_id).evidence)
 
     def _artifact(self, ref: EvidenceRef, conclusion: str) -> None:
-        adir = artifact_dir(self.data_root, ref.kind, ref.artifact_id)
-        self.add(adir / "manifest.json", ref.kind, conclusion, sha256=ref.manifest_sha256)
+        """The artifact a run's ref pins, under the role its kind names; an authorization brings
+        its basis along (0.18.0)."""
+        self._artifact_files(
+            ref.kind, ref.artifact_id, ref.kind, conclusion, pinned_sha=ref.manifest_sha256
+        )
+        if ref.kind == AUTHORIZATION_KIND:
+            self._authorization_basis(ref, conclusion)
+
+    def _artifact_files(
+        self,
+        kind: str,
+        artifact_id: str,
+        role: str,
+        conclusion: str,
+        pinned_sha: str | None = None,
+    ) -> None:
+        """An artifact's ``manifest.json`` and every file it lists, under ``role``. A manifest
+        that cannot be read is listed with the sha that vouches for it (``pinned_sha``), or not
+        at all, and its files are left out."""
+        adir = artifact_dir(self.data_root, kind, artifact_id)
+        self.add(adir / "manifest.json", role, conclusion, sha256=pinned_sha)
+        try:
+            manifest = store.load_manifest(self.data_root, kind, artifact_id)
+        except (ValidationFailed, IntegrityError):
+            return  # listed above as missing, with the sha that was pinned
+        for f in manifest.files:
+            self.add(adir / f.name, role, conclusion, sha256=f.sha256, size=f.bytes)
+
+    def _authorization_basis(self, ref: EvidenceRef, conclusion: str) -> None:
+        """What an authorization rests on (0.18.0, spec 2026-10-31 §4.8): an artifact basis is
+        listed as ``authorization_basis`` -- with the sha the authorization pinned, so a basis
+        that is gone is still named -- and a run basis is walked as a run. An authorization that
+        cannot be read costs its basis and nothing else: it is already listed above. A run basis
+        that names a run being walked ends there (``_seen``)."""
         try:
             manifest = store.load_manifest(self.data_root, ref.kind, ref.artifact_id)
+            word, first, second = parse_basis(
+                load_authorization(self.data_root, ref.artifact_id).basis
+            )
         except (ValidationFailed, IntegrityError):
-            return  # listed above as missing, with the sha the run pinned
-        for f in manifest.files:
-            self.add(adir / f.name, ref.kind, conclusion, sha256=f.sha256, size=f.bytes)
+            return
+        if word == "run":
+            self.walk_run(first, conclusion)
+            return
+        pinned = next((i.sha256 for i in manifest.spec.inputs if i.name == BASIS_INPUT), None)
+        self._artifact_files(first, second, "authorization_basis", conclusion, pinned_sha=pinned)
 
     def _checkpoints(self, record: TrainRecord, conclusion: str) -> None:
         """The newest record of every checkpoint path: a --resume that changed a path's bytes is
@@ -324,6 +364,10 @@ class Collector:
                 conclusion,
                 sha256=staged.artifact.sha256,
                 size=staged.artifact.bytes,
+            )
+        if staged.artifact.code_snapshot:  # a kernel's notebook (0.18.0, spec 2026-10-31 §4.7)
+            self._artifact_files(
+                "code_snapshot", staged.artifact.code_snapshot, "code_snapshot", conclusion
             )
         self.walk_run(staged.eval_run, conclusion)
         if staged.test_run:

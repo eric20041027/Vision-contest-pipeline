@@ -495,6 +495,47 @@ def test_probe_and_local_distributions_agree(tmp_path, monkeypatch):
     assert {d.name for d in here} >= {"agree_pkg", "Agree_Two"}
 
 
+def _shadowing_egg_infos(directory: Path) -> Path:
+    """``*.egg-info`` directories that would shadow the environment's own ``pydantic`` and
+    ``vcp`` (and add a ``ghost-pkg``) if ``directory`` were on the path: a stale build left in
+    the directory a command was typed in."""
+    for name in ("pydantic", "vcp", "ghost_pkg"):
+        info = directory / f"{name}.egg-info"
+        info.mkdir(parents=True)
+        pkg_info = f"Metadata-Version: 2.1\nName: {name}\nVersion: 0.0.1\n"
+        (info / "PKG-INFO").write_bytes(pkg_info.encode("utf-8"))
+    return directory
+
+
+def test_the_probe_does_not_depend_on_the_working_directory(tmp_path, monkeypatch):
+    """``python -c`` puts ``''`` first on ``sys.path``: an egg-info in the wrapper's cwd must not
+    become the environment's distribution, its identity, its editables or its vcp (final review,
+    Important 2)."""
+    monkeypatch.setattr(code_roots, "editables_of", editables_of)  # the real reader
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    shadowed = _shadowing_egg_infos(tmp_path / "shadowed")
+    monkeypatch.chdir(clean)
+    here = probe(None)
+    monkeypatch.chdir(shadowed)
+    there = probe(None)
+    assert there.data["distributions"] == here.data["distributions"]
+    assert there.data["packages"] == here.data["packages"]
+    assert "ghost_pkg" not in there.data["packages"]
+    assert there.identity == here.identity and there.editables == here.editables
+    assert there.child_vcp == here.child_vcp == vcp.__version__
+
+
+def test_local_distributions_skip_the_empty_path_entry(tmp_path, monkeypatch):
+    """The same reader in this process: ``''`` on ``sys.path`` is the cwd, and is not read."""
+    before = local_distributions()
+    monkeypatch.chdir(_shadowing_egg_infos(tmp_path))
+    monkeypatch.setattr(sys, "path", ["", *sys.path])
+    after = local_distributions()
+    assert after == before
+    assert "ghost_pkg" not in {row["name"] for row in after}
+
+
 def test_probe_with_an_explicit_interpreter(this_probe):
     assert probe(Path(sys.executable)).identity == this_probe.identity
 

@@ -28,7 +28,8 @@ from vcp.train.schema import DiskCheck, EnvSnapshot, GitInfo
 
 # Standard library only, and it prints nothing from the environment. The distributions come from
 # the reader ``local_distributions`` runs too; the identity's python string is built here because
-# only the venv's own interpreter can say what it is.
+# only the venv's own interpreter can say what it is. ``packages`` skips the empty ``sys.path``
+# entry as that reader does: under ``-c`` it is the wrapper's current directory.
 PROBE = (
     "import importlib.metadata as m, json, platform, socket, sys, sysconfig\n"
     + _DISTRIBUTIONS_SRC
@@ -38,7 +39,7 @@ out = {"python": sys.version, "executable": sys.executable, "platform": platform
        "distributions": installed_distributions(),
        "identity_python": f"{sys.implementation.name}-{platform.python_version()}-"
                           f"{sys.implementation.cache_tag}-{sysconfig.get_platform()}"}
-for d in m.distributions():
+for d in m.distributions(path=[p for p in sys.path if p]):
     try:
         out["packages"][d.name] = d.version
     except Exception:

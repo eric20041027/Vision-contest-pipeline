@@ -59,13 +59,16 @@ _UNREADABLE_URL = "<redacted>"  # what a URL that cannot be taken apart is recor
 # Standard library only: it runs in the training venv, which has no vcp. One row per PEP 503 name
 # (importlib lists the distributions in ``sys.path`` order, so the first one is the one that
 # resolves); a distribution without a name or a version is no row. A damaged dist-info costs its own
-# ``record_sha256`` or ``direct_url`` -- never the probe.
+# ``record_sha256`` or ``direct_url`` -- never the probe. The empty ``sys.path`` entry is left out:
+# ``python -c`` puts it first and it is the current directory, so an ``*.egg-info`` wherever the
+# command was typed would otherwise shadow the environment's own distribution.
 _DISTRIBUTIONS_SRC = """
 def installed_distributions():
     import hashlib
     import importlib.metadata
     import json
     import re
+    import sys
     from pathlib import Path
 
     def record_sha256(dist):
@@ -86,7 +89,7 @@ def installed_distributions():
         return found if isinstance(found, dict) else None
 
     rows, seen = [], set()
-    for dist in importlib.metadata.distributions():
+    for dist in importlib.metadata.distributions(path=[p for p in sys.path if p]):
         try:
             headers = dist.metadata  # .get: a missing header is None, not a warning or a KeyError
             name, version = headers.get("Name"), headers.get("Version")

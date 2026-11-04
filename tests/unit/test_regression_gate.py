@@ -525,7 +525,8 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
         "is drift while an unimported one is not; exported snapshots verify without the repo and "
         "verify ignores the worktree while diff reports it; any bound claim that changes is "
         "unauthorized and a train run with an authorization fails closed when its snapshot "
-        "cannot be written; secrets are never opened; framework outputs and generated modules "
+        "cannot be written; secrets, and a repository nested in a plain root, are never opened; "
+        "framework outputs and generated modules "
         "do not change identity or completeness; a failing trace never changes the child's "
         "exit code",
         {
@@ -556,7 +557,10 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
                 "test_a_benchmark_run_authorizes_the_full_run",
                 "test_with_an_authorization_a_snapshot_that_cannot_be_written_fails_closed",
             ],
-            "tests/unit/code/test_code_scan.py": ["test_secret_files_are_never_opened"],
+            "tests/unit/code/test_code_scan.py": [
+                "test_secret_files_are_never_opened",
+                "test_a_nested_work_tree_in_a_plain_root_is_not_entered",
+            ],
             "tests/unit/code/test_code_trace.py": ["test_generated_modules_are_not_gaps"],
             "tests/unit/test_e2e_code.py": ["test_benchmark_authorize_full_job_then_stage"],
         },

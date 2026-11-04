@@ -315,6 +315,56 @@ def test_a_nested_repository_is_not_listed(tmp_path):
     assert _paths(scan_root(r, kind="git")) == ["keep.py"]
 
 
+def _nested_work_tree(directory: Path, marker: str) -> Path:
+    """A work tree at ``directory`` with an ignored ``ignored_model.py`` and a ``sub/inner.py``:
+    a real repository, a ``.git`` directory, or the ``.git`` file of a linked worktree."""
+    files = {".gitignore": b"ignored_model.py\n", "sub/inner.py": b"i = 1\n"}
+    if marker == "repository":
+        helpers.git_repo(directory, files)
+    else:
+        _put(directory, files)
+        if marker == "dot-git-dir":
+            (directory / ".git").mkdir()
+        else:
+            (directory / ".git").write_bytes(b"gitdir: /elsewhere/.git/worktrees/clone\n")
+    _put(directory, {"ignored_model.py": "token = 1\n"})
+    return directory
+
+
+NESTED = pytest.mark.parametrize("marker", ["repository", "dot-git-dir", "dot-git-file"])
+
+
+@NESTED
+def test_a_nested_work_tree_in_a_plain_root_is_not_entered(marker, tmp_path, monkeypatch):
+    """A plain root is walked without ``.gitignore``, so a repository cloned into it is a
+    boundary (final review, Important 3): not descended -- its ignored files are never read --
+    and listed in ``excluded_paths``; it is no part of this root's identity."""
+    r = _put(tmp_path / "r", {"ok.py": "x = 1\n"})
+    _nested_work_tree(r / "clone", marker)
+    _never_open(monkeypatch, {"ignored_model.py", "inner.py"}, stat=True)
+    scanned = []
+    real_scandir = os.scandir
+
+    def spy(path="."):
+        scanned.append(os.path.basename(os.fspath(path)))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", spy)
+    s = scan_root(r, kind="dir")
+    assert (_paths(s), s.excluded_paths, s.reason) == (["ok.py"], ("clone",), None)
+    assert "clone" not in scanned and "sub" not in scanned
+    # A nested work tree that is a root of its own is the inner root's, not an exclusion.
+    s = scan_root(r, kind="dir", skip_dirs=[r / "clone"])
+    assert (_paths(s), s.excluded_paths) == (["ok.py"], ())
+
+
+@NESTED
+def test_walk_files_does_not_enter_a_nested_work_tree(marker, tmp_path):
+    r = _put(tmp_path / "r", {"ok.py": "x = 1\n", "pkg/p.py": ""})
+    _nested_work_tree(r / "pkg" / "clone", marker)
+    assert scan.walk_files(r) == ["ok.py", "pkg/p.py"]
+
+
 def test_a_non_ascii_tracked_name_is_listed_by_its_real_name(tmp_path):
     r = helpers.git_repo(tmp_path / "r", {"資料處理.py": b"d = 1\n"})
     s = scan_root(r, kind="git")

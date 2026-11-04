@@ -4,7 +4,8 @@ identity, their shas, the identity itself, and which of them a snapshot keeps th
 A scan reads the disk and writes nothing. Files that rules v1 does not take are never opened:
 secrets are not even stat-ed, an untracked ``CONFIG`` file is not read, a symlink or junction is
 not followed, and a path under an ignored, hidden, virtualenv or ``skip_dirs`` directory is not
-listed. The limits are read from ``vcp.code.rules`` when the scan runs.
+listed, nor (in a plain directory) one inside another repository's work tree. The limits are
+read from ``vcp.code.rules`` when the scan runs.
 """
 
 from __future__ import annotations
@@ -131,7 +132,9 @@ class RootScan:
     kind: RootKind
     entries: tuple[IndexEntry, ...]
     untracked_code: tuple[str, ...]  # included untracked CODE files of a git root
-    excluded_paths: tuple[str, ...]  # secret names, symlinks and junctions: not opened, not listed
+    # Secret names, symlinks and junctions, and (a plain-directory root only) directories that hold
+    # a ``.git`` entry: not opened, not entered, not listed.
+    excluded_paths: tuple[str, ...]
     reason: ScanReason | None
 
     @property
@@ -346,10 +349,18 @@ def _git_candidates(root: Path) -> list[tuple[str, bool]]:
     return [*((path, True) for path in tracked), *((path, False) for path in loose)]
 
 
+def _holds_dot_git(directory: str) -> bool:
+    """The directory holds a ``.git`` file or directory (or a link of that name): it is the top
+    of another work tree -- a clone, a linked worktree, a submodule checkout."""
+    return os.path.lexists(os.path.join(directory, ".git"))
+
+
 def _walk_candidates(root: Path, selector: _Selector) -> list[tuple[str, bool]]:
     """Every file below ``root`` that is neither skipped nor behind a link. Skipped entries (a
     hidden or cache segment, a virtualenv, a ``skip_dirs`` directory) are not entered and do not
-    count toward ``MAX_WALK_ENTRIES``."""
+    count toward ``MAX_WALK_ENTRIES``. A directory below ``root`` that holds a ``.git`` entry is
+    another repository: walked as a plain directory its ignored files would be read, so it is not
+    entered and is listed in ``excluded_paths`` instead, as a link is (spec §7)."""
     limit = rules.MAX_WALK_ENTRIES
     seen = 0
     files: list[tuple[str, bool]] = []
@@ -376,7 +387,7 @@ def _walk_candidates(root: Path, selector: _Selector) -> list[tuple[str, bool]]:
                 if seen > limit:
                     raise ScanStopped("too_large")
                 path = prefix + entry.name
-                if linked:
+                if linked or (is_dir and _holds_dot_git(entry.path)):
                     selector.excluded.add(path)
                 elif is_dir:
                     pending.append((path + "/", entry.path, key + os.sep))
@@ -389,10 +400,10 @@ def _walk_candidates(root: Path, selector: _Selector) -> list[tuple[str, bool]]:
 
 def walk_files(root: Path, skip_dirs: Sequence[Path] = ()) -> list[str]:
     """The root-relative posix path of every file below ``root`` that is neither skipped nor
-    behind a link, in path order: the walk a plain-directory scan takes, under the same limits.
-    Too many entries or a directory that cannot be read stops it as it stops a scan
-    (``ScanStopped``, ``too_large`` / ``unreadable``). Nothing is opened; which of these files
-    the rules take (``file_class``, secrets) is for the caller."""
+    behind a link nor inside a nested work tree, in path order: the walk a plain-directory scan
+    takes, under the same limits. Too many entries or a directory that cannot be read stops it as
+    it stops a scan (``ScanStopped``, ``too_large`` / ``unreadable``). Nothing is opened; which of
+    these files the rules take (``file_class``, secrets) is for the caller."""
     root = Path(root)
     walked = _walk_candidates(root, _Selector(root, skip_dirs))
     return sorted(path for path, _ in walked)
@@ -438,7 +449,8 @@ def scan_root(
 ) -> RootScan:
     """Scan one code root. ``kind="git"`` takes the paths ``git ls-files`` gives for the root's
     subtree (tracked CODE and CONFIG files, untracked non-ignored CODE files) and reads the work
-    tree's bytes; ``kind="dir"`` walks the directory and takes CODE files only. Paths under any of
+    tree's bytes; ``kind="dir"`` walks the directory and takes CODE files only, never entering a
+    directory that holds a ``.git`` entry (listed in ``excluded_paths``). Paths under any of
     ``skip_dirs`` are neither listed nor entered. ``keep`` chooses which files keep their bytes
     (``select_kept``). A root that cannot be scanned comes back with a ``reason`` and no entries."""
     if kind not in ("git", "dir"):

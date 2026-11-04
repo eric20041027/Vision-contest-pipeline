@@ -217,6 +217,31 @@ def test_what_the_rules_never_take_is_not_extra(roots, tmp_path):
     assert verify_dir(out) == _clean(sid)
 
 
+@pytest.mark.parametrize("marker", ["dot-git-dir", "dot-git-file"])
+def test_the_walk_for_extras_does_not_enter_a_nested_work_tree(
+    roots, tmp_path, monkeypatch, marker
+):
+    """The walk is the scan's (final review, Important 3): a directory holding a ``.git`` entry
+    is another repository, not walked for extras."""
+    sid, out = _exported(roots, tmp_path)
+    clone = out / "pkg" / "clone"
+    write_file(clone / "ignored_model.py")
+    if marker == "dot-git-dir":
+        (clone / ".git").mkdir()
+    else:
+        (clone / ".git").write_bytes(b"gitdir: /elsewhere/.git/worktrees/clone\n")
+    scanned = []
+    real = os.scandir
+
+    def spy(path="."):
+        scanned.append(Path(path).name)
+        return real(path)
+
+    monkeypatch.setattr(scan.os, "scandir", spy)
+    assert verify_dir(out) == _clean(sid)
+    assert "pkg" in scanned and "clone" not in scanned
+
+
 @pytest.mark.parametrize(
     "rows",
     [

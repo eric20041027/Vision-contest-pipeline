@@ -99,6 +99,26 @@ def test_a_module_in_a_venv_inside_a_root_is_a_distribution(tmp_path):
     assert (found.cls, found.shown, found.generated_by) == ("root", "cwd:src/mod.py", None)
 
 
+def test_a_module_from_a_nested_work_tree_in_a_plain_root_is_a_gap(tmp_path):
+    """A plain root's scan does not enter a directory holding ``.git`` (final review, Important
+    3), so a module imported from it is ``unlisted`` -- the gap that tells the user to add it with
+    ``--code-root`` -- and its bytes are not read."""
+    from vcp.code.scan import scan_root
+
+    work = tmp_path / "work"
+    mine = _write(work / "train.py")
+    cloned = _write(work / "clone" / "model.py")
+    (work / "clone" / ".git").mkdir()
+    scanned = scan_root(work, kind="dir")
+    index = {entry.path: entry.sha256 for entry in scanned.entries}
+    root = TracedRoot(label="cwd", path=work, snapshot=scanned.snapshot_id, index=index)
+    kw = dict(roots=[root], generated={}, stdlib=[], site=[])
+    assert (scanned.excluded_paths, list(index)) == (("clone",), ["train.py"])
+    found = classify_file(cloned, **kw)
+    assert (found.cls, found.shown) == ("unlisted", "cwd:clone/model.py")
+    assert classify_file(mine, **kw).cls == "root"
+
+
 def test_site_packages_inside_the_standard_library_is_a_distribution(tmp_path):
     """The most specific directory decides: a system Python on Linux, and a Windows venv's
     ``platstdlib`` (``<venv>/Lib``), hold site-packages inside a standard-library directory."""

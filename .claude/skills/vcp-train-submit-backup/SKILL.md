@@ -1,6 +1,6 @@
 ---
 name: vcp-train-submit-backup
-description: Use when wrapping a training command with vcp train run, registering or uploading checkpoints, reading vcp train status, staging / verifying / uploading / recording / scoring / finalising a submission and recording the final selection ticked on the platform with vcp submit, or reading a train run that stopped on low_disk / disk_full, or building, pushing, verifying and pulling backup manifests with vcp backup, or listing what is on disk and which vcp record names it before freeing space with vcp gc scan — including file vs kernel submissions, submission kinds, backup tiers, and what must not be done without authorisation.
+description: Use when wrapping a training command with vcp train run, registering or uploading checkpoints, reading vcp train status, staging / verifying / uploading / recording / scoring / finalising a submission and recording the final selection ticked on the platform with vcp submit, or reading a train run that stopped on low_disk / disk_full, or reading a train run's code grade and its code_snapshot / code_trace / untracked_code WARNs or a code_unavailable ABORT, authorizing a full job from a benchmark (vcp artifact authorize, --authorization), vcp code snapshot / verify / diff / export, require_code, or building, pushing, verifying and pulling backup manifests with vcp backup, or listing what is on disk and which vcp record names it before freeing space with vcp gc scan — including file vs kernel submissions, submission kinds, backup tiers, and what must not be done without authorisation.
 ---
 
 # 訓練、提交、備份
@@ -24,6 +24,35 @@ uv run vcp train status --run R --verify
 - 磁碟（0.16.0）：`train run` 在第一次寫入前量 run 目錄、`--cwd`、checkpoint glob 前綴所在磁碟的可用空間，低於 `--min-free-gib`（預設 10，GiB）就 ABORT `low_disk:`（`free_gib=` `min_free_gib=` `disk_path=`，一個檔都不寫）：清出空間、換磁碟，或明知故犯時調低門檻（`0` 照量照記、不擋）。VERDICT 一律帶 `free_gib=`；`disk_check=unavailable`（WARN）是量不到。`free` 是作業系統回報的磁碟區可用空間，不含 Windows 使用者配額。`train status` 的 `tmp=` 列出殘留的 `.tmp`（框架寫不下留下的半個檔、vcp 被殺時留的 `.<名>.<nonce>.tmp`），範圍是 run 目錄（遞迴）、已登記 checkpoint 的目錄（不遞迴），以及 `--checkpoints` / `--final` 每個 glob 所在的目錄（`train run` 把 glob 寫進 `started` 事件；只看那個目錄直接底下，不遞迴，相對的 glob 也不往 `--cwd` 之上走），所以第一次存檔就失敗的那個目錄也看得到；只列不刪，確認沒人引用再手動刪。
 - `--cwd` 所在 repo 的追蹤檔有未提交改動時 `train run` WARN（`modified=`），diff 存成 `train/git.<n>.patch`；比賽要求只用 commit 過的程式就加 `--require-clean`（第一次寫入前 FAIL `dirty_tree:`）。未追蹤的輸出檔不算改動；訓練中途改了追蹤檔或 commit → WARN `git_changed=`。追蹤檔若含機密，patch 會把它帶進 data root 與備份。
 - 開訓前先 commit 專案程式：乾淨的樹只要 VERDICT 的 `commit=` 就說得出跑的是哪一版；髒樹要靠 `train/git.N.patch` 在那個 commit 上 `git apply` 才還原得回來。
+
+## 程式碼快照與授權（0.18.0）
+`train run` 每個 attempt 在第一次寫入前，替每個 root 寫或重用一份 `code_snapshot`（內容定址、同內容只存一份），結束時再比對。root = `--cwd` 所在 repo、命令裡 `.py` 所在的 repo、editable 安裝的目錄（**含訓練 venv 裡的 vcp**）、`--code-root`。VERDICT 一律帶 `code=`（等級）`code_snapshot=ok|partial|none` `code_trace=complete|incomplete|none`，有 git root 時帶 `untracked_code=`。等級讀取時算、取所有 attempt 的最低，永不 WARN：
+
+| 等級 | 意思 |
+|---|---|
+| `traced` | 每個 root 都有快照，且子程序（用了 `Session`）留下完整的 import 追蹤 |
+| `snapshot` | 每個 root 都有快照，列過的檔訓練中沒被改 |
+| `commit` | 沒有（齊全的）快照，但 `--cwd` 的 HEAD 乾淨或有 patch，訓練中沒變 |
+| `declared` | 其他：舊 run、`eval ingest` 沒掛快照、紀錄讀不動 |
+
+WARN 與處置（訓練照跑，這些只是紀錄說不全）：
+- `code_snapshot=partial|none`（`code_missing=<labels>`）：看 `train status --json` 的 root `reason`。`too_large`（檔數 / 雜湊量 / 走訪量超過上限）→ 把輸出目錄 `.gitignore` 掉或縮小 `--code-root`；`unwritable` → Windows 的路徑預檢（含暫存檔名超過 259 字元，`LongPathsEnabled=1` 也一樣；editable 的 vcp 是整個 checkout，data root 路徑太長它就是這個）或只差大小寫的兩個檔：用短的 data root（例如 `C:/vcp-data`）；`locked` / `partial` / `drift` 見下。
+- `untracked_code=<n>`：n 個未追蹤、未被忽略的 `CODE` 檔進了快照（這是對的：漏列的正是這種檔），但沒有 commit 可以對照；開跑前 stderr 會先印前 5 個路徑。`git add` 它們，或不是程式碼就 `.gitignore`。**wandb 之類把程式碼存進沒被忽略的輸出目錄的工具**，先把那個目錄加進 `.gitignore`，否則每個 run 的快照 id 都不同。未追蹤的設定與資料（`.yaml` `.json` `.ipynb`）不讀、不算身分；要記就 commit，或 `--evidence`。
+- `code_changed=<n>`：訓練中途快照列過的檔被改了或刪了（`train.log.jsonl` 有 `note key=code_changed`，列前 5 個路徑）；等級從 `snapshot` 掉到 `commit` 以下。不要在訓練進行中動被 editable 指到的 checkout。
+- `code_trace=incomplete`（`code_gaps=<n>`）：有被 import 的模組在 root 外（`outside`，例如 `sys.path` 指到別處）、在 root 底下卻不在快照（`unlisted`：被忽略、就地編譯的 `.so`）或內容已變（`changed`）；細節在 `artifacts/code_trace/<run>-a<n>-t<seq>/trace.json`。`torch.compile`、`TORCH_EXTENSIONS_DIR`、triton 的快取是 `generated`，不算缺口；別的框架用 `register_generated`。`code_trace=none` 不 WARN：子程序沒用 `Session`（或 `VCP_CODE_TRACE=0`、DataLoader worker、非 0 rank）。要關追蹤設 `VCP_CODE_TRACE=0`；追蹤失敗只在 stderr 印 `[vcp] code trace skipped: …`，不改子程序的 exit code。
+
+**`code_unavailable:`（ABORT，exit 2）** 只在給了 `--authorization`（或明要快照的 `vcp code snapshot`）時出現，沒有降級；run 的檔都沒寫。`cause=locked`：另一個寫入者持同內容的鎖超過 60 秒 → 等它、重跑。`cause=partial`：先前的寫入者中斷，留下同 id 的半途目錄擋住 → 確定沒有別的寫入者在跑，`vcp artifact clean --kind code_snapshot --older-than 0 --apply`（或等 24 小時寬限期）後重跑。`cause=unwritable`：寫不進（路徑太長、大小寫重名、磁碟）→ 同上，先修環境。`drift:`（FAIL）：掃描之後程式檔被改，等檔案穩定再跑。沒給 `--authorization` 的 run 遇到同樣情況只是 WARN `partial`，不被擋。
+
+**授權（benchmark → 正式 job）**：benchmark 通過後，人決定放行哪些項目變動：
+```bash
+uv run vcp artifact authorize --id full-ok --basis run:bench-50 --for train --free param:trained_on --reason "50 筆 benchmark 速度與正確性都過"
+uv run vcp train run --run full --authorization full-ok … -- <訓練命令>     # 第一次寫入前比對；有一項不同 → FAIL unauthorized: differs=<那一項>，一個檔都沒寫
+```
+產物 job 用 `--for artifact --target-kind K`，正式 job 的 spec 加 `vcp.artifact.authorization.authorization_input(data_root, id)`。vcp 不判斷 benchmark 過了沒，授權只記人的決定。撤銷 = `authorize --supersedes OLD`（舊的變 `superseded:`）。沒給 `--config` 時 `param:config_sha256` 是命令的 sha，只 `--free param:command_sha256` 不允許「多跑 epoch」（兩項都 free，或用 `--config`）；`--resume` 要重複 `--authorization`、`--evidence`、`--labels`。
+
+**提交門**：`submit.yaml` 的 `require_code: declared|commit|snapshot|traced`（預設 `declared`，不寫就不擋）；candidate 的等級（eval run、test run、每個 weights run 的最低）不夠 → `stage` FAIL `code_required:`（baseline 與 probe 不擋，只在 `pairing.checks` 記 `code:<run>=<等級>`），`final` 重讀、不夠的 `why=code_required`。**kernel 提交**的 notebook bundle 不屬於任何 run：先 `vcp code snapshot --root <bundle 目錄>`，`stage --code <id>` 記進 `stage.json`；`require_code` 是 `snapshot` 以上時 kernel candidate 沒給 `--code` → `code_required:`。
+
+**事後驗證**：`vcp code verify --id ID`（快照自己還成立嗎，不看工作樹）、`vcp code diff --run R`（那個 run 的程式碼，現在的檔動了沒）、`vcp code export --id ID --out DIR` → 搬走 → `vcp code verify --dir DIR`（不需要 git 或原 repo；有上限的快照 WARN `not_kept=`，把缺的大檔手動放進去再驗）。升級順序：整個 data root 與每個訓練 venv 的 vcp 先升到同一個 0.18 MINOR（否則 FAIL `vcp_mismatch:`），見 `vcp-release-and-environments`。
 
 ## 提交
 ```bash
@@ -79,3 +108,5 @@ uv run vcp artifact verify --kind gc_scan --id <VERDICT 的 scan=>   # 掃描的
 - 把 `unreferenced` 當成可以刪：它只說 vcp 的紀錄沒提到；`record`、有 WARN（`skipped=` `unreadable=` `running=`）的掃描更不能直接信。
 - 直接上傳既有 CSV 再補紀錄：先釐清來源，無法證明身分的檔只能如實標示。
 - 在 main checkout 的 venv 啟動訓練：用比賽釘版 worktree 的 `vcp.exe`（見 `vcp-release-and-environments`）。
+- 把 `code=declared` 或 `code_trace=none` 當 vcp 壞了：舊 run、沒用 `Session` 的子程序本來就到不了 `traced`，等級是「能證明多少」，不是 WARN；要把門檻變成硬的才設 `require_code`。
+- 授權 `--free` 放太多：每個 `--free` 都是一項不再被比對的東西；先看 `authorize` 印的 `claim` 清單，再決定哪幾項真的要變（例如 `param:trained_on`）。用 benchmark 的輸出目錄（沒被 `.gitignore` 的 `.py`）當 `--cwd` 的一部分，會讓正式 run 的快照 id 不同、授權比對失敗。

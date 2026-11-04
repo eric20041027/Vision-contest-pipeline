@@ -9,6 +9,8 @@ description: Use when someone wants to see, draw, export or share the provenance
 - 圖畫的是**索引**：`vcp provenance graph` 只讀這個 checkout 的索引 `<data_root>/indexes/provenance-<configs root id>.sqlite3`（0.13.0 起每個 checkout 一份；或 `--backend postgresql --pg-service S`），只寫 `--out` 一個檔。檔頭與 VERDICT 的 `hash=` 對得回 `rebuild` / `sync` 印的 `hash=`。
 - 要 vcp ≥ 0.9.0（`uv run vcp provenance graph --help` 有這個命令）。比賽的 venv 釘在舊 tag 時，從 vcp 的 checkout 執行並用 `--data-root` / `--configs-root` 指過去；不要為了畫圖改比賽的 venv。
 - 不自己寫腳本讀 SQLite 畫圖；圖不寫進 data root（FAIL `out_in_data_root:`）。
+- 0.18.0 起圖裡多三種 artifact kind：`code_snapshot`（程式碼快照）、`code_trace`（import 追蹤）、`authorization`（benchmark 綁正式 job）。overview 把每種併成一個帶計數的節點，`full` 逐個畫；它們的邊來自既有的 `inputs`（trace 的 input 是快照，授權的 `basis` input 是 benchmark 產物）加幾條新的：run 依據 → 授權（`PRODUCED_BY`，`input: basis`）、kernel 的快照 → submission（`CONSUMED_BY`）；run 經自己的 `evidence` 清單連到快照、trace、授權。
+- run entity 多一個屬性 `code_grade`（`traced` / `snapshot` / `commit`）。**`declared` 的 run 沒有這個鍵**——缺席就是 `declared`（舊 run、沒有任何程式碼紀錄），不要把「沒有」讀成壞掉，也不要自己補 `declared`；讀的人用 `.get("code_grade", "declared")`。圖不畫這個等級；要看某個 run 的等級用 `vcp train status --run R` 或 `vcp eval status` 的 `code=`。升到 0.18.0 之後索引要 `rebuild` 一次（`sync` 把新增的 `code_grade` 當成既有 entity 被改寫而拒絕）。
 
 ## 步驟
 1. **找 root**：比賽 repo 的 `ENVIRONMENT.md` / `AGENTS.md` 寫的 `VCP_DATA_ROOT`、`VCP_CONFIGS_ROOT`；沒寫才用 `<repo>/vcp-data`、`<repo>/configs`。每個命令都帶 `--data-root` / `--configs-root`。

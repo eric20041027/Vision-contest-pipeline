@@ -27,7 +27,7 @@ VCP 現有的 append-only 台帳、預登記、sealed holdout、submission quota
 | P0 | 產物不可覆寫與 supersession | v0.4.0 已修（Wave 1a） | 提供 `ImmutableArtifactWriter` 與 append-only supersession |
 | P0 | prereg file/log SHA 綁定 | v0.3.0 已修（Wave 0） | rebase、重跑全套測試、合併 |
 | P0 | foreign PENDING → COMPLETE 分數刷新 | v0.3.0 已修（Wave 0） | rebase、推送、review、合併 |
-| P0 | 自動 code/environment inventory | 開放問題（Wave 1c）；v0.11.0 起 `train run` 記下工作樹狀態與追蹤檔的 patch（VCP-041） | bundle/manifest 自動收集 transitive code 與 runtime identity |
+| P0 | 自動 code/environment inventory | 0.18.0 已實作（Wave 1c）：`train run` 每個 attempt 替 `--cwd`、命令裡的腳本、editable 套件（含訓練 venv 的 vcp）與 `--code-root` 做內容定址的程式碼快照並追蹤 import（程式碼等級 `traced > snapshot > commit > declared`）；產物 job 用保留輸入 `code_snapshot.<label>`；v0.11.0 起已記工作樹狀態與追蹤檔的 patch（VCP-041） | `vcp code verify` / `export` 在沒有原 repo 時驗證；benchmark 與正式 job 的綁定見 VCP-006 的授權 |
 | P1 | Data reference deep validation | 開放問題 | 外部 image root 與所有 view 預設 deep validate |
 | P1 | Submission watch/reconcile/idempotency | 部分：同 id 重傳護欄隨 0.12.0（VCP-014）、CLI 失敗時回讀隨 0.13.0（VCP-047）；`watch` / `reconcile` 未做 | 新增 `submit watch` 與 `submit reconcile` |
 | P1 | Backup health/status/evidence addendum | 部分完成 | 分離健康度與 credential 提示；擴充 evidence graph |
@@ -195,7 +195,7 @@ receipt 應由 `DatasetAccess`/`ArrayAccessor` 在 context manager 結束時生�
 
 ### VCP-004：code inventory 容易漏掉真正影響行為的模組
 
-**狀態：設計缺口；RSNA 曾兩次由 review 找到漏列。**
+**狀態：0.18.0 已實作（Wave 1c），見 `docs/superpowers/specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md` 與 `docs/superpowers/plans/2026-11-03-vcp-wave1c-code-snapshot-and-authorization.md`；RSNA 曾兩次由 review 找到漏列。**
 
 #### 實際觸發
 
@@ -259,7 +259,7 @@ with ImmutableArtifactWriter(spec, mode="create") as artifact:
 
 ### VCP-006：benchmark PASS 沒有與正式 full job 做不可替換綁定
 
-**狀態：設計缺口。**
+**狀態：0.18.0 已實作（Wave 1c），見 `docs/superpowers/specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md` 與 `docs/superpowers/plans/2026-11-03-vcp-wave1c-code-snapshot-and-authorization.md`。**
 
 50-study geometry/decode benchmark 可以證明固定樣本上的速度、decode 與 geometry，但若 full extraction 只靠人手沿用設定，仍可能更換 dataset、IDs、source audit、code、batch 或模型。
 
@@ -282,7 +282,7 @@ expires_on_change: true
 
 ### VCP-007：ID、seed、output root 與 audit pin 缺少共同 contract
 
-**狀態：v0.4.0 已修（Wave 1a）：`ArtifactSpec.id_pattern` 的具名群組必須等於同名欄位，`inputs` 在 open 時雜湊、commit 時重驗；見 CHANGELOG [0.4.0]。commit 時比對程式碼快照的部分等 Wave 1c。**
+**狀態：v0.4.0 已修（Wave 1a）：`ArtifactSpec.id_pattern` 的具名群組必須等於同名欄位，`inputs` 在 open 時雜湊、commit 時重驗；見 CHANGELOG [0.4.0]。commit 時比對程式碼快照的部分隨 0.18.0（Wave 1c）處理：`ArtifactWriter` 的保留輸入 `code_snapshot.<label>` 在 commit 時對被 import 的檔重驗（`drift:`）。**
 
 six-slot v2 曾出現輸出 ID 表示 seed 42，但 CLI 仍可接受 seed 43；audit path/SHA 也曾 pin 到不一致版本。這類錯誤不一定造成例外，卻會讓 artifact 名稱、內容與 lineage 分離。
 

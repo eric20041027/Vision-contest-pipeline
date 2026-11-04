@@ -20,7 +20,7 @@ Get-ChildItem "$data/runs", "$data/measure", "$data/artifacts", "$data/submit" -
 | 六角 | fusion run 與配方 |
 | 旗形 | judgement：預登記 id 與判決；指向它的箭頭標讀過的子集 |
 | 跑道 | submission（畫在測試集的框裡） |
-| 雙邊框 | 同一種 artifact kind 併成一個節點：`xN` 與非 VALID 的數量 |
+| 雙邊框 | 同一種 artifact kind 併成一個節點：`xN` 與非 VALID 的數量（0.18.0 起 `code_snapshot`、`code_trace`、`authorization` 也是這樣） |
 | 粗箭頭 | 資料改版：diff id 與變更數 |
 | 粗框 | 有 backup manifest 涵蓋 |
 
@@ -61,3 +61,4 @@ Get-ChildItem "$data/runs", "$data/measure", "$data/artifacts", "$data/submit" -
 - **`artifacts/<kind>/` 裡的半途目錄**（`.…tmp`、只有 `spec.json`）：確認沒有程序在寫，再由產生它的程式清理；vcp 自己留下的半途檔用 `vcp artifact clean`（先不加 `--apply` 看清單）。
 - **`artifact verification failed: … extra=1`**：產物目錄被多放了檔。產物不可改寫：修正開新 id 加 `--supersedes`。
 - **run 目錄沒有 `run.yaml`**：半途的 run；確認沒有訓練在寫，再決定補登記還是搬走。
+- **程式碼快照、trace 或授權被刪、被改**（0.18.0）：那個 artifact entity 驗不過 → BROKEN，掛著它的 run 一起紅，同時 `train status` 的 `code=` 等級往下掉。證據壞了修證據（`vcp backup pull` 還原），不改索引；重新 `vcp code snapshot` 同內容寫出的是另一份 manifest，run 的 ref 釘的是原本那份，不會因此復原。

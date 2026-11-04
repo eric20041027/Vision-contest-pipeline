@@ -183,3 +183,7 @@
 - `CLAUDE.md` 與 `AGENTS.md`：`train/` 放的東西加上 git patch，並寫明 patch 只含追蹤檔的差異。
 - skill `vcp-train-submit-backup`：說明 `--require-clean` 和 `modified=` WARN 的意思；鏡射到 `.agents/skills/`。
 - 稽核文件第 16 節：VCP-041 標為已實作（隨 0.11.0）。
+
+## 10. 後續：程式碼快照（Wave 1c，0.18.0，2026-11-03）
+
+決定 1（只看追蹤中的檔；未追蹤檔只記路徑、不讀內容）對 **VCP-041 的 WARN 與 `--require-clean`** 不變。程式碼快照有一處刻意的偏離：「未追蹤但未被忽略」的 `CODE` 檔（`.py .pyi .pyx .pxd .c .cc .cpp .cu .cuh .h .hpp`）會被讀、會保留位元組，因為 RSNA 兩次漏列的正是這種新增、還沒 `git add` 的 helper；未追蹤的設定與資料（`.yaml` `.json` `.ipynb` `.so` `.sh`）、被 `.gitignore` 忽略的檔、機密檔名與 `.` 開頭的路徑照舊不讀，所以框架寫進 `--cwd` 的輸出不改程式碼身分。這些檔數以 VERDICT 的 `untracked_code=` WARN（`git add` 或 `.gitignore`），不影響 `modified=` / `untracked=`。結束時的 `git_changed=` 比對不變，快照另有自己的 `code_changed=`（只比快照 index 列過的檔）。後記 §3 第 3 條（`vcp.core.build` 的 git 呼叫沿用同一個子程序環境）隨本版處理。細節見 `2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md`。

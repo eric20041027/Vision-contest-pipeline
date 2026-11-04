@@ -20,6 +20,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 產物 | `vcp artifact create/show/verify/lineage/status/relink/clean` | `artifacts/<kind>/<id>/manifest.json`（有它才是產物） |
 | provenance | `vcp provenance rebuild/sync/ingest/impact/stale/explain/graph/status/verify-index` | 可刪除的衍生索引（SQLite 預設；PostgreSQL optional）；`graph` 把它畫成 Mermaid 圖 |
 | 盤點（不是第九層） | `vcp gc scan` | `artifacts/gc_scan/<id>/`（`scan.json` + `items.jsonl`）；只列不刪，引用只讀正本、不讀 provenance 索引 |
+| 程式碼（不是第九層，`src/vcp/code`，0.18.0） | `vcp code snapshot/verify/diff/export`、`vcp artifact authorize`；`train run` 每個 attempt 自動做 | `artifacts/code_snapshot/code-<hex>/`（內容定址的原始碼快照）、`artifacts/code_trace/`（import 追蹤）、`artifacts/authorization/<id>/`（benchmark 綁正式 job）；VERDICT `code=` 是等級 `traced > snapshot > commit > declared`，`submit.yaml` 的 `require_code` 可以擋 |
 
 ## 三條鐵則與 VERDICT
 1. 取時只用 `vcp.core.time.utc_now()/stamp()`。
@@ -35,7 +36,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 - **換寫留痕**：`run.yaml`、預測檔（`--replace` 舊 sha 進 `history.jsonl`）、`anchors.json`（先寫 `anchors.log.jsonl`）。
 
 ## 怎麼證明「做了」
-文件與 RUNBOOK 是主張，不是證據。證據 = 該命令的 VERDICT + 磁碟上的產物 + 台帳列 + sha。例：「baseline 量過 valA/valB」要在 `vcp eval report --dataset D` 看到該 run × valA、valB 的讀數列（或 `measure/D/readings.jsonl` 有列），不是 RUNBOOK 寫了就算。核對用唯讀命令：`eval status/report`、`train status`、`submit status/report`、`backup status`、`artifact status`、`provenance status`。
+文件與 RUNBOOK 是主張，不是證據。證據 = 該命令的 VERDICT + 磁碟上的產物 + 台帳列 + sha。例：「baseline 量過 valA/valB」要在 `vcp eval report --dataset D` 看到該 run × valA、valB 的讀數列（或 `measure/D/readings.jsonl` 有列），不是 RUNBOOK 寫了就算。核對用唯讀命令：`eval status/report`、`train status`、`submit status/report`、`backup status`、`artifact status`、`provenance status`、`code verify/diff`。「這個 run 跑的是哪些程式碼」同樣看 VERDICT 的 `code=` 與 `artifacts/code_snapshot/`，不是 RUNBOOK 寫的 commit。
 
 ## 哪裡找答案（由權威到背景）
 `uv run vcp <group> <cmd> --help` → `docs/reference/cli.md` → `docs/guides/*` → `docs/superpowers/specs/*-design.md` → 對應 plan 的 `*-followups.md`（裁決與待辦）→ `docs/handover/HANDOVER.md`。比賽現況只看 `projects/<contest>/RUNBOOK.md` 與台帳。細節地圖在 [map.md](map.md)。
@@ -47,7 +48,7 @@ vcp 管**流程、身分、證據與治理**：資料 → 切分 → 訓練 → 
 | 新比賽 Day 1 | `vcp-contest-onboarding` |
 | 匯入 / 稽核 / 切分 / 匯出，或 data 命令的 WARN/FAIL | `vcp-data-pipeline` |
 | 預測 → 讀數 → 預登記 → 判決；融合準入 | `vcp-eval-and-fuse` |
-| 訓練包裝、checkpoint、提交、備份 | `vcp-train-submit-backup` |
+| 訓練包裝、checkpoint、程式碼快照與授權、提交、備份 | `vcp-train-submit-backup` |
 | 清磁碟：列出大檔、類別與誰引用它（`vcp gc scan`） | `vcp-train-submit-backup` |
 | 資料集改版、provenance 索引、PostgreSQL、基準量測 | `vcp-provenance` |
 | 看 / 畫 / 交出比賽的 provenance 圖（lineage、哪些壞了或過期） | `vcp-provenance-graph` |

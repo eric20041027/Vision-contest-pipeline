@@ -33,6 +33,8 @@ vcp 是影像比賽的流程與證據管理框架：它不取代 PyTorch、Ultra
 - 把每個新 id、實際命令、VERDICT、讀數、判決及平台結果寫回 RUNBOOK；失敗也保留。
 - 平台憑證只交給官方 CLI 的安全設定。不要貼進聊天、repo 或 vcp 選項。
 - 決選之後：`final` 記的是 vcp 依 sealed 讀數的建議，不是平台上的勾選。人到平台勾完，用 `vcp submit select --dataset D-test --record <ids>` 記下實際勾的（vcp 不替你勾，也讀不到平台的勾選，所以 agent 要由人告知勾了什麼）；同一個 id 傳過兩次就寫 `<id>@<平台 ref>` 指明哪一發，刻意什麼都不勾就 `--none`（第一次 `--none` 之前，讀寫同一份台帳的每個 checkout 都先升到 0.17.0：0.16.0 讀到空的 `chosen` 會 FAIL `bad ledger row`）；`vcp submit status` 沒有 `selection=missing|slots|differs` 的 WARN 才算對上（只在 `board_rule: best`；截止前 `selection_warn_hours`，預設 48 小時起還沒記就 WARN；`--none` 之後的 `selection=unticked` 單獨不 WARN，有 `final` 時 `unticked,differs` WARN，因為 vcp 不知道平台會計哪幾發）。勾錯了就回平台改、再記一次，最新的一列為準。`sync` / `upload` 的 `cli_warnings=` 一直 WARN 是平台 CLI 該升級了；失敗的 `sync` 與上傳前同步的 `sync_failed:` 也帶 `cli_warnings=<n>`，個數 > 0 就去 log 看 CLI 說了什麼。
+- 先小後大（benchmark → 正式 job，0.18.0）：benchmark 跑完、你看過速度與正確性之後，`vcp artifact authorize --id A --basis run:<benchmark run>|artifact:<kind>/<id> --for train|artifact [--free …] --reason "…"`，正式 job 帶 `train run --authorization A`（產物 job 在 spec 加 `authorization_input`）。授權會列出它綁住的每個 `claim`（資料集、程式碼快照、batch 之類）；`--free` 哪幾項可以變是你的決定，agent 不替你放行。正式 job 有一項不同就 FAIL `unauthorized:`、`differs=` 說是哪一項、一個檔都沒寫；benchmark 的輸出目錄（例如 wandb 把程式碼存進的 `wandb/`）先 `.gitignore`，否則正式 run 的快照 id 會不同。
+- 讀 `train run` 的 VERDICT 時多看三個欄位：`code=`（`traced` > `snapshot` > `commit` > `declared`，只是能證明多少，不 WARN）、`code_snapshot=`（`partial` / `none` WARN：有 root 沒快照）、`untracked_code=`（WARN：未追蹤的 `.py` 進了快照，`git add` 或 `.gitignore`）。要比賽規定「程式碼一定要有快照」就在 `submit.yaml` 設 `require_code: snapshot`。訓練 venv 裡的 vcp 要跟核心同一個 MINOR（`vcp_mismatch:`）。
 - 訓練前 `vcp train run` 會量磁碟，低於 `--min-free-gib`（預設 10 GiB）就 ABORT `low_disk:`；失敗時 `reason=disk_full:` / `low_disk:` 是磁碟的跡象，清出空間（`vcp train status` 的 `tmp=` 列出殘留的 `.tmp`）再 `--resume`；例外是 `--upload` 步驟中途的 `disk_full:`：attempt 已經結束，`--resume` 會把整個訓練命令再跑一次，VERDICT 的訊息改說 `vcp train upload --run R --dest DEST`（冪等）。
 - 磁碟吃緊或比賽收尾時：`vcp gc scan --root projects/<contest>`（只列不刪）列出大項目與引用它的紀錄。讀 `unreferenced`、`debris`、`duplicate of`，`record` 先問自己是否放棄那個 dataset 或 run；`unreferenced` 只表示 vcp 的紀錄沒提到，筆記與別的工具可能還要它，刪由人做；掃描的 id 寫進 RUNBOOK。
 - Windows 的訓練/推論用專案 venv 的絕對 interpreter；`train.yaml` 的最新執行看 `attempts[-1]`。`rclone_conf=unknown` 不是 absent，本機 `remote_copy` 也不是異機備份（0.13.0 起 `backup push --tier 3` 會把它送到目的地；推完、驗完 `backup status` 才說 verified）。
@@ -72,4 +74,4 @@ sealed：保持封存，除非我已明確開啟最後評估窗口。
 
 ## 何時讓 agent 停在決定點
 
-只有下一步真的依賴以下事項時才停：規則或資料權利不明、必要資料缺失、會超出既定資源、未授權的外傳/正式提交、sealed 最終解封、解鎖/覆寫/忘記遠端等不可逆變更。已授權的步驟持續完成，不反覆確認；某層受阻時繼續其他獨立且有價值的工作。
+只有下一步真的依賴以下事項時才停：規則或資料權利不明、授權 benchmark 時哪些項目可以 `--free`（vcp 不判斷 benchmark 過了沒，放行是人的決定）、必要資料缺失、會超出既定資源、未授權的外傳/正式提交、sealed 最終解封、解鎖/覆寫/忘記遠端等不可逆變更。已授權的步驟持續完成，不反覆確認；某層受阻時繼續其他獨立且有價值的工作。

@@ -35,7 +35,7 @@ uv sync
 uv run python examples/quickstart.py
 ```
 
-一條命令、約一分鐘、不下載任何東西：它在暫存目錄生成 240 張合成影像的資料集，走完整個迴圈——import、validate、split、兩個假模型、ingest、measure、anchor、**preregister**、measure、**judge**、report——每一步印出收尾的 `VERDICT`。輸出節錄：
+一條命令、約一分鐘、不下載任何東西：它在暫存目錄生成 240 張合成影像的資料集，走完整個迴圈——import、validate、split、兩個假模型、ingest、measure、anchor、**preregister**、measure、**judge**、report，最後再包一次訓練，並在專案目錄刪掉之後仍驗得過它的程式碼快照——每一步印出收尾的 `VERDICT`。輸出節錄：
 
 ```text
 VERDICT cmd=split status=OK plan=fixed-v1 train=120 valA=60 valB=60 seed=42
@@ -84,6 +84,7 @@ VERDICT cmd=eval.judge status=OK dataset=demo prereg=p1 verdict=PASS bases_posit
 - **寫一次的檔就不再改。** 切分計畫、預登記、融合配方、備份清單都不可變——要改就換 id，舊證據因此永遠還是它原本的意思。台帳（讀數、判決、提交）只增不改。
 - **主張先於量測。** 候選只有在預登記的主張贏過它要求數量的獨立評估基底（預設兩個）才準入。打開 sealed holdout 要留下理由，決選時會列出它被打開過幾次。
 - **讀取是證明出來的，不是宣告的。** 訓練迴圈經 vcp 的存取器讀資料時會留下收據，寫明它碰了哪些子集；「這個模型沒看過 holdout」因此可以查核。
+- **跑的是哪些程式碼有紀錄，benchmark 綁住正式 job（0.18.0）。** 每個訓練 attempt 都替它用到的原始碼做內容定址的快照（含還沒 commit 的新檔），並追蹤程序實際 import 的模組；`vcp artifact authorize` 把 benchmark 證明過的東西記成授權，正式 job 的資料、ids、程式碼、batch 或模型有一項不同就被拒絕。
 - **比賽專屬程式碼不進核心。** 你的指標、轉換器、融合器與輸出格式以 `--plugin projects.<contest>.<module>` 自行登記。
 
 ```mermaid
@@ -159,7 +160,7 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 
 1. **RSNA 的教訓（0.16.0）。** 記錄你在平台上實際勾選的最終提交，和 vcp 的決選不同時警告；Kaggle CLI 過舊時警告；訓練前檢查磁碟空間，磁碟滿時在判決裡寫明原因。
 2. **安全的清理報告（0.17.0）。** `vcp gc scan` 列出大型檔案、它們的類別與每一個被誰引用；只列不刪。
-3. **稽核 Wave 1c。** 每個產物背後的程式碼快照，以及產物授權。
+3. **稽核 Wave 1c（0.18.0）。** 每個 run 與產物背後的程式碼快照，以及產物授權：已實作，等待發版。
 4. **`1.0.0`**，等稽核 Wave 1（1a、1b、1c）全部落地：從那之後，產物與台帳格式就是對外的承諾。
 
 ## 文件

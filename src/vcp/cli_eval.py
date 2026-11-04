@@ -23,7 +23,7 @@ from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
-from vcp.data.evidence_ref import current, labels_field
+from vcp.data.evidence_ref import evidence_count, labels_field
 from vcp.measure.anchors import anchor_key, set_anchor
 from vcp.measure.ingest import IngestSpec, ingest
 from vcp.measure.judge import JudgeSpec, judge_prereg
@@ -132,6 +132,13 @@ def ingest_cmd(
         list[str] | None,
         typer.Option("--labels", help="label_set id the run trained with (repeatable)"),
     ] = None,
+    code: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--code",
+            help="LABEL=ID of a code snapshot (`vcp code snapshot`) the run ran (repeatable)",
+        ),
+    ] = None,
     plugin: PluginOpt = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
@@ -160,6 +167,7 @@ def ingest_cmd(
             receipts=list(receipt or []),
             evidence=list(evidence or []),
             labels=list(labels or []),
+            code=list(code or []),
             data_root=data_root,
             configs_root=configs_root,
         )
@@ -181,8 +189,9 @@ def ingest_cmd(
             "replaced": res.replaced,
             "receipts": len(res.run.access),
             "provenance": res.provenance,
-            "evidence": len(current(res.run.evidence)),
+            "evidence": evidence_count(res.run.evidence),
             "labels": labels_field(res.run.evidence),
+            "code": res.code,
         }
         if res.unknown:
             fields["unknown"] = len(res.unknown)
@@ -620,12 +629,12 @@ def status_cmd(
         ]
         human += [f"unreadable run card (not counted in runs=): {p}" for p in st.unreadable]
         human += [
-            f"provenance unavailable for run {run}: {msg}"
+            f"provenance unavailable for run {run}: {msg} code={st.code.get(run, 'declared')}"
             for run, msg in st.provenance_failed.items()
         ]
         human += [
             f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'} "
-            f"labels={st.labels.get(run, 'dataset')}"
+            f"labels={st.labels.get(run, 'dataset')} code={st.code.get(run, 'declared')}"
             for run, g in st.provenance.items()
         ]
         # An abandoned claim is the one thing here that wants attention; everything else is a

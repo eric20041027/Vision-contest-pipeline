@@ -20,7 +20,8 @@
 | 1b. 資料改版（分支） | 新版 `import` + `validate`, `data diff --from --to`, `provenance ingest`, `stale --head`, `impact` | `dataset_diff` artifact；每個既有 run 相對新 head 的 VALID/STALE/REVIEW/BROKEN 已知，重跑清單由它決定 |
 | 2. 固定切分 | `data split`, `lineage` | 不可變 plan；通常 train + 至少兩個互斥 eval + sealed，group 不跨子集 |
 | 3. 訓練輸入 | `data materialize` 或 `data export` | cache manifest 或 export manifest 可由訓練程式讀取 |
-| 4. baseline | `train run`（迴圈用 `MaterializedReader` / `Session.access`）, `train status --verify`, `eval ingest`, `measure`, `anchor` | checkpoint 有 sha 與副本；run 的 provenance 等級 `receipt`（`eval status` 顯示）；valA/valB baseline 讀數與 anchors 存在 |
+| 4. baseline | `train run`（迴圈用 `MaterializedReader` / `Session.access`）, `train status --verify`, `eval ingest`, `measure`, `anchor` | checkpoint 有 sha 與副本；run 的 provenance 等級 `receipt`（`eval status` 顯示）；VERDICT 的 `code=`（0.18.0：`traced` > `snapshot` > `commit` > `declared`）與 `code_snapshot=`、`untracked_code=`、`code_changed=` 的 WARN 已讀懂並處理；valA/valB baseline 讀數與 anchors 存在 |
+| 4b. 正式訓練前的授權（先小後大時） | 小規模 benchmark run（或 `ArtifactWriter` 的 benchmark 產物）人看過之後 `vcp artifact authorize --id A --basis run:<bench>\|artifact:<kind>/<id> --for train\|artifact [--free …] --reason "…"`；正式 job `train run --authorization A`（產物 job 加 `authorization_input`） | 授權列出的 `claim` 就是正式 job 必須跟 benchmark 一樣的東西；換了資料、程式碼、batch、模型之類 → FAIL `unauthorized:`（`differs=` 說是哪一項）、一個檔都沒寫；benchmark 的輸出目錄（沒被 `.gitignore` 的 `.py`，例如 wandb 的 `wandb/`）要先 `.gitignore`，否則正式 run 的快照 id 不同；訓練 venv 的 vcp 與核心同一個 MINOR |
 | 5. 候選 | `eval sigma`（tuning）、`preregister`, `measure`, `judge --strict` | 預登記早於候選讀數；`verdict=PASS` 才準入 |
 | 6. 融合 | `fuse recipe`, `ablate --preregister`, `eval measure/judge`, `fuse build` | 每位成員的「有它 vs 沒它」判決都 PASS；配方與成員 sha 固定 |
 | 7a. file test 推論 | 專案推論、`eval ingest` | eval/test run 的權重或融合身分匹配；test run 可重產 |
@@ -43,15 +44,16 @@
 
 不要自行創造 legacy/emergency kind。舊 artifact 只能按真實身分記錄；若要用正式 `baseline` waiver，先以目前 `--help` 與 gate 核對必要證據及理由。
 
-## 九組命令的角色
+## 十組命令的角色
 
 - `vcp data import|validate|audit|split|lineage|export|materialize`：建立可追蹤且防洩漏的資料輸入。
-- `vcp train run|upload|status`：包住任意框架，記命令、環境、checkpoint 與副本；vcp 不替你定義模型。
+- `vcp train run|upload|status`：包住任意框架，記命令、環境、checkpoint 與副本；vcp 不替你定義模型。0.18.0 起每個 attempt 也替跑的程式碼做快照（含訓練 venv 裡的 vcp）並追蹤 import，`--authorization` 把 benchmark 綁到正式 run。
 - `vcp eval ingest|measure|anchor|sigma|preregister|judge|status|report`：把預測正規化，保護量測條件並留下可稽核判決。
 - `vcp fuse recipe|ablate|build`：固定配方並證明每位成員的增益。
 - `vcp submit init|stage|verify|upload|record|score|sync|final|select|lock|unlock|status|report`：治理候選身分、配額、平台事實與決選；`select --record` / `--none` 記下你在平台上實際勾的最終提交。
 - `vcp backup manifest|push|verify|pull|status`：從結論反向收集證據並驗證恢復能力。
-- `vcp artifact create|show|verify|lineage|status|relink|clean`：不可變產物（收據、source audit、dataset diff、policy、比賽自訂 kind）的建立與稽核。
+- `vcp artifact create|show|verify|lineage|status|relink|clean`：不可變產物（收據、source audit、dataset diff、policy、程式碼快照、trace、授權、比賽自訂 kind）的建立與稽核；`vcp artifact authorize` 把 benchmark 證明過的東西記成授權。
+- `vcp code snapshot|verify|diff|export`（0.18.0）：`train run` 以外的程式碼快照（kernel 的 bundle、外部訓練），與事後驗證（`verify` 不看工作樹、`diff` 看現在的檔動了沒、`export` → `verify --dir` 不需要原 repo）。
 - `vcp provenance rebuild|sync|ingest|impact|stale|explain|status|verify-index`：資料改版後判定哪些 run 還有效；SQLite 預設、PostgreSQL optional。
 - `vcp gc scan`：磁碟盤點（0.17.0），列出大項目、類別與引用它的紀錄，寫一份 `gc_scan` 產物；只列不刪、不讀 provenance 索引。
 
@@ -66,7 +68,7 @@
 | `$VCP_DATA_ROOT/runs/<run>/` | run card、預測、train/fuse 證據 | 指定 replace/resume 才換寫，必須留 history/log |
 | `$VCP_DATA_ROOT/measure/<name>/` | readings、judgements、sigma、anchors | 台帳只增；anchor 換寫前先留 log |
 | `$VCP_DATA_ROOT/submit/<test>/<id>/` | submission、stage card | 寫一次不改 |
-| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、label_set、evidence、provenance_policy、gc_scan、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
+| `$VCP_DATA_ROOT/artifacts/<kind>/<id>/` | access_receipt、source_audit、dataset_diff、label_set、evidence、provenance_policy、gc_scan、code_snapshot、code_trace、authorization、自訂 kind | 有 `manifest.json` 才是產物；同 id 不重開，修正用新 id + supersedes |
 | `$VCP_DATA_ROOT/indexes/` | provenance 的 SQLite 索引，每個 checkout 一份（`provenance-<configs root id>.sqlite3`） | 衍生品，可刪可 rebuild，不進 git；新 checkout 或搬過的 checkout 先 rebuild |
 | `configs/datasets/<name>/` | dataset card、splits、prereg、fuse、submit、backup | 進 git；不可變物換 id |
 | `projects/<contest>/` | 模型、轉換器、metric、writer、notebook、RUNBOOK | 比賽專屬且可重跑 |

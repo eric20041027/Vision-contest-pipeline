@@ -518,6 +518,53 @@ GATE: list[tuple[str, str, dict[str, list[str]]]] = [
             "tests/unit/test_e2e_submit.py": ["test_kaggle_selection_by_ref_then_gc_scan"],
         },
     ),
+    (
+        "code snapshots, traces and authorizations (0.18.0)",
+        "code: train run snapshots every code root before its first write and the snapshot "
+        "reuses one content-addressed artifact; an imported file changed during an artifact job "
+        "is drift while an unimported one is not; exported snapshots verify without the repo and "
+        "verify ignores the worktree while diff reports it; any bound claim that changes is "
+        "unauthorized and a train run with an authorization fails closed when its snapshot "
+        "cannot be written; secrets, and a repository nested in a plain root, are never opened; "
+        "framework outputs and generated modules "
+        "do not change identity or completeness; a failing trace never changes the child's "
+        "exit code",
+        {
+            "tests/unit/artifact/test_writer_code.py": [
+                "test_an_imported_file_changed_during_the_job_fails_commit",
+                "test_a_file_nobody_imported_may_change",
+            ],
+            "tests/unit/test_cli_code.py": [
+                "test_verify_ignores_the_worktree_and_diff_sees_it",
+                "test_export_then_verify_dir_round_trip",
+                "test_verify_dir_needs_no_git",
+            ],
+            "tests/unit/train/test_run.py": [
+                "test_require_clean_fails_before_the_first_write",
+            ],
+            "tests/unit/train/test_run_code.py": [
+                "test_an_untracked_helper_is_kept_and_warned",
+                "test_framework_outputs_do_not_change_the_identity",
+                "test_a_failing_trace_keeps_the_exit_code",
+                "test_a_trace_that_cannot_be_imported_keeps_the_exit_code",
+                "test_an_unignored_secret_is_not_read",
+            ],
+            "tests/unit/artifact/test_authorization.py": [
+                "test_any_bound_input_that_changes_is_unauthorized",
+            ],
+            "tests/unit/train/test_run_authorization.py": [
+                "test_any_bound_train_claim_that_changes_is_unauthorized",
+                "test_a_benchmark_run_authorizes_the_full_run",
+                "test_with_an_authorization_a_snapshot_that_cannot_be_written_fails_closed",
+            ],
+            "tests/unit/code/test_code_scan.py": [
+                "test_secret_files_are_never_opened",
+                "test_a_nested_work_tree_in_a_plain_root_is_not_entered",
+            ],
+            "tests/unit/code/test_code_trace.py": ["test_generated_modules_are_not_gaps"],
+            "tests/unit/test_e2e_code.py": ["test_benchmark_authorize_full_job_then_stage"],
+        },
+    ),
 ]
 
 

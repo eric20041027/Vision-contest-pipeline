@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from vcp.cli_artifact import artifact_app
 from vcp.cli_backup import backup_app
+from vcp.cli_code import code_app
 from vcp.cli_common import (
     CmdResult,
     ConfigsRootOpt,
@@ -55,6 +56,7 @@ data_app = typer.Typer(no_args_is_help=True, help="dataset commands")
 app.add_typer(data_app, name="data")
 app.add_typer(artifact_app, name="artifact")
 app.add_typer(backup_app, name="backup")
+app.add_typer(code_app, name="code")
 app.add_typer(eval_app, name="eval")
 app.add_typer(fuse_app, name="fuse")
 app.add_typer(gc_app, name="gc")

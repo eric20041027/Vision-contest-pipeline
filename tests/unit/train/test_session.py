@@ -49,6 +49,22 @@ def test_current_requires_the_wrapper_env(roots, monkeypatch):
         Session.current(roots.data)
 
 
+def test_current_survives_a_trace_module_that_cannot_be_imported(roots, monkeypatch, capsys):
+    """Spec 2026-10-31 §5.2: the whole trace is inside the guard, its import included -- a trace
+    that cannot even load is one stderr line, never a ``Session.current()`` that raises."""
+    import vcp.code
+
+    _running(roots)
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.delattr(vcp.code, "trace", raising=False)
+    monkeypatch.setitem(sys.modules, "vcp.code.trace", None)  # the import raises
+    s = Session.current(roots.data)
+    assert (s.run_id, s.data_root) == ("r1", roots.data)
+    err = capsys.readouterr().err
+    assert err.startswith("[vcp] code trace skipped: ModuleNotFoundError: ")
+    assert err.count("\n") == 1
+
+
 def test_attempt_is_the_exported_one_or_else_the_records(roots, monkeypatch):
     """VCP-043: a public, read-only attempt number (the contest had to call ``_attempt()``)."""
     _running(roots)  # the record's current attempt is 2
@@ -284,3 +300,27 @@ def test_a_conflicting_attach_evidence_copies_nothing(roots, monkeypatch, tmp_pa
             s.attach_evidence("teacher", f, role="soft")
         assert sorted(p.name for p in evidence_dir.iterdir()) == before
     assert [r.role for r in load_record(roots.data, "r1").evidence] == ["teacher"]
+
+
+@pytest.mark.parametrize(
+    ("name", "role"),
+    [("code.cwd", None), ("code_trace.a2.1", None), ("authorization", None), ("x", "code")],
+)
+def test_session_attach_evidence_refuses_a_reserved_name(roots, monkeypatch, tmp_path, name, role):
+    """The code layer's refs are written by vcp itself; a loop cannot claim their names or roles,
+    and nothing is copied or recorded when it tries."""
+    ds, _ = seed_tiny(roots)
+    _running(roots)
+    save_run(roots.data, _card(ds))
+    monkeypatch.setenv("VCP_RUN_ID", "r1")
+    monkeypatch.delenv("VCP_ATTEMPT", raising=False)
+    train_yaml = run_dir(roots.data, "r1") / "train.yaml"
+    before = train_yaml.read_bytes()
+    f = tmp_path / "teacher.jsonl"
+    f.write_text("t", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="^role_reserved:") as ei:
+        Session("r1", roots.data).attach_evidence(name, f, role=role)
+    assert ei.value.fields == {"evidence_name": name}
+    assert train_yaml.read_bytes() == before
+    assert not (roots.data / "artifacts" / "evidence").exists()
+    assert not [e for e in read_events(roots.data, "r1") if e["event"] == "evidence"]

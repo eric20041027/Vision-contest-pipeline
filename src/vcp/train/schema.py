@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 
+from vcp.code.schema import CodeSection, Distribution, EnvIdentity
 from vcp.data.access.schema import AccessRef
 from vcp.data.evidence_ref import EvidenceRef
 
@@ -165,3 +166,9 @@ class EnvSnapshot(_Strict):
     git: GitInfo | None = None
     taken_at: str
     disk: DiskCheck | None = None  # 0.16.0: an older env.json has none
+    # 0.18.0 (spec 2026-10-31 §4.3): the code the run ran, the installed distributions and the
+    # identity claims. An older env.json has none; vcp reads them back only through
+    # ``vcp.train.env.read_sections``, one section at a time.
+    code: CodeSection | None = None
+    distributions: list[Distribution] | None = None
+    identity: EnvIdentity | None = None

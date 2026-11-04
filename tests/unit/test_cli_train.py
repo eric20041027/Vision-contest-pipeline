@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -347,6 +348,127 @@ def _work(tmp_path):
     work.mkdir()
     (work / "fake_train.py").write_text(FAKE, encoding="utf-8")
     return work
+
+
+def test_train_run_cli_code_fields(roots, tmp_path, isolated_git, monkeypatch):
+    seed_det(roots)
+    repo = git_repo(
+        tmp_path / "repo", {"fake_train.py": FAKE.encode(), ".gitignore": b"weights/\n"}
+    )
+    r = _run(repo, run="r1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "code_snapshot=ok" in v and "untracked_code=0" in v
+    assert v.index("free_gib=") < v.index("code_snapshot=") < v.index("untracked_code=")
+    assert "code_missing=" not in v
+    work = _work(tmp_path)
+    v = _verdict(_run(work, run="r2").output)
+    assert "code_snapshot=ok" in v and "untracked_code=" not in v and "code_missing=" not in v
+    r = _run(work, "--code-root", str(tmp_path / "nowhere"), run="r3")
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "status=FAIL" in v and "not_found:" in v and "run=r3" in v
+    assert not (roots.data / "runs" / "r3").exists()
+    from vcp.code import rules
+
+    monkeypatch.setattr(rules, "MAX_FILES", 0)
+    r = _run(work, "--code-root", str(repo), run="r4")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "code_snapshot=none" in v
+    assert "code_missing=cwd,root-1" in v and "untracked_code=0" in v
+    assert "warning: code_snapshot=none (code_missing=cwd,root-1)" in r.output
+
+
+def test_train_run_cli_code_changed_field(roots, tmp_path):
+    seed_det(roots)
+    work = _work(tmp_path)
+    (work / "helper.py").write_bytes(b"V = 1\n")
+    # a child that edits a file the snapshot lists
+    edit = 'Path("helper.py").write_bytes(b"V = 2\\n")\nsys.exit('
+    (work / "fake_train.py").write_text(FAKE.replace("sys.exit(", edit, 1), encoding="utf-8")
+    r = _run(work, run="r1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "code_changed=1" in v
+    assert v.index("code_snapshot=") < v.index("code_changed=")
+    assert "warning: code_changed=1" in r.output
+    r = _run(work, run="r2")  # the same edit again: helper.py already says V = 2
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "code_changed" not in v and "code_changed" not in r.output
+
+
+def test_train_run_cli_keeps_the_exit_code_when_the_snapshot_is_removed_mid_run(roots, tmp_path):
+    seed_det(roots)
+    work = _work(tmp_path)
+    (work / "helper.py").write_bytes(b"V = 1\n")
+    base = str(roots.data / "artifacts" / "code_snapshot")
+    child = f'import shutil\nshutil.rmtree({base!r})\nPath("helper.py").write_bytes(b"V = 2\\n")\n'
+    (work / "fake_train.py").write_text(
+        FAKE.replace("sys.exit(", child + "sys.exit(", 1), encoding="utf-8"
+    )
+    r = _run(work, run="r1")
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "status_attempt" not in v
+    assert "exit_code=0" in v and "checkpoints=1" in v and "code_changed=1" in v
+    assert "final=none" not in v
+
+
+def test_train_run_cli_always_says_code(roots, work):
+    seed_det(roots)
+    r = _run(work)
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and re.search(r" code=snapshot( |$)", v)
+    assert v.index(" code=") < v.index("code_snapshot=") < v.index("code_trace=")
+
+
+def test_train_status_always_reports_code(roots, work):
+    seed_det(roots)
+    assert _run(work).exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and re.search(r" code=snapshot( |$)", v)
+    assert "attempt 1: code=snapshot" in r.output
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--json"])
+    doc = json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
+    code = doc["result"]["code"]
+    assert code["grade"] == "snapshot" and code["attempts"][0]["grade"] == "snapshot"
+    (root,) = code["attempts"][0]["roots"]
+    assert (
+        root["label"] == "cwd" and root["snapshot"].startswith("code-") and root["reason"] is None
+    )
+    assert re.search(r" code=snapshot( |$)", r.stderr)
+
+
+def test_train_status_says_when_the_code_is_only_declared(roots, work, tmp_path):
+    seed_det(roots)
+    assert _run(work).exit_code == 0
+    (work / "helper.py").write_bytes(b"V = 1\n")
+    edit = 'Path("helper.py").write_bytes(b"V = 2\\n")\nsys.exit('
+    (work / "fake_train.py").write_text(FAKE.replace("sys.exit(", edit, 1), encoding="utf-8")
+    assert _run(work, run="r2").exit_code == 0  # the child edited a file its snapshot lists
+    r = runner.invoke(app, ["train", "status", "--run", "r2"])
+    assert re.search(r" code=declared( |$)", _verdict(r.output))
+    assert "attempt 1: code=declared" in r.output
+    r = runner.invoke(app, ["train", "status", "--run", "ghost"])
+    assert r.exit_code == 1 and " code=" not in _verdict(r.output)
+
+
+def test_train_status_verify_names_a_broken_snapshot(roots, work):
+    seed_det(roots)
+    assert _run(work).exit_code == 0
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--verify"])
+    assert "drift=0" in _verdict(r.output) and "drift: evidence" not in r.output
+    env = json.loads((roots.data / "runs" / "r1" / "train" / "env.1.json").read_bytes())
+    sid = env["code"]["roots"][0]["snapshot"]
+    kept = roots.data / "artifacts" / "code_snapshot" / sid / "files" / "fake_train.py"
+    kept.write_bytes(kept.read_bytes() + b"# tampered\n")
+    r = runner.invoke(app, ["train", "status", "--run", "r1", "--verify"])
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "status=WARN" in v and "drift=1" in v
+    assert "drift: evidence:code.cwd" in r.output
+    assert re.search(r" code=declared( |$)", v)  # the snapshot no longer holds: the grade drops
+
+
+def test_train_run_help_documents_code_root(roots):
+    out = runner.invoke(app, ["train", "run", "--help"]).output
+    assert "--code-root" in out and "another" in out
 
 
 def test_train_run_cli_free_gib_and_min_free_gib(roots, tmp_path, monkeypatch):

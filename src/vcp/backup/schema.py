@@ -33,6 +33,12 @@ ROLES: tuple[str, ...] = (
     "source_audit",
     "label_set",
     "evidence",
+    # 0.18.0 (spec 2026-10-31 §4.8): a train run binds a snapshot per code root, the traces its
+    # child wrote and the authorization it was checked against, whose basis travels with it
+    "code_snapshot",
+    "code_trace",
+    "authorization",
+    "authorization_basis",
     "history",
     "fuse_record",
     "train_record",
@@ -48,7 +54,17 @@ ROLES: tuple[str, ...] = (
     "checkpoint_final",
     "checkpoint",
 )
-_TIER2 = ("source_audit", "prediction", "samples", "raw_manifest", "train_dir", "logs", "evidence")
+_TIER2 = (
+    "source_audit",
+    "prediction",
+    "samples",
+    "raw_manifest",
+    "train_dir",
+    "logs",
+    "evidence",
+    "code_snapshot",
+    "authorization_basis",
+)
 TIER_OF: dict[str, int] = {
     role: 3 if role.startswith("checkpoint") else (2 if role in _TIER2 else 1) for role in ROLES
 }
@@ -76,6 +92,8 @@ CARD_ROLES = frozenset(
         "recipe",
         "run_card",
         "access_receipt",
+        "code_trace",
+        "authorization",
         "fuse_record",
         "train_record",
         "dataset_card",

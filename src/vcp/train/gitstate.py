@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vcp.core.errors import ValidationFailed
+from vcp.core.proc import GIT_LOCAL_ENV, git_environment
 from vcp.train.schema import GitInfo
 
 PATH_LIMIT = 50  # paths kept per list; the counts stay exact
@@ -59,28 +60,7 @@ DIFF_ARGS = (
     "--ignore-submodules=untracked",
     "--",
 )
-# git's repository-local variables (`git rev-parse --local-env-vars`). Inherited from a git hook,
-# `git submodule foreach` or a shell, they would point every call at another repository and copy
-# its content into the patch. The config git passes through the environment
-# (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and its KEY/VALUE pairs) is kept, as git keeps it when
-# it switches to another repository itself: a container's safe.directory must still apply.
-_LOCAL_ENV = frozenset(
-    {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_CONFIG",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_COMMON_DIR",
-        "GIT_GRAFT_FILE",
-        "GIT_INDEX_FILE",
-        "GIT_SHALLOW_FILE",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_PREFIX",
-    }
-)
+_LOCAL_ENV = GIT_LOCAL_ENV
 
 
 @dataclass(frozen=True)
@@ -115,12 +95,8 @@ class _GitFailed(Exception):
 
 
 def _environment() -> dict[str, str]:
-    """The environment of every git call: without git's repository-local variables, so only the
-    repository containing ``--cwd`` is looked at; with ``GIT_OPTIONAL_LOCKS=0``, so ``git status``
-    never rewrites that repository's index (``git diff`` may still refresh its stat cache)."""
-    env = {key: value for key, value in os.environ.items() if key not in _LOCAL_ENV}
-    env["GIT_OPTIONAL_LOCKS"] = "0"
-    return env
+    """The environment of every git call (``vcp.core.proc.git_environment``)."""
+    return git_environment()
 
 
 def _command(cwd: Path, args: Sequence[str]) -> list[str] | None:

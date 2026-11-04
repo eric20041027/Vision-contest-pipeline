@@ -2,11 +2,22 @@ import pytest
 from pydantic import ValidationError
 
 from vcp.core.errors import ValidationFailed
+from vcp.data.evidence import check_evidence_file
 from vcp.data.evidence_ref import (
+    AUTHORIZATION_NAME,
+    AUTHORIZATION_ROLE,
+    CODE_ROLE,
+    CODE_TRACE_ROLE,
+    LABELS_ROLE,
+    ORIGINAL_KINDS,
+    RESERVED_NAME_PREFIXES,
+    RESERVED_ROLES,
     EvidenceRef,
     add_ref,
     add_refs,
     current,
+    evidence_count,
+    is_reserved_name,
     labels_field,
     merge_refs,
 )
@@ -102,3 +113,111 @@ def test_an_empty_evidence_list_is_not_written(make):
 
 def test_evidence_is_a_training_event():
     assert "evidence" in EVENTS
+
+
+def test_the_reserved_vocabulary():
+    assert (CODE_ROLE, CODE_TRACE_ROLE, AUTHORIZATION_ROLE) == (
+        "code",
+        "code_trace",
+        "authorization",
+    )
+    assert RESERVED_ROLES == (LABELS_ROLE, "code", "code_trace", "authorization")
+    assert AUTHORIZATION_NAME == "authorization"
+    assert RESERVED_NAME_PREFIXES == ("code.", "code_trace.")
+    assert ORIGINAL_KINDS == ("evidence", "label_set")
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "role"),
+    [
+        ("code_snapshot", "code.cwd", "code"),
+        ("code_trace", "code_trace.a1.1", "code_trace"),
+        ("authorization", "authorization", "authorization"),
+    ],
+)
+def test_the_new_kinds_load(kind, name, role):
+    ref = _ref(name, kind=kind, role=role)
+    assert type(ref).model_validate(ref.model_dump(mode="json")) == ref
+    assert ref.kind == kind
+
+
+def test_an_unknown_kind_is_still_refused():
+    with pytest.raises(ValidationError):
+        _ref(kind="elsewhere")
+
+
+@pytest.mark.parametrize(
+    ("name", "reserved"),
+    [
+        ("code.cwd", True),
+        ("code.dist-vcp", True),
+        ("code_trace.a1.1", True),
+        ("authorization", True),
+        ("teacher", False),
+        ("code", False),  # the role is reserved; the bare name is not a prefix match
+        ("codec.v1", False),
+        ("xcode.cwd", False),
+        ("authorization2", False),
+        ("my.authorization", False),
+    ],
+)
+def test_reserved_names(name, reserved):
+    assert is_reserved_name(name) is reserved
+
+
+@pytest.mark.parametrize(
+    ("name", "role"),
+    [
+        ("code.cwd", "code.cwd"),
+        ("code_trace.a1.1", "x"),
+        ("authorization", "authorization"),
+        ("x", "code"),
+        ("x", "code_trace"),
+        ("x", "authorization"),
+    ],
+)
+def test_reserved_names_and_roles_are_refused(tmp_path, name, role):
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    with pytest.raises(ValidationFailed, match="^role_reserved:") as ei:
+        check_evidence_file(name, f, role)
+    assert ei.value.fields == {"evidence_name": name}
+
+
+def test_the_labels_role_keeps_its_message(tmp_path):
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    with pytest.raises(ValidationFailed) as ei:
+        check_evidence_file("x", f, "labels")
+    assert str(ei.value) == (
+        "role_reserved: role 'labels' is for label sets; attach them with --labels "
+        "or Session.attach_labels"
+    )
+
+
+def test_an_ordinary_name_and_role_still_pass(tmp_path):
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    check_evidence_file("code", f, "corpus")  # the bare word is not reserved as a name
+    check_evidence_file("teacher", f, "teacher")
+
+
+def test_evidence_and_labels_count_only_the_original_kinds():
+    refs = [
+        _ref("teacher"),
+        _ref("pseudo-v1", kind="label_set", artifact_id="pseudo-v1"),
+        _ref("code.cwd", kind="code_snapshot", role="code"),
+        _ref("code_trace.a1.1", kind="code_trace", role="code_trace"),
+        _ref("authorization", kind="authorization", role="authorization"),
+    ]
+    assert evidence_count(refs) == 2
+    assert labels_field(refs) == "pseudo-v1"
+    assert evidence_count([]) == 0
+
+
+def test_evidence_count_counts_names_not_rows():
+    refs = add_refs(
+        [], [_ref(sha="a"), _ref(sha="b"), _ref("code.cwd", kind="code_snapshot", role="code")]
+    )
+    assert len(refs) == 3
+    assert evidence_count(refs) == 1

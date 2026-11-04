@@ -7,10 +7,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.code.grade import code_info
+from vcp.code.schema import CodeGrade
+from vcp.code.snapshot import KIND as SNAPSHOT_KIND
+from vcp.code.snapshot import code_ref
 from vcp.core.config import is_true
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file
-from vcp.core.paths import DatasetPaths
+from vcp.core.paths import DatasetPaths, validate_name
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
 from vcp.data.evidence import (
@@ -21,7 +25,7 @@ from vcp.data.evidence import (
     label_ref,
     parse_evidence_args,
 )
-from vcp.data.evidence_ref import add_refs
+from vcp.data.evidence_ref import CODE_ROLE, EvidenceRef, add_refs, check_name
 from vcp.data.split import assert_plan_matches, load_plan
 from vcp.measure.converters import ConvertContext, get_converter
 from vcp.measure.predictions import check_predictions, write_predictions
@@ -65,6 +69,9 @@ class IngestSpec(BaseModel):
     # spec 2026-09-26 §5.4: evidence files (NAME=PATH) and label_set ids to bind to the run.
     evidence: list[str] = Field(default_factory=list)
     labels: list[str] = Field(default_factory=list)
+    # spec 2026-10-31 §5.8: code snapshot ids to bind as ``code.<label>`` (LABEL=ID), taken with
+    # `vcp code snapshot`. Checked with the evidence, before anything is written.
+    code: list[str] = Field(default_factory=list)
     data_root: Path | None = None
     configs_root: Path | None = None
 
@@ -83,6 +90,7 @@ class IngestResult(BaseModel):
     replaced: bool
     created_run: bool
     provenance: str
+    code: CodeGrade = "declared"  # the saved run's grade (vcp.code.grade), read after the save
 
 
 def _export_sha(export_dir: Path | None) -> str | None:
@@ -199,9 +207,47 @@ def _run_card(
     return card, True
 
 
-def _attach(data_root: Path, card: RunCard, evidence: list[str], labels: list[str]) -> RunCard:
-    """``ingest --evidence / --labels``: bound by hand, no attempt. Every check runs before any
-    evidence is copied."""
+def parse_code_args(items: list[str]) -> list[tuple[str, str]]:
+    """``LABEL=ID`` options in order. The label becomes the ref's name (``code.<label>``) and the
+    id a path segment, so both must be names (``validate_name``); an item of another shape, or
+    a label given twice, is ``invalid:``."""
+    out: list[tuple[str, str]] = []
+    for item in items:
+        label, sep, snapshot_id = item.partition("=")
+        if not sep or not label or not snapshot_id:
+            raise ValidationFailed(f"invalid: --code expects LABEL=ID, got {item!r}")
+        for what, value in (("label", label), ("id", snapshot_id)):
+            try:
+                validate_name(value)
+            except ValidationFailed as e:
+                raise ValidationFailed(f"invalid: --code {what} in {item!r}: {e}") from e
+        if any(known == label for known, _ in out):
+            raise ValidationFailed(f"invalid: --code {label!r} is given twice")
+        out.append((label, snapshot_id))
+    return out
+
+
+def _check_code_names(
+    existing: list[EvidenceRef], code: list[tuple[str, str]], labels: list[str]
+) -> None:
+    """Every ``code.<label>`` is free for a snapshot ref: not a ``--labels`` id of this call, and
+    not held by the run's list under another kind or role (a name keeps its role and kind)."""
+    for label, _ in code:
+        name = f"code.{label}"
+        if name in labels:
+            raise ValidationFailed(
+                f"evidence_conflict: {name!r} is both a --labels id and the name of vcp's "
+                f"{SNAPSHOT_KIND} ref",
+                fields={"evidence_name": name},
+            )
+        check_name(existing, name, CODE_ROLE, SNAPSHOT_KIND)
+
+
+def _attach(
+    data_root: Path, card: RunCard, evidence: list[str], labels: list[str], code: list[str]
+) -> RunCard:
+    """``ingest --evidence / --labels / --code``: bound by hand, no attempt. Every check -- the
+    shapes, the names, the snapshots -- runs before any evidence is copied."""
     scope = RunScope(
         run_id=card.run_id,
         dataset=card.dataset,
@@ -210,12 +256,18 @@ def _attach(data_root: Path, card: RunCard, evidence: list[str], labels: list[st
         trained_on=tuple(card.trained_on),
     )
     parsed = parse_evidence_args(evidence)
+    snapshots = parse_code_args(code)
     for name, path in parsed:
         check_evidence_file(name, path, name)
     # Ruling 2026-09-26 (Task 7): names must not conflict before a single byte is copied, exactly
     # as `train run` already enforces (spec §5.2 / §5.4) -- checked against the run's own current
     # list before either a --labels lookup or a --evidence copy happens below.
     check_names(card.evidence, parsed, labels)
+    _check_code_names(card.evidence, snapshots, labels)
+    code_refs = [
+        code_ref(data_root, label, snapshot_id, attempt=None, binding="manual")
+        for label, snapshot_id in snapshots
+    ]
     label_refs = [
         label_ref(data_root, scope, lid, attempt=None, binding="manual") for lid in labels
     ]
@@ -223,7 +275,7 @@ def _attach(data_root: Path, card: RunCard, evidence: list[str], labels: list[st
         attach_evidence(data_root, scope, name, path, role=name, attempt=None, binding="manual")
         for name, path in parsed
     ]
-    new_refs = add_refs(card.evidence, [*evidence_refs, *label_refs])
+    new_refs = add_refs(card.evidence, [*evidence_refs, *label_refs, *code_refs])
     return card.model_copy(update={"evidence": new_refs})
 
 
@@ -244,8 +296,8 @@ def ingest(spec: IngestSpec) -> IngestResult:
     )
     if spec.receipts:
         card = attach_receipts(card, spec.receipts, data_root=paths.data_root)
-    if spec.evidence or spec.labels:
-        card = _attach(paths.data_root, card, spec.evidence, spec.labels)
+    if spec.evidence or spec.labels or spec.code:
+        card = _attach(paths.data_root, card, spec.evidence, spec.labels, spec.code)
     converter = get_converter(spec.format)
     ctx = ConvertContext(dataset, ids, spec.export_dir, dict(spec.options))
     preds = converter.convert(spec.src, ctx)
@@ -305,4 +357,5 @@ def ingest(spec: IngestSpec) -> IngestResult:
         replaced=replaced,
         created_run=created,
         provenance=info.grade,
+        code=code_info(paths.data_root, spec.run_id).grade,
     )

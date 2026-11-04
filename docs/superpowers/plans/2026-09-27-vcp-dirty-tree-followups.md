@@ -48,4 +48,5 @@
 3. `vcp.core.build`（vcp 自己的 build string）的 git 呼叫也改用 `gitstate` 的子程序環境。
    - 目前在 git hook 裡，或 shell 設了 `GIT_DIR` 時，產物記的 `vcp_version` 可能是別的 repo 的 commit。
    - 它的 `git status --porcelain` 也還會順手改寫 index。
+   - **已處理（2026-11-03，Wave 1c Task 1，隨 0.18.0）**：`vcp.core.build` 的 git 呼叫改用 `vcp.core.proc.git_environment()`（`gitstate` 的 `_environment` 與 `_LOCAL_ENV` 也指向它，同一個環境：去掉 `GIT_DIR` 等決定 repo 的變數、設 `GIT_OPTIONAL_LOCKS=0`），所以設了 `GIT_DIR` 或在 git hook 裡，`vcp_version` 仍是 vcp 自己的 commit，`git status` 也不再改寫 index。搬到 `vcp.core.proc` 是因為 `vcp.core.build` import `vcp.train.gitstate` 會循環（`vcp.train/__init__` → `session` → `artifact.writer` → `core.build`）。見 `2026-11-03-vcp-wave1c-followups.md` §2.1。
 4. `not_found:` 取第一個 `fatal:` 行，而不是第一行 stderr。前面若有 `error:` 或 `warning:`，就會蓋過真正的原因。

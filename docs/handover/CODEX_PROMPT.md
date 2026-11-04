@@ -1,4 +1,4 @@
-# 給 Codex 的接續開發 prompt（2026-11-02）
+# 給 Codex 的接續開發 prompt（2026-11-04）
 
 把下面整段貼給 Codex（repo 根目錄開啟）。它假設 Codex 能讀 repo、跑 `uv`、跑測試、開 worktree / 分支與 commit。2026-09-07 的舊版所列的第一、第二階段（待辦清理、RSNA Knee 膠水）都已完成；RSNA 比賽現在在獨立工作區推進，不在這個 repo 裡。
 
@@ -25,9 +25,9 @@
 ## 目前的開放待辦（依價值排序；每項都在對應後記有裁決脈絡）
 
 1. **PostgreSQL adaptive policy v2 的收尾**：程式與凍結的 policy 隨 0.15.0 發出，三段量測已完成（2026-10-20；held-out v2 驗收通過、H1 與 H1a 成立；證據紀錄 `docs/benchmarks/postgres-provenance-v2.md`、課程素材 `docs/benchmarks/postgres-provenance-course-brief-v2.md`）。量測後發現的兩個 runner 缺陷（CPU 查詢逾時會靜默改值、錯誤訊息完全去敏）也已修正（後記 `docs/superpowers/plans/2026-10-09-vcp-postgres-adaptive-policy-v2-followups.md` §3）。這一項已經沒有待辦，下一項是稽核 Wave 1c。
-2. **稽核 Wave 1c：程式碼快照與產物授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：`train run` 從 0.11.0 起記下工作樹狀態與追蹤檔的 patch（VCP-041），但訓練程式的快照與授權邊界還沒有做成產物。spec 草稿在 PR #60（未合併，等使用者審它的待確認決定）；審定後再寫計畫，實作排在 2026-12-06 之後。
+2. **稽核 Wave 1c：程式碼快照與產物授權**（VCP-004 / VCP-006，`docs/audits/2026-09-11-vcp-improvement-audit.md`）：**實作與文件都在分支 `feat/wave1c-code-snapshot`，等發版 0.18.0（使用者同意之後，發版 commit 不在功能分支；`CHANGELOG.md`、`__version__`、`plugin.json`、tag 都還沒動）。**spec `docs/superpowers/specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md`，後記 `docs/superpowers/plans/2026-11-03-vcp-wave1c-followups.md`（§2.1 是實作期裁決，§2.2 是開放待辦）。`train run` 每個 attempt 做程式碼快照並追蹤 import（等級 `traced > snapshot > commit > declared`）、`vcp code snapshot|verify|diff|export`、`vcp artifact authorize` 與 `train run --authorization`、`submit.yaml` 的 `require_code`。新紀錄舊 vcp（0.17 以前）讀不動：整個 data root 與每個訓練 venv 先升到 0.18，再跑第一個 0.18 的 `train run`；每個 checkout `vcp provenance rebuild` 一次。發版時要順手改 README 兩份的版本行，與這些地方「待發版」的字樣：README 兩份「Roadmap / 路線圖」的 0.18.0 那條與「How it works / 它怎麼運作」的 0.18.0 功能列、`vcp-orientation/map.md` 的「歷史」、`docs/handover/HANDOVER.md` 與本檔。
 3. **凍結前的契約項**：各後記最後一節的待辦裡，會改變寫入內容、VERDICT 欄位、`reason=` 字彙或 exit 類別的那些（例如共用台帳後記 §3 的幾項；0.16.0 後記 §2.2 第 12 條的 `cli_warnings=` 已隨 0.17.0 做完），在 1.0 之前做完，或明寫留到 1.0 之後；1.0 之後再改就是 MAJOR。
-4. **`1.0.0`**：留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
+4. **`1.0.0`**：留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。門檻在 Wave 1c spec §13，目前進度：(1) 實作以 0.18.0 發出、稽核文件的 VCP-004／006 標為已實作——程式與文件完成，**等發版**；(2) 回歸門檻 `tests/unit/test_regression_gate.py` 有 `0.18.0` 那一列、每個稽核驗收有具名測試——已完成，Windows 與 Linux CI 待合併前確認；(3) 凍結前的契約項（本節第 3 條，含 Wave 1c 後記 §2.2 會改寫入內容、VERDICT 或 `reason=` 的待辦）——**未做**，要做完或逐項寫明留到 1.0 之後；(4) 合成端到端在 CI 裡跑——已完成（`examples/quickstart.py` 的 `train run` → `code=snapshot` → `vcp code verify`，與 benchmark → authorize → 正式 job → `stage`（`require_code: snapshot`）的 e2e 測試）；(5) 1.0.0 的 CHANGELOG 條目寫明從此承諾的契約——**未做**。
 5. **full rebuild 後的 dead tuples**（§3-7）：是否在 rebuild 收尾 `VACUUM`，或只寫進操作指南（2026-10-09 裁決：不加 VACUUM，寫進操作指南）。
 6. **EXPLAIN 覆蓋 `status` / `impact` 查詢計畫**（§3-4）；**Linux host 的 live integration record**（§3-3）；**1M 規模**要 ≥128 GB 的機器。
 7. **0.17.0 的開放項**（後記 `docs/superpowers/plans/2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md` §2.2）：使用者覆核 spec §13 的裁決；gc 的進度輸出、硬連結去重、說出有連結沒走（`links:`）；拆 `train/run.py`（923 行，超過 800 行上限）；其他非原子的整份重寫。

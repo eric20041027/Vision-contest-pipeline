@@ -1,6 +1,7 @@
 """``EvidenceRef``: a run's reference to an immutable artifact it read -- a label set or a
-copied evidence file (spec 2026-09-26 §3.3). The model and the list rules only; making the
-artifacts is ``vcp.data.evidence``'s job, writing the list is the caller's."""
+copied evidence file (spec 2026-09-26 §3.3), or, since 0.18.0, a code snapshot, a code trace or an
+authorization (spec 2026-10-31 §4.3). The model and the list rules only; making the artifacts is
+``vcp.data.evidence``'s job, writing the list is the caller's."""
 
 from __future__ import annotations
 
@@ -11,9 +12,20 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import validate_name
 
-EvidenceKind = Literal["evidence", "label_set"]
+EvidenceKind = Literal["evidence", "label_set", "code_snapshot", "code_trace", "authorization"]
 Binding = Literal["cli", "session", "manual"]
 LABELS_ROLE = "labels"
+# The roles and names vcp's own refs carry (spec §4.3). ``--evidence`` and
+# ``Session.attach_evidence`` cannot use them (``role_reserved:``), so a ref with one of these
+# is always vcp's.
+CODE_ROLE = "code"
+CODE_TRACE_ROLE = "code_trace"
+AUTHORIZATION_ROLE = "authorization"
+RESERVED_ROLES = (LABELS_ROLE, CODE_ROLE, CODE_TRACE_ROLE, AUTHORIZATION_ROLE)
+AUTHORIZATION_NAME = "authorization"
+RESERVED_NAME_PREFIXES = ("code.", "code_trace.")
+# The two kinds a person attaches: the ones the VERDICT's ``evidence=`` and ``labels=`` count.
+ORIGINAL_KINDS = ("evidence", "label_set")
 
 
 class EvidenceRef(BaseModel):
@@ -80,6 +92,17 @@ def merge_refs(first: list[EvidenceRef], second: list[EvidenceRef]) -> list[Evid
     ``train.yaml``'s list is merged into ``run.yaml``'s, as access receipts are."""
     seen = {(r.kind, r.artifact_id) for r in first}
     return [*first, *(r for r in second if (r.kind, r.artifact_id) not in seen)]
+
+
+def is_reserved_name(name: str) -> bool:
+    """A name only vcp's own refs may carry: ``authorization``, ``code.*``, ``code_trace.*``."""
+    return name == AUTHORIZATION_NAME or name.startswith(RESERVED_NAME_PREFIXES)
+
+
+def evidence_count(refs: list[EvidenceRef]) -> int:
+    """How many names are attached as evidence or label sets: the VERDICT's ``evidence=``. The
+    code layer's refs (snapshot, trace, authorization) are not counted."""
+    return sum(1 for r in current(refs) if r.kind in ORIGINAL_KINDS)
 
 
 def labels_field(refs: list[EvidenceRef]) -> str:

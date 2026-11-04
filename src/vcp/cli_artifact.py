@@ -10,14 +10,23 @@ import typer
 from pydantic import ValidationError
 
 from vcp.artifact import store
+from vcp.artifact.authorization import AuthorizeSpec, authorize
 from vcp.artifact.clean import clean, parse_age, scan
 from vcp.artifact.lineage import lineage as lineage_of
 from vcp.artifact.schema import ArtifactManifest, ArtifactSpec, InputRef, check_file_name
 from vcp.artifact.writer import ArtifactWriter
-from vcp.cli_common import CmdResult, DataRootOpt, JsonOpt, parse_opts, run_command
+from vcp.cli_common import (
+    CmdResult,
+    ConfigsRootOpt,
+    DataRootOpt,
+    JsonOpt,
+    parse_opts,
+    run_command,
+)
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
-from vcp.core.paths import resolve_data_root
+from vcp.core.paths import resolve_configs_root, resolve_data_root
+from vcp.train.authorize import run_claims
 
 artifact_app = typer.Typer(no_args_is_help=True, help="immutable artifact commands")
 
@@ -141,6 +150,79 @@ def create_cmd(
         return "OK", fields, _payload(manifest), human
 
     run_command("artifact.create", json_mode, data_root, fn, context=_ident(kind, artifact_id))
+
+
+@artifact_app.command("authorize")
+def authorize_cmd(
+    authorization_id: IdOpt,
+    basis: Annotated[
+        str,
+        typer.Option(
+            "--basis", help="what proved it: artifact:<kind>/<id> (a benchmark) or run:<id>"
+        ),
+    ],
+    consumer: Annotated[
+        str, typer.Option("--for", help="who may use it: artifact (a job) or train (a run)")
+    ],
+    target_kind: Annotated[
+        str | None,
+        typer.Option("--target-kind", help="the kind of artifact the job makes (--for artifact)"),
+    ] = None,
+    free: Annotated[
+        list[str] | None,
+        typer.Option("--free", help="claim NAME the job may change (repeatable)"),
+    ] = None,
+    set_: Annotated[
+        list[str] | None,
+        typer.Option("--set", help="NAME=VALUE or NAME=@PATH (its sha) to bind (repeatable)"),
+    ] = None,
+    reason: Annotated[str, typer.Option("--reason", help="why this job is authorized")] = "",
+    supersedes: Annotated[
+        str | None, typer.Option("--supersedes", help="id of the authorization this one replaces")
+    ] = None,
+    json_mode: JsonOpt = False,
+    data_root: DataRootOpt = None,
+    configs_root: ConfigsRootOpt = None,
+) -> None:
+    """Bind a job to what a benchmark proved: write an authorization from the claims of an
+    artifact or a training run. A job that names it must come out the same on every claim."""
+
+    def fn() -> CmdResult:
+        root = resolve_data_root(data_root)
+        spec = AuthorizeSpec(
+            authorization_id=authorization_id,
+            basis=basis,
+            consumer=consumer,  # type: ignore[arg-type]  # authorize() refuses anything else
+            target_kind=target_kind,
+            free=list(free or []),
+            set_=list(set_ or []),
+            reason=reason,
+            supersedes=supersedes,
+        )
+
+        def basis_run_claims(run_id: str) -> dict[str, str]:
+            # Only a run basis reads the configs root (its plan file): an artifact basis is
+            # authorized on a machine that has none.
+            return run_claims(root, resolve_configs_root(configs_root), run_id)
+
+        res = authorize(spec, data_root=root, run_claims=basis_run_claims)
+        fields: dict[str, FieldValue] = {
+            "id": res.authorization_id,
+            "basis": res.basis,
+            "for": res.consumer,
+            "claims": len(res.claims),
+            "freed": len(res.freed),
+        }
+        human = [
+            f"authorization {res.authorization_id} committed: basis {res.basis}, "
+            f"for {res.consumer}, {len(res.claims)} claims, {len(res.freed)} freed"
+        ]
+        human += [f"claim {name}={value[:12]}" for name, value in res.claims.items()]
+        human += [f"freed {name}" for name in res.freed]
+        return "OK", fields, asdict(res), human
+
+    context: dict[str, FieldValue] = {"id": authorization_id, "basis": basis}
+    run_command("artifact.authorize", json_mode, data_root, fn, context=context)
 
 
 @artifact_app.command("show")

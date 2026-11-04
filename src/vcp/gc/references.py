@@ -24,7 +24,14 @@ from vcp.backup.ledger import BackupLedger
 from vcp.backup.manifest import load_manifest, local_path
 from vcp.backup.schema import RemoteCopy
 from vcp.core.errors import VcpError
-from vcp.core.paths import DatasetPaths, artifacts_root, resolve_stored_path, runs_root, store_path
+from vcp.core.paths import (
+    DatasetPaths,
+    artifacts_root,
+    path_key,
+    resolve_stored_path,
+    runs_root,
+    store_path,
+)
 from vcp.data.dataset import Dataset
 from vcp.train.records import events_path, has_record
 from vcp.train.records import load_record as load_train_record
@@ -32,11 +39,6 @@ from vcp.train.schema import TrainRecord
 from vcp.train.status import checkpoint_dirs
 
 COUNTED = ("runs", "datasets", "backup_manifests", "artifacts")
-
-
-def path_key(path: Path) -> str:
-    """How two spellings of one path are told to be one: resolved, in the platform's case."""
-    return os.path.normcase(str(Path(path).resolve()))
 
 
 @dataclass(frozen=True)

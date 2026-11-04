@@ -7,11 +7,13 @@ from helpers import make_label_set
 from submit_fixtures import EVAL
 from vcp.backup.evidence import CONCLUSIONS, Collector, external_path, parse_conclusion
 from vcp.backup.schema import CARD_ROLES, ROLES, TIER_OF
+from vcp.code.scan import scan_root
+from vcp.code.snapshot import write_snapshot
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import DatasetPaths
 from vcp.data.access.access import DatasetAccess
-from vcp.data.evidence import RunScope, attach_evidence, label_ref
+from vcp.data.evidence import RunScope, artifact_ref, attach_evidence, label_ref
 from vcp.data.split import load_plan
 from vcp.measure.provenance import attach_receipts
 from vcp.measure.runs import load_run, run_dir, save_run
@@ -311,6 +313,37 @@ def _with_evidence(world, tmp_path):
     lab = label_ref(world.roots.data, scope, "pseudo-v1", attempt=None, binding="manual")
     save_run(world.roots.data, card.model_copy(update={"evidence": [ev, lab]}))
     return ev, lab
+
+
+def test_walk_run_collects_a_code_snapshot(world, tmp_path):
+    """0.18.0: every train run binds the snapshot of its code; a backup of the run carries it,
+    in the reproduction tier (spec 2026-10-31 §4.8)."""
+    assert TIER_OF["code_snapshot"] == 2
+    code = tmp_path / "code"
+    code.mkdir()
+    (code / "train.py").write_bytes(b"x = 1\n")
+    sid = write_snapshot(world.roots.data, scan_root(code, kind="dir"), command="test").snapshot_id
+    ref = artifact_ref(
+        world.roots.data,
+        "code_snapshot",
+        sid,
+        name="code.cwd",
+        role="code",
+        attempt=None,
+        binding="manual",
+    )
+    card = load_run(world.roots.data, "good")
+    save_run(world.roots.data, card.model_copy(update={"evidence": [ref]}))
+    col = _col(world)
+    col.walk_run("good", "run:good")
+    base = f"artifacts/code_snapshot/{sid}"
+    assert _roles(col)["code_snapshot"] == [
+        f"{base}/files/train.py",
+        f"{base}/index.jsonl",
+        f"{base}/manifest.json",
+        f"{base}/snapshot.json",
+    ]
+    assert col.missing == [] and col.unlisted == []
 
 
 def test_walk_run_collects_evidence_and_label_sets(world, tmp_path):

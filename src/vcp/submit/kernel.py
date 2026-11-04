@@ -7,6 +7,10 @@ passes the checks its eval run passes -- never trained on or read the sealed sub
 at least what the profile requires. A baseline is held to membership only (its eval run is not
 sealed-checked either); a probe is exempt, but everything it would have failed is written into
 its pairing checks as ``weights:<run>=<finding>``.
+
+The code a submission rests on is graded run by run (``submission_runs``, ``code_grades``): the
+eval run, a file's test run and a kernel's weights runs. A kernel's own notebook is not any run's
+code, so ``--code`` names a ``code_snapshot`` for it (``check_notebook_code``).
 """
 
 from __future__ import annotations
@@ -15,8 +19,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from vcp.core.errors import ValidationFailed
+from vcp.code.grade import code_info
+from vcp.code.schema import CodeGrade
+from vcp.code.snapshot import KIND as SNAPSHOT_KIND
+from vcp.code.snapshot import SHOWN_PATHS, check_snapshot
+from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.data.access.schema import GRADE_RANK, Grade
+from vcp.data.evidence import IntactMemo
 from vcp.fuse.build import load_record
 from vcp.measure.provenance import provenance
 from vcp.measure.runs import load_run
@@ -150,3 +159,45 @@ def kernel_provenance(
         lowest = min(lowest, info.grade, key=lambda g: GRADE_RANK[g])
         seen |= set(info.observed)
     return lowest, seen
+
+
+def submission_runs(eval_run: str, test_run: str | None, weights: Iterable[WeightRef]) -> list[str]:
+    """The runs whose code a submission rests on, each once, in this order: the eval run, the
+    test run (a file's inference code lives there, spec 2026-10-31 decision 28) and the weights
+    runs a kernel loads."""
+    runs = [eval_run, *([] if test_run is None else [test_run]), *(ref.run for ref in weights)]
+    return list(dict.fromkeys(runs))
+
+
+def code_grades(data_root: Path, runs: Iterable[str], memo: IntactMemo) -> dict[str, CodeGrade]:
+    """The code grade of each run (``vcp.code.grade``; never raises). One ``memo`` for the whole
+    command, so a snapshot that several runs share is hashed once."""
+    return {run: code_info(data_root, run, intact=memo).grade for run in runs}
+
+
+def check_notebook_code(data_root: Path, snapshot_id: str) -> None:
+    """``--code``: the snapshot exists (``not_found:`` / ``partial:``) and holds (``mismatch:``).
+    The failure names the snapshot in ``code=``, not in ``id=`` -- that is the submission's."""
+    try:
+        check = check_snapshot(data_root, snapshot_id)
+    except (ValidationFailed, IntegrityError) as e:
+        raise type(e)(f"{e.args[0]} (--code)", fields={"code": snapshot_id}) from e
+    if not check.ok:
+        named = ", ".join([*check.mismatch, *check.missing][:SHOWN_PATHS])
+        raise IntegrityError(
+            f"mismatch: {SNAPSHOT_KIND}/{snapshot_id} does not hold (mismatch="
+            f"{len(check.mismatch)} missing={len(check.missing)}: {named}); move the directory "
+            "aside and snapshot again",
+            fields={"code": snapshot_id},
+        )
+
+
+def notebook_code_holds(data_root: Path, snapshot_id: str | None) -> bool:
+    """Whether a kernel's recorded ``--code`` is there and still holds; ``final`` asks this and
+    treats anything it cannot read as no."""
+    if snapshot_id is None:
+        return False
+    try:
+        return check_snapshot(data_root, snapshot_id).ok
+    except (VcpError, OSError, ValueError):
+        return False

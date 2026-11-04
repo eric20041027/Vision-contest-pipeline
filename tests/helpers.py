@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import vcp
 from vcp.core.errors import ValidationFailed
 from vcp.core.paths import DatasetPaths
 from vcp.data.dataset import Dataset
@@ -532,6 +533,49 @@ def seed_tiny(roots: Any, samples: list[Sample] | None = None) -> tuple[Dataset,
     plan = build_plan(ds, plan_id="fixed-v1", subsets=parse_subsets(DEFAULT_SUBSETS), seed=0)
     save_plan(plan, paths)
     return ds, plan
+
+
+# The training child of the `vcp train run` tests (`fake_train.py` in the conftest's `work`): it
+# prints what the wrapper put in its environment, writes two checkpoints under `weights/`, ticks
+# for five seconds when its second argument is `sleep`, and exits with its first argument.
+FAKE = """
+import os, sys, time
+from pathlib import Path
+print("VCP_RUN_ID", os.environ.get("VCP_RUN_ID"))
+print("VCP_SEED", os.environ.get("VCP_SEED"), "HASHSEED", os.environ.get("PYTHONHASHSEED"))
+code = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+Path("weights").mkdir(exist_ok=True)
+Path("weights/best.pt").write_bytes(b"best-" + str(code).encode())
+Path("weights/last.pt").write_bytes(b"last")
+if len(sys.argv) > 2 and sys.argv[2] == "sleep":
+    for i in range(50):
+        print("tick", i, flush=True)
+        time.sleep(0.1)
+sys.exit(code)
+"""
+
+
+def seed_train(roots: Any) -> tuple[Dataset, SplitPlan]:
+    """What a `vcp train run` test trains on: ``seed_tiny``'s dataset ``tiny`` and plan
+    ``fixed-v1``, with the images its card points at on disk, so a child may read them."""
+    samples = det_samples(40, seed=0)
+    write_images(roots.data / "raw" / "tiny", samples)
+    return seed_tiny(roots, samples)
+
+
+# The vcp package this test session imports. `trace_on` makes it the one editable code root, the
+# way a training venv with an editable vcp has it (as a package, not the whole checkout).
+VCP_PACKAGE = Path(vcp.__file__).resolve().parent
+
+
+def trace_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Undo the conftest's ``_code_tracking_off`` for one test: the child may trace its imports
+    (``VCP_CODE_TRACE`` unset) and the training venv has one editable distribution, ``vcp`` at
+    ``VCP_PACKAGE``."""
+    from vcp.code import roots
+
+    monkeypatch.delenv("VCP_CODE_TRACE", raising=False)
+    monkeypatch.setattr(roots, "editables_of", lambda raw: [roots.Editable("vcp", VCP_PACKAGE)])
 
 
 def make_label_set(

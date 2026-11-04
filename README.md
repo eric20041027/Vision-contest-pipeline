@@ -35,7 +35,7 @@ uv sync
 uv run python examples/quickstart.py
 ```
 
-One command, about a minute, no downloads: it builds a 240-image synthetic dataset in a temporary directory and walks the whole loop — import, validate, split, two fake models, ingest, measure, anchor, **pre-register**, measure, **judge**, report — printing the `VERDICT` line each step ends with. Selected lines from its output:
+One command, about a minute, no downloads: it builds a 240-image synthetic dataset in a temporary directory and walks the whole loop — import, validate, split, two fake models, ingest, measure, anchor, **pre-register**, measure, **judge**, report, then a wrapped training run whose code snapshot still verifies after the project directory is deleted — printing the `VERDICT` line each step ends with. Selected lines from its output:
 
 ```text
 VERDICT cmd=split status=OK plan=fixed-v1 train=120 valA=60 valB=60 seed=42
@@ -84,6 +84,7 @@ Every step is a command that ends with a machine-readable verdict, and the files
 - **Written-once files stay written once.** Split plans, pre-registrations, fusion recipes and backup manifests are immutable — to change one you change its id, so old evidence keeps meaning what it meant. Ledgers (readings, judgements, submissions) only grow.
 - **Claims come before measurements.** A candidate is admitted only if its pre-registered claim wins on as many independent evaluation bases as the claim requires (two by default). Opening the sealed holdout takes a recorded reason, and the final pick reports how many times it was opened.
 - **Reads are proven, not declared.** A training loop that reads through vcp's accessor leaves an access receipt naming the subsets it touched; "this model never saw the holdout" becomes checkable.
+- **The code that ran is on record, and a benchmark is bound to the real job (0.18.0, awaiting release).** Each training attempt snapshots the source it uses (a content-addressed copy, new uncommitted files included) and traces what the process imports; `vcp artifact authorize` records what a benchmark proved, and the full job is refused if its dataset, ids, code, batch or model differ.
 - **Competition code stays out of the core.** Your metrics, converters, fusers and output formats register themselves through `--plugin projects.<contest>.<module>`.
 
 ```mermaid
@@ -159,7 +160,7 @@ Full option tables and worked flows: [docs/reference/cli.md](docs/reference/cli.
 
 1. **Lessons from RSNA (0.16.0).** Record the final selection you actually made on the platform and warn when it differs from vcp's pick; warn when the Kaggle CLI is out of date; check free disk space before training and name a full disk in the verdict.
 2. **A safe clean-up report (0.17.0).** `vcp gc scan` lists large files, their class and which record names each one; it never deletes.
-3. **Audit wave 1c.** A snapshot of the code behind every artifact, and artifact authorisation.
+3. **Audit wave 1c (0.18.0).** A snapshot of the code behind every run and artifact, and artifact authorisation: implemented, awaiting release.
 4. **`1.0.0`**, once all of audit wave 1 (1a, 1b, 1c) has landed: from then on the artifact and ledger formats are a promise.
 
 ## Documentation

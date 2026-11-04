@@ -1,4 +1,4 @@
-# vcp 交接文件（2026-11-02 更新）
+# vcp 交接文件（2026-11-04 更新）
 
 給接手開發的人或代理（Codex）。讀完這份就能不靠對話紀錄繼續做。搭配根目錄的 `AGENTS.md` / `CLAUDE.md`（機械鐵則與常用命令）、`README.md`（每層的命令表）。
 
@@ -17,12 +17,14 @@
 | 7 | Dataset evolution provenance | `src/vcp/provenance` | `vcp data diff`、`vcp provenance rebuild\|sync\|ingest\|impact\|stale\|explain\|status\|verify-index` |
 | 稽核 Wave 1a/1b | 不可變產物、access receipt、source audit | `src/vcp/artifact`、`src/vcp/data/access`、`src/vcp/data/source_audit.py` | `vcp artifact create\|show\|verify\|lineage\|status\|relink\|clean`；收據與稽核由 export / train / validate 自動留下 |
 | 0.17.0 | 磁碟盤點（只列不刪） | `src/vcp/gc` | `vcp gc scan` |
+| 0.18.0（待發） | 稽核 Wave 1c：程式碼快照、import 追蹤、產物授權 | `src/vcp/code`、`src/vcp/train/coderun.py`、`src/vcp/train/authorize.py`、`src/vcp/artifact/authorization.py` | `vcp code snapshot\|verify\|diff\|export`、`vcp artifact authorize`；`train run --code-root --authorization` |
 
 起點是賽後報告 `docs/postmortems/2026-08-aidea-marine-debris-detection.md`（§9 藍圖）：public→private 掉分的根因是「只在一個儀器上驗證」「元件準入不一致」「σ_p 太晚估」；框架把這些變成機制（≥2 個互斥驗證集 + 1 個 sealed holdout、護欄先於讀數、預登記 t 門檻、元件準入需 ≥2 個基底、台帳與上傳原子、UTC 時戳）。
 
 ## 2. 現況
 
 - 分支：`main` = `origin/main`（GitHub `eric20041027/Vision-contest-pipeline`）。Codex 的 `codex/dataset-evolution-provenance`（0.7.0）與 `codex/postgresql-adaptive-provenance`（0.8.0）已各以一個 PR 合併，tag 打在合併 commit。Codex 的 PR #21（SQLite 索引保存 graph gaps）2026-09-23 合併，隨 0.9.1 發出：0.9.0 以前建的 SQLite 索引讀取時 FAIL `mismatch: graph_gaps metadata; rebuild required`，每個 data root `rebuild` 一次（RSNA 的索引也是）。
+- **0.18.0 待發（稽核 Wave 1c，分支 `feat/wave1c-code-snapshot`，base `main` 8b46ad4）**：程式碼快照（`code_snapshot`）、import 追蹤（`code_trace`）、產物授權（`authorization`）、`vcp code snapshot|verify|diff|export`、`vcp artifact authorize`、`train run --code-root --authorization`、`submit.yaml` 的 `require_code`、`eval ingest --code`、`submit stage --code`、備份的四個新 role、provenance 的 `code_grade`；二十一個任務做完，文件（本檔、`CLAUDE.md` / `AGENTS.md`、`docs/reference/cli.md`、五個 skill）已更新，`CHANGELOG.md`、`__version__`、`plugin.json`、tag **還沒動**，發版是使用者同意之後另一個 PR（這時 README 兩份的版本行，與這些地方的「待發版」字樣一起改：README 兩份「Roadmap / 路線圖」的 0.18.0 那條與「How it works / 它怎麼運作」的 0.18.0 功能列、`vcp-orientation/map.md` 的「歷史」、本檔與 `CODEX_PROMPT.md`）。實作期裁決與開放待辦在後記 `docs/superpowers/plans/2026-11-03-vcp-wave1c-followups.md`；spec `docs/superpowers/specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md`。新紀錄舊 vcp（0.17 以前）讀不動：讀同一個 data root 的每個 checkout 與每個訓練 venv 先升到 0.18，再跑第一個 0.18 的 `train run`；每個 checkout `vcp provenance rebuild` 一次。目標在課程凍結（2026-11-13）前合併；趕不上就留在分支，凍結結束（12/06）後再合。
 - 版本：`0.17.0`（tag `v0.17.0`，2026-11-02，MINOR：0.16.0 留下的四件——`vcp submit select --none`（台帳寫 `chosen: []`，狀態 `selection=unticked`）、`--record <id>@<ref>`（同一個 id 重傳過時指其中一發）與讀取時解析 `foreign:<ref>`、失敗的 `sync` 與上傳前同步的 `sync_failed:` 也帶 `cli_warnings=`；新命令 `vcp gc scan`（磁碟盤點，只列不刪，寫 `gc_scan` 產物，只讀正本、不讀 provenance 索引）；另有兩項 PATCH：其他只增 jsonl 的整列 append（#63，Windows 上每日 log 改成 LF）與 `train status` 的 `.tmp` 掃描不進連結、讀不了的目錄只略過（#64）；0.16.0 讀到空的 `chosen` 會 FAIL，第一次 `--none` 之前讀寫同一份台帳的都先升級；PR #63–#65）；`0.16.0`（tag `v0.16.0`，2026-11-01，MINOR：RSNA 收尾的三件——提交台帳新事件 `selected` 與 `vcp submit select`（人在平台上勾的最終提交，`status` 的 `selection=` 核對數量、截止與 `final`）、`sync` 與 `upload` 的 `cli_warnings=`、`train run` 的可用空間檢查（`--min-free-gib`，`low_disk:` / `disk_full:`）與 `train status` 的 `tmp=`；另有 yaml 的原子替換、`train.log.jsonl` 不留半列、provenance 狀態計算的效能修正 #56；0.15.1 以前的 vcp 讀到 `selected` 列會 FAIL，讀寫同一份台帳的都先升級；PR #58、#61）；`0.15.1`（tag `v0.15.1`，2026-10-24，PATCH：Kaggle CLI 的版本警告行不再讓讀提交列表失敗——只略過答案前面的 `Warning:` 與空白行，經 redact 寫進 log；PR #52）；`0.15.0`（tag `v0.15.0`，2026-10-10，MINOR：PostgreSQL adaptive policy v2——`postgres-adaptive-v2-9f4e58346529`，以依 `total_edges` 數量級分層的信心帶取代 v1 固定 7.3 秒的帶；預先登記的候選帶比較；held-out v2 與 real v2 讓凍結的 v1 同場比較，量測前檢查 policy 配對與環境；量測待計畫附錄 A；PR #39）；`0.14.0`（tag `v0.14.0`，2026-10-09，MINOR：VCP-048——平台做完卻沒有分數的提交（Kaggle code submission 隱藏重跑出錯）寫成台帳新事件 `errored`；`sync` 的 `errored=`（寫入時 WARN）、`status` 的 `errored=`（不 WARN）、`final` 的 `why=errored`；0.13.0 以前的 vcp 讀到 `errored` 列會 FAIL，讀寫同一份台帳的都先升級；PR #37）；`0.13.0`（tag `v0.13.0`，2026-10-05，MINOR：第三輪回報的 VCP-044～047——provenance 索引每個 checkout 一份並記下 root（`root_mismatch:`）、備份清單的完整性（`manifest_incomplete`）、本機 `remote_copy` 跟著 tier 3 推到目的地（`local_copies=`）、Kaggle CLI 失敗時回讀（`upload_failed:` / `upload_unconfirmed:`）與列表逾時；文件同步；PR #35）；`0.12.0`（tag `v0.12.0`，2026-09-29，MINOR：VCP-038 第 2–4 段與 VCP-014——共用台帳正本（`ledger: shared`、`vcp submit ledger adopt`）、寫入命令的檔案鎖、上傳前同步、PENDING 綁定、同 id 重傳要 `--force`；PR #33）；`0.11.0`（tag `v0.11.0`，2026-09-28，MINOR：RSNA 第二輪回報的 VCP-040 + 042——run 讀的證據檔與標籤集（`vcp data labels`、`train run --evidence / --labels`、`Session.attach_evidence / attach_labels`、`eval ingest --evidence / --labels`）——與 VCP-041——dirty 工作樹（`--require-clean`、`modified=` WARN、`train/git.<n>.patch`、`git_changed=`）；PR #30、#31）；`0.10.0`（tag `v0.10.0`，2026-09-25，MINOR：RSNA 第二輪回報的五件——kernel 權重必須是被判決的那組、Kaggle 上傳回讀確認、同一發不再被 uploaded 與 foreign 各算一次、多折同名 checkpoint 的備份與上傳、子程序的 `VCP_ATTEMPT`；PR #24–#28）；`0.9.1`（tag `v0.9.1`，2026-09-24，PATCH：skill 打包成 Claude Code plugin `vcp`、帶上 PR #21）；`0.9.0`（tag `v0.9.0`，2026-09-23，MINOR：`vcp provenance graph` 把索引畫成 Mermaid 圖，加 skill `vcp-provenance-graph`）；`0.8.1`（tag `v0.8.1`，2026-09-21，PATCH：串流 replay、`python -m vcp`、receipt nonce 加寬、開源門面；五份 provenance 證據齊全後、RSNA 訓練開跑前發）；`0.8.0`（tag `v0.8.0`）= PostgreSQL Adaptive Provenance：未給 `--backend` 仍是 SQLite，PostgreSQL 是 optional、noncanonical、可重建的 derived index；`0.7.0`（tag `v0.7.0`）= Dataset Evolution 與 Incremental Impact Provenance；`0.6.0`（tag `v0.6.0`）= 稽核 Wave 1b-2 source audit；`0.5.0` = Wave 1b-1；`0.4.0` = Wave 1a；規則與發版步驟在 `CHANGELOG.md` 表頭。下一步：稽核 Wave 1c（程式碼快照與產物授權，VCP-004/006；spec 草稿在 PR #60，待使用者審，實作排在 2026-12-06 之後）；provenance 的開放項在 PostgreSQL 後記最後一節（EXPLAIN、Linux live、1M；full rebuild 後的 VACUUM 已裁決：不加，寫進操作指南）。
 - 測試：`uv run pytest --cov=vcp` 在 0.17.0 = 2958 passed / 90 skipped，覆蓋率 95.92%（0.16.0 是 2549 / 85 / 95.69%，0.15.1 是 2320 / 85 / 95.50%，0.15.0 是 2199 / 76 / 95.48%，0.14.0 是 2085 / 76 / 95.45%，0.13.0 是 2044 / 76 / 95.43%，0.12.0 是 1924 / 76 / 95.35%，0.11.0 是 1830 / 76 / 95.27%，0.10.0 是 1748 / 76 / 95.07%，0.9.1 是 1685 / 76 / 95.03%，0.9.0 是 1677 / 76 / 95.01%，0.8.1 是 1612 / 76 / 94.85%；PostgreSQL 整合案例未配置 service 時 skip；CI 的 ubuntu `postgres` job 有 Docker Compose 的 17.11）。核心環境不裝 torch，project checkpoint 測試在獨立訓練 venv 另跑；ruff 另明列新增 project Python 檔。
 - 真資料（本機 `C:/vcp-data`）：RSNA Knee 200-study 子集已匯入為 dataset `rsna-knee`，另有 3-study `rsna-knee-test`；`uv run pytest tests/integration -o addopts="" -q -m realdata` 收 15 個唯讀測試，其中 `test_artifact_status`、`test_access_receipts`、`test_audited_access` 是之後加的，還沒有在真資料上跑過的紀錄（跑過就把數字補在這裡）；有紀錄的最後一次是 2026-09-07 的另外 12 個：9 passed / 3 skipped（marine-debris 未匯入）。
@@ -44,6 +46,8 @@ src/vcp/measure   schema runs（run.yaml、FUSE_FRAMEWORK）predictions converte
 src/vcp/fuse      schema recipes（配方進 git）fusers/（wbf/mean/rank_mean）members build（fuse.json）ablate
 src/vcp/train     schema records（train.yaml + train.log.jsonl）env gitstate（dirty 工作樹）checkpoints upload
                   attach（--evidence / --labels）disk（可用空間與磁碟滿的判斷）run session reader status
+                  coderun（0.18.0：root 規劃、掃描、寫快照、結束比對、WARN 行；run.py 只加呼叫與欄位）
+                  authorize（0.18.0：run 依據的 claims 與 train 字彙；產物層不 import 它）
 src/vcp/submit    schema profile（submit.yaml）ledger（submissions.jsonl）location（台帳位置與交易）adopt
                   timewin guards pairing matching kernel gate
                   writers/（scores_csv/coco_results/csv_boxes）platforms/（manual/kaggle）stage actions sync final
@@ -52,13 +56,18 @@ src/vcp/backup    schema ledger manifest completeness（清單完整性）eviden
                   push verify pull status
 src/vcp/gc        references（從正本收集引用：backup 的走法換上不雜湊的記錄端）layout（類別與單位）
                   scan（走根、合併項目、找複本）record（gc_scan 產物）
+src/vcp/code      （0.18.0）rules（規則 v1）scan（記憶體內掃一個 root）roots（root 規劃、editable）generated（生成程式碼登記表）
+                  snapshot（code_snapshot 產物：身分、鎖、重用、check_snapshot）trace（子程序的 import 追蹤與分類）
+                  grade（程式碼等級，讀取時算）process（snapshot_inputs、check_imports：產物 job 的同程序追蹤）
+                  diff bundle（export 與 verify --dir）schema（CodeSection、EnvIdentity、CodeGrade）
 src/vcp/artifact  schema（pydantic 模型、check_file_name）ledger（supersession.jsonl 讀寫）store（load/reuse/verify）
                   writer（ArtifactWriter：claim/write/commit）lineage（chain/successors/head/forks）clean（scan/clean）
+                  authorization（0.18.0：authorize、consume、claims 字彙）
 src/vcp/provenance schema/policy/diff（dataset_diff artifact）graph/views（full oracle）roots（索引服務的 root）
                   backend（SQLite adapter / optional PostgreSQL）postgres + postgres_schema（v1 normalized derived index）
                   strategy（immutable adaptive policy）index（SQLite cache）render + render_mermaid（provenance graph）
 src/vcp/cli*.py   每層一個 typer app（含 cli_artifact.py 的 `vcp artifact` 群：create/show/verify/lineage/status/
-                  relink/clean）；cli_common.run_command 統一 VERDICT / exit code / --json / context
+                  relink/clean/authorize；cli_code.py 的 `vcp code` 群）；cli_common.run_command 統一 VERDICT / exit code / --json / context
 projects/rsna-knee  prepare/train/predict/bundle CLI、rsna_knee 共用轉換與模型、RUNBOOK；比賽程式只在這裡
 tests/            unit/<layer>、integration（真資料）、performance/、helpers.py、submit_fixtures.py、backup_fixtures.py
 configs/          datasets/<name>/（dataset.yaml、splits/、prereg/、fuse/、submit.yaml、backup/…）進 git
@@ -128,6 +137,8 @@ acceptance 表已無空格（calibration v1 與 1M memory gate v2–v4 被 RAM �
 10. **RSNA 收尾的三件（最終選取、CLI 警告、磁碟空間）**：已隨 0.16.0 發出（PR #58、#61；spec `docs/superpowers/specs/2026-10-30-vcp-0160-selection-and-disk-design.md`）。台帳多一個事件 `selected`，只由人下的 `vcp submit select --record` 寫；0.15.1 以前的 vcp 讀到會 FAIL `bad ledger row`，所以第一次 `select --record` 之前，讀寫那份台帳的每個 checkout 都先升到 0.16.0（範圍同第 9 條），在那之前 0.15 與 0.16 可以共用台帳；`submit.yaml` 寫了非預設的 `selection_warn_hours` 之後，讀它的 vcp 也都要 0.16.0。後記 `docs/superpowers/plans/2026-10-30-vcp-0160-selection-and-disk-followups.md` §2.2 的開放項：比賽工作區的升級不做（RSNA 已結束、台帳已鎖，下一場比賽從 Day 1 就用新版）；`select --none`、`<id>@<ref>`、`gc`、其他只增 jsonl 的半列、失敗的 `sync` 的 `cli_warnings=` 都隨 0.17.0 發出（第 11 條）；自動讀回平台的勾選仍等 kaggle CLI（2.2.5 沒有旗標）。
 11. **0.16.0 留下的四件與磁碟盤點**：已隨 0.17.0 發出（PR #63–#65；spec `docs/superpowers/specs/2026-11-01-vcp-0170-selection-gaps-and-gc-design.md`）。`select --none` 寫 `chosen: []`，0.16.0 讀到會 FAIL `bad ledger row`：第一次 `--none` 之前，讀寫那份台帳的每個 checkout 都先升到 0.17.0（範圍同第 9 條），在那之前 0.16 與 0.17 可以共用台帳；`<id>@<ref>` 條目 0.16.0 照常載入、多半只會多報。`vcp gc scan` 只列不刪、不上鎖、只讀正本：`unreferenced` 只表示 vcp 的紀錄沒提到。開放項在後記 `docs/superpowers/plans/2026-11-01-vcp-0170-selection-gaps-and-gc-followups.md` §2.2：使用者覆核 spec §13 的裁決、自動讀回平台的勾選、gc 的進度輸出與硬連結、拆 `train/run.py`（923 行）、其他非原子的整份重寫、整列 append 不加鎖、gc 不說有連結沒走。
 
+12. **稽核 Wave 1c（程式碼快照與產物授權，VCP-004 / VCP-006）**：實作與文件完成，**等發版 0.18.0**（見第 2 節）。開放項在後記 `docs/superpowers/plans/2026-11-03-vcp-wave1c-followups.md` §2.2：發版本身、精確到「被 import 的檔」的重用（spec §12）、標準庫寫的 Kaggle 內驗證腳本、其他框架的生成程式碼登記項、wandb 之類輸出目錄的提示、editable 的 vcp checkout 的雜湊成本與 Windows `MAX_PATH` 預檢（`LongPathsEnabled=1` 也一樣）；以及會改寫入內容、VERDICT 或 `reason=` 的審查遺留（凍結前的契約項，CODEX_PROMPT 第 3 條）。1.0.0 的門檻是 spec §13：本項發版後，剩凍結前的契約項與 1.0.0 的 CHANGELOG 條目。
+
 ## 7. 開發流程（這個 repo 一直這樣做）
 
 1. **brainstorm → spec**：大改動先寫 `docs/superpowers/specs/<date>-<topic>-design.md`（架構、資料模型、CLI 表、錯誤字彙、測試策略、驗收、不在範圍），使用者核可後才寫計畫。
@@ -148,6 +159,12 @@ acceptance 表已無空格（calibration v1 與 1M memory gate v2–v4 被 RAM �
 - `vcp gc scan` 只列、不刪：`unreferenced` 只表示 vcp 的紀錄沒提到，筆記、notebook、共用 data root 的別的專案可能還要它；`record` 是 vcp 的紀錄（被放棄的 run、別的 checkout 的 dataset），要不要整批放棄是人的決定。訓練中掃（`running > 0`）時，新寫的 checkpoint 還沒登記，會被讀成 `unreferenced`。
 - `--forget-remote` 要整份清單在目的地驗過才刪憑證；帶 `present=false` 條目的清單永遠不能 forget。
 - GitHub 上的歷史在 2026-10 改寫過一次（hash 全部換了，見 CHANGELOG 的版本規則）。本機的 `refs/archive/pre-rewrite-2026-10/` 保留了舊歷史，釘在舊 commit 上的 worktree 照常能用；舊 hash 對新 hash 查 `docs/reference/commit-map-2026-10.tsv`。
+
+- 0.18.0 的測試目錄 `tests/unit/code/` **不放 `__init__.py`，檔名一律 `test_code_*.py`**：`tests/unit` 沒有 `__init__.py`，pytest 的 prepend 模式會把它放上 `sys.path`，`code/__init__.py` 會蓋掉標準庫的 `code`（`pdb` 用它），跟 0.17 的 `gc` 同一個陷阱；沒有 `__init__.py` 的目錄只是 namespace 片段，標準庫照樣優先。
+- `tests/conftest.py` 有 autouse `_code_tracking_off`（`VCP_CODE_TRACE=0`、`vcp.code.roots.editables_of` → `[]`、清掉 `vcp.code.process` 的 `_TRACKED`）：既有的 `train run` 測試因此只多一個 plain `cwd` root，沒有新 WARN，也不去雜湊真的 vcp checkout。要追蹤、或要 editable root 的測試呼叫 `helpers.trace_on(monkeypatch)`（editable root 換成 `src/vcp`）。共用的 fixture（`proj`、`bench`）在 `tests/code_fixtures.py`，由 `tests/conftest.py` 的 `pytest_plugins` 載入；0.17 的 golden 在 `tests/compat_v0170.py`。
+- 快照的 Windows `MAX_PATH` 預檢（259 字元，含寫入用的暫存檔名）**照樣適用於 `LongPathsEnabled=1`**；用長的暫存 data root 跑 `train run` 且 venv 裡 editable 了整個 vcp checkout，那個 root 會是 `unwritable`、run 降到 `declared`。`examples/quickstart.py` 為此在它自己建的空 venv 裡訓練。
+- `train run` 在 Windows 上整個 vcp checkout 當一個 root 雜湊（約 120 MB 的追蹤 JSON，每個 attempt 兩次），快照 id 隨文件改動而變；訓練 venv 的 editable 指向釘在 tag 的 detached worktree 就沒有這個問題（見 `vcp-release-and-environments`）。
+- 寫 `run.yaml` / `train.yaml` 的 `evidence` 的程式碼，選 ref 一律用 kind + role，不要只看名稱（`authorization`、`code.*`、`code_trace.*` 是保留名，但舊紀錄裡可能有同名的別種 ref）。
 
 ## 9. 交接時的數字
 

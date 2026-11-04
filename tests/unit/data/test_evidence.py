@@ -1,11 +1,13 @@
 import pytest
 
+import vcp.data.evidence as evidence_module
 from helpers import make_label_set, seed_tiny
 from vcp.artifact import store
 from vcp.core.errors import ValidationFailed
 from vcp.core.hashing import sha256_file
 from vcp.core.paths import artifact_dir
 from vcp.data.evidence import (
+    IntactMemo,
     RunScope,
     attach_evidence,
     broken_refs,
@@ -128,3 +130,35 @@ def test_broken_refs_names_what_no_longer_verifies(roots, tmp_path):
     )
     stale = lab.model_copy(update={"manifest_sha256": "0" * 64})
     assert broken_refs(roots.data, [ev, stale]) == ["teacher", "pseudo-v1"]
+
+
+def test_an_intact_memo_asks_once_per_pinned_artifact(roots, tmp_path, monkeypatch):
+    ds, plan = seed_tiny(roots)
+    make_label_set(roots, tmp_path, plan)
+    f = tmp_path / "teacher.jsonl"
+    f.write_text("t1", encoding="utf-8")
+    ev = attach_evidence(
+        roots.data, _scope(ds), "teacher", f, role="teacher", attempt=1, binding="cli"
+    )
+    lab = label_ref(roots.data, _scope(ds), "pseudo-v1", attempt=1, binding="cli")
+    asked: list[str] = []
+    real = evidence_module.ref_intact
+
+    def counted(data_root, ref):
+        asked.append(ref.name)
+        return real(data_root, ref)
+
+    monkeypatch.setattr(evidence_module, "ref_intact", counted)
+    memo = IntactMemo()
+    assert broken_refs(roots.data, [ev, lab], intact=memo) == []
+    assert broken_refs(roots.data, [ev, lab], intact=memo) == [] and memo(roots.data, ev)
+    assert asked == ["teacher", "pseudo-v1"]
+    # the key is the pinned manifest and the data root, so neither a stale pin nor another root
+    # borrows the verdict
+    stale = ev.model_copy(update={"manifest_sha256": "0" * 64})
+    assert memo(roots.data, stale) is False and memo(roots.data / "elsewhere", ev) is False
+    assert asked == ["teacher", "pseudo-v1", "teacher", "teacher"]
+    # without a memo every call verifies again, as before
+    broken_refs(roots.data, [ev])
+    broken_refs(roots.data, [ev])
+    assert len(asked) == 6

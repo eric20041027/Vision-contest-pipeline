@@ -19,7 +19,7 @@ from vcp.cli_common import (
 from vcp.core.errors import ValidationFailed
 from vcp.core.log import FieldValue, Status
 from vcp.core.paths import resolve_data_root
-from vcp.data.evidence_ref import current, labels_field
+from vcp.data.evidence_ref import evidence_count, labels_field
 from vcp.train.disk import DEFAULT_MIN_FREE_GIB, UNKNOWN, free_gib, unavailable
 from vcp.train.run import RunSpec, train_run
 from vcp.train.status import status as status_view
@@ -93,6 +93,17 @@ def run_cmd(
             "(GiB); 0 only records the measurement",
         ),
     ] = DEFAULT_MIN_FREE_GIB,
+    code_root: Annotated[
+        list[Path] | None,
+        typer.Option("--code-root", help="another directory whose code the run uses (repeatable)"),
+    ] = None,
+    authorization: Annotated[
+        str | None,
+        typer.Option(
+            "--authorization",
+            help="authorization id: FAIL before any write unless every claim it binds holds",
+        ),
+    ] = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
     configs_root: ConfigsRootOpt = None,
@@ -121,6 +132,8 @@ def run_cmd(
                 labels=list(labels or []),
                 require_clean=require_clean,
                 min_free_gib=min_free_gib,
+                code_roots=list(code_root or []),
+                authorization=authorization,
                 command=list(ctx.args),
                 on_line=lambda line: typer.echo(line, nl=False, err=json_mode),
                 data_root=data_root,
@@ -147,7 +160,13 @@ def run_cmd(
             "labels": res.labels,
             "commit": res.git.commit[:12] if res.git is not None else "none",
             "free_gib": free_gib(res.disk) if res.disk is not None else UNKNOWN,
+            # spec 2026-10-31 §6: always, in the order code, code_snapshot, code_trace.
+            "code": res.code,
+            "code_snapshot": res.code_snapshot,
+            "code_trace": res.code_trace,
         }
+        if res.authorization is not None:
+            fields["authorization"] = res.authorization
         if res.disk is not None and unavailable(res.disk):
             fields["disk_check"] = "unavailable"
         if res.skipped:
@@ -165,6 +184,14 @@ def run_cmd(
             fields["untracked"] = res.git.untracked
         if res.git_changed:
             fields["git_changed"] = ",".join(res.git_changed)
+        if res.untracked_code is not None:  # there is a git root
+            fields["untracked_code"] = res.untracked_code
+        if res.code_missing:
+            fields["code_missing"] = ",".join(res.code_missing)
+        if res.code_changed:
+            fields["code_changed"] = res.code_changed
+        if res.code_trace == "incomplete":
+            fields["code_gaps"] = res.code_gaps
         failed = res.attempt.status != "finished" or res.verified < res.uploaded + res.skipped
         status: Status = "FAIL" if failed else ("WARN" if res.warnings else "OK")
         if res.attempt.status != "finished":
@@ -179,13 +206,11 @@ def run_cmd(
             human.append(f"{res.disk_failure.reason}; free space, then --resume")
         return status, fields, res.record.model_dump(mode="json"), human
 
-    run_command(
-        "train.run",
-        json_mode,
-        data_root,
-        fn,
-        context={"run": run, "dataset": dataset, "plan": plan},
-    )
+    # A failure keeps authorization= too: consume's superseded: names no field of its own.
+    context: dict[str, FieldValue] = {"run": run, "dataset": dataset, "plan": plan}
+    if authorization is not None:
+        context["authorization"] = authorization
+    run_command("train.run", json_mode, data_root, fn, context=context)
 
 
 @train_app.command("upload")
@@ -247,8 +272,10 @@ def status_cmd(
             # up. Reported, never WARNed: no copy of them can appear any more.
             "superseded": len(st.superseded),
             "running": st.running,
-            "evidence": len(current(st.record.evidence)),
+            "evidence": evidence_count(st.record.evidence),
             "labels": labels_field(st.record.evidence),
+            # spec 2026-10-31 §5.8: always; the run's weakest attempt (a grade never WARNs).
+            "code": st.code.grade,
             # 5.5: leftover `*.tmp` files; always reported, > 0 is a WARN (also while running).
             "tmp": len(st.tmp),
         }
@@ -262,6 +289,7 @@ def status_cmd(
         human = []
         if last is not None:
             human.append(f"attempt {last.n} command: {' '.join(last.command or st.record.command)}")
+        human += [f"attempt {a.n}: code={a.grade}" for a in st.code.attempts]
         human += [f"unbacked: {p}" for p in st.unbacked]
         human += [f"superseded: {p}" for p in st.superseded]
         human += [f"missing: {p}" for p in st.missing]
@@ -277,6 +305,7 @@ def status_cmd(
             "unbacked": st.unbacked,
             "superseded": st.superseded,
             "tmp": [{"path": t.path, "bytes": t.bytes} for t in st.tmp],
+            "code": st.code.to_json(),
         }
         return ("WARN" if warn else "OK"), fields, payload, human
 

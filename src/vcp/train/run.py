@@ -2,10 +2,12 @@
 
 Every check runs before the first file is written: the dataset and plan agree, the export
 manifests say which subsets were trained on, the config has a hash, the venv has a python, the
-command can be found, the run id is free (or resumable), and every disk the run writes to has
-room (spec 2026-10-30 §5.1). Only then the run card, the training record, the console log and
-the environment snapshot appear -- and whatever the command does next is recorded, exit code
-and all.
+command can be found, the run id is free (or resumable), the training environment answers its
+probe and its code roots are scanned (spec 2026-10-31 §5.1), an ``--authorization`` holds for the
+run's claims, and every disk the run writes to has room (spec 2026-10-30 §5.1). Only then the
+code snapshots (which, with an authorization, fail closed), the run card, the training record, the
+console log and the environment snapshot appear -- and whatever the command does next is
+recorded, exit code and all.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -21,13 +24,16 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vcp.artifact.authorization import consume
+from vcp.code.grade import code_info
+from vcp.code.schema import CodeGrade
 from vcp.core.errors import PlanMismatchError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_json
 from vcp.core.paths import DatasetPaths, store_path
 from vcp.core.time import stamp, utc_now
 from vcp.data.dataset import Dataset
 from vcp.data.evidence import RunScope, check_names
-from vcp.data.evidence_ref import current, labels_field, merge_refs
+from vcp.data.evidence_ref import evidence_count, labels_field, merge_refs
 from vcp.data.schema import DatasetCard
 from vcp.data.split import SplitPlan, assert_plan_matches, load_plan
 from vcp.measure.provenance import provenance
@@ -35,7 +41,26 @@ from vcp.measure.runs import append_history, assert_run_matches, load_run, run_d
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train.attach import attach as attach_cli_evidence
 from vcp.train.attach import moved, preflight
+from vcp.train.authorize import plan_file_sha
 from vcp.train.checkpoints import expand, register, resolve_final
+from vcp.train.coderun import (
+    CodePlan,
+    RootResult,
+    attach_code_refs,
+    authorization_ref,
+    changed_since_snapshot,
+    check_child_vcp,
+    check_ref_names,
+    claims_now,
+    code_section,
+    plan_code,
+    snapshot_state,
+    trace_summary,
+    untracked_notice,
+    untracked_total,
+    write_all,
+)
+from vcp.train.coderun import warnings as code_warnings
 from vcp.train.disk import (
     DEFAULT_MIN_FREE_GIB,
     DiskFailure,
@@ -47,12 +72,13 @@ from vcp.train.disk import (
     targets,
     unavailable,
 )
-from vcp.train.env import snapshot, venv_python
+from vcp.train.env import ProbeReport, probe, snapshot, venv_python
 from vcp.train.gitstate import changed_since, require_clean
 from vcp.train.gitstate import warning as git_warning
 from vcp.train.records import (
     TRAIN_DIR,
     append_event,
+    bind_ref,
     has_record,
     load_record,
     save_record,
@@ -103,6 +129,8 @@ class RunSpec(BaseModel):
     labels: list[str] = Field(default_factory=list)  # label_set ids
     require_clean: bool = False  # VCP-041: FAIL before the first write on tracked changes
     min_free_gib: float = DEFAULT_MIN_FREE_GIB  # ABORT below this free space; 0 = only record
+    code_roots: list[Path] = Field(default_factory=list)  # --code-root (spec 2026-10-31 §5.1)
+    authorization: str | None = None  # --authorization: held for this call only (§5.1 step 6)
     command: list[str]
     on_line: Callable[[str], None] | None = None
     rclone_runner: Runner | None = None
@@ -135,6 +163,18 @@ class RunResult(BaseModel):
     git_changed: list[str] = Field(default_factory=list)
     disk: DiskCheck | None = None  # the free space measured before the first write (§5.1)
     disk_failure: DiskFailure | None = None  # a failed attempt the disk explains (§5.3)
+    # spec 2026-10-31 §5.4: the run's code grade (its weakest attempt's), read back from the record.
+    code: CodeGrade = "declared"
+    # §5.1: whether every code root has a snapshot, the labels of those that have
+    # none, and the untracked CODE files of the git roots (None when no root is a git root).
+    code_snapshot: str = "none"
+    code_missing: list[str] = Field(default_factory=list)
+    untracked_code: int | None = None
+    code_changed: int = 0  # listed files the child changed or removed (§5.3)
+    # §5.3: what the attempt's import traces say, and their gaps (outside + unlisted + changed).
+    code_trace: str = "none"
+    code_gaps: int = 0
+    authorization: str | None = None  # the authorization this call was checked against (§5.6)
 
 
 def read_export(export_dir: Path) -> dict[str, Any]:
@@ -515,6 +555,8 @@ class _Prepared:
     created: bool  # a new run: its card is not on disk yet
     disk_targets: list[tuple[DiskRole, Path]]
     disk_check: DiskCheck
+    report: ProbeReport  # the training environment's probe (spec 2026-10-31 §5.1 step 2)
+    code: CodePlan  # its code roots, scanned (steps 4-5)
 
 
 @dataclass(frozen=True)
@@ -534,6 +576,8 @@ class _Attempted:
     git_changed: list[str]
     changed: list[str]
     disk_failure: DiskFailure | None
+    code: list[RootResult]  # every code root and its snapshot, as env.<n>.json records them
+    code_changed: int  # the listed files that differ now (spec 2026-10-31 §5.3)
     uploaded: int = 0
     verified: int = 0
     skipped: int = 0
@@ -602,6 +646,41 @@ def _check_disk(
     return disk_targets, disk_check
 
 
+def _consume(
+    spec: RunSpec,
+    *,
+    data_root: Path,
+    configs_root: Path,
+    dataset_card: DatasetCard,
+    trained_on: list[str],
+    chash: str,
+    evidence: list[tuple[str, Path]],
+    report: ProbeReport,
+    code: CodePlan,
+) -> None:
+    """spec 2026-10-31 §5.1 step 6: with ``--authorization``, the claims this run has before its
+    first write must come out as the authorization binds them (§5.6): ``unauthorized:`` or
+    ``superseded:`` otherwise, with nothing written. Without one, nothing to do."""
+    if spec.authorization is None:
+        return
+    claims = claims_now(
+        dataset=dataset_card.name,
+        plan_id=spec.plan_id,
+        seed=spec.seed,
+        samples_hash=dataset_card.samples_hash,
+        trained_on=trained_on,
+        chash=chash,
+        command=spec.command,
+        plan_sha256=plan_file_sha(data_root, configs_root, dataset_card.name, spec.plan_id),
+        evidence=evidence,
+        labels=spec.labels,
+        plan=code,
+        report=report,
+        data_root=data_root,
+    )
+    consume(data_root, spec.authorization, consumer="train", target_kind=None, claims=claims)
+
+
 def _prepare(spec: RunSpec) -> _Prepared:
     """Every check and measurement that comes before vcp's first write (module docstring)."""
     paths = DatasetPaths.resolve(
@@ -631,6 +710,32 @@ def _prepare(spec: RunSpec) -> _Prepared:
     )
     # spec 2026-09-26 §5.2: names checked against the run's own lists, still before any write.
     check_names([*record.evidence, *card.evidence], evidence, spec.labels)
+    # spec 2026-10-31 §5.1 steps 2-5: the probe (an ABORT here writes nothing), the training
+    # venv's vcp, and the code roots planned and scanned in memory.
+    report = probe(python)
+    check_child_vcp(report, spec.venv)
+    code = plan_code(
+        cwd=cwd,
+        command=spec.command,
+        report=report,
+        code_roots=spec.code_roots,
+        patterns=_patterns(spec),
+        data_root=data_root,
+        configs_root=configs_root,
+    )
+    # The names vcp's own refs will take, held against the same lists and this call's --labels.
+    check_ref_names([*record.evidence, *card.evidence], spec.labels, code, spec.authorization)
+    _consume(
+        spec,
+        data_root=data_root,
+        configs_root=configs_root,
+        dataset_card=dataset_card,
+        trained_on=trained_on,
+        chash=chash,
+        evidence=evidence,
+        report=report,
+        code=code,
+    )
     disk_targets, disk_check = _check_disk(spec, data_root, cwd)
     return _Prepared(
         data_root=data_root,
@@ -648,6 +753,8 @@ def _prepare(spec: RunSpec) -> _Prepared:
         created=created,
         disk_targets=disk_targets,
         disk_check=disk_check,
+        report=report,
+        code=code,
     )
 
 
@@ -694,11 +801,24 @@ def _start_attempt(
 
 
 def _snapshot_env(
-    spec: RunSpec, p: _Prepared, record: TrainRecord, attempt: Attempt, n: int
+    spec: RunSpec,
+    p: _Prepared,
+    record: TrainRecord,
+    attempt: Attempt,
+    n: int,
+    results: list[RootResult],
 ) -> tuple[TrainRecord, Attempt, EnvSnapshot]:
-    """step 6: the environment snapshot, with the tracked diff beside it, named on the attempt."""
+    """step 6: the environment snapshot, with the tracked diff beside it, named on the attempt.
+    The probe is the one ``_prepare`` ran; the code section says which snapshot each root has."""
     patch_rel = f"{TRAIN_DIR}/git.{n}.patch"
-    snap = snapshot(p.python, p.cwd, patch=(p.run_root / patch_rel, patch_rel), disk=p.disk_check)
+    snap = snapshot(
+        p.python,
+        p.cwd,
+        patch=(p.run_root / patch_rel, patch_rel),
+        disk=p.disk_check,
+        report=p.report,
+        code=code_section(p.code, results, p.data_root),
+    )
     env_rel = f"{TRAIN_DIR}/env.{n}.json"
     with (p.run_root / env_rel).open("w", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps(snap.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n")
@@ -769,11 +889,17 @@ def _diagnose_disk(
 
 
 def _note_changes(
-    spec: RunSpec, p: _Prepared, n: int, digests: dict[str, str], git: GitInfo | None
-) -> tuple[list[str], list[str]]:
+    spec: RunSpec,
+    p: _Prepared,
+    n: int,
+    digests: dict[str, str],
+    git: GitInfo | None,
+    results: list[RootResult],
+) -> tuple[list[str], list[str], int]:
     """What the command changed under its own feet, each a ``note`` event: the evidence files
-    that moved, and (VCP-041, spec 2026-09-27 §4.3) HEAD and the tracked diff. Returns the names
-    and the paths."""
+    that moved, (VCP-041, spec 2026-09-27 §4.3) HEAD and the tracked diff, and (spec 2026-10-31
+    §5.3) the files the code snapshots list. Returns the names, the git changes and the number
+    of changed code files."""
     changed = moved(p.evidence, digests)
     if changed:
         append_event(
@@ -792,7 +918,19 @@ def _note_changes(
             commit=delta.commit,
             diff_sha256=delta.diff_sha256,
         )
-    return changed, git_changed
+    code = changed_since_snapshot(results)
+    if code.count:
+        append_event(
+            p.data_root,
+            spec.run_id,
+            "note",
+            n,
+            key="code_changed",
+            value=code.count,
+            paths=code.paths,
+            roots=code.roots,
+        )
+    return changed, git_changed, code.count
 
 
 def _merge_receipts(p: _Prepared, record: TrainRecord) -> RunCard:
@@ -816,21 +954,30 @@ def _merge_receipts(p: _Prepared, record: TrainRecord) -> RunCard:
     return card
 
 
-def _run_attempt(spec: RunSpec, p: _Prepared) -> _Attempted:
+def _run_attempt(spec: RunSpec, p: _Prepared, results: list[RootResult]) -> _Attempted:
     """Steps 5-9: everything vcp writes around the command, in the order it writes it."""
     # no-op for a new run
     record = _close_running(p.record, data_root=p.data_root, run_id=spec.run_id)
     n = len(record.attempts) + 1
     record, attempt = _start_attempt(spec, p, record, n)
-    record, attempt, snap = _snapshot_env(spec, p, record, attempt, n)
-    # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything.
-    # (The record it returns is superseded by the re-read after the command.)
-    _, digests = attach_cli_evidence(
+    record, attempt, snap = _snapshot_env(spec, p, record, attempt, n, results)
+    # spec 2026-09-26 §5.2: attached after the first writes, before the child reads anything;
+    # the code snapshots (spec 2026-10-31 §5.1 step 9) on the record that holds the --evidence.
+    # (The record they return is superseded by the re-read after the command.)
+    record, digests = attach_cli_evidence(
         p.data_root, p.scope, record, p.evidence, spec.labels, attempt=n
     )
+    record = attach_code_refs(p.data_root, record, results, n)
+    if spec.authorization is not None:  # the run pins what it was checked against (§5.6)
+        record, _ = bind_ref(
+            p.data_root, record, authorization_ref(p.data_root, spec.authorization, n), n
+        )
+    notice = untracked_notice(results)
+    if notice is not None:
+        print(notice, file=sys.stderr, flush=True)  # before the child's first line
     record, attempt, code = _execute_attempt(spec, p, attempt, n)
     disk_failure = _diagnose_disk(spec, p, attempt, n, code)
-    changed, git_changed = _note_changes(spec, p, n, digests, snap.git)
+    changed, git_changed, code_changed = _note_changes(spec, p, n, digests, snap.git, results)
     card = _merge_receipts(p, record)
     # steps 8-9
     record, card, final, registered, warnings = _finish_checkpoints(
@@ -848,11 +995,14 @@ def _run_attempt(spec: RunSpec, p: _Prepared) -> _Attempted:
         git_changed=git_changed,
         changed=changed,
         disk_failure=disk_failure,
+        code=results,
+        code_changed=code_changed,
     )
 
 
-def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
-    """What is worth a WARN about the run itself, before what its receipts say."""
+def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted, code: list[str]) -> list[str]:
+    """What is worth a WARN about the run itself, before what its receipts say; ``code`` is what
+    ``coderun.warnings`` says about the code roots."""
     warnings = list(a.warnings)
     if spec.seed is None:
         warnings.append("seed=none")
@@ -867,11 +1017,16 @@ def _run_warnings(spec: RunSpec, p: _Prepared, a: _Attempted) -> list[str]:
         warnings.append(f"git_changed={','.join(a.git_changed)}")
     if unavailable(p.disk_check):
         warnings.append("disk_check=unavailable")
-    return warnings
+    return [*warnings, *code]
 
 
 def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
-    warnings = _run_warnings(spec, p, a)
+    code_state, code_missing = snapshot_state(a.code)
+    untracked = untracked_total(a.code)
+    trace = trace_summary(p.data_root, a.record, a.n)
+    warnings = _run_warnings(
+        spec, p, a, code_warnings(code_state, code_missing, untracked, a.code_changed, trace=trace)
+    )
     info = provenance(a.card, data_root=p.data_root, configs_root=p.configs_root)
     observed_beyond = sorted(set(info.observed) - set(p.trained_on))
     if observed_beyond:
@@ -897,13 +1052,21 @@ def _result(spec: RunSpec, p: _Prepared, a: _Attempted) -> RunResult:
         observed_beyond=observed_beyond,
         receipt_invalid=len(info.invalid),
         source_audit_missing=source_audit_missing,
-        evidence=len(current(a.card.evidence)),
+        evidence=evidence_count(a.card.evidence),
         labels=labels_field(a.card.evidence),
         evidence_changed=a.changed,
         git=a.git,
         git_changed=a.git_changed,
         disk=p.disk_check,
         disk_failure=a.disk_failure,
+        code=code_info(p.data_root, spec.run_id).grade,
+        code_snapshot=code_state,
+        code_missing=code_missing,
+        untracked_code=untracked,
+        code_changed=a.code_changed,
+        code_trace=trace.state,
+        code_gaps=trace.gaps,
+        authorization=spec.authorization,
     )
 
 
@@ -912,9 +1075,13 @@ def train_run(spec: RunSpec) -> RunResult:
     # §5.3: from here on every write is vcp's own record. A full disk under it is an ABORT
     # `disk_full:` (the child is already stopped by execute() when its console write is the one
     # that fails). The upload destination is not vcp's record, so `_upload_all` guards only its own
-    # bookkeeping writes, not the `upload(...)` call.
+    # bookkeeping writes, not the `upload(...)` call. The code snapshots come first (spec
+    # 2026-10-31 §5.1 step 8): they are artifacts, not the run's files, so a snapshot that cannot be
+    # written leaves the run with nothing on disk yet -- which is when a run with an authorization
+    # stops (C3: `drift:`, `code_unavailable:`).
     with own_writes():
-        a = _run_attempt(spec, p)
+        results = write_all(p.data_root, p.code, strict=spec.authorization is not None)
+        a = _run_attempt(spec, p, results)
     if a.attempt.status == "finished" and spec.uploads:
         record, uploaded, verified, skipped = _upload_all(
             spec, a.record, data_root=p.data_root, n=a.n

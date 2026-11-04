@@ -6,7 +6,7 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 # 發版、環境與 git 慣例
 
 ## 版本規則（CHANGELOG 表頭是權威）
-- SemVer 停在 `0.x`。**MINOR**：寫進產物／台帳的內容或語意改了，或 CLI 契約改了（命令、選項、VERDICT 欄位、exit code、`reason=` 字彙、登記項）。**PATCH**：其餘（bug、訊息、效能、測試、文件、內部重構）。`1.0.0` 留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
+- SemVer 停在 `0.x`。**MINOR**：寫進產物／台帳的內容或語意改了，或 CLI 契約改了（命令、選項、VERDICT 欄位、exit code、`reason=` 字彙、登記項）。**PATCH**：其餘（bug、訊息、效能、測試、文件、內部重構）。`1.0.0` 留給稽核 Wave 1（1a、1b、1c）全部落地之後，包括 1c（程式碼快照與產物授權，VCP-004／006；實作隨 0.18.0，門檻見 `docs/superpowers/specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md` §13）。稽核 §11 的 Wave 1 清單裡，第 4 項（單一大陣列的選取列存取器）與第 5 項（合成插件端到端、比賽原型遷移）排在 1.0 之後。
 - 「登記項改變」只指 `src/vcp` 內建登記表；`projects/<contest>/` 以 `--plugin` 登記的指標、轉換器、融合器等不動框架，**不需要發版**，也不算 MINOR。
 - `src/vcp/__init__.py` 的 `__version__` 是唯一來源；產物寫 build string `X.Y.Z[+g<commit>[.dirty]]`。發版前的產物帶 `+g<sha>` 是合法的，不必為了「好看」發版；為比賽開跑前發一個 PATCH 讓產物寫乾淨版號是可以的。
 
@@ -22,11 +22,14 @@ description: Use when bumping or tagging a vcp version, deciding PATCH vs MINOR,
 - **比賽工作區的 venv**（核心 + 訓練，各自 Python 3.12.14）以 editable 指向那個 worktree：`uv pip install --python <venv>/Scripts/python.exe --no-deps -e "<worktree>[dicom]"`；`--no-deps` 只換 vcp 一個套件，torch 等不動。訓練與量測一律從該 worktree 或工作區的 `vcp.exe` 啟動。
 - 升版：新 worktree at 新 tag → `uv sync` → 重跑上面兩行 `uv pip install` → 改工作區 `ENVIRONMENT.md` / `AGENTS.md` 的 `$framework` 路徑並 commit。舊 worktree 留著，直到沒有 run 依賴它。
 - 量測 venv 凍結後禁 install；訓練 venv 只在建環境時裝套件，之後 `uv pip freeze` 進 `requirements-*.txt`。
+- **訓練 venv 的 vcp 要跟核心同一個 MINOR**（0.18.0 起）：`train run --venv` 的探針看到 venv 裡的 vcp `MAJOR.MINOR` 跟 wrapper 不同 → FAIL `vcp_mismatch:`（`child_vcp=`），一個檔都不寫（舊的 `Session` 讀不動新的 `train.yaml`，會到第一次登記 checkpoint 才當掉）。**升級順序**：讀同一個 data root 的每個 checkout 與每個訓練 venv（editable 的 vcp）先升到 0.18，再跑第一個 0.18 的 `train run`；0.17 以前的 vcp 讀到新紀錄（`evidence` 的新 kind、`stage.json` 的 `code`、寫了 `require_code` 的 `submit.yaml`、備份清單的新 role）會 FAIL。升完在每個 checkout 跑一次 `vcp provenance rebuild`（run entity 多了 `code_grade`，`sync` 會拒絕）。
+- **editable 的 vcp 是程式碼 root**：`train run` 把整個 checkout（追蹤的檔，含 `docs/benchmarks` 底下約 120 MB 的 JSON）當一個 root 雜湊，每個 attempt 開跑與結束比對各一次，快照 id 隨文件改動而變。釘在 tag 的 detached worktree 不會動，所以 id 穩定、同內容只存一份；在會改動的 main checkout 上 editable 就會一直產生新快照。Windows 上 data root 路徑太長，這個 root 會因為 `MAX_PATH` 預檢（`LongPathsEnabled=1` 也一樣）變成 `unwritable`、run 降到 `declared`（`code_snapshot=partial`）：用短的 data root。
 - **provenance 索引跟著 checkout 走**（0.13.0 起）：每個 worktree 有自己的 SQLite 索引 `<data_root>/indexes/provenance-<configs root id>.sqlite3`，在那個 worktree 跑過一次 `vcp provenance rebuild` 才有；搬移或改名 worktree 之後也要 rebuild 一次。用 PostgreSQL 時一個 worktree 一個 service／database：兩個 worktree 共用一個 database 會 `root_mismatch:`，`rebuild` 則取代別人的 generation 並 WARN `replaced_root=`。
 
 ## 訓練或量測進行中的禁區
 - 不在被 editable 指到的 checkout 上 `git pull / checkout / merge`，不 `uv sync --reinstall-package`（`vcp.exe` 被鎖會失敗，且磁碟上的程式碼會在執行中被換掉）。開發一律在另一個 worktree。
 - benchmark runner 釘住原始檔雜湊：該 worktree 任何檔改動都會讓續跑被拒。
+- 0.18.0 起訓練中動被 editable 指到的 checkout 也會留下痕跡：快照列過的檔被改 → `train run` WARN `code_changed=<n>`，該 attempt 的程式碼等級掉到 `commit` 以下。
 - 別的專案的訓練會吃掉記憶體：看管程式（`C:/vcp-data/bench/supervise.py`）會先停 benchmark；反過來跑訓練前先確認沒有 benchmark 在跑。
 
 ## git 與 PR 慣例

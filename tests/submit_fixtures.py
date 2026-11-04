@@ -16,10 +16,14 @@ from helpers import (
     perfect_predictions,
     write_images,
 )
+from vcp.code.grade import code_info
+from vcp.code.scan import scan_root
+from vcp.code.snapshot import code_ref, write_snapshot
 from vcp.core.config import dump_yaml_model
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import stamp
 from vcp.data.dataset import Dataset
+from vcp.data.evidence_ref import add_refs
 from vcp.data.source_audit import write_source_audit
 from vcp.data.split import DEFAULT_SUBSETS, build_plan, parse_subsets, save_plan
 from vcp.measure.ingest import IngestSpec, ingest
@@ -28,6 +32,7 @@ from vcp.measure.ledger import READINGS_LEDGER, ReadingsLedger
 from vcp.measure.measure import MeasureSpec, measure_run
 from vcp.measure.predictions import write_predictions
 from vcp.measure.prereg import create_prereg
+from vcp.measure.runs import load_run, save_run
 from vcp.measure.schema import Prediction, PreRegistration
 from vcp.submit.ledger import SubmissionLedger
 from vcp.submit.schema import Gate, LedgerRow, PlatformProfile
@@ -176,6 +181,28 @@ def seed_test_runs(pair, plan_id: str = "all-v1", subset: str = "test") -> None:
             random_scores(samples, seed=seed),
             weights=pair.weights[weights],
         )
+
+
+def code_snapshot(pair, name: str = "src", body: bytes = b"A = 1") -> str:
+    """A ``code_snapshot`` of a small directory of the test's own. The id follows the bytes, so
+    the same ``body`` gives the same snapshot whatever the ``name``."""
+    src = pair.tmp / name
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "a.py").write_bytes(body)
+    outcome = write_snapshot(
+        pair.roots.data, scan_root(src, kind="dir", keep="capped"), command="test.submit"
+    )
+    assert outcome.state in ("created", "reused"), outcome
+    return outcome.snapshot_id
+
+
+def tie_code(pair, run: str, snapshot_id: str) -> None:
+    """``run`` carries ``code.cwd`` pinned to the snapshot, as ``eval ingest --code`` binds it;
+    its code grade is ``snapshot`` from here on."""
+    card = load_run(pair.roots.data, run)
+    ref = code_ref(pair.roots.data, "cwd", snapshot_id, attempt=None, binding="manual")
+    save_run(pair.roots.data, card.model_copy(update={"evidence": add_refs(card.evidence, [ref])}))
+    assert code_info(pair.roots.data, run).grade == "snapshot"
 
 
 def seed_judgements(pair) -> None:

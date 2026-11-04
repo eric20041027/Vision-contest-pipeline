@@ -1,7 +1,7 @@
-"""Subprocess plumbing shared by every layer that shells out (rclone, kaggle): an injectable
-runner that inherits the environment and records none of it, and the redaction every byte of a
-third-party CLI's output passes through before it can reach a message, a VERDICT, a log or a
-ledger."""
+"""Subprocess plumbing shared by every layer that shells out (rclone, kaggle, git): an injectable
+runner that inherits the environment and records none of it, the environment every git call runs
+in, and the redaction every byte of a third-party CLI's output passes through before it can reach
+a message, a VERDICT, a log or a ledger."""
 
 from __future__ import annotations
 
@@ -24,11 +24,43 @@ _LONG = re.compile(r"[A-Za-z0-9+/_-]{32,}")
 # ``taskkill /T`` finds the tree by parent pid, and a child in a new group would ignore Ctrl+C --
 # while the caller's wait for it cannot be interrupted there.
 _NEW_SESSION: dict[str, Any] = {} if sys.platform == "win32" else {"start_new_session": True}
+# git's repository-local variables (`git rev-parse --local-env-vars`). Inherited from a git hook,
+# `git submodule foreach` or a shell, they would point every call at another repository and copy
+# its content into what is recorded. The config git passes through the environment
+# (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and its KEY/VALUE pairs) is kept, as git keeps it when
+# it switches to another repository itself: a container's safe.directory must still apply.
+GIT_LOCAL_ENV = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_SHALLOW_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+    }
+)
 
 
 def default_runner(args: list[str]) -> subprocess.CompletedProcess[str]:
     """Inherits the environment (the CLI needs its credentials) and records none of it."""
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def git_environment() -> dict[str, str]:
+    """The environment of every git call: without git's repository-local variables, so only the
+    repository containing the call's directory is looked at; with ``GIT_OPTIONAL_LOCKS=0``, so
+    ``git status`` never rewrites that repository's index (``git diff`` may still refresh its stat
+    cache)."""
+    env = {key: value for key, value in os.environ.items() if key not in GIT_LOCAL_ENV}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
 
 
 def _kill_tree(proc: subprocess.Popen[str]) -> None:

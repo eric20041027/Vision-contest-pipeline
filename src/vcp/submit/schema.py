@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from vcp.code.schema import CodeGrade
 from vcp.core.time import parse_stamp
 from vcp.data.access.schema import Grade
 
@@ -133,6 +134,7 @@ class PlatformProfile(_Strict):
     writer_opts: dict[str, str] = Field(default_factory=dict)
     kaggle_command: list[str] = Field(default_factory=lambda: ["kaggle"])
     require_provenance: Grade = "declared"
+    require_code: CodeGrade = "declared"
     ledger: LedgerMode = "configs"
     selection_warn_hours: float | None = DEFAULT_SELECTION_WARN_HOURS
     created_at: str
@@ -178,16 +180,19 @@ class PlatformProfile(_Strict):
     def _omit_what_older_vcp_cannot_read(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, Any]:
-        """``ledger: configs`` and the default ``selection_warn_hours`` are never written, so
-        ``vcp submit init`` still writes what 0.11 (0.15 for the hours) reads. An older vcp
-        refuses either key (``extra_forbidden``), which is what should stop it once a profile
-        says ``shared`` or a changed warning window (spec 2026-09-28 §7, spec 2026-10-30
-        §3.3)."""
+        """``ledger: configs``, the default ``selection_warn_hours`` and ``require_code:
+        declared`` are never written, so ``vcp submit init`` still writes what 0.11 (0.15 for
+        the hours, 0.17 for the code) reads. An older vcp refuses any of the keys
+        (``extra_forbidden``), which is what should stop it once a profile says ``shared``, a
+        changed warning window or a code requirement (spec 2026-09-28 §7, spec 2026-10-30 §3.3,
+        spec 2026-10-31 §4.7)."""
         data: dict[str, Any] = handler(self)
         if self.ledger == "configs":
             data.pop("ledger", None)
         if self.selection_warn_hours == DEFAULT_SELECTION_WARN_HOURS:
             data.pop("selection_warn_hours", None)
+        if self.require_code == "declared":
+            data.pop("require_code", None)
         return data
 
 
@@ -228,10 +233,14 @@ class Artifact(_Strict):
     version: int | None = None
     output: str | None = None
     weights: list[WeightRef] = Field(default_factory=list)
+    # a kernel's notebook code: the ``code_snapshot`` id ``--code`` named (spec 2026-10-31 §4.7)
+    code_snapshot: str | None = None
 
     @model_validator(mode="after")
     def _shape(self) -> Artifact:
         if self.kind == "file":
+            if self.code_snapshot is not None:
+                raise ValueError("a file artifact takes no code_snapshot (it is for kernels)")
             needed = {
                 "path": self.path,
                 "bytes": self.bytes,
@@ -252,6 +261,15 @@ class Artifact(_Strict):
             if not self.weights:
                 raise ValueError("kernel artifact needs at least one weights reference")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_snapshot(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """No ``code_snapshot`` key unless a kernel named one: every other ``stage.json`` keeps
+        the bytes 0.17 wrote (spec 2026-10-31 §8)."""
+        data: dict[str, Any] = handler(self)
+        if self.code_snapshot is None:
+            data.pop("code_snapshot", None)
+        return data
 
 
 class Gate(_Strict):
@@ -275,6 +293,16 @@ class Staged(_Strict):
     staged_at: str
     vcp_version: str
     provenance: Grade | None = None
+    # the lowest code grade of the runs the submission rests on, as ``stage`` read it (spec
+    # 2026-10-31 §4.7); absent in a ``stage.json`` written before 0.18 and then not written back
+    code: CodeGrade | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_an_absent_code(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.code is None:
+            data.pop("code", None)
+        return data
 
 
 class FinalEntry(_Strict):

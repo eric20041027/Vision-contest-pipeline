@@ -15,6 +15,10 @@ os.environ["NO_COLOR"] = "1"
 for _forced in ("FORCE_COLOR", "PY_COLORS", "CLICOLOR_FORCE"):
     os.environ.pop(_forced, None)
 
+# Fixtures defined once for the tests that use them (`proj`; Wave 1c preflight R13). Registered
+# here, the top-level conftest, so pytest imports the module itself and rewrites its asserts.
+pytest_plugins = ["code_fixtures"]
+
 
 @pytest.fixture(autouse=True)
 def _isolated_roots(tmp_path, monkeypatch):
@@ -31,6 +35,20 @@ def _roomy_disk(monkeypatch):
     from vcp.train import disk
 
     monkeypatch.setattr(disk, "usage", lambda path: (ROOMY_BYTES, ROOMY_BYTES))
+
+
+@pytest.fixture(autouse=True)
+def _code_tracking_off(monkeypatch):
+    """No editable install is a code root and no child traces its imports unless the test calls
+    helpers.trace_on: the test venv's editable vcp is this whole checkout, which every train run
+    would scan and copy. No snapshot an earlier test took with ``snapshot_inputs`` is tracked:
+    ids are content, so a stale entry would turn another test's static ``code_snapshot.*`` input
+    into an import check against this pytest process."""
+    from vcp.code import process, roots
+
+    monkeypatch.setenv("VCP_CODE_TRACE", "0")
+    monkeypatch.setattr(roots, "editables_of", lambda raw: [])
+    monkeypatch.setattr(process, "_TRACKED", {})
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +83,19 @@ def isolated_git(tmp_path, monkeypatch):
         "GIT_CONFIG_COUNT",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def work(tmp_path):
+    """A plain working directory for ``vcp train run`` -- no repository -- holding
+    ``fake_train.py`` (``helpers.FAKE``). ``tests/unit/train/test_run.py`` has its own, which wins
+    there."""
+    from helpers import FAKE
+
+    path = tmp_path / "work"
+    path.mkdir()
+    (path / "fake_train.py").write_bytes(FAKE.encode("utf-8"))
+    return path
 
 
 @pytest.fixture

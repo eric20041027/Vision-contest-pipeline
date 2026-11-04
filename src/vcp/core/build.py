@@ -22,6 +22,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import vcp
+from vcp.core.proc import git_environment
 
 _BUILD = re.compile(
     r"^(?P<version>\d+\.\d+\.\d+)(?:\+g(?P<commit>[0-9a-f]{40})(?P<dirty>\.dirty)?)?$"
@@ -41,7 +42,9 @@ def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str] | None:
     exe = shutil.which("git")
     if exe is None:
         return None
-    return subprocess.run([exe, "-C", str(cwd), *args], capture_output=True, text=True)
+    return subprocess.run(
+        [exe, "-C", str(cwd), *args], capture_output=True, text=True, env=git_environment()
+    )
 
 
 def git_head(cwd: Path) -> tuple[str, bool] | None:

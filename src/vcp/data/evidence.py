@@ -5,6 +5,7 @@ reference into ``train.yaml`` / ``run.yaml`` is theirs."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,11 +18,13 @@ from vcp.core.paths import validate_name
 from vcp.core.time import stamp
 from vcp.data.evidence_ref import (
     LABELS_ROLE,
+    RESERVED_ROLES,
     Binding,
     EvidenceKind,
     EvidenceRef,
     check_name,
     current,
+    is_reserved_name,
 )
 from vcp.data.labels import LABEL_SET_KIND, load_label_set
 
@@ -63,13 +66,26 @@ def check_evidence_file(name: str, path: Path, role: str) -> None:
     """Everything an evidence attachment needs before a byte is copied. The copy keeps the
     source's file name, so a name the artifact writer would refuse is refused here -- one of
     its own files in any case (a case-insensitive disk folds ``MANIFEST.JSON`` onto
-    ``manifest.json``), or a temp name ``clean`` may remove."""
+    ``manifest.json``), or a temp name ``clean`` may remove. The roles and names of vcp's own
+    refs (``labels``, the code layer's) are not for evidence."""
     validate_name(name)
     validate_name(role)
     if role == LABELS_ROLE:
         raise ValidationFailed(
             f"role_reserved: role {LABELS_ROLE!r} is for label sets; attach them with --labels "
             "or Session.attach_labels",
+            fields={"evidence_name": name},
+        )
+    if role in RESERVED_ROLES:
+        raise ValidationFailed(
+            f"role_reserved: role {role!r} is vcp's own (code snapshots, traces and "
+            "authorizations); pick another role",
+            fields={"evidence_name": name},
+        )
+    if is_reserved_name(name):
+        raise ValidationFailed(
+            f"role_reserved: name {name!r} is vcp's own (authorization, code.*, code_trace.*); "
+            "pick another name",
             fields={"evidence_name": name},
         )
     if not path.exists():
@@ -112,7 +128,7 @@ def check_names(
         check_name(existing, label_set_id, LABELS_ROLE, "label_set")
 
 
-def _ref(
+def artifact_ref(
     data_root: Path,
     kind: EvidenceKind,
     artifact_id: str,
@@ -122,6 +138,8 @@ def _ref(
     attempt: int | None,
     binding: Binding,
 ) -> EvidenceRef:
+    """The reference to a committed artifact, pinned to its ``manifest.json`` as it is now. Every
+    kind of ref is made here: evidence copies, label sets, and the code layer's snapshots."""
     return EvidenceRef(
         name=name,
         role=role,
@@ -166,7 +184,7 @@ def attach_evidence(
                     fields={"evidence_name": name},
                 )
             writer.commit()
-    return _ref(
+    return artifact_ref(
         data_root,
         EVIDENCE_KIND,
         artifact_id,
@@ -203,7 +221,7 @@ def label_ref(
             f"labels_mismatch: label_set/{label_set_id}: {'; '.join(problems)}",
             fields={"label_set": label_set_id},
         )
-    return _ref(
+    return artifact_ref(
         data_root,
         LABEL_SET_KIND,
         label_set_id,
@@ -232,6 +250,34 @@ def ref_intact(data_root: Path, ref: EvidenceRef) -> bool:
     )
 
 
-def broken_refs(data_root: Path, refs: list[EvidenceRef]) -> list[str]:
-    """Names of current references that are no longer intact (``train status --verify``)."""
-    return [r.name for r in current(refs) if not ref_intact(data_root, r)]
+# What decides whether a ref is intact: ``ref_intact``, or a memo of it (``IntactMemo``).
+Verifier = Callable[[Path, EvidenceRef], bool]
+
+
+class IntactMemo:
+    """``ref_intact`` remembered per pinned artifact. Verifying one hashes every file it holds, so
+    a caller that asks about the same artifact again within one operation (``train status
+    --verify`` asks for the evidence list and for the code grade; a report grades many runs that
+    share a snapshot) passes one memo to all of them. Nothing is relaxed: the first question about
+    an artifact is the full ``ref_intact``; the key is the data root and the artifact as the ref
+    pins it (kind, id, manifest sha), so a ref pinning another manifest is asked on its own.
+
+    A memo is for one operation: it never sees an artifact change after it was asked."""
+
+    def __init__(self) -> None:
+        self._seen: dict[tuple[str, str, str, str], bool] = {}
+
+    def __call__(self, data_root: Path, ref: EvidenceRef) -> bool:
+        key = (str(data_root), ref.kind, ref.artifact_id, ref.manifest_sha256)
+        if key not in self._seen:
+            self._seen[key] = ref_intact(data_root, ref)
+        return self._seen[key]
+
+
+def broken_refs(
+    data_root: Path, refs: list[EvidenceRef], *, intact: Verifier | None = None
+) -> list[str]:
+    """Names of current references that are no longer intact (``train status --verify``);
+    ``intact`` is a memo shared with the caller's other checks, ``ref_intact`` when not given."""
+    check = intact if intact is not None else ref_intact
+    return [r.name for r in current(refs) if not check(data_root, r)]

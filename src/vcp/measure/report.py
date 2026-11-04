@@ -13,10 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from vcp.code.grade import code_info
 from vcp.core.config import load_yaml_model
 from vcp.core.errors import ValidationFailed, VcpError
 from vcp.core.paths import DatasetPaths
 from vcp.core.time import parse_stamp, utc_now
+from vcp.data.evidence import IntactMemo
 from vcp.data.evidence_ref import labels_field
 from vcp.measure.anchors import load_anchors
 from vcp.measure.ledger import (
@@ -40,7 +42,9 @@ class StatusResult:
     receipts show it read; ``provenance_failed`` names the runs (counted in ``runs``, absent
     from ``provenance`` / ``observed``) whose grade could not be computed at all -- a fused run
     naming a member that can no longer be read is the case this exists for (a read-only view
-    must survive that the way it survives an unreadable run card)."""
+    must survive that the way it survives an unreadable run card). ``code`` maps each run id
+    to its code grade (``vcp.code.grade``, spec 2026-10-31 §5.8); it never fails, so every
+    counted run has one."""
 
     orphans: list[str]
     preregs: int
@@ -53,6 +57,7 @@ class StatusResult:
     observed: dict[str, list[str]] = field(default_factory=dict)
     provenance_failed: dict[str, str] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)  # run id -> label sets or "dataset"
+    code: dict[str, str] = field(default_factory=dict)  # run id -> code grade
 
 
 def _runs_for(paths: DatasetPaths) -> tuple[list[RunCard], list[str]]:
@@ -108,8 +113,11 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
     labels: dict[str, str] = {}
     observed: dict[str, list[str]] = {}
     provenance_failed: dict[str, str] = {}
+    code: dict[str, str] = {}
+    memo = IntactMemo()  # one command: a snapshot several runs share is hashed once
     for card in sorted(cards, key=lambda c: c.run_id):
         labels[card.run_id] = labels_field(card.evidence)
+        code[card.run_id] = code_info(paths.data_root, card.run_id, intact=memo).grade
         try:
             info = provenance(card, data_root=paths.data_root, configs_root=paths.configs_root)
         except (VcpError, OSError, UnicodeDecodeError) as e:
@@ -141,6 +149,7 @@ def status(paths: DatasetPaths, *, max_age_hours: int = 48, now: str | None = No
         observed=observed,
         provenance_failed=provenance_failed,
         labels=labels,
+        code=code,
     )
 
 

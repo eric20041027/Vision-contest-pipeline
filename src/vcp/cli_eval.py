@@ -132,6 +132,13 @@ def ingest_cmd(
         list[str] | None,
         typer.Option("--labels", help="label_set id the run trained with (repeatable)"),
     ] = None,
+    code: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--code",
+            help="LABEL=ID of a code snapshot (`vcp code snapshot`) the run ran (repeatable)",
+        ),
+    ] = None,
     plugin: PluginOpt = None,
     json_mode: JsonOpt = False,
     data_root: DataRootOpt = None,
@@ -160,6 +167,7 @@ def ingest_cmd(
             receipts=list(receipt or []),
             evidence=list(evidence or []),
             labels=list(labels or []),
+            code=list(code or []),
             data_root=data_root,
             configs_root=configs_root,
         )
@@ -183,6 +191,7 @@ def ingest_cmd(
             "provenance": res.provenance,
             "evidence": evidence_count(res.run.evidence),
             "labels": labels_field(res.run.evidence),
+            "code": res.code,
         }
         if res.unknown:
             fields["unknown"] = len(res.unknown)
@@ -625,7 +634,7 @@ def status_cmd(
         ]
         human += [
             f"{run}: provenance={g} observed={','.join(st.observed[run]) or '-'} "
-            f"labels={st.labels.get(run, 'dataset')}"
+            f"labels={st.labels.get(run, 'dataset')} code={st.code.get(run, 'declared')}"
             for run, g in st.provenance.items()
         ]
         # An abandoned claim is the one thing here that wants attention; everything else is a

@@ -40,6 +40,8 @@ from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
 from vcp.core.lock import LOCKS_DIR, file_lock
 from vcp.core.paths import artifact_dir, check_relative_path
+from vcp.data.evidence import artifact_ref
+from vcp.data.evidence_ref import CODE_ROLE, Binding, EvidenceRef
 
 __all__ = [
     "FILES_DIR",
@@ -52,6 +54,7 @@ __all__ = [
     "SnapshotOutcome",
     "WriteReason",
     "check_snapshot",
+    "code_ref",
     "load_index",
     "lock_file",
     "parse_index",
@@ -82,6 +85,7 @@ WriteReason = Literal["locked", "partial", "unwritable", "drift"]
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _INDEX_KEYS = frozenset({"path", "sha256", "bytes", "kept"})
 _REPAIR = "move the directory aside and snapshot again"
+SHOWN_PATHS = 5  # files a mismatch: message names; its counts stay exact
 
 
 @dataclass(frozen=True)
@@ -440,3 +444,33 @@ def _snapshot_json_state(
 
 def _result(mismatch: set[str], missing: set[str], files: int, kept: int) -> SnapshotCheck:
     return SnapshotCheck(not (mismatch or missing), sorted(mismatch), sorted(missing), files, kept)
+
+
+# -- binding ------------------------------------------------------------------------------------
+
+
+def code_ref(
+    data_root: Path, label: str, snapshot_id: str, *, attempt: int | None, binding: Binding
+) -> EvidenceRef:
+    """A run's pin on a snapshot that is there and holds (spec §4.3): ``code.<label>``, role
+    ``code``, pinned to the manifest as it is now. The snapshot is held to ``check_snapshot``
+    first -- ``not_found:`` / ``partial:`` as ``store.load_manifest`` raises them, ``mismatch:``
+    when it does not hold -- so a ref is never made to something that would not verify. Writes
+    nothing; the caller binds the ref."""
+    data_root = Path(data_root)
+    check = check_snapshot(data_root, snapshot_id)
+    if not check.ok:
+        named = ", ".join([*check.mismatch, *check.missing][:SHOWN_PATHS])
+        raise _mismatch(
+            snapshot_id,
+            f"does not hold (mismatch={len(check.mismatch)} missing={len(check.missing)}: {named})",
+        )
+    return artifact_ref(
+        data_root,
+        KIND,
+        snapshot_id,
+        name=f"code.{label}",
+        role=CODE_ROLE,
+        attempt=attempt,
+        binding=binding,
+    )

@@ -17,6 +17,8 @@ from helpers import (
 )
 from vcp.cli import app
 from vcp.cli_eval import load_plugins
+from vcp.code.scan import scan_root
+from vcp.code.snapshot import write_snapshot
 from vcp.core import atomic
 from vcp.core.errors import VcpError
 from vcp.core.paths import DatasetPaths
@@ -1333,3 +1335,52 @@ def test_measure_verdict_prints_identity(roots, tmp_path):
     v = _verdict(r.output)
     assert r.exit_code == 0 and "status=WARN" in v
     assert "identity=full_hash" in v and "source_audit=missing" in v
+
+
+def test_eval_status_lists_each_runs_code(roots, tmp_path):
+    """spec 2026-10-31 §5.8: each run's code grade is on its line and in `--json`; the VERDICT
+    names the same fields it did before (the grade is per run, not a count)."""
+    ds, plan, _ = det_with_runs(roots, tmp_path, n=40)
+    src = tmp_path / "code"
+    src.mkdir()
+    (src / "train.py").write_bytes(b"x = 1" + bytes([10]))
+    snapshot_id = write_snapshot(
+        roots.data, scan_root(src, kind="dir", keep="capped"), command="test.status"
+    ).snapshot_id
+    preds = tmp_path / "ext-valA.jsonl"
+    write_predictions(preds, perfect_predictions(ds.subset("valA", plan), ds.card))
+    args = ["eval", "ingest", "--run", "ext", "--dataset", "tiny", "--plan", "fixed-v1"]
+    args += ["--subset", "valA", "--format", "jsonl", "--src", str(preds)]
+    args += ["--trained-on", "train", "--code", f"cwd={snapshot_id}"]
+    r = runner.invoke(app, args)
+    assert r.exit_code == 0 and "code=snapshot" in _verdict(r.output), r.output
+
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny"])
+    assert r.exit_code == 0, r.output
+    run_lines = [line for line in r.output.splitlines() if " provenance=" in line]
+    lines = {line.split(":", 1)[0]: line for line in run_lines}
+    assert lines["ext"].endswith(" code=snapshot")
+    assert lines["perfect"].endswith(" code=declared") and lines["noisy"].endswith(" code=declared")
+    names = [token.split("=", 1)[0] for token in _verdict(r.output).split()[1:]]
+    assert names == [
+        "cmd",
+        "status",
+        "dataset",
+        "runs",
+        "preregs",
+        "judged",
+        "anchors",
+        "receipt_runs",
+        "export_runs",
+        "declared_runs",
+    ]
+
+    r = runner.invoke(app, ["eval", "status", "--dataset", "tiny", "--json"])
+    assert r.exit_code == 0, r.output
+    doc = json.loads(r.stdout)
+    assert doc["result"]["status"]["code"] == {
+        "ext": "snapshot",
+        "noisy": "declared",
+        "perfect": "declared",
+    }
+    assert "code" not in doc["fields"] and "code_runs" not in doc["fields"]

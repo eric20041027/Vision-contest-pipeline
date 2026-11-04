@@ -1,14 +1,17 @@
 """``vcp artifact`` through the CLI: VERDICT lines, exit codes, --json."""
 
 import json
+import sys
 
 from typer.testing import CliRunner
 
+from helpers import seed_train
 from vcp.artifact.authorization import AuthorizeSpec, authorize
 from vcp.cli import app
 from vcp.code.scan import scan_root
 from vcp.code.snapshot import snapshot_json_path, write_snapshot
 from vcp.core.paths import artifact_dir
+from vcp.train.run import RunSpec, train_run
 
 runner = CliRunner()
 
@@ -313,3 +316,168 @@ def test_cli_create_with_an_authorization_input(roots, tmp_path, bench):
     assert r.exit_code == 1 and "unauthorized:" in v and "differs=param:batch" in v
     assert "authorization=a1" in v and "kind=features id=f-2" in v
     assert not artifact_dir(roots.data, "features", "f-2").exists()
+
+
+# -- artifact authorize ---------------------------------------------------------------------------
+
+
+def _authorize_args(authorization_id="a1", *extra, basis="artifact:benchmark/b-50"):
+    return ["authorize", "--id", authorization_id, "--basis", basis, *extra]
+
+
+def test_artifact_authorize_cli(roots, bench):
+    r = _run(
+        *_authorize_args(
+            "a1",
+            "--for",
+            "artifact",
+            "--target-kind",
+            "features",
+            "--free",
+            "param:limit",
+            "--reason",
+            "50-sample benchmark passed",
+        )
+    )
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert v.startswith("VERDICT cmd=artifact.authorize status=OK")
+    assert all(
+        field in v
+        for field in [
+            "id=a1",
+            "basis=artifact:benchmark/b-50",
+            "for=artifact",
+            "claims=6",
+            "freed=1",
+        ]
+    )
+    lines = r.output.splitlines()
+    assert "claim dataset=demo" in lines and "claim param:batch=8" in lines
+    assert f"claim input:model={bench.sha('model')[:12]}" in lines
+    assert sum(line.startswith("claim ") for line in lines) == 6
+    assert artifact_dir(roots.data, "authorization", "a1").is_dir()
+
+
+def test_artifact_authorize_cli_json_and_set(roots, bench, tmp_path):
+    model = tmp_path / "new-model.bin"
+    model.write_bytes(b"m3")
+    r = _run(
+        *_authorize_args(
+            "a2",
+            "--for",
+            "artifact",
+            "--target-kind",
+            "features",
+            "--free",
+            "param:limit",
+            "--free",
+            "input:ids",
+            "--set",
+            "param:batch=16",
+            "--set",
+            f"input:model=@{model}",
+            "--reason",
+            "retuned",
+            "--json",
+        )
+    )
+    assert r.exit_code == 0, r.output
+    doc = _json(r)
+    assert doc["status"] == "OK" and doc["cmd"] == "artifact.authorize"
+    assert (doc["fields"]["claims"], doc["fields"]["freed"]) == (5, 2)
+    result = doc["result"]
+    assert result["authorization_id"] == "a2" and result["consumer"] == "artifact"
+    assert result["freed"] == ["param:limit", "input:ids"]
+    assert result["claims"]["param:batch"] == "16" and "input:ids" not in result["claims"]
+    assert len(result["manifest_sha256"]) == 64
+    assert "VERDICT cmd=artifact.authorize" in r.stderr and "claim " not in r.stdout
+
+
+def test_artifact_authorize_cli_failures_keep_id_and_basis(roots, bench):
+    reason = ("--reason", "because")
+    r = _run(*_authorize_args("a3", "--for", "artifact", *reason))  # no --target-kind
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "invalid:" in v and "id=a3" in v
+    assert "basis=artifact:benchmark/b-50" in v
+
+    r = _run(*_authorize_args("a4", "--for", "train", *reason))  # param:* is not a train claim
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "unbindable:" in v and "param:batch" in v and "id=a4" in v
+
+    r = _run(*_authorize_args("a5", "--for", "artifact", "--target-kind", "features"))
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "invalid:" in v and "--reason" in v and "id=a5" in v
+
+    nope = "artifact:benchmark/nope"
+    r = _run(*_authorize_args("a6", "--for", "artifact", "--target-kind", "f", *reason, basis=nope))
+    v = _verdict(r.output)  # the basis's own kind/id must not replace id=a6
+    assert r.exit_code == 1 and "not_found:" in v and "id=a6" in v
+    assert "basis=artifact:benchmark/nope" in v and "kind=benchmark" not in v
+
+    r = _run(
+        *_authorize_args("a7", "--for", "artifact", "--target-kind", "f", *reason, basis="run:nope")
+    )
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "not_found:" in v and "id=a7" in v and "basis=run:nope" in v
+    assert not artifact_dir(roots.data, "authorization", "a7").exists()
+
+
+def _create_with(bench, artifact_id, *, authorization):
+    spec = bench.spec(artifact_id, batch="8", authorization=authorization)
+    args = ["--kind", "features", "--id", artifact_id, "--dataset", "demo"]
+    for key, value in spec.params.items():
+        args += ["--param", f"{key}={value}"]
+    for ref in spec.inputs:
+        args += ["--input", f"{ref.name}={ref.path}"]
+    payload = bench.data / "features.bin"
+    payload.write_bytes(b"f")
+    return _run("create", *args, "--file", str(payload))
+
+
+def test_artifact_authorize_cli_exists_and_supersedes(roots, bench):
+    base = ["--for", "artifact", "--target-kind", "features", "--reason", "ok"]
+    assert _run(*_authorize_args("a1", *base)).exit_code == 0
+    r = _run(*_authorize_args("a1", *base))
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "exists:" in v and "id=a1" in v
+    r = _run(*_authorize_args("a2", *base, "--supersedes", "a1"))
+    assert r.exit_code == 0, r.output
+    assert "supersedes" not in _verdict(r.output)  # the VERDICT says what the spec lists
+    r = _create_with(bench, "f-1", authorization="a1")
+    assert r.exit_code == 1 and "superseded:" in _verdict(r.output)
+
+
+def test_artifact_authorize_cli_from_a_training_run(roots, work):
+    seed_train(roots)
+    train_run(
+        RunSpec(
+            run_id="r",
+            dataset="tiny",
+            plan_id="fixed-v1",
+            trained_on=["train"],
+            cwd=work,
+            command=[sys.executable, "fake_train.py", "0"],
+            seed=1,
+            checkpoints=["weights/*.pt"],
+            final="weights/best.pt",
+            data_root=roots.data,
+            configs_root=roots.configs,
+        )
+    )
+    r = _run(*_authorize_args("a-run", "--for", "train", "--reason", "benchmark", basis="run:r"))
+    v = _verdict(r.output)
+    assert r.exit_code == 0, r.output
+    assert "id=a-run" in v and "basis=run:r" in v and "for=train" in v and "freed=0" in v
+    assert "claims=12" in v and "claim seed=1" in r.output.splitlines()
+    assert any(line.startswith("claim input:code_snapshot.cwd=") for line in r.output.splitlines())
+    free = ["--free", "seed", "--free", "param:command_sha256"]
+    r = _run(*_authorize_args("a-run2", "--for", "train", "--reason", "b", *free, basis="run:r"))
+    v = _verdict(r.output)
+    assert r.exit_code == 0 and "claims=10" in v and "freed=2" in v
+    r = _run(
+        *_authorize_args(
+            "a-run3", "--for", "artifact", "--target-kind", "k", "--reason", "b", basis="run:r"
+        )
+    )
+    assert r.exit_code == 1 and "unbindable:" in _verdict(r.output)

@@ -10,12 +10,18 @@ from typing import Any
 from pydantic import ValidationError
 
 from vcp.artifact import store
+from vcp.artifact.authorization import BASIS_INPUT, parse_basis
+from vcp.artifact.authorization import KIND as AUTHORIZATION_KIND
 from vcp.artifact.schema import ArtifactManifest
 from vcp.backup.manifest import load_manifest as load_backup_manifest
+from vcp.code.grade import code_info
+from vcp.code.snapshot import KIND as SNAPSHOT_KIND
+from vcp.code.trace import KIND as TRACE_KIND
 from vcp.core.errors import IntegrityError, ValidationFailed
 from vcp.core.hashing import sha256_file, sha256_text
 from vcp.core.paths import DatasetPaths, artifacts_root, check_relative_path, runs_root
 from vcp.data.dataset import Dataset
+from vcp.data.evidence import IntactMemo
 from vcp.data.evidence_ref import EvidenceRef
 from vcp.data.materialize.manifest import ManifestRow
 from vcp.data.source_audit import load_source_audit
@@ -29,6 +35,8 @@ from vcp.provenance.diff import KIND as DIFF_KIND
 from vcp.provenance.diff import open_dataset_diff
 from vcp.provenance.schema import ProvenanceEdge, ProvenanceEntity, SampleChange
 from vcp.submit.schema import Staged
+
+DECLARED = "declared"  # the weakest code grade; a run entity does not carry it (see _run_entity)
 
 
 def entity_id(entity_type: str, key: str) -> str:
@@ -292,24 +300,31 @@ def _run_entity(
     broken_reason: str | None = None,
     provenance_grade: str | None = None,
     observed: list[str] | None = None,
+    code_grade: str | None = None,
 ) -> ProvenanceEntity:
     dataset_id = dataset_version_id(card.dataset, card.samples_hash)
+    attributes: dict[str, Any] = {
+        "dataset": card.dataset,
+        "samples_hash": card.samples_hash,
+        "plan_id": card.plan_id,
+        "trained_on": sorted(card.trained_on),
+        "predicted_subsets": sorted(card.predictions),
+        "access": [ref.model_dump(mode="json") for ref in card.access],
+        "access_receipts": [ref.artifact_id for ref in card.access],
+        "provenance_grade": provenance_grade,
+        "observed_subsets": observed or [],
+    }
+    # Absent means declared (spec 2026-10-31 §4.8): a run that ties to no recorded code adds no
+    # key, so a graph without code keeps the bytes it had before 0.18 -- the registered benchmark
+    # workloads pin the hash of the graph they build (tests/unit/provenance/test_break_even_*).
+    if code_grade is not None and code_grade != DECLARED:
+        attributes["code_grade"] = code_grade
     return ProvenanceEntity(
         entity_id=entity_id("run", card.run_id),
         entity_type="run",
         key=card.run_id,
         dataset_version_id=dataset_id,
-        attributes={
-            "dataset": card.dataset,
-            "samples_hash": card.samples_hash,
-            "plan_id": card.plan_id,
-            "trained_on": sorted(card.trained_on),
-            "predicted_subsets": sorted(card.predictions),
-            "access": [ref.model_dump(mode="json") for ref in card.access],
-            "access_receipts": [ref.artifact_id for ref in card.access],
-            "provenance_grade": provenance_grade,
-            "observed_subsets": observed or [],
-        },
+        attributes=attributes,
         broken_reason=broken_reason,
     )
 
@@ -324,7 +339,11 @@ def _evidence_intact(graph: ProvenanceGraph, data_root: Path, ref: EvidenceRef) 
     return manifest.is_file() and sha256_file(manifest) == ref.manifest_sha256
 
 
-def _scan_runs(graph: ProvenanceGraph, data_root: Path, configs_root: Path) -> None:
+def _scan_runs(
+    graph: ProvenanceGraph, data_root: Path, configs_root: Path, intact: IntactMemo
+) -> None:
+    """One entity per run. ``intact`` is the build's one memo: a snapshot that many runs pin is
+    verified once, not once per run."""
     root = runs_root(data_root)
     if not root.is_dir():
         return
@@ -362,6 +381,7 @@ def _scan_runs(graph: ProvenanceGraph, data_root: Path, configs_root: Path) -> N
                 broken_reason=f"missing or invalid {missing}" if missing else None,
                 provenance_grade=info.grade,
                 observed=info.observed,
+                code_grade=code_info(data_root, card.run_id, intact=intact).grade,
             )
         )
         export_hashes = {
@@ -710,9 +730,11 @@ def _link_artifact_runs(graph: ProvenanceGraph, data_root: Path) -> None:
     for artifact_entity in sorted(graph.entities.values(), key=lambda item: item.entity_id):
         if artifact_entity.entity_type != "artifact":
             continue
-        # Receipts and evidence copies reach a run only through the run's own list (_scan_runs):
-        # an evidence copy's params.run names the run that made it, not one that consumed it.
-        if artifact_entity.attributes.get("kind") in ("access_receipt", "evidence"):
+        # Receipts, evidence copies and code traces reach a run only through the run's own list
+        # (_scan_runs): an evidence copy's params.run names the run that made it, not one that
+        # consumed it, and a trace the run card does not list (the card was replaced, the trace
+        # is from an attempt that was not kept) is not something the run rests on.
+        if artifact_entity.attributes.get("kind") in ("access_receipt", "evidence", TRACE_KIND):
             continue
         params = artifact_entity.attributes.get("params", {})
         run_name = params.get("run") if isinstance(params, dict) else None
@@ -733,6 +755,28 @@ def _link_artifact_inputs(graph: ProvenanceGraph, data_root: Path) -> None:
             source = _artifact_source(path, data_root) if isinstance(path, str) else None
             if source in graph.entities and isinstance(name, str):
                 graph.add_edge(source, artifact_entity.entity_id, "PRODUCED_BY", {"input": name})
+
+
+def _link_authorization_runs(graph: ProvenanceGraph) -> None:
+    """A run an authorization stands on feeds it, as an artifact basis does through its ``basis``
+    input (spec 2026-10-31 §4.8). Needs the run entities, so it runs after ``_scan_runs``; a basis
+    that is not a run, cannot be read or names a run the graph does not hold adds nothing."""
+    for entity in sorted(graph.entities.values(), key=lambda item: item.entity_id):
+        if entity.entity_type != "artifact" or entity.attributes.get("kind") != AUTHORIZATION_KIND:
+            continue
+        params = entity.attributes.get("params")
+        basis = params.get("basis") if isinstance(params, dict) else None
+        if not isinstance(basis, str):
+            continue
+        try:
+            word, run_id, _ = parse_basis(basis)
+        except ValidationFailed:
+            continue
+        if word != "run":
+            continue  # an artifact basis is linked by its `basis` input (_link_artifact_inputs)
+        run = entity_id("run", run_id)
+        if run in graph.entities:
+            graph.add_edge(run, entity.entity_id, "PRODUCED_BY", {"input": BASIS_INPUT})
 
 
 def _link_artifact_supersessions(graph: ProvenanceGraph) -> None:
@@ -784,6 +828,11 @@ def _scan_submissions(graph: ProvenanceGraph, data_root: Path) -> None:
                 graph.replace_entity(
                     graph.entities[ident].model_copy(update={"broken_reason": f"missing {source}"})
                 )
+        # A kernel's notebook code: the snapshot `--code` named (spec 2026-10-31 §4.7, §4.8).
+        notebook = staged.artifact.code_snapshot
+        snapshot = entity_id("artifact", f"{SNAPSHOT_KIND}/{notebook}") if notebook else None
+        if snapshot in graph.entities:
+            graph.add_edge(snapshot, ident, "CONSUMED_BY")
 
 
 def _source_for_backup(path: str) -> str | None:
@@ -838,7 +887,9 @@ def build_graph(data_root: Path, configs_root: Path) -> ProvenanceGraph:
     _scan_artifacts(graph, data_root)
     _link_artifact_inputs(graph, data_root)
     _link_artifact_supersessions(graph)
-    _scan_runs(graph, data_root, configs_root)
+    # One memo for the whole build: a snapshot that many runs pin is hashed once (spec §5.4).
+    _scan_runs(graph, data_root, configs_root, IntactMemo())
+    _link_authorization_runs(graph)
     _scan_measurements(graph, data_root)
     _scan_fusions(graph, data_root)
     _link_artifact_runs(graph, data_root)

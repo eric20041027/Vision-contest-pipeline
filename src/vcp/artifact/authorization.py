@@ -30,8 +30,9 @@ from vcp.artifact import store
 from vcp.artifact.lineage import list_manifests, successors_of
 from vcp.artifact.schema import AUTHORIZATION_INPUT, ArtifactManifest, ArtifactSpec, InputRef
 from vcp.artifact.writer import ArtifactWriter
-from vcp.core.errors import IntegrityError, ValidationFailed
+from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file, sha256_json
+from vcp.core.log import FieldValue
 from vcp.core.paths import artifact_dir, run_path, validate_name
 
 __all__ = [
@@ -178,13 +179,34 @@ def artifact_claims(spec: ArtifactSpec) -> dict[str, str]:
     return dict(sorted(claims.items()))
 
 
-def _successors(data_root: Path, kind: str, artifact_id: str) -> list[str]:
-    return successors_of(list_manifests(data_root, kind)).get(artifact_id, [])
+def _with_fields(e: VcpError, fields: dict[str, FieldValue]) -> VcpError:
+    """``e`` again, with these VERDICT fields instead of its own. An error that comes from reading
+    something other than the command's subject carries that thing's ``kind`` / ``id`` (a basis's,
+    an authorization's), and ``run_command`` lets an error's fields win over the command's: the
+    VERDICT would name the wrong artifact."""
+    return type(e)(e.args[0], location=e.location, fields=fields)
+
+
+def _successors(data_root: Path, kind: str, artifact_id: str, *, subject: str) -> list[str]:
+    """The ids that supersede ``artifact_id`` among the committed artifacts of the kind. Finding
+    out reads every one of them, so an unrelated one that cannot be read (a copied directory, a
+    half-edited manifest) makes the question unanswerable: ``superseded:`` -- nothing may rely on
+    what cannot be checked -- naming ``subject`` and the kind, with none of that artifact's own
+    word or fields."""
+    try:
+        manifests = list_manifests(data_root, kind)
+    except (VcpError, OSError) as e:
+        why = e.args[0] if isinstance(e, VcpError) else e
+        raise ValidationFailed(
+            f"superseded: {subject} cannot be checked: {kind} holds an unreadable artifact "
+            f"({why}); move it aside"
+        ) from e
+    return successors_of(manifests).get(artifact_id, [])
 
 
 def is_superseded(data_root: Path, kind: str, artifact_id: str) -> bool:
     """Some committed artifact of the kind names this one in its ``supersedes``."""
-    return bool(_successors(data_root, kind, artifact_id))
+    return bool(_successors(data_root, kind, artifact_id, subject=f"artifact {kind}/{artifact_id}"))
 
 
 # -- authorize ---------------------------------------------------------------------------------
@@ -231,10 +253,14 @@ def _check_shape(spec: AuthorizeSpec) -> None:
         raise ValidationFailed("invalid: --reason must say why this job is authorized")
 
 
-def _artifact_basis(data_root: Path, kind: str, artifact_id: str) -> ArtifactManifest:
-    """A basis artifact that is committed (``not_found:`` / ``partial:``), whole (``mismatch:``)
-    and not superseded (``superseded:``)."""
-    manifest = store.load_manifest(data_root, kind, artifact_id)
+def _artifact_basis(data_root: Path, kind: str, artifact_id: str, basis: str) -> ArtifactManifest:
+    """A basis artifact that is committed (``not_found:`` / ``partial:``, with ``basis=`` and not
+    the basis's ``kind`` / ``id`` as fields), whole (``mismatch:``) and not superseded
+    (``superseded:``)."""
+    try:
+        manifest = store.load_manifest(data_root, kind, artifact_id)
+    except VcpError as e:
+        raise _with_fields(e, {"basis": basis}) from e
     res = store.verify(data_root, kind, artifact_id)
     if res.failed:
         raise IntegrityError(
@@ -242,7 +268,9 @@ def _artifact_basis(data_root: Path, kind: str, artifact_id: str) -> ArtifactMan
             f"(mismatch={len(res.mismatch)} missing={len(res.missing)} extra={len(res.extra)}); "
             "`vcp artifact verify` says which file"
         )
-    newer = _successors(data_root, kind, artifact_id)
+    newer = _successors(
+        data_root, kind, artifact_id, subject=f"basis artifact {kind}/{artifact_id}"
+    )
     if newer:
         raise ValidationFailed(
             f"superseded: basis artifact {kind}/{artifact_id} is superseded by "
@@ -252,14 +280,20 @@ def _artifact_basis(data_root: Path, kind: str, artifact_id: str) -> ArtifactMan
 
 
 def _run_basis(
-    data_root: Path, run_id: str, run_claims: Callable[[str], dict[str, str]] | None
+    data_root: Path, run_id: str, run_claims: Callable[[str], dict[str, str]] | None, basis: str
 ) -> dict[str, str]:
+    """The claims of a run basis, from the training layer. What goes wrong while reading the run
+    (a missing evidence artifact, say) carries ``basis=`` and not that artifact's ``kind`` /
+    ``id``."""
     card = run_path(data_root, run_id) / "run.yaml"
     if not card.is_file():
         raise ValidationFailed(f"not_found: basis run {run_id} has no run.yaml ({card})")
     if run_claims is None:
         raise ValidationFailed("invalid: a run basis needs run_claims, the training layer's part")
-    return dict(run_claims(run_id))
+    try:
+        return dict(run_claims(run_id))
+    except VcpError as e:
+        raise _with_fields(e, {"basis": basis}) from e
 
 
 def _free(claims: dict[str, str], free: list[str]) -> tuple[dict[str, str], list[str]]:
@@ -290,8 +324,9 @@ def _parse_set(item: str) -> tuple[str, str]:
 def _set(claims: dict[str, str], items: list[str], freed: list[str]) -> dict[str, str]:
     parsed = [_parse_set(item) for item in items]
     names = [name for name, _ in parsed]
-    for name in sorted({n for n in names if names.count(n) > 1}):
-        raise ValidationFailed(f"invalid: --set {name} given more than once")
+    repeated = sorted({n for n in names if names.count(n) > 1})
+    if repeated:
+        raise ValidationFailed(f"invalid: --set {repeated[0]} given more than once")
     for name in names:
         if name in freed:
             raise ValidationFailed(f"invalid: {name} is both --free and --set; pick one")
@@ -327,11 +362,11 @@ def authorize(
     word, first, second = parse_basis(spec.basis)
     basis: InputRef | None = None
     if word == "artifact":
-        manifest = _artifact_basis(data_root, first, second)
+        manifest = _artifact_basis(data_root, first, second, spec.basis)
         basis = InputRef(name=BASIS_INPUT, path=str(store.manifest_path(data_root, first, second)))
         claims = artifact_claims(manifest.spec)
     else:
-        claims = _run_basis(data_root, first, run_claims)
+        claims = _run_basis(data_root, first, run_claims, spec.basis)
     claims, freed = _bind(spec, claims)
     doc = AuthorizationDoc(
         consumer=spec.consumer,
@@ -429,7 +464,9 @@ def _check_holds(data_root: Path, authorization_id: str) -> None:
             f"no longer matches its manifest (mismatch={len(res.mismatch)} "
             f"missing={len(res.missing)} extra={len(res.extra)}); authorize again",
         )
-    newer = _successors(data_root, KIND, authorization_id)
+    newer = _successors(
+        data_root, KIND, authorization_id, subject=f"authorization {authorization_id}"
+    )
     if newer:
         raise _superseded(authorization_id, f"is itself superseded by {', '.join(newer)}")
 
@@ -464,7 +501,7 @@ def _check_basis(data_root: Path, manifest: ArtifactManifest, doc: Authorization
         raise _basis_gone(authorization_id, basis, "its files no longer match its manifest")
     if sha256_file(store.manifest_path(data_root, first, second)) != pinned.sha256:
         raise _basis_gone(authorization_id, basis, "its manifest changed since the authorization")
-    newer = _successors(data_root, first, second)
+    newer = _successors(data_root, first, second, subject=f"authorization {authorization_id}")
     if newer:
         raise _basis_gone(authorization_id, basis, f"superseded by {', '.join(newer)}")
 
@@ -489,7 +526,10 @@ def consume(
     out as authorized (``unauthorized:``, ``differs=<names>``). A claim the consumer has beyond
     the authorized ones is not looked at. Returns the document."""
     data_root = Path(data_root)
-    manifest = store.load_manifest(data_root, KIND, authorization_id)  # not_found: / partial:
+    try:
+        manifest = store.load_manifest(data_root, KIND, authorization_id)
+    except VcpError as e:  # not_found: / partial:, naming the authorization and not the job
+        raise _with_fields(e, {"authorization": authorization_id}) from e
     _check_holds(data_root, authorization_id)
     doc = _read(data_root, manifest)
     _check_basis(data_root, manifest, doc)

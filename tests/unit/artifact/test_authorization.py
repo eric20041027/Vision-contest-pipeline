@@ -4,6 +4,7 @@ its reserved input ``authorization`` -- holds a job against them. A run basis ar
 ``run_claims``, the training layer's part (Task 13); here it is a stub."""
 
 import json
+import shutil
 
 import pytest
 from pydantic import ValidationError
@@ -557,8 +558,6 @@ def test_a_basis_that_stops_holding_makes_the_authorization_superseded(roots, be
 
 
 def test_a_basis_that_is_gone_makes_the_authorization_superseded(roots, bench):
-    import shutil
-
     _authorize(bench)
     shutil.rmtree(bench.manifest.parent)
     with pytest.raises(ValidationFailed, match="^superseded:.*basis benchmark/b-50.*no longer"):
@@ -585,3 +584,80 @@ def test_a_run_basis_holds_while_its_run_card_is_there(roots, bench):
     card.unlink()
     with pytest.raises(ValidationFailed, match="^superseded:.*basis run r1.*no longer"):
         consume(roots.data, "a1", consumer="train", target_kind=None, claims=now)
+
+
+# -- an error keeps the command's identity: no sibling's word or fields leak in ---------------
+
+
+def _copy(roots, kind, artifact_id, name):
+    """A copy of an artifact directory, as a file manager leaves it (``a1 - Copy``)."""
+    base = roots.data / "artifacts" / kind
+    shutil.copytree(base / artifact_id, base / name)
+
+
+@pytest.mark.parametrize("copy_name", ["a1 - Copy", "a1-copy"])
+def test_an_unreadable_neighbour_of_the_authorization_is_named_and_leaks_nothing(
+    roots, bench, copy_name
+):
+    """``a1 - Copy`` is no valid name; ``a1-copy`` is one whose manifest says it is ``a1``
+    (``mismatch:`` with ``kind`` / ``id`` fields). Neither may speak for the command."""
+    _authorize(bench)
+    _copy(roots, KIND, "a1", copy_name)
+    with pytest.raises(ValidationFailed) as ei:
+        consume(roots.data, "a1", consumer="artifact", target_kind="features", claims={})
+    text = str(ei.value)
+    assert text.startswith(
+        "superseded: authorization a1 cannot be checked: authorization holds an unreadable "
+        "artifact ("
+    )
+    assert text.endswith("); move it aside") and ei.value.fields == {}
+    with pytest.raises(ValidationFailed, match="^superseded: authorization a1 cannot be checked"):
+        ArtifactWriter.create(bench.spec("f-all", authorization="a1"), data_root=roots.data)
+
+
+@pytest.mark.parametrize("copy_name", ["b-50 - Copy", "b-50-copy"])
+def test_an_unreadable_neighbour_of_the_basis_is_named_and_leaks_nothing(roots, bench, copy_name):
+    _authorize(bench)
+    _copy(roots, "benchmark", "b-50", copy_name)
+    with pytest.raises(ValidationFailed) as ei:
+        consume(roots.data, "a1", consumer="artifact", target_kind="features", claims={})
+    text = str(ei.value)
+    assert text.startswith(
+        "superseded: authorization a1 cannot be checked: benchmark holds an unreadable artifact ("
+    )
+    assert text.endswith("); move it aside") and ei.value.fields == {}
+    # authorizing against the basis asks the same question, and answers it the same way
+    with pytest.raises(ValidationFailed) as ei:
+        _authorize(bench, "a2")
+    assert str(ei.value).startswith("superseded: basis artifact benchmark/b-50 cannot be checked")
+    assert "benchmark holds an unreadable artifact (" in str(ei.value) and ei.value.fields == {}
+    assert not artifact_dir(roots.data, KIND, "a2").exists()
+
+
+def test_is_superseded_names_an_unreadable_neighbour_too(roots, bench):
+    _authorize(bench)
+    _copy(roots, KIND, "a1", "a1 - Copy")
+    with pytest.raises(ValidationFailed, match="^superseded: .*authorization holds an unreadable"):
+        is_superseded(roots.data, KIND, "a1")
+
+
+def test_a_missing_basis_keeps_the_authorization_id_and_names_the_basis(roots, bench):
+    """``load_manifest``'s ``kind`` / ``id`` are the basis's: left on the error they would turn
+    ``id=`` of ``artifact authorize`` into the basis's id."""
+    with pytest.raises(ValidationFailed, match="^not_found:") as ei:
+        _authorize(bench, basis="artifact:benchmark/nope")
+    assert ei.value.fields == {"basis": "artifact:benchmark/nope"}
+    (roots.data / "artifacts" / "benchmark" / "half").mkdir()
+    with pytest.raises(ValidationFailed, match="^partial:") as ei:
+        _authorize(bench, basis="artifact:benchmark/half")
+    assert ei.value.fields == {"basis": "artifact:benchmark/half"}
+
+
+def test_consuming_a_missing_authorization_names_it_and_not_the_job(roots, bench):
+    with pytest.raises(ValidationFailed, match="^not_found:") as ei:
+        consume(roots.data, "nope", consumer="artifact", target_kind="features", claims={})
+    assert ei.value.fields == {"authorization": "nope"}
+    (roots.data / "artifacts" / KIND / "half").mkdir(parents=True)
+    with pytest.raises(ValidationFailed, match="^partial:") as ei:
+        consume(roots.data, "half", consumer="artifact", target_kind="features", claims={})
+    assert ei.value.fields == {"authorization": "half"}

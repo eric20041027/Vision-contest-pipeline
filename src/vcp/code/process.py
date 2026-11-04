@@ -15,6 +15,10 @@ in its snapshot, is ``code_outside:``; an imported file whose bytes changed sinc
 ``drift:``; a file nobody imported may change. A snapshot another process took is in no
 ``_TRACKED`` here: the writer checks it statically, nothing more.
 
+``snapshot_roots`` is the same for the roots ``vcp code snapshot`` is given by hand (spec §5.7):
+each is taken as given, keeps every byte, and a root that cannot be snapshotted is a refusal.
+Nothing is tracked for ``check_imports``; no job is running.
+
 ``loaded_modules`` and ``main_file`` are the seams tests replace: they are reached as module
 attributes, as ``write_snapshot`` and ``scan_root`` are.
 """
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import NoReturn
@@ -30,8 +35,14 @@ from typing import NoReturn
 from vcp.artifact.schema import CODE_INPUT_PREFIX, ArtifactSpec, InputRef
 from vcp.code import roots
 from vcp.code.generated import generated_locations
-from vcp.code.roots import PlannedRoot, generated_exclusions, plan_roots, skip_dirs_for
-from vcp.code.scan import RootScan, scan_root
+from vcp.code.roots import (
+    PlannedRoot,
+    generated_exclusions,
+    plan_roots,
+    repo_top,
+    skip_dirs_for,
+)
+from vcp.code.scan import RootScan, root_kind, scan_root
 from vcp.code.schema import RootReason
 from vcp.code.snapshot import SNAPSHOT_PATH, SnapshotOutcome, snapshot_json_path, write_snapshot
 from vcp.code.trace import TracedRoot, classify_modules, site_dirs, stdlib_dirs
@@ -42,16 +53,20 @@ from vcp.core.paths import path_key, resolve_configs_root, resolve_stored_path, 
 
 __all__ = [
     "COMMAND",
+    "ROOTS_COMMAND",
     "SHOWN_PATHS",
+    "Written",
     "check_imports",
     "loaded_modules",
     "main_file",
     "raise_for_outcome",
     "snapshot_inputs",
+    "snapshot_roots",
     "strict",
 ]
 
 COMMAND = "snapshot_inputs"  # who holds a snapshot's lock, as the lock file says
+ROOTS_COMMAND = "code.snapshot"  # ... when `vcp code snapshot` holds it
 SHOWN_PATHS = 5  # paths a code_outside: / drift: message names; the count stays exact
 # The environment's reasons a root has no snapshot (ABORT `code_unavailable:`), and what to do.
 _UNAVAILABLE: dict[str, str] = {
@@ -202,6 +217,80 @@ def snapshot_inputs(data_root: Path, extra_roots: Sequence[Path] = ()) -> list[I
             )
         )
     return inputs
+
+
+# -- the roots `vcp code snapshot` is given ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Written:
+    """One root of ``snapshot_roots`` with its scan and the write that gave it a snapshot:
+    ``outcome.state`` is ``created`` or ``reused``, never a write with a ``reason``."""
+
+    root: PlannedRoot
+    scan: RootScan
+    outcome: SnapshotOutcome
+
+
+def _given_roots(paths: Sequence[Path]) -> list[PlannedRoot]:
+    """Each ``--root`` as it was given: ``root-<n>`` (``n`` counts from 1 in what was given,
+    whatever is dropped before it), the kind the disk says (``root_kind``), a second spelling of
+    one directory dropped. A path that is no directory is ``not_found:``, before anything is
+    scanned or written."""
+    planned: list[PlannedRoot] = []
+    seen: set[str] = set()
+    for n, path in enumerate(paths, start=1):
+        label = f"root-{n}"
+        if not Path(path).is_dir():
+            raise ValidationFailed(
+                f"not_found: --root {path} is not a directory", fields={"code_root": label}
+            )
+        resolved = Path(path).resolve()
+        key = path_key(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        kind = root_kind(resolved)
+        top = repo_top(resolved) if kind == "git" else None
+        planned.append(PlannedRoot(label, "extra", resolved, kind, top[1] if top else None))
+    return planned
+
+
+def snapshot_roots(
+    data_root: Path, configs_root: Path | None, roots: Sequence[Path]
+) -> list[Written]:
+    """spec §5.7: snapshot the directories ``vcp code snapshot`` was given, in order. Each scan
+    leaves out the data root, the configs root (when there is one), every root nested in it and
+    the generated-code directories an environment variable puts inside one (R4); every file keeps
+    its bytes (``keep="all"``: the limits that stay are the file and hash totals). A root that
+    cannot be scanned stops everything before anything is written; then each snapshot is written
+    or reused, and one that cannot be is a refusal (``strict``). A reused snapshot is whatever
+    was written first: a capped one comes back with ``outcome.not_kept`` > 0."""
+    data_root = Path(data_root)
+    planned = _given_roots(roots)
+    fixed = [
+        data_root,
+        *([Path(configs_root)] if configs_root is not None else []),
+        *generated_exclusions(planned),
+    ]
+    scans = [
+        scan_root(
+            root.path,
+            kind=root.kind,
+            skip_dirs=skip_dirs_for(planned, i, fixed=fixed),
+            keep="all",
+        )
+        for i, root in enumerate(planned)
+    ]
+    for root, scan in zip(planned, scans, strict=True):
+        if scan.reason is not None:
+            raise_for_outcome(root.label, scan.reason)
+    written = []
+    for root, scan in zip(planned, scans, strict=True):
+        outcome = write_snapshot(data_root, scan, command=ROOTS_COMMAND)
+        strict(root, scan, outcome)  # a write with a reason is refused here
+        written.append(Written(root, scan, outcome))
+    return written
 
 
 # -- checking a job's imports -----------------------------------------------------------------

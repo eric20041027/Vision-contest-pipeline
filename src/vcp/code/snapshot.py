@@ -54,6 +54,7 @@ __all__ = [
     "check_snapshot",
     "load_index",
     "lock_file",
+    "parse_index",
     "snapshot_json_path",
     "snapshot_spec",
     "write_snapshot",
@@ -179,34 +180,42 @@ def _index_entry(line: str) -> IndexEntry:
     return IndexEntry(path, digest, size, kept)
 
 
-def _read_index(path: Path, snapshot_id: str) -> list[IndexEntry]:
-    def bad(why: str) -> IntegrityError:
-        return _mismatch(snapshot_id, f"{INDEX_FILE} {why}")
-
-    try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
-        raise bad("is missing") from None
+def parse_index(raw: bytes) -> list[IndexEntry]:
+    """The rows of an ``index.jsonl``'s bytes, in path order. ``ValueError`` says what is wrong
+    with them (the words that follow "index.jsonl" in a ``mismatch:``): not UTF-8, ending in the
+    middle of a line, a row that is not an index row, a path listed twice or out of order. An
+    exported directory is read with this too (``vcp.code.bundle``), where no snapshot id exists."""
     try:
         # Split on "\n" alone: a path may hold U+2028 or U+0085, which `splitlines` cuts at.
         text = raw.decode("utf-8")
     except UnicodeDecodeError as e:
-        raise bad(f"is not UTF-8 ({e})") from e
+        raise ValueError(f"is not UTF-8 ({e})") from e
     if text and not text.endswith("\n"):
-        raise bad("ends in the middle of a line")
+        raise ValueError("ends in the middle of a line")
     entries: list[IndexEntry] = []
     for number, line in enumerate(text.split("\n")[:-1], start=1):
         try:
             entry = _index_entry(line)
         except ValueError as e:
-            raise bad(f"line {number} is not an index row ({e})") from e
+            raise ValueError(f"line {number} is not an index row ({e})") from e
         if entries and entry.path <= entries[-1].path:
             twice = entry.path == entries[-1].path
-            raise bad(
+            raise ValueError(
                 f"line {number}: {entry.path!r} is {'listed twice' if twice else 'out of order'}"
             )
         entries.append(entry)
     return entries
+
+
+def _read_index(path: Path, snapshot_id: str) -> list[IndexEntry]:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raise _mismatch(snapshot_id, f"{INDEX_FILE} is missing") from None
+    try:
+        return parse_index(raw)
+    except ValueError as e:
+        raise _mismatch(snapshot_id, f"{INDEX_FILE} {e}") from e
 
 
 def load_index(data_root: Path, snapshot_id: str) -> list[IndexEntry]:

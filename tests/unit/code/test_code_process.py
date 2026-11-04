@@ -2,6 +2,7 @@
 in its own process. The roots are planned as ``train run`` plans them, each snapshot is written or
 reused, and there is no fallback: a root that cannot be snapshotted is a refusal."""
 
+import re
 import sys
 import types
 from pathlib import Path
@@ -12,7 +13,7 @@ from code_fixtures import write_file
 from vcp.code import process, rules
 from vcp.code import roots as code_roots
 from vcp.code.roots import Editable, PlannedRoot
-from vcp.code.scan import RootScan
+from vcp.code.scan import RootScan, scan_root
 from vcp.code.snapshot import KIND as SNAPSHOT_KIND
 from vcp.code.snapshot import (
     SNAPSHOT_FILE,
@@ -20,6 +21,7 @@ from vcp.code.snapshot import (
     SnapshotOutcome,
     load_index,
     snapshot_json_path,
+    write_snapshot,
 )
 from vcp.core.errors import IntegrityError, ValidationFailed, VcpError
 from vcp.core.hashing import sha256_file
@@ -215,3 +217,137 @@ def test_main_file_is_the_file_main_runs(tmp_path, monkeypatch):
     assert process._main_file() is None
     main.__file__ = str(job)
     assert process._main_file() == job
+
+
+# -- the roots `vcp code snapshot` is given (spec §5.7; Wave 1c preflight R4) -------------------
+
+BIG_FILE = b"# " + b"x" * (rules.KEEP_FILE_LIMIT + 1) + b"\n"
+
+
+def _dir(base: Path, name: str, files: dict[str, bytes]) -> Path:
+    for rel, data in files.items():
+        write_file(base / name / rel, data)
+    return base / name
+
+
+def test_snapshot_roots_takes_each_root_as_given_and_keeps_every_byte(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n", "big.py": BIG_FILE})
+    two = _dir(tmp_path, "two", {"b.py": b"b = 2\n"})
+    written = process.snapshot_roots(roots.data, None, [one, two])
+    assert [w.root.label for w in written] == ["root-1", "root-2"]
+    assert [(w.root.source, w.root.kind, w.root.path) for w in written] == [
+        ("extra", "dir", one.resolve()),
+        ("extra", "dir", two.resolve()),
+    ]
+    first = written[0]
+    assert (first.outcome.state, first.outcome.reason) == ("created", None)
+    assert (first.scan.files, first.outcome.kept, first.outcome.not_kept) == (2, 2, 0)
+    adir = artifact_dir(roots.data, SNAPSHOT_KIND, first.outcome.snapshot_id)
+    assert (adir / "files" / "big.py").read_bytes() == BIG_FILE  # past the 1 MiB a run keeps
+
+
+def test_snapshot_roots_reuses_what_is_already_there(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+    first = process.snapshot_roots(roots.data, None, [one])
+    again = process.snapshot_roots(roots.data, None, [one])
+    assert first[0].outcome.state == "created" and again[0].outcome.state == "reused"
+    assert again[0].outcome.snapshot_id == first[0].outcome.snapshot_id
+
+
+def test_snapshot_roots_reusing_a_capped_copy_reports_what_it_never_kept(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n", "big.py": BIG_FILE})
+    capped = scan_root(one, kind="dir", keep="capped")
+    write_snapshot(roots.data, capped, command="test")
+    outcome = process.snapshot_roots(roots.data, None, [one])[0].outcome
+    assert (outcome.state, outcome.kept, outcome.not_kept) == ("reused", 1, 1)
+
+
+def test_snapshot_roots_drops_a_second_spelling_and_numbers_what_was_given(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+    two = _dir(tmp_path, "two", {"b.py": b"b = 2\n"})
+    written = process.snapshot_roots(roots.data, None, [one, tmp_path / "one" / ".." / "one", two])
+    assert [w.root.label for w in written] == ["root-1", "root-3"]
+
+
+def test_snapshot_roots_gives_a_nested_root_to_the_innermost(roots, tmp_path):
+    outer = _dir(tmp_path, "outer", {"o.py": b"o = 1\n", "inner/i.py": b"i = 1\n"})
+    written = process.snapshot_roots(roots.data, None, [outer, outer / "inner"])
+    paths = [[e.path for e in load_index(roots.data, w.outcome.snapshot_id)] for w in written]
+    assert paths == [["o.py"], ["i.py"]]
+
+
+def test_snapshot_roots_leaves_out_the_data_and_configs_roots(tmp_path):
+    root = _dir(tmp_path, "proj", {"a.py": b"a = 1\n"})
+    data, configs = root / "vcp-data", root / "configs"
+    write_file(data / "d.py")
+    write_file(configs / "c.py")
+    [written] = process.snapshot_roots(data, configs, [root])
+    assert [e.path for e in load_index(data, written.outcome.snapshot_id)] == ["a.py"]
+
+
+def test_snapshot_roots_leaves_out_generated_code_an_environment_variable_names(
+    roots, tmp_path, monkeypatch
+):
+    root = _dir(tmp_path, "proj", {"a.py": b"a = 1\n"})
+    write_file(root / "inductor" / "abc" / "kernel.py")
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(root / "inductor"))
+    [written] = process.snapshot_roots(roots.data, None, [root])
+    assert [e.path for e in load_index(roots.data, written.outcome.snapshot_id)] == ["a.py"]
+
+
+def test_snapshot_roots_takes_a_git_root_with_its_commit(roots, tmp_path, isolated_git):
+    from helpers import git_repo
+
+    repo = git_repo(tmp_path / "repo", {"train.py": b"v = 1\n"})
+    [written] = process.snapshot_roots(roots.data, None, [repo])
+    assert written.root.kind == "git" and re.fullmatch(r"[0-9a-f]{40}", written.root.commit)
+
+
+def test_a_root_that_is_no_directory_is_not_found_before_anything_is_written(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+    with pytest.raises(ValidationFailed, match="^not_found:") as ei:
+        process.snapshot_roots(roots.data, None, [one, tmp_path / "gone"])
+    assert ei.value.fields == {"code_root": "root-2"}
+    assert not (roots.data / "artifacts").exists()
+
+
+def test_snapshot_roots_stops_every_write_when_one_root_cannot_be_scanned(
+    roots, tmp_path, monkeypatch
+):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+    two = _dir(tmp_path, "two", {"a.py": b"a = 1\n", "b.py": b"b = 2\n", "c.py": b"c = 3\n"})
+    monkeypatch.setattr(rules, "MAX_FILES", 2)
+    with pytest.raises(ValidationFailed, match="^too_large:") as ei:
+        process.snapshot_roots(roots.data, None, [one, two])
+    assert ei.value.fields == {"code_root": "root-2"}
+    assert not (roots.data / "artifacts").exists()
+
+
+@pytest.mark.parametrize(
+    ("reason", "word", "status"),
+    [
+        ("locked", "code_unavailable:", "ABORT"),
+        ("partial", "code_unavailable:", "ABORT"),
+        ("unwritable", "code_unavailable:", "ABORT"),
+        ("drift", "drift:", "FAIL"),
+    ],
+)
+def test_snapshot_roots_has_no_fallback(roots, tmp_path, monkeypatch, reason, word, status):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+
+    def refused(data_root, scan, *, command):
+        assert command == process.ROOTS_COMMAND
+        return SnapshotOutcome(str(scan.snapshot_id), None, reason, scan.kept, scan.not_kept)
+
+    monkeypatch.setattr(process, "write_snapshot", refused)
+    with pytest.raises(VcpError) as ei:
+        process.snapshot_roots(roots.data, None, [one])
+    assert ei.value.status == status and str(ei.value).startswith(word)
+    assert ei.value.fields["code_root"] == "root-1"
+    assert reason == "drift" or ei.value.fields["cause"] == reason
+
+
+def test_snapshot_roots_does_not_track_anything_for_the_import_check(roots, tmp_path):
+    one = _dir(tmp_path, "one", {"a.py": b"a = 1\n"})
+    process.snapshot_roots(roots.data, None, [one])
+    assert process._TRACKED == {}

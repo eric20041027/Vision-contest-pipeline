@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-import vcp.code.grade as grade_module
+import vcp.data.evidence as evidence_module
 from backup_fixtures import make_fusion, make_world
 from compat_v0170 import ENV_JSON_0100, ENV_JSON_0170
 from vcp.code import trace
@@ -26,12 +26,13 @@ from vcp.code.scan import scan_root
 from vcp.code.schema import CodeRoot, CodeSection
 from vcp.code.snapshot import write_snapshot
 from vcp.core.paths import artifact_dir, store_path
-from vcp.data.evidence import artifact_ref
+from vcp.data.evidence import IntactMemo, artifact_ref
 from vcp.data.evidence_ref import CODE_ROLE, EvidenceRef
 from vcp.measure.runs import load_run, run_dir, save_run
 from vcp.measure.schema import RunCard, RunSource
 from vcp.train.records import append_event, events_path, load_record, save_record, train_dir
 from vcp.train.schema import Attempt, TrainRecord
+from vcp.train.status import status
 
 C = "6f867fe" + "0" * 33
 S, D = "8" * 64, "9" * 64
@@ -480,9 +481,10 @@ def test_code_info_never_raises(roots, tmp_path, monkeypatch):
     def broken(*_args, **_kwargs):
         raise OSError("disk went away")
 
-    monkeypatch.setattr(grade_module, "ref_intact", broken)
-    assert b.info().grade == "declared"  # the attempt cannot be read: declared, not an exception
-    monkeypatch.undo()
+    with monkeypatch.context() as patched:  # undo this patch only, never the conftest's isolation
+        patched.setattr(evidence_module, "ref_intact", broken)
+        assert b.info().grade == "declared"  # unreadable: declared, not an exception
+    assert b.grade == "snapshot"
     train_yaml = run_dir(roots.data, "r") / "train.yaml"
     train_yaml.write_bytes(b"run_id: [unclosed\n")
     assert b.info() == CodeInfo("declared", [])
@@ -529,7 +531,20 @@ def test_an_ingest_run_with_intact_code_refs_is_snapshot(roots, tmp_path):
     assert code_info(roots.data, "ext").grade == "declared"
 
 
-def test_a_fused_run_takes_its_lowest_member(roots, tmp_path):
+def _counting(monkeypatch) -> list[tuple[str, str]]:
+    """Every artifact ``ref_intact`` is really asked about from now on, as (kind, id)."""
+    asked: list[tuple[str, str]] = []
+    real = evidence_module.ref_intact
+
+    def counted(data_root, ref):
+        asked.append((ref.kind, ref.artifact_id))
+        return real(data_root, ref)
+
+    monkeypatch.setattr(evidence_module, "ref_intact", counted)
+    return asked
+
+
+def test_a_fused_run_takes_its_lowest_member(roots, tmp_path, monkeypatch):
     world = make_world(roots, tmp_path)  # runs good and bad, with eval predictions
     fused = make_fusion(world)  # run fx over good + bad
     assert code_info(roots.data, fused) == CodeInfo("declared", [])  # neither member has code
@@ -555,3 +570,57 @@ def test_a_fused_run_takes_its_lowest_member(roots, tmp_path):
     b.trace()
     assert code_info(roots.data, "good").grade == "traced"
     assert code_info(roots.data, fused).grade == "snapshot"  # still the weakest member
+    asked = _counting(monkeypatch)  # the members of one fusion share one memo
+    assert code_info(roots.data, fused).grade == "snapshot"
+    assert len(asked) == len(set(asked)) and ("code_snapshot", sid) in asked
+
+
+# -- verifying once --------------------------------------------------------------------------------
+
+
+def test_one_memo_across_runs_verifies_a_shared_snapshot_once(roots, tmp_path, monkeypatch):
+    first = _build(roots, tmp_path, run_id="r1")
+    second = _build(roots, tmp_path, run_id="r2", attempts=2)  # the same code: the same snapshot
+    assert first.sid == second.sid
+    asked = _counting(monkeypatch)
+    memo = IntactMemo()
+    infos = [code_info(roots.data, run_id, intact=memo) for run_id in ("r1", "r2")]
+    assert [i.grade for i in infos] == ["snapshot", "snapshot"]
+    assert asked == [("code_snapshot", first.sid)]  # two runs, three attempts: hashed once
+
+    asked.clear()  # nothing shared, nothing remembered: each call verifies for itself
+    alone = [code_info(roots.data, run_id) for run_id in ("r1", "r2")]
+    assert alone == infos and asked == [("code_snapshot", first.sid)] * 2
+
+
+def test_a_shared_memo_still_sees_a_snapshot_that_is_not_what_the_run_pinned(roots, tmp_path):
+    good = _build(roots, tmp_path, run_id="r1")
+    stale = _build(roots, tmp_path, run_id="r2")
+    other = _ref(roots, good.sid).model_copy(update={"manifest_sha256": "0" * 64})
+    save_record(roots.data, stale.record().model_copy(update={"evidence": [other]}))
+    memo = IntactMemo()
+    # the pinned manifest is part of the key: r1's verdict is not lent to r2
+    assert [code_info(roots.data, r, intact=memo).grade for r in ("r1", "r2")] == [
+        "snapshot",
+        "commit",
+    ]
+
+
+def test_status_verify_hashes_each_pinned_artifact_once(roots, tmp_path, monkeypatch):
+    b = _build(roots, tmp_path)
+    b.trace()
+    asked = _counting(monkeypatch)
+    verified = status(roots.data, "r", verify=True)
+    assert verified.drift == [] and verified.code.grade == "traced"
+    assert len(asked) == len(set(asked)) and {kind for kind, _ in asked} == {
+        "code_snapshot",
+        "code_trace",
+    }
+    asked.clear()
+    assert status(roots.data, "r").code.grade == "traced"  # without --verify as well
+    assert len(asked) == len(set(asked)) == 2
+
+    kept = artifact_dir(roots.data, "code_snapshot", b.sid) / "files" / "a.py"
+    kept.write_bytes(b"A = 99\n")  # the results are what they were without the memo
+    broken = status(roots.data, "r", verify=True)
+    assert broken.drift == ["evidence:code.cwd"] and broken.code.grade == "commit"

@@ -5,6 +5,7 @@ reference into ``train.yaml`` / ``run.yaml`` is theirs."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -249,6 +250,34 @@ def ref_intact(data_root: Path, ref: EvidenceRef) -> bool:
     )
 
 
-def broken_refs(data_root: Path, refs: list[EvidenceRef]) -> list[str]:
-    """Names of current references that are no longer intact (``train status --verify``)."""
-    return [r.name for r in current(refs) if not ref_intact(data_root, r)]
+# What decides whether a ref is intact: ``ref_intact``, or a memo of it (``IntactMemo``).
+Verifier = Callable[[Path, EvidenceRef], bool]
+
+
+class IntactMemo:
+    """``ref_intact`` remembered per pinned artifact. Verifying one hashes every file it holds, so
+    a caller that asks about the same artifact again within one operation (``train status
+    --verify`` asks for the evidence list and for the code grade; a report grades many runs that
+    share a snapshot) passes one memo to all of them. Nothing is relaxed: the first question about
+    an artifact is the full ``ref_intact``; the key is the data root and the artifact as the ref
+    pins it (kind, id, manifest sha), so a ref pinning another manifest is asked on its own.
+
+    A memo is for one operation: it never sees an artifact change after it was asked."""
+
+    def __init__(self) -> None:
+        self._seen: dict[tuple[str, str, str, str], bool] = {}
+
+    def __call__(self, data_root: Path, ref: EvidenceRef) -> bool:
+        key = (str(data_root), ref.kind, ref.artifact_id, ref.manifest_sha256)
+        if key not in self._seen:
+            self._seen[key] = ref_intact(data_root, ref)
+        return self._seen[key]
+
+
+def broken_refs(
+    data_root: Path, refs: list[EvidenceRef], *, intact: Verifier | None = None
+) -> list[str]:
+    """Names of current references that are no longer intact (``train status --verify``);
+    ``intact`` is a memo shared with the caller's other checks, ``ref_intact`` when not given."""
+    check = intact if intact is not None else ref_intact
+    return [r.name for r in current(refs) if not check(data_root, r)]

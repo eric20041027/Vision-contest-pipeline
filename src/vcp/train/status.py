@@ -11,7 +11,7 @@ from pathlib import Path, PurePath, PurePosixPath
 
 from vcp.code.grade import CodeInfo, code_info
 from vcp.core.paths import resolve_stored_path, store_path
-from vcp.data.evidence import broken_refs
+from vcp.data.evidence import IntactMemo, broken_refs
 from vcp.measure.runs import run_dir
 from vcp.train.checkpoints import drift as _drift
 from vcp.train.checkpoints import missing as _missing
@@ -244,6 +244,7 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
     newest = {c.path: c.sha256 for c in record.checkpoints}
     stale = [c for c in record.checkpoints if c.sha256 not in verified]
     scan = tmp_files(data_root, record)
+    intact = IntactMemo()  # --verify and the code grade ask about the same refs: hash each once
     return StatusResult(
         record=record,
         backed=sum(1 for c in record.checkpoints if c.sha256 in verified),
@@ -254,14 +255,14 @@ def status(data_root: Path, run_id: str, *, verify: bool = False) -> StatusResul
         missing=_missing(record, data_root),
         drift=(
             _drift(record, data_root)
-            + [f"evidence:{n}" for n in broken_refs(data_root, record.evidence)]
+            + [f"evidence:{n}" for n in broken_refs(data_root, record.evidence, intact=intact)]
             if verify
             else []
         ),
         running=sum(1 for a in record.attempts if a.status == "running"),
         tmp=scan.files,
         tmp_skipped=scan.skipped,
-        code=code_info(data_root, run_id),
+        code=code_info(data_root, run_id, intact=intact),
     )
 
 

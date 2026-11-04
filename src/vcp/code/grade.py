@@ -15,8 +15,9 @@ This module may import ``vcp.train`` (the record and the event log it reads); th
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from vcp.code.trace import KIND as TRACE_KIND
 from vcp.code.trace import TRACE_FILE
 from vcp.core.errors import VcpError
 from vcp.core.paths import artifact_dir
-from vcp.data.evidence import ref_intact
+from vcp.data.evidence import IntactMemo, Verifier
 from vcp.data.evidence_ref import CODE_ROLE, CODE_TRACE_ROLE, EvidenceRef, current
 from vcp.measure.runs import FUSE_FRAMEWORK, load_run, run_dir
 from vcp.train.env import EnvSections, read_sections
@@ -127,23 +128,12 @@ def notes_by_attempt(data_root: Path, run_id: str) -> dict[int, set[str]]:
 # -- one attempt -----------------------------------------------------------------------------------
 
 
-class _Intact:
-    """``ref_intact`` once per pinned artifact: verifying a snapshot hashes its files, and the
-    attempts of a resumed run share it."""
-
-    def __init__(self, data_root: Path):
-        self._data_root = data_root
-        self._seen: dict[tuple[str, str, str], bool] = {}
-
-    def __call__(self, ref: EvidenceRef) -> bool:
-        key = (ref.kind, ref.artifact_id, ref.manifest_sha256)
-        if key not in self._seen:
-            self._seen[key] = ref_intact(self._data_root, ref)
-        return self._seen[key]
+# ``intact(ref)``: is the artifact a ref pins still what it pinned (``ref_intact``, memoized).
+Intact = Callable[[EvidenceRef], bool]
 
 
 def _snapshot_complete(
-    code: CodeSection | None, evidence: list[EvidenceRef], intact: _Intact
+    code: CodeSection | None, evidence: list[EvidenceRef], intact: Intact
 ) -> bool:
     """Every root of the attempt has a snapshot, and the run holds an intact ``code_snapshot`` ref
     to that id (picked by kind and role; the rows of every name count, so an earlier attempt's
@@ -166,7 +156,7 @@ def _trace_complete(data_root: Path, ref: EvidenceRef) -> bool:
         return False
 
 
-def _traced(data_root: Path, evidence: list[EvidenceRef], n: int, intact: _Intact) -> bool:
+def _traced(data_root: Path, evidence: list[EvidenceRef], n: int, intact: Intact) -> bool:
     """The attempt has at least one trace, and every one of them is intact and complete."""
     refs = [
         r
@@ -192,7 +182,7 @@ def _attempt_grade(
     n: int,
     sections: EnvSections,
     notes: set[str],
-    intact: _Intact,
+    intact: Intact,
 ) -> CodeGrade:
     if _snapshot_complete(sections.code, record.evidence, intact):
         # code_changed does not lower a trace: it compared the files that were imported.
@@ -209,7 +199,7 @@ def _attempt(
     n: int,
     env: str | None,
     notes: set[str],
-    intact: _Intact,
+    intact: Intact,
 ) -> AttemptCode:
     sections = read_sections(run_dir(data_root, record.run_id) / env) if env else _NO_SECTIONS
     roots = (
@@ -227,10 +217,10 @@ def _attempt(
 # -- a run -----------------------------------------------------------------------------------------
 
 
-def _train_info(data_root: Path, run_id: str) -> CodeInfo:
+def _train_info(data_root: Path, run_id: str, memo: Verifier) -> CodeInfo:
     record = load_record(data_root, run_id)
     notes = notes_by_attempt(data_root, run_id)
-    intact = _Intact(data_root)
+    intact = partial(memo, data_root)
     attempts = [
         _attempt(data_root, record, a.n, a.env, notes.get(a.n, set()), intact)
         for a in record.attempts
@@ -238,7 +228,7 @@ def _train_info(data_root: Path, run_id: str) -> CodeInfo:
     return CodeInfo(lowest(a.grade for a in attempts), attempts)
 
 
-def _ingest_info(data_root: Path, run_id: str) -> CodeInfo:
+def _ingest_info(data_root: Path, run_id: str, memo: Verifier) -> CodeInfo:
     """A run that did not train here (``eval ingest``): ``snapshot`` when it carries code refs and
     every one is intact, else ``declared`` -- there is no ``env.json`` to fall back on."""
     refs = [
@@ -246,7 +236,7 @@ def _ingest_info(data_root: Path, run_id: str) -> CodeInfo:
         for r in current(load_run(data_root, run_id).evidence)
         if r.kind == SNAPSHOT_KIND and r.role == CODE_ROLE
     ]
-    intact = _Intact(data_root)
+    intact = partial(memo, data_root)
     return CodeInfo("snapshot" if refs and all(intact(r) for r in refs) else "declared", [])
 
 
@@ -265,23 +255,30 @@ def _fused_members(data_root: Path, run_id: str) -> list[str] | None:
     return [m.run for m in load_fusion(data_root, run_id).members]
 
 
-def _info(data_root: Path, run_id: str, seen: frozenset[str]) -> CodeInfo:
+def _info(data_root: Path, run_id: str, seen: frozenset[str], memo: Verifier) -> CodeInfo:
     if run_id in seen:  # a fusion that names itself: nothing says what it ran
         return _DECLARED
     try:
         members = _fused_members(data_root, run_id)
         if members is not None:
             below = seen | {run_id}
-            return CodeInfo(lowest(_info(data_root, m, below).grade for m in members), [])
+            return CodeInfo(lowest(_info(data_root, m, below, memo).grade for m in members), [])
         if has_record(data_root, run_id):
-            return _train_info(data_root, run_id)
-        return _ingest_info(data_root, run_id)
+            return _train_info(data_root, run_id, memo)
+        return _ingest_info(data_root, run_id, memo)
     except _UNREADABLE:
         return _DECLARED
 
 
-def code_info(data_root: Path, run_id: str) -> CodeInfo:
+def code_info(data_root: Path, run_id: str, *, intact: Verifier | None = None) -> CodeInfo:
     """The code grade of ``run_id`` and of each of its attempts (spec §5.4). A run is as strong as
     its weakest attempt; one without ``train.yaml`` is graded by its ``code.<label>`` refs; a fused
-    one by its weakest member. Never raises: what cannot be read is ``declared``."""
-    return _info(Path(data_root), run_id, frozenset())
+    one by its weakest member. Never raises: what cannot be read is ``declared``.
+
+    Every ref is held to the full ``ref_intact``. ``intact`` is a shared ``IntactMemo`` for a
+    caller that grades several runs, or checks the same refs otherwise, in one operation so that an
+    artifact is hashed once; without it this call has a memo of its own (its attempts and a fused
+    run's members still share)."""
+    return _info(
+        Path(data_root), run_id, frozenset(), intact if intact is not None else IntactMemo()
+    )

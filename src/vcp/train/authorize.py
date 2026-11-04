@@ -158,13 +158,18 @@ def _cli_refs(record: TrainRecord, attempt: Attempt, kind: str) -> dict[str, Evi
 def run_claims(data_root: Path, configs_root: Path, run_id: str) -> dict[str, str]:
     """The ``train`` claims of run ``run_id``, read from the records of its chosen attempt. A run
     that cannot give all of them is not a basis, and nothing is bound with a claim fewer:
-    ``invalid:`` for a run with no training record or no attempt, or with a root that has no
-    snapshot (an attempt whose environment file is missing or records no code is one);
+    ``invalid:`` for a run with no training record or no attempt, with a root that has no
+    snapshot (an attempt whose environment file is missing or records no code is one), or whose
+    environment file has no ``identity`` (the ``env:`` claims);
     ``not_found:`` for a snapshot, plan or evidence artifact that is gone."""
     record = _record(data_root, run_id)
     attempt = _chosen_attempt(record)
     sections = _sections(data_root, run_id, attempt)
     code = _code_claims(data_root, run_id, attempt, sections.code)
+    if sections.identity is None:  # no env: claims, so an authorization would bind fewer
+        raise ValidationFailed(
+            f"invalid: basis run {run_id} attempt {attempt.n} has no environment identity"
+        )
     evidence = {
         name: source_sha(data_root, ref)
         for name, ref in _cli_refs(record, attempt, "evidence").items()

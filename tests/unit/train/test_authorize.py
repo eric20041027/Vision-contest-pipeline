@@ -318,6 +318,25 @@ def test_a_missing_environment_file_means_no_snapshot_either(roots, work):
         _claims(roots)
 
 
+@pytest.mark.parametrize("identity", ["missing", "null", "not_an_identity"])
+def test_a_basis_attempt_without_an_environment_identity_is_invalid(roots, work, identity):
+    """Without its ``identity`` the attempt gives no ``env:`` claims: an authorization over it
+    would bind fewer claims than the run it vouches for."""
+    seed_train(roots)
+    train_run(_spec(roots, work))
+    path = run_dir(roots.data, "r") / "train" / "env.1.json"
+    doc = json.loads(path.read_bytes())
+    if identity == "missing":
+        del doc["identity"]
+    else:
+        doc["identity"] = None if identity == "null" else {"python": "cp313"}
+    path.write_bytes((json.dumps(doc, indent=2) + "\n").encode("utf-8"))
+    with pytest.raises(
+        ValidationFailed, match="^invalid: basis run r attempt 1 has no environment identity"
+    ):
+        _claims(roots)
+
+
 def test_a_snapshot_that_is_gone_is_not_found(roots, work):
     seed_train(roots)
     train_run(_spec(roots, work))

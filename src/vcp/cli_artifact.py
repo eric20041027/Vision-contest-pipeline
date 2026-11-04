@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from functools import partial
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -200,11 +199,13 @@ def authorize_cmd(
             reason=reason,
             supersedes=supersedes,
         )
-        res = authorize(
-            spec,
-            data_root=root,
-            run_claims=partial(run_claims, root, resolve_configs_root(configs_root)),
-        )
+
+        def basis_run_claims(run_id: str) -> dict[str, str]:
+            # Only a run basis reads the configs root (its plan file): an artifact basis is
+            # authorized on a machine that has none.
+            return run_claims(root, resolve_configs_root(configs_root), run_id)
+
+        res = authorize(spec, data_root=root, run_claims=basis_run_claims)
         fields: dict[str, FieldValue] = {
             "id": res.authorization_id,
             "basis": res.basis,

@@ -448,6 +448,25 @@ def test_artifact_authorize_cli_exists_and_supersedes(roots, bench):
     assert r.exit_code == 1 and "superseded:" in _verdict(r.output)
 
 
+def test_artifact_authorize_cli_needs_a_configs_root_only_for_a_run_basis(
+    roots, bench, tmp_path, monkeypatch
+):
+    """An artifact basis reads nothing under the configs root, so a machine without one can
+    authorize it; a run basis reads its plan file there, and says so when there is none."""
+    monkeypatch.delenv("VCP_CONFIGS_ROOT")
+    monkeypatch.chdir(tmp_path)  # no pyproject.toml beside a configs/ above it either
+    base = ["--for", "artifact", "--target-kind", "features", "--reason", "b"]
+    r = _run(*_authorize_args("a1", *base))
+    assert r.exit_code == 0, r.output
+    card = roots.data / "runs" / "r" / "run.yaml"  # a run basis gets as far as reading its claims
+    card.parent.mkdir(parents=True)
+    card.write_bytes(b"run_id: r\n")
+    r = _run(*_authorize_args("a2", "--for", "train", "--reason", "b", basis="run:r"))
+    v = _verdict(r.output)
+    assert r.exit_code == 1 and "cannot locate configs root" in v
+    assert "id=a2" in v and "basis=run:r" in v
+
+
 def test_artifact_authorize_cli_from_a_training_run(roots, work):
     seed_train(roots)
     train_run(

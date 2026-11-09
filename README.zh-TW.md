@@ -3,8 +3,8 @@
 **影像辨識比賽的可回溯訓練紀錄。**
 
 [![CI](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/eric20041027/Vision-contest-pipeline/actions/workflows/ci.yml)
-[![Version 0.17.0](https://img.shields.io/badge/version-0.17.0-informational.svg)](CHANGELOG.md)
-[![Tests 2958](https://img.shields.io/badge/tests-2958%20passed-success.svg)](CONTRIBUTING.md)
+[![Version 0.18.0](https://img.shields.io/badge/version-0.18.0-informational.svg)](CHANGELOG.md)
+[![Tests 3784](https://img.shields.io/badge/tests-3784%20passed-success.svg)](CONTRIBUTING.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -84,7 +84,7 @@ VERDICT cmd=eval.judge status=OK dataset=demo prereg=p1 verdict=PASS bases_posit
 - **寫一次的檔就不再改。** 切分計畫、預登記、融合配方、備份清單都不可變——要改就換 id，舊證據因此永遠還是它原本的意思。台帳（讀數、判決、提交）只增不改。
 - **主張先於量測。** 候選只有在預登記的主張贏過它要求數量的獨立評估基底（預設兩個）才準入。打開 sealed holdout 要留下理由，決選時會列出它被打開過幾次。
 - **讀取是證明出來的，不是宣告的。** 訓練迴圈經 vcp 的存取器讀資料時會留下收據，寫明它碰了哪些子集；「這個模型沒看過 holdout」因此可以查核。
-- **跑的是哪些程式碼有紀錄，benchmark 綁住正式 job（0.18.0，待發版）。** 每個訓練 attempt 都替它用到的原始碼做內容定址的快照（含還沒 commit 的新檔），並追蹤程序實際 import 的模組；`vcp artifact authorize` 把 benchmark 證明過的東西記成授權，正式 job 的資料、ids、程式碼、batch 或模型有一項不同就被拒絕。
+- **跑的是哪些程式碼有紀錄，benchmark 綁住正式 job（0.18.0）。** 每個訓練 attempt 都替它用到的原始碼做內容定址的快照（含還沒 commit 的新檔），並追蹤程序實際 import 的模組；`vcp artifact authorize` 把 benchmark 證明過的東西記成授權，正式 job 的資料、ids、程式碼、batch 或模型有一項不同就被拒絕。
 - **比賽專屬程式碼不進核心。** 你的指標、轉換器、融合器與輸出格式以 `--plugin projects.<contest>.<module>` 自行登記。
 
 ```mermaid
@@ -156,11 +156,11 @@ repo 內建十個 skill（Claude Code 讀 `.claude/skills/`，Codex 讀鏡射的
 
 ## 路線圖
 
-`0.17.0`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
+`0.18.0`，尚未到 1.0：MINOR 版仍可能改寫入格式（產物與台帳）或 CLI 契約，每次改了什麼寫在 [CHANGELOG.md](CHANGELOG.md)；用到新版加的功能之後，舊版 vcp 可能讀不動新紀錄。
 
 1. **RSNA 的教訓（0.16.0）。** 記錄你在平台上實際勾選的最終提交，和 vcp 的決選不同時警告；Kaggle CLI 過舊時警告；訓練前檢查磁碟空間，磁碟滿時在判決裡寫明原因。
 2. **安全的清理報告（0.17.0）。** `vcp gc scan` 列出大型檔案、它們的類別與每一個被誰引用；只列不刪。
-3. **稽核 Wave 1c（0.18.0）。** 每個 run 與產物背後的程式碼快照，以及產物授權：已實作，等待發版。
+3. **稽核 Wave 1c（0.18.0）。** 每個 run 與產物背後的程式碼快照，以及產物授權。
 4. **`1.0.0`**，等稽核 Wave 1（1a、1b、1c）全部落地：從那之後，產物與台帳格式就是對外的承諾。
 
 ## 文件

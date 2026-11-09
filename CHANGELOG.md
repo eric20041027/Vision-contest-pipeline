@@ -16,6 +16,120 @@ vcp 的每個 release 一條，最新在最上面。格式依 [Keep a Changelog]
   4. commit（`chore(release): vx.y.z`）、開 PR、CI 綠了合併（`main` 有 branch protection 而且是 strict，不能直接推）、在**合併 commit** 上 `git tag -a vx.y.z <合併 commit> -m "vcp x.y.z"`、`git push origin vx.y.z`，再以本檔該版的段落建 GitHub Release：`gh release create vx.y.z --verify-tag --title "vcp x.y.z" --notes-file <該版段落>`（repo 首頁的 Releases 欄才會跟上；0.15.1 以前的 tag 在 2026-10-24 一次補齊）。
 - 產物不可改寫（專案鐵則）：舊版本寫下的 `vcp_version` 永遠留著，本檔是它們的解析路徑。
 
+## [0.18.0] - 2026-11-09
+
+稽核 Wave 1c：程式碼快照與產物授權（VCP-004 / VCP-006；#69，合併 commit `93e1a83`；spec
+`docs/superpowers/specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md`，計畫
+`docs/superpowers/plans/2026-11-03-vcp-wave1c-code-snapshot-and-authorization.md`，後記
+`docs/superpowers/plans/2026-11-03-vcp-wave1c-followups.md`）；同期的 #67、#68 只有文件（課程簡報素材 v3、期末報告的
+英文說明）。tag `v0.18.0` 打在發版 PR 的合併 commit 上。本版之後，1.0.0 的門檻（spec §13）剩凍結前的契約項與
+1.0.0 自己的條目。
+MINOR 的理由：
+- 新產物 kind：`code_snapshot`（`artifacts/code_snapshot/code-<16 hex>/`：`snapshot.json`、`index.jsonl`、
+  `files/`；內容定址、同內容重用、不做 supersedes）、`code_trace`（`artifacts/code_trace/<run>-a<n>-t<seq>/trace.json`）、
+  `authorization`（`artifacts/authorization/<id>/authorization.json`；撤銷 = supersede）。
+- 寫進紀錄的新內容：`train.yaml` / `run.yaml` 的 `evidence` 多三種 kind（`code_snapshot`、`code_trace`、
+  `authorization`），名稱 `authorization` 與以 `code.`、`code_trace.` 開頭的名稱保留；`train/env.<n>.json` 多 `code`、
+  `distributions`、`identity` 三段；`train.log.jsonl` 多一種 `note`（`key=code_changed`，不加事件種類）；
+  `stage.json` 的 `Staged.code` 與 kernel 的 `Artifact.code_snapshot`；`submit.yaml` 的 `require_code`；備份清單的四個
+  新 role（`code_snapshot` tier 2、`code_trace` tier 1、`authorization` tier 1、`authorization_basis` tier 2）；
+  provenance 的 run entity 多 `code_grade`。
+- CLI 契約：新命令群 `vcp code snapshot | verify | diff | export` 與 `vcp artifact authorize`；新選項
+  `train run --code-root DIR…`、`--authorization ID`，`eval ingest --code LABEL=ID…`，`submit stage --code ID`
+  （kernel）；新 VERDICT 欄位：`train run` 一律帶 `code=` `code_snapshot=` `code_trace=`，有 git root 時帶
+  `untracked_code=`，條件欄位 `code_missing=` `code_gaps=` `code_changed=` `authorization=` `child_vcp=`；
+  `train status`、`eval ingest`、`submit stage` 的 `code=`；`final` 表的 `why=code_required`；`eval status` 每個
+  run 的 `code=`。新 `reason=` 字：`unauthorized:`、`superseded:`、`unbindable:`、`code_outside:`、
+  `code_required:`、`too_large:`、`vcp_mismatch:` 是 FAIL（exit 1），`code_unavailable:` 是 ABORT（exit 2）。
+- `train run` 的環境探針（PROBE）從第一次寫入之後提前到之前：探針失敗是一個檔都不寫的 ABORT（以前會留下
+  `running` 的 attempt）。
+- API：`ArtifactWriter` 的保留輸入名 `code_snapshot.<label>` 與 `authorization`（`create` 與 `commit` 各檢查一次）；
+  `vcp.code.process.snapshot_inputs`、`vcp.code.generated.register_generated`、
+  `vcp.artifact.authorization.authorization_input` / `consume`；`Session` 的 import 追蹤；`vcp.core.proc.git_environment`、
+  `vcp.core.paths.path_key` / `is_under`、`vcp.data.evidence.IntactMemo`。
+
+### Added
+- **程式碼快照**：`train run` 每個 attempt 在第一次寫入前規劃 root（`cwd`、`script`、探針回報的 editable 目錄——包括
+  訓練 venv 裡的 vcp——與 `--code-root`），在記憶體裡掃描、寫或重用 `code_snapshot`，掛成 `code.<label>` ref。規則固定
+  （`vcp.code.rules`，`rules: 1`）：git root 的追蹤檔（`CODE` 與 `CONFIG`）加上未追蹤但未被忽略的 `CODE` 檔（新增、還沒
+  `git add` 的 helper 會被讀、會保留位元組——VCP-004 的實際觸發）；未追蹤的設定與資料、被忽略的檔、機密檔名、`.` 開頭的
+  路徑、data / configs root、checkpoint glob 的基底目錄、symlink 都不讀，所以框架寫進 `--cwd` 的輸出不改身分。保留
+  上限：`train run` 單檔 ≤ 1 MiB、每 root 累計 ≤ 64 MiB；`vcp code snapshot` 全保留；每 root ≤ 20,000 檔、雜湊 ≤ 512 MiB。
+  快照寫不成（`locked` / `partial` / `unwritable` / `drift`）或掃描失敗時只 WARN `code_snapshot=partial|none`，訓練照跑；
+  有 `--authorization` 時 fail closed。`untracked_code > 0` 時子程序開始前 stderr 先印一行路徑。
+- **結束時的比對**：子程序結束後重算快照 index 列過的檔，有不同或不見 → `note` `code_changed` 與 WARN `code_changed=`。
+- **import 追蹤**：在 `vcp train run` 底下用 `Session` 的子程序結束時把 `sys.modules` 分類成 `root` / `changed` /
+  `unlisted` / `generated` / `stdlib` / `distribution` / `outside`，寫 `code_trace` 產物（input 名 `snapshot.<label>`）；
+  `complete` 時 `code_trace=complete`，否則 WARN `incomplete`（`code_gaps=`）。DataLoader worker、非 0 rank、
+  `VCP_CODE_TRACE=0` 不追蹤；整段包在 `try` 裡，失敗只印 `[vcp] code trace skipped: <原因>`，永不改 exit code。生成程式碼
+  登記表內建 `torch_inductor`、`torch_extensions`、`triton`，`register_generated` 加登記項。
+- **程式碼等級** `traced > snapshot > commit > declared`，讀取時由 `env.<n>.json`、`train.yaml` 與產物算，不存：run 取
+  最弱的 attempt，fused run 取成員最低，沒有 `train.yaml` 的 run 有完好的 `code.*` ref 才是 `snapshot`；產物被刪或被改時
+  往下掉。`train status`（`--json` 有每個 attempt 的等級與 root）、`eval status`、`submit stage` / `final` 與 provenance 都讀它。
+- **`submit.yaml` 的 `require_code`**（預設 `declared`，等於預設時不寫出）：candidate 低於它 → FAIL `code_required:`；
+  baseline 與 probe 不擋，寫 pairing check `code:<run>=<等級>`；`final` 重讀，不夠的 `why=code_required`。kernel 提交以
+  `submit stage --code ID` 把 `vcp code snapshot` 寫的 bundle 快照記進 `stage.json`。
+- **授權**：`vcp artifact authorize --basis artifact:K/I|run:R --for artifact|train` 從 benchmark 算出 claims（`--free`
+  拿掉、`--set N=V|N=@PATH` 加上），寫 `authorization` 產物；`ArtifactWriter` 的 `authorization` 輸入與
+  `train run --authorization` 在第一次寫入前消耗它：綁住的任何一項不同 → FAIL `unauthorized:`（`differs=`）；授權或依據
+  壞了、被取代、不見 → `superseded:`；可重複使用，撤銷 = 用新授權 supersede。
+- **產物 job 的同程序追蹤**：`snapshot_inputs` 取得的快照，`ArtifactWriter` 在 `create` 與 `commit` 對 `sys.modules`
+  分類：root 外的模組 → `code_outside:`，被 import 的檔改了 → `drift:`，沒被 import 的檔改了不影響。
+- **`vcp code`**：`snapshot`（寫或重用，全保留，重用有上限的快照時 WARN `not_kept=`）、`verify --id`（快照本身還成立嗎，
+  不看工作樹）與 `verify --dir`（驗 `export` 出的目錄，不需要 git；VERDICT 帶 `id=`，同時給 `--id` 必須等於它，否則
+  `mismatch:`；index 路徑上的連結一律 `mismatch:`、不跟隨）、`diff --id --root | --run [--attempt]`（目前的檔漂移了沒，
+  不碰快照位元組）、`export --id --out`（不寫進 data root、不覆寫非空目錄）。
+- `eval ingest --code LABEL=ID`：把 `vcp code snapshot` 寫的快照掛到 `train run` 以外的 run（binding `manual`）。
+- 備份與 `gc scan` 收快照、trace、授權與依據（run 依據的 `run.yaml` 不見 → 那個 run 的備份 `not_found:`）；provenance
+  圖有新的 entity 與邊（快照 → trace、授權的依據、kernel 快照 → submission）。
+- 回歸門檻 `tests/unit/test_regression_gate.py` 加 `0.18.0` 那一列；`examples/quickstart.py` 多一段 `train run` →
+  `code=snapshot` → `vcp code verify`（要求 `status=OK`）。
+
+### Changed
+- `train run` 第一次寫入前的順序：輸入檢查 → 探針 → 子程序的 vcp（`--venv` 裡的 vcp `MAJOR.MINOR` 不同 → FAIL
+  `vcp_mismatch:`、`child_vcp=`）→ root 規劃與掃描 → 授權比對 → 磁碟檢查 → 寫快照。`--code-root` 不是目錄 → FAIL
+  `not_found:`；`code.<label>` / `authorization` 的 ref 名稱跟 `--evidence` / `--labels` 撞名 → `evidence_conflict:`。
+- 環境探針多回報 `distributions` 與 `identity`，只看 `sys.path` 上非空的項目：在哪個目錄下命令，記下的 distribution 都
+  一樣（目前目錄裡過時的 `*.egg-info` 不再蓋掉真的那一份）。
+- provenance 的 run entity 只在等級高於 `declared` 時帶 `code_grade`（缺席 = `declared`）：沒有程式碼紀錄的圖、已預登記的
+  E5 與已發表的 benchmark 的 `workload_hash` 都跟 0.17 相同。
+- 與 spec 文字不同、以程式碼為準的地方集中在後記 §2.1 第 45 條：`verify --dir` 帶 `id=` 並接受 `--id`；明要的快照遇到
+  不存在的 root → FAIL `not_found:`；`vcp code snapshot --root` 在 data root 或 configs root 裡面 → `invalid:`；一般目錄
+  root 不往下走進含 `.git` 項目的子目錄（另一個 repository，記進 `excluded_paths`，要涵蓋就 `--code-root`）；有 `.git`
+  項目但 git 問不動的樹仍是 git root、掃描 fail closed；大小寫重名的預檢每個平台都做，Windows 的路徑長度預檢量暫存檔的
+  路徑；`authorize` 多 `--supersedes OLD`。
+- CI 的測試 job 逾時從 30 分鐘改成 45 分鐘（Windows 的 job 加上 Wave 1c 約 30 分鐘）。
+
+### Fixed
+- `vcp.core.build` 的 git 呼叫改用 `vcp.core.proc.git_environment()`（去掉 `GIT_DIR` 等決定 repo 的變數）：在 git hook
+  或設了 `GIT_DIR` 的 shell 裡，產物的 `vcp_version` 仍是 vcp 自己 repository 的 commit，不再記成別的 repo 的。
+  `gitstate` 用同一個環境（dirty 工作樹後記 §3 第 3 條）。
+
+### 相容性與升級
+- 0.17 以前的 vcp 讀到新紀錄會 FAIL：`train.yaml` / `run.yaml` 的新 evidence kind（每個 0.18 的 `train run` 都會寫）、
+  備份清單的新 role、`stage.json` 的 `code` / `code_snapshot`、寫了 `require_code` 的 `submit.yaml`（`extra_forbidden`）。
+  讀同一個 data root 的每個 checkout 與每個訓練 venv（editable 的 vcp）都先升到 0.18，再跑第一個 0.18 的 `train run`；
+  訓練 venv 的 vcp MINOR 不同 → FAIL `vcp_mismatch:`，一個檔都不寫。
+- provenance 索引：`code_grade` 是 run entity 的新屬性，`sync` 會當成改寫而拒絕 → 每個 checkout `vcp provenance rebuild`
+  一次（SQLite 與 PostgreSQL 都是）。
+- 舊紀錄照讀、不改寫、不補快照：0.11 以後的訓練 run 多半是 `commit`，更早的、dirty 而沒有 patch 的、沒有 `train.yaml`
+  的是 `declared`。`env.<n>.json` 的新段落舊 vcp 不讀；三種新產物在舊 vcp 眼中是一般產物，`artifact verify` 照驗。
+- 沒有新內容的紀錄位元組不變：沒有新 ref 的 `TrainRecord` / `RunCard`、`require_code: declared` 的 profile、沒有
+  `code` 的 `stage.json` 都跟 0.17 逐位元組相同（golden `tests/compat_v0170.py`）。
+- 快照可能含寫死在程式碼裡的機密，會跟著進 data root 與 tier 2 備份：機密放環境變數或憑證檔。
+
+### 已知限制
+- 見 spec §12 與後記 §1、§2.2。主要是：
+  - 只追得到用 `Session` 的 Python 程序：worker、非 0 rank、非 Python 程式、被強制結束的程序沒有 trace，等級最多 `snapshot`；
+  - 未追蹤的設定不是身分；就地編譯的擴充是 `unlisted`；生成程式碼登記表只內建三項；「改過」是事後比對；
+  - 訓練 venv 裡 editable 的 vcp checkout 整個是一個 root：雜湊慢、文件一改 id 就變；data root 路徑長時在 Windows 上會被
+    `MAX_PATH` 預檢降成 `unwritable`（開了 `LongPathsEnabled` 也一樣）；
+  - 等級每次讀取都全量雜湊；重用的粒度是 root；儲存不去重；中斷的半途目錄擋住那個內容直到 `vcp artifact clean`；
+  - 授權不判斷 benchmark 的內容、沒有時效；沒有授權時，少數非磁碟滿的寫入錯誤仍會讓 `train run` ABORT（後記 §2.2
+    第 11 條，凍結前的契約項）。
+
+發版時的全套測試（Windows）：`uv run pytest --cov=vcp` = 3784 passed / 97 skipped，覆蓋率 96.31%。
+
 ## [0.17.0] - 2026-11-02
 
 0.16.0 後記（`docs/superpowers/plans/2026-10-30-vcp-0160-selection-and-disk-followups.md`）§2.2 的第 6、7、10、11、

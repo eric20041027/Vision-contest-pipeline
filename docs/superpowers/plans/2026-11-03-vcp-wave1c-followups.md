@@ -1,4 +1,4 @@
-# vcp 0.18.0 後記：程式碼快照、import 追蹤與產物授權（稽核 Wave 1c，待 0.18.0）
+# vcp 0.18.0 後記：程式碼快照、import 追蹤與產物授權（稽核 Wave 1c，0.18.0）
 
 - spec：`../specs/2026-10-31-vcp-wave1c-code-snapshot-and-authorization-design.md`（99d8073，builder-check 裁決 c81511d，改以 0.18.0 並由使用者批准 §16 的 1e94798）。計畫：`2026-11-03-vcp-wave1c-code-snapshot-and-authorization.md`（78f0a8f），二十一個任務，大致一個任務一個 commit（21 個任務裡有 9 個另有審查修正的 commit：Task 2、3、4、8、10、13、14、15、18）。
 - 分支 `feat/wave1c-code-snapshot`，base `main` 8b46ad4。
@@ -27,7 +27,8 @@
   - 最終審查的修正（2026-11-04，§2.1 第 46–49 條）：`7d9ae1d` fix(train): a trace module that cannot be imported never fails Session.current；`4ce5895` fix(train): the environment probe never reads the wrapper's working directory；`b0b3f3f` fix(code): a plain-directory walk does not enter a nested work tree；`b9c3378` fix(code): no git at trace exit, code= on every eval status line, quickstart checks verify；接著文件一個 commit（本檔、`cli.md`、CLAUDE.md / AGENTS.md、README 兩份、`vcp-train-submit-backup` 的 reference 與鏡射、HANDOVER / CODEX_PROMPT）。
 - 每個行為變更都先寫測試、看它失敗再實作。例外是只鎖現狀的測試：0.17 的 golden（`tests/compat_v0170.py`，Task 5 與 Task 17：沒有新 ref 的 `TrainRecord` / `RunCard`、`require_code: declared` 的 profile、沒有 `code` 的 `stage.json` 都跟 0.17 逐位元組相同）、Task 18 審查後補的兩個釘行為的測試（`cb3952b`：被改寫而仍在的依據照現況備份、不見的 run 依據讓走法 `not_found:`）、回歸門檻那一列（`27b0482`，`tests/unit/test_regression_gate.py`）。
 - 分支在 Task 9 與 Task 14 各派過一次 `workflow_dispatch`，早一點抓 Linux 的失敗：`43b1e97`（run 41743187799）與 `44e70ed`（run 41764890681），Lint、Tests ubuntu、Tests windows 都綠。
-- 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json`、tag 不在本分支（§2.2 第 1 條）；`docs/handover/` 與 README 的版本行在發版時一起改。
+- 版本、`CHANGELOG.md`、`.claude/.claude-plugin/plugin.json`、tag 不在本分支，在發版 commit `chore(release): v0.18.0` 改（§2.2 第 1 條）；`docs/handover/` 與 README 的版本行也在那個 commit 改。
+- 合併時（#69 = `93e1a83`）CI 的測試 job 逾時從 30 分鐘提高到 45 分鐘（`03b3fcc`）：Windows 的測試 job 在 Wave 1c 之前約 25 分鐘、之後約 30 分鐘，PR 的那一次撞到 30 分鐘被取消（Linux 不到 10 分鐘就過）。
 
 ## 1. 已知限制
 
@@ -135,7 +136,7 @@
 
 ### 2.2 開放待辦（依優先順序）
 
-1. **發版 0.18.0**（使用者同意之後；發版 commit 不在功能分支）。`CHANGELOG.md` 加 `## [0.18.0]`：MINOR 的理由（spec §9）；Added / Changed / Fixed；相容性與升級（spec §8：整個 data root 與每個訓練 venv 先升、`provenance rebuild`、`require_code` 的 `extra_forbidden`）；已知限制（spec §12 與本檔 §1）。`src/vcp/__init__.py` 的 `__version__`、`tests/unit/test_package.py` 的 `EXPECTED_CANDIDATE_VERSION` 與 `.claude/.claude-plugin/plugin.json` 同步改成 0.18.0；README 兩份的版本行，與「待發版」字樣所在的地方——README 兩份「Roadmap / 路線圖」的 0.18.0 那條與「How it works / 它怎麼運作」的 0.18.0 功能列、`vcp-orientation/map.md` 的「歷史」、`docs/handover/HANDOVER.md` 與 `CODEX_PROMPT.md`——以及 `docs/handover/` 的現況與測試數字一起更新。目標在課程凍結（2026-11-13）前合併；趕不上就留在分支，12/06 之後再合。
+1. ~~**發版 0.18.0**（使用者同意之後；發版 commit 不在功能分支）。~~ 已完成（2026-11-09，使用者同意）：`chore(release): v0.18.0`，tag `v0.18.0` 打在發版 PR 的合併 commit 上。`CHANGELOG.md` 加 `## [0.18.0]`：MINOR 的理由（spec §9）；Added / Changed / Fixed；相容性與升級（spec §8：整個 data root 與每個訓練 venv 先升、`provenance rebuild`、`require_code` 的 `extra_forbidden`）；已知限制（spec §12 與本檔 §1）。`src/vcp/__init__.py` 的 `__version__`、`tests/unit/test_package.py` 的 `EXPECTED_CANDIDATE_VERSION` 與 `.claude/.claude-plugin/plugin.json` 同步改成 0.18.0；README 兩份的版本行，與「待發版」字樣所在的地方——README 兩份「Roadmap / 路線圖」的 0.18.0 那條與「How it works / 它怎麼運作」的 0.18.0 功能列、`vcp-orientation/map.md` 的「歷史」、`docs/handover/HANDOVER.md` 與 `CODEX_PROMPT.md`——以及 `docs/handover/` 的現況與測試數字一起更新。目標在課程凍結（2026-11-13）前合併；趕不上就留在分支，12/06 之後再合。
 2. **凍結前的契約項**（CODEX_PROMPT 第 3 條）：下面第 9 條的審查遺留裡，會改變寫入內容、VERDICT 欄位、`reason=` 字彙或 exit 類別的，要在 1.0 之前做完，或明寫留到 1.0 之後。各任務審查標「should triage / must triage」的：trace 的武裝在 `try` 外（§14 第 15 條，**must**）——**已修**（§2.1 第 46 條）；`write_snapshot` 的 `OSError` 逸出（§2 反目標）——留待，見第 11 條；`--evidence` 檔雜湊與複製之間的變動（授權綁了未綁定的 sha）——留待，見第 11 條；`eval status` 人看的行漏掉 `code=`（§5.8）——**已修**（第 49 條）；PROBE 的 `sys.path[0]==''`——**已修**（第 47 條），distribution 列的順序（身分決定性）仍開放；`build_string()` 在結束時的 git 子程序沒有逾時——**已修**（第 49 條）。
 3. **精確到「被 import 的檔」的重用**（spec §12）：現在重用的粒度是 root，同一個 root 裡沒被 import 的程式檔改了，新 spec 的快照就不同，`reuse` 報 `spec_mismatch:`。要精確到被 import 的檔，要把 trace 寫進產物並讓 `reuse` 比對它。
 4. **標準庫寫的 Kaggle 內驗證腳本**（spec §12）：Kaggle kernel 裡驗 bundle 現在要裝 vcp 跑 `code verify --dir`；`index.jsonl` 是純 JSONL 加 sha256，可以補一個只用標準函式庫的腳本（`kept: false` 的檔 WARN `not_kept=` 的語意要一致）。

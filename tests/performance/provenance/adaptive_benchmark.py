@@ -268,6 +268,35 @@ def _validate_checkpoint_value(value) -> None:
         raise ValueError("unsafe checkpoint evidence")
 
 
+_SOURCE_PATH = re.compile(r"(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.(?:py|toml|lock)")
+
+
+def _without_source_paths(contract):
+    """``contract`` for the secret-safe check, without the source snapshot's paths.
+
+    A repository-relative module path is not a secret, but the generic text filter reads it as
+    one: ``src/vcp/artifact/authorization.py`` (0.18.0) made every contract unsafe. The paths
+    are checked by shape here instead; everything else still goes through the filter.
+    """
+    try:
+        identity = contract["execution_identity"]
+        tree = identity["source_tree"]
+        files = tree["files"]
+    except (KeyError, TypeError):
+        return contract
+    if not isinstance(files, list):
+        return contract
+    for entry in files:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str) or not _SOURCE_PATH.fullmatch(path):
+            raise ValueError("unsafe checkpoint evidence")
+    stripped = [{key: item for key, item in entry.items() if key != "path"} for entry in files]
+    return {
+        **contract,
+        "execution_identity": {**identity, "source_tree": {**tree, "files": stripped}},
+    }
+
+
 def _json_text(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
 
@@ -308,7 +337,7 @@ class CheckpointStore:
     def __init__(self, root: Path, contract: dict[str, Any]):
         self.root = Path(root).resolve()
         self.contract = contract
-        _validate_checkpoint_value(contract)
+        _validate_checkpoint_value(_without_source_paths(contract))
         self.contract_text = _json_text(contract)
         self.contract_sha256 = sha256_text(self.contract_text)
         identity = contract.get("execution_identity")

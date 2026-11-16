@@ -426,6 +426,20 @@ used for fitting. Hypotheses, gates and predictions are committed before the mea
   - After the measurement, profiling showed part of FULL's cost at 10K came from a VCP status computation that
     rescanned the graph for every score record; it was fixed in release 0.16.0 (statuses unchanged, 10K L1 FULL
     33.1 s → 8.3 s in a profile). E5's numbers describe the code as measured and stay as published.
+- **Second measurement (2026-11-15)**, on the code of release 0.18.0, which contains that fix (`src/vcp` unchanged,
+  benchmark files added). It is a new pre-registered experiment with new seeds (20261115, 20261116), the same frozen
+  policy v2 and no v1: 28 scenarios × 3 methods, 84 rows, parity 84/84, all 28 predicted choices matched. The October
+  result above is kept as published, and this run does not replace it.
+  - H5a holds again: the crossover is between 0.40 and 0.50 at both sizes, and above it FULL takes 8–21% less time.
+  - H5b now holds: pooled p50 ratio 1.000 and p95 ratio 1.023 (October: 0.959 and 1.628). v2 still switches to FULL
+    from 0.30, where INCREMENTAL is faster. At 0.30 the early switch now costs 1.19–1.30× INCREMENTAL's time (October:
+    up to 3.11× at 10K), so H5b holds because the wrong choice became cheaper, not because v2 chose better.
+  - H5c holds again: pooled p50 5,615 ms vs 6,792 ms (0.83×).
+  - Limits: the cost model was fitted on the old code and overestimates both methods (INCREMENTAL by 6–50%, FULL by
+    11–45%). Above the crossover at 10K the absolute times are slower than in October, and the cause was not examined.
+    The machine was not idle during the run, and the scope is still one machine and two graph sizes. All ten
+    deviations and the side-by-side tables are in `postgres-provenance-break-even-v2.md` (evidence
+    `postgres-provenance-break-even-v2.json`).
 
 ---
 

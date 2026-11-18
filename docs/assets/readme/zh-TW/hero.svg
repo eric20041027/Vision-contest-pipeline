@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="424" viewBox="0 0 1200 424" role="img" aria-labelledby="title desc">
+  <title id="title">vcp：vision contest pipeline</title>
+  <desc id="desc">影像辨識比賽的可回溯訓練紀錄。終端機畫面依序是預登記主張、量測候選，最後判決 verdict=PASS。</desc>
+  <rect width="1200" height="424" rx="24" fill="#F4F6FA"/>
+  <path d="M24 0H14V424H24A24 24 0 0 1 0 400V24A24 24 0 0 1 24 0Z" fill="#1F5FBF"/>
+  <g id="title-block" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif">
+    <text x="64" y="68" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18" fill="#52607A" letter-spacing="1.6">CLI · 影像辨識比賽</text>
+    <text x="60" y="178" font-size="116" font-weight="800" fill="#14213D">vcp</text>
+    <text x="278" y="150" font-size="28" fill="#52607A">vision contest pipeline</text>
+    <text x="64" y="246" font-size="36" font-weight="700" fill="#14213D">影像辨識比賽的</text>
+    <text x="64" y="294" font-size="36" font-weight="700" fill="#1F5FBF">可回溯訓練紀錄</text>
+  </g>
+  <g id="project-proof" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18">
+    <rect x="680" y="44" width="464" height="276" rx="16" fill="#1B2433"/>
+    <text x="704" y="78" font-size="16" fill="#8A96AA">examples/quickstart.py</text>
+    <path d="M680 94H1144" stroke="#8A96AA" stroke-opacity=".28"/>
+    <text x="704" y="128"><tspan fill="#8A96AA">$ </tspan><tspan fill="#D7DEE9">vcp eval preregister --id p1 …</tspan></text>
+    <text x="704" y="156"><tspan fill="#8A96AA">VERDICT … status=OK prereg=p1</tspan></text>
+    <text x="704" y="184"><tspan fill="#8A96AA">$ </tspan><tspan fill="#D7DEE9">vcp eval measure --run candidate …</tspan></text>
+    <text x="704" y="212"><tspan fill="#8A96AA">valA … t=2.98</tspan></text>
+    <text x="704" y="240"><tspan fill="#8A96AA">valB … t=4.01</tspan></text>
+    <text x="704" y="268"><tspan fill="#8A96AA">$ </tspan><tspan fill="#D7DEE9">vcp eval judge --prereg p1 …</tspan></text>
+    <text x="704" y="296"><tspan fill="#D7DEE9">VERDICT … </tspan><tspan fill="#6FD6A0" font-weight="700">verdict=PASS</tspan><tspan fill="#D7DEE9"> bases_positive=2</tspan></text>
+  </g>
+  <path d="M64 352H1136" stroke="#D5DBE5" stroke-width="2"/>
+  <g id="process" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18">
+    <circle cx="72" cy="388" r="6" fill="#F4F6FA" stroke="#52607A" stroke-width="2"/>
+    <text x="90" y="394" fill="#52607A">稽核</text>
+    <path d="M138 388H211" stroke="#D5DBE5" stroke-width="2"/>
+    <circle cx="225" cy="388" r="6" fill="#F4F6FA" stroke="#52607A" stroke-width="2"/>
+    <text x="243" y="394" fill="#52607A">切分</text>
+    <path d="M291 388H364" stroke="#D5DBE5" stroke-width="2"/>
+    <circle cx="378" cy="388" r="6" fill="#F4F6FA" stroke="#52607A" stroke-width="2"/>
+    <text x="396" y="394" fill="#52607A">訓練</text>
+    <path d="M444 388H517" stroke="#D5DBE5" stroke-width="2"/>
+    <circle cx="531" cy="388" r="6" fill="#1F5FBF" stroke="#1F5FBF" stroke-width="2"/>
+    <text x="549" y="394" fill="#14213D" font-weight="700">主張</text>
+    <path d="M597 388H671" stroke="#D5DBE5" stroke-width="2"/>
+    <circle cx="685" cy="388" r="6" fill="#1F5FBF" stroke="#1F5FBF" stroke-width="2"/>
+    <text x="703" y="394" fill="#14213D" font-weight="700">判決</text>
+    <path d="M751 388H824" stroke="#D5DBE5" stroke-width="2"/>
+    <circle cx="838" cy="388" r="6" fill="#F4F6FA" stroke="#52607A" stroke-width="2"/>
+    <text x="856" y="394" fill="#52607A">提交</text>
+    <path d="M904 388H977" stroke="#D5DBE5" stroke-width="2"/>
+    <circle cx="991" cy="388" r="6" fill="#F4F6FA" stroke="#52607A" stroke-width="2"/>
+    <text x="1009" y="394" fill="#52607A">備份</text>
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="136" viewBox="0 0 1200 136" role="img" aria-labelledby="title desc">
+  <title id="title">每條規則都來自一次真實的失誤</title>
+  <desc id="desc">第二節：vcp 來自一份賽後報告，那場比賽的 private 分數掉了 0.0108。</desc>
+  <rect width="1200" height="136" rx="20" fill="#F4F6FA"/>
+  <path d="M20 0H14V136H20A20 20 0 0 1 0 116V20A20 20 0 0 1 20 0Z" fill="#1F5FBF"/>
+  <g id="title-block" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif">
+    <text x="64" y="46" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18" fill="#52607A" letter-spacing="2">02 · 為什麼</text>
+    <text x="64" y="100" font-size="40" font-weight="750" fill="#14213D">每條規則都來自一次真實的失誤</text>
+  </g>
+  <g id="project-cue" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18">
+    <rect x="887" y="46" width="249" height="52" rx="12" fill="#1B2433"/>
+    <text x="907" y="78"><tspan fill="#8A96AA">private 分數 </tspan><tspan fill="#FF9AA2" font-weight="700">−0.0108</tspan></text>
+  </g>
+</svg>

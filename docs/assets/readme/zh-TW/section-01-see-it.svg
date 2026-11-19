@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="136" viewBox="0 0 1200 136" role="img" aria-labelledby="title desc">
+  <title id="title">看起來比較好，還不夠</title>
+  <desc id="desc">第一節：候選的分數比較高，但沒過預登記的門檻，判決仍然是 FAIL。</desc>
+  <rect width="1200" height="136" rx="20" fill="#F4F6FA"/>
+  <path d="M20 0H14V136H20A20 20 0 0 1 0 116V20A20 20 0 0 1 20 0Z" fill="#1F5FBF"/>
+  <g id="title-block" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif">
+    <text x="64" y="46" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18" fill="#52607A" letter-spacing="2">01 · 實際跑一次</text>
+    <text x="64" y="100" font-size="40" font-weight="750" fill="#14213D">看起來比較好，還不夠</text>
+  </g>
+  <g id="project-cue" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft JhengHei', monospace" font-size="18">
+    <rect x="804" y="46" width="332" height="52" rx="12" fill="#1B2433"/>
+    <text x="824" y="78"><tspan fill="#D7DEE9">t=1.46 &lt; 2.0 → </tspan><tspan fill="#FF9AA2" font-weight="700">verdict=FAIL</tspan></text>
+  </g>
+</svg>

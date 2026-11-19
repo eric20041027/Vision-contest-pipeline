@@ -160,6 +160,27 @@ def expect(stdout: str, cmd: str, word: str) -> None:
         raise SystemExit(f"quickstart step failed: expected {word} from {cmd}")
 
 
+def closing_lines(judge_stdout: str) -> list[str]:
+    """The last words of the run, from the verdict step 11 really returned."""
+    fields = verdict_fields(judge_stdout, "eval.judge")
+    verdict = next((word.split("=", 1)[1] for word in fields if word.startswith("verdict=")), "")
+    snapshot = "The code snapshot of step 13 lets you check which code ran."
+    if verdict == "PASS":
+        return [
+            "Done. The judge verdict of step 11 is PASS because the candidate cleared the",
+            "threshold on both valA and valB. Lower CANDIDATE_ACCURACY in this file to about",
+            "0.80 and run it again: the gap still looks good, but the verdict flips to FAIL.",
+            f"That is the point. {snapshot}",
+        ]
+    if verdict == "FAIL":
+        return [
+            "Done. The judge verdict of step 11 is FAIL: the candidate did not clear the",
+            "threshold (t >= 2.0) on at least 2 subsets, however good the gap looks.",
+            f"That is the point. {snapshot}",
+        ]
+    return [f"Done. The judge verdict of step 11 is {verdict or 'missing'}. {snapshot}"]
+
+
 def pinned_snapshot(status_json: str) -> str:
     """The code snapshot a run pinned: the ``code.cwd`` row of ``train status --json``."""
     doc = json.loads(status_json.splitlines()[0])
@@ -307,7 +328,7 @@ def main() -> int:
             "accuracy",
             **roots,
         )
-        run(
+        judged = run(
             "11. judge: paired bootstrap on every base; admission needs"
             " t >= 2.0 on at least 2 of them",
             "eval",
@@ -376,10 +397,7 @@ def main() -> int:
         )
         expect(verified, "code.verify", "status=OK")
 
-        print("\nDone. The judge verdict of step 11 is PASS because the candidate cleared the")
-        print("threshold on both valA and valB. Lower CANDIDATE_ACCURACY in this file to about")
-        print("0.80 and run it again: the gap still looks good, but the verdict flips to FAIL.")
-        print("That is the point. The code snapshot of step 13 lets you check which code ran.")
+        print("\n" + "\n".join(closing_lines(judged)))
         return 0
     finally:
         if args.root is None or not args.keep:
